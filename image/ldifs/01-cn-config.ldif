@@ -19,13 +19,6 @@ objectClass: olcGlobal
 cn: config
 olcArgsFile: __LDAP_RUN_DIR__/slapd.args
 olcPidFile: __LDAP_RUN_DIR__/slapd.pid
-# Explicit default hash for any cleartext userPassword write (see the
-# ppolicy overlay below, which enforces that hashing). {ARGON2} is NOT
-# available in this build (libargon2 isn't linked — see image/README.md);
-# {SSHA} is the salted-SHA1 scheme built into every OpenLDAP, and is the
-# conservative, universally-interoperable choice for a general-purpose
-# directory.
-olcPasswordHash: {SSHA}
 #__TLS_ATTRS__
 
 #
@@ -56,12 +49,19 @@ include: file:///etc/openldap/schema/inetorgperson.ldif
 include: file:///etc/openldap/schema/nis.ldif
 
 #
-# Frontend (defaults are fine — no global access override)
+# Frontend. Sets the explicit default hash for any cleartext userPassword
+# write (see the ppolicy overlay below, which enforces that hashing) — this
+# belongs here, not on the global cn=config entry (deprecated there as of
+# 2.6). {ARGON2} is NOT available in this build (libargon2 isn't linked —
+# see image/README.md); {SSHA} is the salted-SHA1 scheme built into every
+# OpenLDAP, and is the conservative, universally-interoperable choice for a
+# general-purpose directory.
 #
 dn: olcDatabase=frontend,cn=config
 objectClass: olcDatabaseConfig
 objectClass: olcFrontendConfig
 olcDatabase: frontend
+olcPasswordHash: {SSHA}
 
 #
 # Primary MDB database. Explicitly numbered {1} so the overlay entries below
