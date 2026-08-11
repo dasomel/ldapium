@@ -19,6 +19,7 @@ RUN apt-get update \
         libssl-dev \
         libsasl2-dev \
         libltdl-dev \
+        libargon2-dev \
         groff-base \
         pkgconf \
         curl \
@@ -34,7 +35,20 @@ RUN curl -fsSL -o openldap.tgz \
 
 WORKDIR /usr/src/openldap-2.6.14
 # Verified configure line (2.6.14): mdb/syncprov are on by default, these
-# four overlays are off-by-default and must be requested explicitly.
+# overlays are off-by-default and must be requested explicitly. The
+# accesslog/auditlog/constraint/deref/dynlist/sssvlv/otp block below is for
+# scale (indexed paging, deref-in-one-roundtrip for large group lookups) and
+# audit — loaded as modules only, see image/ldifs/01-cn-config.ldif for which
+# ones are also enabled by default. --enable-argon2 is `no|yes`, not `mod`
+# (verified against `./configure --help`) — but that flag only controls
+# whether argon2 support is BUILT at all. Combined with --enable-modules
+# (set above), the result is still a LOADABLE module (argon2.la/.so), not
+# code linked into slapd: confirmed with `ldd /usr/lib/slapd` (no argon2
+# symbol) and the runtime failure without it —
+#   Password generation failed for scheme {ARGON2}: scheme not recognized
+# See image/ldifs/01-cn-config.ldif (olcModuleload: argon2.la) and
+# image/entrypoint.sh (the bootstrap `slappasswd -o module-load=argon2`
+# call) for where it actually gets loaded.
 RUN ./configure \
         --prefix=/usr \
         --sysconfdir=/etc \
@@ -47,8 +61,17 @@ RUN ./configure \
         --enable-ppolicy=mod \
         --enable-unique=mod \
         --enable-syncprov=mod \
+        --enable-accesslog=mod \
+        --enable-auditlog=mod \
+        --enable-constraint=mod \
+        --enable-deref=mod \
+        --enable-dynlist=mod \
+        --enable-sssvlv=mod \
+        --enable-otp=mod \
+        --enable-argon2 \
         --with-tls=openssl \
         --with-cyrus-sasl \
+        --with-argon2=libargon2 \
     && make depend \
     && make -j"$(nproc)" \
     && make install
@@ -73,6 +96,7 @@ RUN apt-get update \
         libssl3t64 \
         libsasl2-2 \
         libltdl7 \
+        libargon2-1 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system ldap \
@@ -108,7 +132,13 @@ RUN mkdir -p /etc/openldap/slapd.d /var/lib/openldap/data /var/lib/openldap/run 
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV LDAP_SEED_DIR=/opt/ldifs
 
-USER ldap
+# Numeric, not `USER ldap`. Kubernetes' runAsNonRoot check refuses to start a
+# container whose image declares a NAMED user, because the kubelet cannot
+# resolve the name to a uid to prove it isn't root:
+#   Error: container has runAsNonRoot and image has non-numeric user (ldap),
+#   cannot verify user is non-root
+# 999:999 is the ldap user/group created above.
+USER 999:999
 WORKDIR /var/lib/openldap
 
 VOLUME ["/etc/openldap/slapd.d", "/var/lib/openldap/data"]

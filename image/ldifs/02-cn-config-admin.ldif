@@ -15,7 +15,8 @@
 # reusing the same admin password for operator simplicity.
 #
 # Tokens replaced by entrypoint.sh:
-#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h {SSHA}`
+#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h "$LDAP_PASSWORD_HASH"`
+#                           (default {ARGON2})
 #
 dn: olcDatabase={0}config,cn=config
 changetype: modify

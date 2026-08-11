@@ -3,9 +3,13 @@
 # launch, directly into the mdb database via:
 #   slapadd -n 1 -F <config-dir> -l <rendered-file>
 #
-# This creates ONLY the root suffix entry and the admin entry — no sample
-# users, groups, or OUs. That is intentional: this image never seeds demo
-# data. Anything beyond these two entries belongs in LDAP_SEED_DIR.
+# This creates the root suffix entry, the admin entry, and (by default) a
+# password policy container — no sample users, groups, or other OUs. That
+# is intentional: this image never seeds demo data. The policy entries are
+# operational scaffolding the ppolicy overlay needs to do anything at all
+# (see LDAP_PASSWORD_POLICY_ENABLED in image/README.md, "Password policy"),
+# not sample content, so they don't violate that principle. Anything
+# beyond what's here belongs in LDAP_SEED_DIR.
 #
 # Tokens replaced by entrypoint.sh:
 #   __LDAP_ROOT_DN__        e.g. dc=example,dc=org
@@ -13,7 +17,14 @@
 #   __LDAP_ORG_NAME__       e.g. Example Org
 #   __LDAP_ADMIN_DN__       e.g. cn=admin,dc=example,dc=org
 #   __LDAP_ADMIN_RDN_VALUE__ first RDN value of the admin DN, e.g. admin
-#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h {SSHA}`
+#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h "$LDAP_PASSWORD_HASH"`
+#                           (default {ARGON2})
+#   #__PASSWORD_POLICY__    (full-line anchor, see the ANCHOR note in
+#                           entrypoint.sh) replaced with the whole
+#                           ou=policies + cn=default pwdPolicy entry pair
+#                           built from LDAP_PASSWORD_POLICY_ENABLED and
+#                           friends, or dropped with no replacement when
+#                           the policy is disabled
 #
 dn: __LDAP_ROOT_DN__
 objectClass: dcObject
@@ -27,3 +38,5 @@ objectClass: simpleSecurityObject
 cn: __LDAP_ADMIN_RDN_VALUE__
 description: LDAP administrator
 userPassword: __LDAP_ADMIN_PW_HASH__
+
+#__PASSWORD_POLICY__

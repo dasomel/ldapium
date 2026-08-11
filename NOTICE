@@ -29,6 +29,7 @@ Linked third-party libraries and their licenses:
     Cyrus SASL       BSD (4-clause, UC Regents variant)
     libltdl (GNU libtool) LGPL-2.1-or-later — dynamically linked only
     LMDB             The OpenLDAP Public License
+    libargon2        CC0-1.0 / Apache License 2.0 (dual-licensed, dynamically linked)
 
 The experimental back-sql backend is deliberately NOT built, so unixODBC
 (LGPL-2.1 libraries / GPL-2.0 programs) is neither linked nor distributed.
