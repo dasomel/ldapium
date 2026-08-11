@@ -189,7 +189,7 @@ export function ChangePasswordPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="new-password">{t('changePassword.newPasswordLabel')}</Label>
+              <Label htmlFor="new-password">{t('common.newPasswordLabel')}</Label>
               <Input
                 id="new-password"
                 type="password"

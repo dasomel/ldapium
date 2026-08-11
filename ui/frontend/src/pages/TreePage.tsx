@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FileSearch, FolderTree, Loader2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { useT } from '@/context/LanguageContext'
 import type { Entry, TreeNode } from '@/lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -9,6 +10,7 @@ import { TreeNodeRow } from '@/components/tree/TreeNodeRow'
 import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 
 export function TreePage() {
+  const t = useT()
   const [roots, setRoots] = useState<TreeNode[] | null>(null)
   const [rootError, setRootError] = useState<string | null>(null)
   const [selectedDn, setSelectedDn] = useState<string | null>(null)
@@ -26,7 +28,7 @@ export function TreePage() {
     api
       .tree()
       .then(setRoots)
-      .catch((err) => setRootError(err instanceof ApiError ? err.message : 'Failed to load the base DN'))
+      .catch((err) => setRootError(err instanceof ApiError ? err.message : t('tree.loadBaseFailed')))
   }
 
   useEffect(() => {
@@ -43,7 +45,7 @@ export function TreePage() {
         if (!cancelled) setEntry(e)
       })
       .catch((err) => {
-        if (!cancelled) setEntryError(err instanceof ApiError ? err.message : 'Failed to load entry')
+        if (!cancelled) setEntryError(err instanceof ApiError ? err.message : t('tree.loadEntryFailed'))
       })
       .finally(() => {
         if (!cancelled) setEntryLoading(false)
@@ -59,19 +61,17 @@ export function TreePage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FolderTree className="size-4 text-accent" />
-            DIT Browser
+            {t('tree.browserTitle')}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-1 overflow-auto p-2">
           {rootError && <ErrorState message={rootError} onRetry={loadRoots} />}
           {!rootError && roots === null && (
             <div className="flex items-center gap-2 px-2 py-3 text-[13px] text-muted-foreground">
-              <Spinner /> Loading base DN…
+              <Spinner /> {t('tree.loadingBase')}
             </div>
           )}
-          {roots?.length === 0 && (
-            <EmptyState icon={FolderTree} title="No entries under the base DN" />
-          )}
+          {roots?.length === 0 && <EmptyState icon={FolderTree} title={t('tree.noEntriesTitle')} />}
           {roots?.map((node) => (
             <TreeNodeRow key={node.dn} node={node} depth={0} selectedDn={selectedDn} onSelect={setSelectedDn} />
           ))}
@@ -82,20 +82,20 @@ export function TreePage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileSearch className="size-4 text-accent" />
-            {selectedDn ? 'Entry attributes' : 'Select an entry'}
+            {selectedDn ? t('tree.entryAttributesTitle') : t('tree.selectEntryTitle')}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-1 overflow-auto p-0">
           {!selectedDn && (
             <EmptyState
               icon={FileSearch}
-              title="Nothing selected"
-              description="Pick an entry from the tree on the left to inspect its attributes."
+              title={t('tree.nothingSelectedTitle')}
+              description={t('tree.nothingSelectedDescription')}
             />
           )}
           {selectedDn && entryLoading && (
             <div className="flex items-center gap-2 px-4 py-4 text-[13px] text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" /> Loading entry…
+              <Loader2 className="size-3.5 animate-spin" /> {t('tree.loadingEntry')}
             </div>
           )}
           {entryError && <ErrorState message={entryError} />}

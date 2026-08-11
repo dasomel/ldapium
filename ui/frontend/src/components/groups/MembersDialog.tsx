@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { EmptyState } from '@/components/ui/empty-state'
 import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
+import { useT } from '@/context/LanguageContext'
 import { api } from '@/lib/api'
 import type { Group } from '@/lib/types'
 
@@ -34,6 +35,7 @@ function looksLikeDN(input: string): boolean {
 }
 
 export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: MembersDialogProps) {
+  const t = useT()
   const [members, setMembers] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -89,7 +91,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
         // back to the plain "paste a DN" path and say why the list isn't
         // there, same principle as the schema-editing fallback.
         setCandidates([])
-        setCandidatesError(err instanceof Error ? err.message : 'Failed to load users/groups')
+        setCandidatesError(err instanceof Error ? err.message : t('membersDialog.loadCandidatesFailedGeneric'))
       })
   }, [open])
 
@@ -116,7 +118,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
       setMembers((m) => [...m, dn])
       setQuery('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add member')
+      setError(err instanceof Error ? err.message : t('membersDialog.addMemberFailed'))
     } finally {
       setBusyDn(null)
     }
@@ -135,7 +137,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
       await onRemove(group.dn, memberDn)
       setMembers((m) => m.filter((d) => d !== memberDn))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove member')
+      setError(err instanceof Error ? err.message : t('membersDialog.removeMemberFailed'))
     } finally {
       setBusyDn(null)
     }
@@ -147,7 +149,10 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users2 className="size-4 text-accent" />
-            Members <span className="font-mono text-xs font-normal text-muted-foreground">(<GlossaryTerm term="member">member</GlossaryTerm>)</span>
+            {t('common.members')}{' '}
+            <span className="font-mono text-xs font-normal text-muted-foreground">
+              (<GlossaryTerm term="member">member</GlossaryTerm>)
+            </span>
           </DialogTitle>
           <DialogDescription className="font-mono">{group?.dn}</DialogDescription>
         </DialogHeader>
@@ -155,20 +160,20 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
           <div className="space-y-1.5">
             <form onSubmit={handleSubmit} className="flex gap-2">
               <Input
-                placeholder="Search by name, or paste a full DN"
+                placeholder={t('membersDialog.searchPlaceholder')}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="font-mono"
               />
               <Button type="submit" disabled={!query.trim() || busyDn === query.trim()}>
                 <UserPlus className="size-4" />
-                Add
+                {t('common.add')}
               </Button>
             </form>
 
             {candidatesError && (
               <p className="text-[12px] text-muted-foreground">
-                Couldn't load a pick list ({candidatesError}) — paste a full DN above to add someone.
+                {t('membersDialog.pickListError', { error: candidatesError })}
               </p>
             )}
 
@@ -199,10 +204,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
             )}
 
             {hasGroupCandidates && (
-              <p className="text-[12px] text-muted-foreground">
-                Groups can be members too, for nesting. OpenLDAP does not automatically expand nested
-                groups — a member of a member group won't show up here or count as a member of this one.
-              </p>
+              <p className="text-[12px] text-muted-foreground">{t('membersDialog.nestedGroupsNote')}</p>
             )}
           </div>
 
@@ -214,7 +216,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
 
           <div className="max-h-72 overflow-auto rounded-console border border-border">
             {members.length === 0 ? (
-              <EmptyState icon={Users2} title="No members" className="py-8" />
+              <EmptyState icon={Users2} title={t('membersDialog.noMembers')} className="py-8" />
             ) : (
               <ul className="divide-y divide-border">
                 {members.map((m) => (
@@ -225,7 +227,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
                     <Button
                       variant="ghost"
                       size="icon"
-                      title="Remove member"
+                      title={t('membersDialog.removeMemberTitle')}
                       disabled={busyDn === m}
                       onClick={() => handleRemove(m)}
                       className="shrink-0 hover:bg-danger/10 hover:text-danger"
@@ -240,7 +242,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
+            {t('common.close')}
           </Button>
         </DialogFooter>
       </DialogContent>

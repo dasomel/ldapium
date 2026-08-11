@@ -3,6 +3,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useT } from '@/context/LanguageContext'
 import type { User } from '@/lib/types'
 
 interface SetPasswordDialogProps {
@@ -16,6 +17,7 @@ interface SetPasswordDialogProps {
  * — never a raw userPassword write — so the directory's own hashing
  * scheme and password policy apply. */
 export function SetPasswordDialog({ open, onOpenChange, user, onSubmit }: SetPasswordDialogProps) {
+  const t = useT()
   const [password, setPassword] = useState('')
   const [generated, setGenerated] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -40,7 +42,7 @@ export function SetPasswordDialog({ open, onOpenChange, user, onSubmit }: SetPas
         reset()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set password')
+      setError(err instanceof Error ? err.message : t('setPasswordDialog.genericError'))
     } finally {
       setBusy(false)
     }
@@ -56,21 +58,19 @@ export function SetPasswordDialog({ open, onOpenChange, user, onSubmit }: SetPas
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Set password</DialogTitle>
+          <DialogTitle>{t('setPasswordDialog.title')}</DialogTitle>
           <DialogDescription className="font-mono">{user?.dn}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           {generated ? (
             <div className="space-y-1.5">
-              <Label>Server-generated password</Label>
+              <Label>{t('setPasswordDialog.generatedLabel')}</Label>
               <Input readOnly value={generated} className="font-mono" onFocus={(e) => e.target.select()} />
-              <p className="text-[12px] text-muted-foreground">
-                Copy this now — it won't be shown again.
-              </p>
+              <p className="text-[12px] text-muted-foreground">{t('setPasswordDialog.copyNowHint')}</p>
             </div>
           ) : (
             <div className="space-y-1.5">
-              <Label htmlFor="new-password">New password</Label>
+              <Label htmlFor="new-password">{t('common.newPasswordLabel')}</Label>
               <Input
                 id="new-password"
                 type="password"
@@ -79,9 +79,7 @@ export function SetPasswordDialog({ open, onOpenChange, user, onSubmit }: SetPas
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              <p className="text-[12px] text-muted-foreground">
-                Leave blank to have the directory server generate one instead.
-              </p>
+              <p className="text-[12px] text-muted-foreground">{t('setPasswordDialog.blankHint')}</p>
             </div>
           )}
           {error && (
@@ -92,14 +90,14 @@ export function SetPasswordDialog({ open, onOpenChange, user, onSubmit }: SetPas
         </DialogBody>
         <DialogFooter>
           {generated ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{t('common.done')}</Button>
           ) : (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button onClick={handleSubmit} disabled={busy}>
-                {busy ? 'Setting…' : 'Set password'}
+                {busy ? t('setPasswordDialog.settingBusy') : t('setPasswordDialog.title')}
               </Button>
             </>
           )}

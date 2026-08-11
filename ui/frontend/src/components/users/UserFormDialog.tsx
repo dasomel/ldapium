@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
+import { useT } from '@/context/LanguageContext'
 import type { User, UserFormInput } from '@/lib/types'
 
 interface UserFormDialogProps {
@@ -16,6 +17,7 @@ interface UserFormDialogProps {
 const emptyForm: UserFormInput = { uid: '', cn: '', sn: '', givenName: '', mail: '', password: '' }
 
 export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormDialogProps) {
+  const t = useT()
   const [form, setForm] = useState<UserFormInput>(emptyForm)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -39,7 +41,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
       await onSubmit(form)
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save user')
+      setError(err instanceof Error ? err.message : t('userForm.genericError'))
     } finally {
       setBusy(false)
     }
@@ -50,7 +52,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
       <DialogContent>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>{isEdit ? 'Edit user' : 'New user'}</DialogTitle>
+            <DialogTitle>{isEdit ? t('userForm.editTitle') : t('userForm.newTitle')}</DialogTitle>
           </DialogHeader>
           <DialogBody className="space-y-3.5">
             <div className="grid grid-cols-2 gap-3">
@@ -80,7 +82,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="givenName">Given name</Label>
+                <Label htmlFor="givenName">{t('userForm.givenNameLabel')}</Label>
                 <Input
                   id="givenName"
                   value={form.givenName}
@@ -107,7 +109,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
             </div>
             {!isEdit && (
               <div className="space-y-1.5">
-                <Label htmlFor="password">Initial password (optional)</Label>
+                <Label htmlFor="password">{t('userForm.initialPasswordLabel')}</Label>
                 <Input
                   id="password"
                   type="password"
@@ -115,9 +117,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
                   value={form.password}
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                 />
-                <p className="text-[12px] text-muted-foreground">
-                  Set via the LDAP Password Modify operation (RFC 3062). Leave blank to set it later.
-                </p>
+                <p className="text-[12px] text-muted-foreground">{t('userForm.initialPasswordHint')}</p>
               </div>
             )}
             {error && (
@@ -128,10 +128,10 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create user'}
+              {busy ? t('common.saving') : isEdit ? t('common.saveChanges') : t('userForm.createButton')}
             </Button>
           </DialogFooter>
         </form>

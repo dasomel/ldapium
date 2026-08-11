@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
+import { useT } from '@/context/LanguageContext'
 import type { Group, GroupFormInput } from '@/lib/types'
 
 interface GroupFormDialogProps {
@@ -16,6 +17,7 @@ interface GroupFormDialogProps {
 const emptyForm: GroupFormInput = { cn: '', description: '' }
 
 export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFormDialogProps) {
+  const t = useT()
   const [form, setForm] = useState<GroupFormInput>(emptyForm)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -35,7 +37,7 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
       await onSubmit(form)
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save group')
+      setError(err instanceof Error ? err.message : t('groupForm.genericError'))
     } finally {
       setBusy(false)
     }
@@ -46,7 +48,7 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
       <DialogContent>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>{isEdit ? 'Edit group' : 'New group'}</DialogTitle>
+            <DialogTitle>{isEdit ? t('groupForm.editTitle') : t('groupForm.newTitle')}</DialogTitle>
           </DialogHeader>
           <DialogBody className="space-y-3.5">
             <div className="space-y-1.5">
@@ -62,7 +64,7 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="group-description">Description</Label>
+              <Label htmlFor="group-description">{t('common.description')}</Label>
               <Input
                 id="group-description"
                 value={form.description}
@@ -71,9 +73,10 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
             </div>
             {!isEdit && (
               <p className="text-[12px] text-muted-foreground">
-                <GlossaryTerm term="groupOfNames">groupOfNames</GlossaryTerm> requires at least one{' '}
-                <GlossaryTerm term="member">member</GlossaryTerm>, so the new group starts with you as
-                its first member — add the real member(s) and remove yourself afterwards if needed.
+                <GlossaryTerm term="groupOfNames">groupOfNames</GlossaryTerm>
+                {t('groupForm.firstMemberNoteMiddle')}
+                <GlossaryTerm term="member">member</GlossaryTerm>
+                {t('groupForm.firstMemberNoteEnd')}
               </p>
             )}
             {error && (
@@ -84,10 +87,10 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create group'}
+              {busy ? t('common.saving') : isEdit ? t('common.saveChanges') : t('groupForm.createButton')}
             </Button>
           </DialogFooter>
         </form>

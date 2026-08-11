@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { useT } from '@/context/LanguageContext'
 import type { TreeNode } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -15,6 +16,7 @@ interface TreeNodeRowProps {
  * first expand, matching how sysadmins actually explore large directories
  * (never eagerly load the whole subtree). */
 export function TreeNodeRow({ node, depth, selectedDn, onSelect }: TreeNodeRowProps) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -34,7 +36,7 @@ export function TreeNodeRow({ node, depth, selectedDn, onSelect }: TreeNodeRowPr
     try {
       setChildren(await api.tree(node.dn))
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load children')
+      setError(err instanceof ApiError ? err.message : t('tree.loadChildrenFailed'))
     } finally {
       setLoading(false)
     }
@@ -73,7 +75,7 @@ export function TreeNodeRow({ node, depth, selectedDn, onSelect }: TreeNodeRowPr
               style={{ paddingLeft: 8 + (depth + 1) * 16 }}
               className="flex items-center gap-1.5 py-1.5 text-[12px] text-muted-foreground"
             >
-              <Loader2 className="size-3 animate-spin" /> Loading…
+              <Loader2 className="size-3 animate-spin" /> {t('tree.loadingChildren')}
             </div>
           )}
           {error && (
@@ -83,7 +85,7 @@ export function TreeNodeRow({ node, depth, selectedDn, onSelect }: TreeNodeRowPr
           )}
           {children?.length === 0 && !loading && (
             <div style={{ paddingLeft: 8 + (depth + 1) * 16 }} className="py-1.5 text-[12px] text-muted-foreground">
-              No entries
+              {t('tree.noEntriesShort')}
             </div>
           )}
           {children?.map((child) => (

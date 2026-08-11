@@ -3,6 +3,7 @@ import { Pencil, Plus, Search, Trash2, Users2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { Group, GroupFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
+import { useT } from '@/context/LanguageContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +16,7 @@ import { MembersDialog } from '@/components/groups/MembersDialog'
 
 export function GroupsPage() {
   const { notify } = useToast()
+  const t = useT()
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,7 +37,7 @@ export function GroupsPage() {
         setGroups(items)
         setTruncated(truncated)
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load groups'))
+      .catch((err) => setError(err instanceof ApiError ? err.message : t('groups.loadFailed')))
   }
 
   useEffect(load, [])
@@ -50,10 +52,10 @@ export function GroupsPage() {
   async function handleCreateOrUpdate(input: GroupFormInput) {
     if (editing) {
       await api.updateGroup({ ...input, dn: editing.dn })
-      notify('success', `Updated ${input.cn}`)
+      notify('success', t('groups.updatedToast', { cn: input.cn }))
     } else {
       await api.createGroup(input)
-      notify('success', `Created group ${input.cn}`)
+      notify('success', t('groups.createdToast', { cn: input.cn }))
     }
     load()
   }
@@ -61,7 +63,7 @@ export function GroupsPage() {
   async function handleDelete() {
     if (!deleting) return
     await api.deleteGroup(deleting.dn)
-    notify('success', `Deleted ${deleting.cn}`)
+    notify('success', t('groups.deletedToast', { cn: deleting.cn }))
     setDeleting(null)
     load()
   }
@@ -95,7 +97,7 @@ export function GroupsPage() {
         <div className="relative w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Filter groups…"
+            placeholder={t('groups.filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-8"
@@ -108,7 +110,7 @@ export function GroupsPage() {
           }}
         >
           <Plus className="size-4" />
-          New group
+          {t('groups.newGroupButton')}
         </Button>
       </div>
 
@@ -116,46 +118,45 @@ export function GroupsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users2 className="size-4 text-accent" />
-            Groups
+            {t('nav.groups')}
             {groups && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
           </CardTitle>
         </CardHeader>
         {truncated && (
           <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
-            Showing the first {groups?.length ?? 0} groups — the directory has more than fit in one
-            response. Filter below to find a specific group.
+            {t('groups.truncatedBanner', { n: groups?.length ?? 0 })}
           </div>
         )}
         <CardContent className="p-0">
           {error && <ErrorState message={error} onRetry={load} />}
           {!error && groups === null && (
             <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
-              <Spinner /> Loading groups…
+              <Spinner /> {t('groups.loading')}
             </div>
           )}
           {groups?.length === 0 && (
             <EmptyState
               icon={Users2}
-              title="No groups yet"
-              description="Create the first group to start organizing access."
+              title={t('groups.emptyTitle')}
+              description={t('groups.emptyDescription')}
               action={
                 <Button size="sm" onClick={() => setFormOpen(true)}>
-                  <Plus className="size-4" /> New group
+                  <Plus className="size-4" /> {t('groups.newGroupButton')}
                 </Button>
               }
             />
           )}
           {!!groups?.length && filtered.length === 0 && (
-            <EmptyState icon={Search} title="No matches" description={`Nothing matches "${query}".`} />
+            <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
           )}
           {filtered.length > 0 && (
             <Table>
               <TableHead>
                 <tr>
                   <TableHeadCell>cn</TableHeadCell>
-                  <TableHeadCell>Description</TableHeadCell>
-                  <TableHeadCell>Members</TableHeadCell>
-                  <TableHeadCell className="text-right">Actions</TableHeadCell>
+                  <TableHeadCell>{t('common.description')}</TableHeadCell>
+                  <TableHeadCell>{t('common.members')}</TableHeadCell>
+                  <TableHeadCell className="text-right">{t('common.actions')}</TableHeadCell>
                 </tr>
               </TableHead>
               <TableBody>
@@ -184,7 +185,7 @@ export function GroupsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Manage members"
+                          title={t('groups.manageMembersTitle')}
                           onClick={() => setMembersGroup(g)}
                         >
                           <Users2 className="size-3.5" />
@@ -192,7 +193,7 @@ export function GroupsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Edit"
+                          title={t('common.edit')}
                           onClick={() => {
                             setEditing(g)
                             setFormOpen(true)
@@ -203,7 +204,7 @@ export function GroupsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Delete"
+                          title={t('common.delete')}
                           className="hover:bg-danger/10 hover:text-danger"
                           onClick={() => setDeleting(g)}
                         >
@@ -230,8 +231,8 @@ export function GroupsPage() {
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}
-        title="Delete group"
-        description={`This permanently removes ${deleting?.dn ?? 'this entry'} from the directory.`}
+        title={t('groups.deleteTitle')}
+        description={t('groups.deleteDescription', { dn: deleting?.dn ?? t('common.thisEntry') })}
         requireText={deleting?.cn}
         onConfirm={handleDelete}
       />

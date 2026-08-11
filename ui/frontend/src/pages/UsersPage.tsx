@@ -3,6 +3,7 @@ import { KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound } from 
 import { api, ApiError } from '@/lib/api'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
+import { useLanguage } from '@/context/LanguageContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +17,7 @@ import { MemberOfDialog } from '@/components/users/MemberOfDialog'
 
 export function UsersPage() {
   const { notify } = useToast()
+  const { language, t } = useLanguage()
   const [users, setUsers] = useState<User[] | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +39,7 @@ export function UsersPage() {
         setUsers(items)
         setTruncated(truncated)
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load users'))
+      .catch((err) => setError(err instanceof ApiError ? err.message : t('users.loadFailed')))
   }
 
   useEffect(load, [])
@@ -54,24 +56,24 @@ export function UsersPage() {
   async function handleCreateOrUpdate(input: UserFormInput) {
     if (editing) {
       await api.updateUser({ ...input, dn: editing.dn })
-      notify('success', `Updated ${input.uid || editing.uid}`)
+      notify('success', t('users.updatedToast', { name: input.uid || editing.uid }))
     } else {
       await api.createUser(input)
-      notify('success', `Created user ${input.uid}`)
+      notify('success', t('users.createdToast', { uid: input.uid }))
     }
     load()
   }
 
   async function handleSetPassword(dn: string, password: string) {
     const res = await api.setPassword(dn, password || undefined)
-    notify('success', 'Password updated')
+    notify('success', t('users.passwordUpdatedToast'))
     return res.generatedPassword
   }
 
   async function handleDelete() {
     if (!deleting) return
     await api.deleteUser(deleting.dn)
-    notify('success', `Deleted ${deleting.uid}`)
+    notify('success', t('users.deletedToast', { uid: deleting.uid }))
     setDeleting(null)
     load()
   }
@@ -83,10 +85,10 @@ export function UsersPage() {
   async function handleUnlock(u: User) {
     try {
       await api.unlockUser(u.dn)
-      notify('success', `Unlocked ${u.uid}`)
+      notify('success', t('users.unlockedToast', { uid: u.uid }))
       load()
     } catch (err) {
-      notify('error', err instanceof ApiError ? err.message : `Failed to unlock ${u.uid}`)
+      notify('error', err instanceof ApiError ? err.message : t('users.unlockFailedToast', { uid: u.uid }))
     }
   }
 
@@ -109,7 +111,7 @@ export function UsersPage() {
         <div className="relative w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Filter users…"
+            placeholder={t('users.filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-8"
@@ -122,7 +124,7 @@ export function UsersPage() {
           }}
         >
           <Plus className="size-4" />
-          New user
+          {t('users.newUserButton')}
         </Button>
       </div>
 
@@ -130,48 +132,47 @@ export function UsersPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <UserRound className="size-4 text-accent" />
-            Users
+            {t('users.title')}
             {users && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
           </CardTitle>
         </CardHeader>
         {truncated && (
           <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
-            Showing the first {users?.length ?? 0} users — the directory has more than fit in one
-            response. Filter below to find a specific user.
+            {t('users.truncatedBanner', { n: users?.length ?? 0 })}
           </div>
         )}
         <CardContent className="p-0">
           {error && <ErrorState message={error} onRetry={load} />}
           {!error && users === null && (
             <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
-              <Spinner /> Loading users…
+              <Spinner /> {t('users.loading')}
             </div>
           )}
           {users?.length === 0 && (
             <EmptyState
               icon={UserRound}
-              title="No users yet"
-              description="Create the first directory user to get started."
+              title={t('users.emptyTitle')}
+              description={t('users.emptyDescription')}
               action={
                 <Button size="sm" onClick={() => setFormOpen(true)}>
-                  <Plus className="size-4" /> New user
+                  <Plus className="size-4" /> {t('users.newUserButton')}
                 </Button>
               }
             />
           )}
           {!!users?.length && filtered.length === 0 && (
-            <EmptyState icon={Search} title="No matches" description={`Nothing matches "${query}".`} />
+            <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
           )}
           {filtered.length > 0 && (
             <Table>
               <TableHead>
                 <tr>
                   <TableHeadCell>uid</TableHeadCell>
-                  <TableHeadCell>Name</TableHeadCell>
-                  <TableHeadCell>Mail</TableHeadCell>
-                  <TableHeadCell>Groups</TableHeadCell>
-                  <TableHeadCell>Status</TableHeadCell>
-                  <TableHeadCell className="text-right">Actions</TableHeadCell>
+                  <TableHeadCell>{t('users.colName')}</TableHeadCell>
+                  <TableHeadCell>{t('users.colMail')}</TableHeadCell>
+                  <TableHeadCell>{t('nav.groups')}</TableHeadCell>
+                  <TableHeadCell>{t('users.colStatus')}</TableHeadCell>
+                  <TableHeadCell className="text-right">{t('common.actions')}</TableHeadCell>
                 </tr>
               </TableHead>
               <TableBody>
@@ -202,10 +203,16 @@ export function UsersPage() {
                         <Badge
                           variant="danger"
                           className="gap-1"
-                          title={u.lockedAt ? `Locked since ${new Date(u.lockedAt).toLocaleString()}` : 'Locked'}
+                          title={
+                            u.lockedAt
+                              ? t('users.lockedSince', {
+                                  date: new Date(u.lockedAt).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US'),
+                                })
+                              : t('users.lockedBadge')
+                          }
                         >
                           <Lock className="size-3" />
-                          Locked
+                          {t('users.lockedBadge')}
                         </Badge>
                       ) : (
                         <span className="text-muted-foreground">—</span>
@@ -217,7 +224,7 @@ export function UsersPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            title="Unlock account"
+                            title={t('users.unlockTitle')}
                             onClick={() => handleUnlock(u)}
                           >
                             <Unlock className="size-3.5" />
@@ -226,7 +233,7 @@ export function UsersPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Edit"
+                          title={t('common.edit')}
                           onClick={() => {
                             setEditing(u)
                             setFormOpen(true)
@@ -237,7 +244,7 @@ export function UsersPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Set password"
+                          title={t('setPasswordDialog.title')}
                           onClick={() => setPasswordUser(u)}
                         >
                           <KeyRound className="size-3.5" />
@@ -245,7 +252,7 @@ export function UsersPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Delete"
+                          title={t('common.delete')}
                           className="hover:bg-danger/10 hover:text-danger"
                           onClick={() => setDeleting(u)}
                         >
@@ -272,8 +279,8 @@ export function UsersPage() {
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}
-        title="Delete user"
-        description={`This permanently removes ${deleting?.dn ?? 'this entry'} from the directory.`}
+        title={t('users.deleteTitle')}
+        description={t('users.deleteDescription', { dn: deleting?.dn ?? t('common.thisEntry') })}
         requireText={deleting?.uid}
         onConfirm={handleDelete}
       />

@@ -2,13 +2,16 @@ import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
 import { LockKeyhole, TerminalSquare } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import { useT } from '@/context/LanguageContext'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 
 export function LoginPage() {
   const { dn, login } = useAuth()
+  const t = useT()
   const [identity, setIdentity] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -23,7 +26,7 @@ export function LoginPage() {
     try {
       await login(identity, password)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not reach the server.')
+      setError(err instanceof ApiError ? err.message : t('login.connectionError'))
     } finally {
       setBusy(false)
     }
@@ -38,7 +41,7 @@ export function LoginPage() {
           </div>
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Directory Console</h1>
-            <p className="text-[13px] text-muted-foreground">Sign in with your directory credentials</p>
+            <p className="text-[13px] text-muted-foreground">{t('login.subtitle')}</p>
           </div>
         </div>
 
@@ -47,7 +50,11 @@ export function LoginPage() {
           className="animate-console-in space-y-4 rounded-console border border-border bg-surface p-5 shadow-panel"
         >
           <div className="space-y-1.5">
-            <Label htmlFor="identity">DN or uid</Label>
+            <Label htmlFor="identity">
+              <GlossaryTerm term="dn">DN</GlossaryTerm>
+              {t('login.identityLabelJoiner')}
+              <GlossaryTerm term="uid">uid</GlossaryTerm>
+            </Label>
             <Input
               id="identity"
               autoFocus
@@ -60,7 +67,7 @@ export function LoginPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t('login.passwordLabel')}</Label>
             <Input
               id="password"
               type="password"
@@ -79,13 +86,11 @@ export function LoginPage() {
 
           <Button type="submit" disabled={busy} className="w-full">
             <LockKeyhole className="size-4" />
-            {busy ? 'Binding…' : 'Sign in'}
+            {busy ? t('login.bindingBusy') : t('login.signInButton')}
           </Button>
         </form>
 
-        <p className="mt-4 text-center text-[12px] text-muted-foreground">
-          Authenticated by an LDAP bind. Your permissions are whatever your directory account allows.
-        </p>
+        <p className="mt-4 text-center text-[12px] text-muted-foreground">{t('login.footerNote')}</p>
       </div>
     </div>
   )

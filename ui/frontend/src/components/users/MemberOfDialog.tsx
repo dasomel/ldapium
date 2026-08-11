@@ -3,6 +3,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
+import { useT } from '@/context/LanguageContext'
 import type { User } from '@/lib/types'
 
 interface MemberOfDialogProps {
@@ -15,6 +16,7 @@ interface MemberOfDialogProps {
 // each group's own member attribute, so it can't be edited here. Change
 // membership from the Groups page's Members dialog instead.
 export function MemberOfDialog({ open, onOpenChange, user }: MemberOfDialogProps) {
+  const t = useT()
   const groups = user?.memberOf ?? []
 
   return (
@@ -23,7 +25,7 @@ export function MemberOfDialog({ open, onOpenChange, user }: MemberOfDialogProps
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users2 className="size-4 text-accent" />
-            Group membership{' '}
+            {t('memberOfDialog.title')}{' '}
             <span className="font-mono text-xs font-normal text-muted-foreground">
               (<GlossaryTerm term="memberOf">memberOf</GlossaryTerm>)
             </span>
@@ -33,7 +35,7 @@ export function MemberOfDialog({ open, onOpenChange, user }: MemberOfDialogProps
         <DialogBody>
           <div className="max-h-72 overflow-auto rounded-console border border-border">
             {groups.length === 0 ? (
-              <EmptyState icon={Users2} title="No group membership" className="py-8" />
+              <EmptyState icon={Users2} title={t('memberOfDialog.noGroupMembership')} className="py-8" />
             ) : (
               <ul className="divide-y divide-border">
                 {groups.map((dn) => (
@@ -47,7 +49,7 @@ export function MemberOfDialog({ open, onOpenChange, user }: MemberOfDialogProps
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
+            {t('common.close')}
           </Button>
         </DialogFooter>
       </DialogContent>

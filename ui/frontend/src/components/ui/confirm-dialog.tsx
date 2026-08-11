@@ -4,6 +4,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Button } from './button'
 import { Input } from './input'
 import { Label } from './label'
+import { useT } from '@/context/LanguageContext'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -26,9 +27,10 @@ export function ConfirmDialog({
   title,
   description,
   requireText,
-  confirmLabel = 'Delete',
+  confirmLabel,
   onConfirm,
 }: ConfirmDialogProps) {
+  const t = useT()
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -68,7 +70,8 @@ export function ConfirmDialog({
         {requireText && (
           <DialogBody>
             <Label htmlFor="confirm-text">
-              Type <span className="font-mono normal-case text-foreground">{requireText}</span> to confirm
+              <span className="font-mono normal-case text-foreground">{requireText}</span>
+              {t('confirmDialog.typeToConfirmSuffix')}
             </Label>
             <Input
               id="confirm-text"
@@ -83,10 +86,10 @@ export function ConfirmDialog({
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button variant="danger" onClick={handleConfirm} disabled={!canConfirm || busy}>
-            {busy ? 'Working…' : confirmLabel}
+            {busy ? t('common.working') : (confirmLabel ?? t('common.delete'))}
           </Button>
         </DialogFooter>
       </DialogContent>

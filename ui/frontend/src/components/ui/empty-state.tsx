@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import { useT } from '@/context/LanguageContext'
 import { cn } from '@/lib/utils'
 
 interface EmptyStateProps {
@@ -26,18 +27,21 @@ export function EmptyState({ icon: Icon, title, description, action, className }
 }
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const t = useT()
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <div className="flex size-11 items-center justify-center rounded-full border border-danger/30 bg-danger/10 text-danger">
         !
       </div>
       <div className="space-y-1">
-        <p className="text-sm font-medium text-foreground">Something went wrong</p>
+        <p className="text-sm font-medium text-foreground">{t('common.somethingWrong')}</p>
+        {/* message is the server's/network's own error text — never
+         * translated, see lib/i18n/en.ts's file-level comment. */}
         <p className="max-w-sm font-mono text-[12.5px] text-muted-foreground">{message}</p>
       </div>
       {onRetry && (
         <button onClick={onRetry} className="text-[13px] font-medium text-accent hover:underline">
-          Retry
+          {t('common.retry')}
         </button>
       )}
     </div>
