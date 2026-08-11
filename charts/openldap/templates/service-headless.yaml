@@ -1,0 +1,30 @@
+# Headless Service used for two things:
+# 1. StatefulSet requires a governing Service (`serviceName` below).
+# 2. Replication peer FQDNs (LDAP_REPLICATION_PEERS) resolve through this —
+#    publishNotReadyAddresses is required so a peer's DNS name resolves
+#    before that peer itself passes readiness (otherwise the first
+#    replicated pair can deadlock: each waits on the other's DNS record,
+#    which only appears once it's Ready).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openldap.headlessName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: ldap
+      port: {{ .Values.service.ldapPort }}
+      targetPort: ldap
+      protocol: TCP
+    {{- if .Values.tls.enabled }}
+    - name: ldaps
+      port: {{ .Values.service.ldapsPort }}
+      targetPort: ldaps
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "openldap.selectorLabels" . | nindent 4 }}

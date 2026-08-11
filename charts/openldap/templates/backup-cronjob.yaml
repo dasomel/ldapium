@@ -1,0 +1,230 @@
+# Network-based LDAP backup. Reuses the server image (ldapsearch/gzip/find
+# are already in it) rather than shelling into the server pod: slapcat needs
+# local filesystem access to the data PVC, which is ReadWriteOnce and already
+# held by the running server pod, so a second pod can't attach it. ldapsearch
+# over the network sidesteps that entirely.
+#
+# '*' '+' requests both user attributes and operational attributes
+# (entryUUID, entryCSN, creatorsName, modifyTimestamp, ...) — without '+' a
+# slapadd restore would create fresh entryUUIDs/CSNs for every entry, which
+# is not a restore, it's a new directory that happens to contain the same
+# data. See README.md's Restore section for how these files get used.
+#
+# Password is passed via -y (a file), never -w (a command-line arg visible to
+# any local user via `ps`). The file comes from the same admin Secret the
+# server itself uses (openldap.adminSecretName) — this chart fails render
+# rather than ship a default admin password, and the backup job piggybacks on
+# that same guarantee instead of needing its own.
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "openldap.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.backup.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: {{ .Values.backup.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.backup.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "openldap.backup.selectorLabels" . | nindent 12 }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.backup.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              image: {{ include "openldap.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.backup.securityContext | nindent 16 }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+
+                  ts=$(date -u +%Y%m%dT%H%M%SZ)
+                  backup_dir=/backup
+                  work_dir=/tmp
+                  pwfile=/etc/openldap-backup/admin-password
+
+                  log() { printf '[backup] %s\n' "$*" >&2; }
+
+                  dump_entry_count=0
+
+                  # $1 = bind DN, $2 = search base, $3 = output basename.
+                  # Dumped to work_dir (emptyDir) first and gzipped to a
+                  # dotfile in backup_dir before the final mv, so a failed or
+                  # partial run never leaves a corrupt/truncated *.ldif.gz
+                  # behind under its real name (mv on the same filesystem is
+                  # atomic; work_dir and backup_dir are deliberately
+                  # different volumes, so the plaintext LDIF never touches
+                  # the backup PVC). Also sets dump_entry_count, read by the
+                  # caller right after the data dump — '|| true' because
+                  # `grep -c` exits 1 on zero matches, which set -e would
+                  # otherwise treat as this whole assignment failing.
+                  dump() {
+                    ldapsearch -x -H "$LDAP_URL" -D "$1" -y "$pwfile" \
+                      -b "$2" -o ldif-wrap=no '(objectClass=*)' '*' '+' \
+                      > "${work_dir}/${3}.ldif"
+                    dump_entry_count=$(grep -c '^dn:' "${work_dir}/${3}.ldif" || true)
+                    gzip -c "${work_dir}/${3}.ldif" > "${backup_dir}/.tmp-${3}-${ts}.ldif.gz"
+                    mv "${backup_dir}/.tmp-${3}-${ts}.ldif.gz" "${backup_dir}/${3}-${ts}.ldif.gz"
+                    rm -f "${work_dir}/${3}.ldif"
+                    log "wrote ${3}-${ts}.ldif.gz (${dump_entry_count} entries)"
+                  }
+
+                  # Records a successful backup under ou=operations so the
+                  # management UI — which only ever talks LDAP, never
+                  # Kubernetes, and has no ServiceAccount by design — can
+                  # show "last backup" via a plain bound LDAP read. No
+                  # custom schema: applicationProcess (cosine.schema, always
+                  # loaded — see image/ldifs/01-cn-config.ldif) is a stock
+                  # objectClass whose MUST is exactly cn and whose MAY
+                  # includes description, and a multi-valued description of
+                  # "key=value" pairs avoids inventing an attribute that
+                  # would then need to survive every future schema/replication/
+                  # backup change. LDAP does not order multi-valued
+                  # attributes, so the UI must parse by key, not position —
+                  # documented in README.md.
+                  #
+                  # Existence is checked by search before deciding
+                  # ldapadd-vs-ldapmodify (same idiom entrypoint.sh already
+                  # uses for syncprov/peer detection) rather than trying
+                  # ldapadd first and inspecting its exit code — that way
+                  # "Already exists" (68) is never hit in the first place.
+                  # $1 = data entry count, $2 = data file name, $3 = config
+                  # file name.
+                  record_backup_status() {
+                    ops_dn="ou=operations,${LDAP_ROOT_DN}"
+                    backup_dn="cn=backup,${ops_dn}"
+                    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                    record_ldif="${work_dir}/backup-record.ldif"
+
+                    if ! ldapsearch -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" \
+                        -b "$ops_dn" -s base -o nettimeout=5 '(objectClass=*)' 1.1 >/dev/null 2>&1; then
+                      log "creating ${ops_dn}"
+                      printf 'dn: %s\nobjectClass: organizationalUnit\nou: operations\n' "$ops_dn" \
+                        | ldapadd -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" || return 1
+                    fi
+
+                    if ldapsearch -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" \
+                        -b "$backup_dn" -s base -o nettimeout=5 '(objectClass=*)' 1.1 >/dev/null 2>&1; then
+                      {
+                        printf 'dn: %s\n' "$backup_dn"
+                        printf 'changetype: modify\n'
+                        printf 'replace: description\n'
+                        printf 'description: lastSuccessAt=%s\n' "$now"
+                        printf 'description: dataEntries=%s\n' "$1"
+                        printf 'description: dataFile=%s\n' "$2"
+                        printf 'description: configFile=%s\n' "$3"
+                      } > "$record_ldif"
+                      ldapmodify -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" -f "$record_ldif" || return 1
+                    else
+                      {
+                        printf 'dn: %s\n' "$backup_dn"
+                        printf 'objectClass: applicationProcess\n'
+                        printf 'cn: backup\n'
+                        printf 'description: lastSuccessAt=%s\n' "$now"
+                        printf 'description: dataEntries=%s\n' "$1"
+                        printf 'description: dataFile=%s\n' "$2"
+                        printf 'description: configFile=%s\n' "$3"
+                      } > "$record_ldif"
+                      ldapadd -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" -f "$record_ldif" || return 1
+                    fi
+                    rm -f "$record_ldif"
+                  }
+
+                  log "dumping data (${LDAP_ROOT_DN}) from ${LDAP_URL}"
+                  dump "$LDAP_ADMIN_DN" "$LDAP_ROOT_DN" data
+                  data_file="data-${ts}.ldif.gz"
+                  data_entries="$dump_entry_count"
+
+                  log "dumping cn=config from ${LDAP_URL}"
+                  dump "cn=admin,cn=config" "cn=config" config
+                  config_file="config-${ts}.ldif.gz"
+
+                  log "pruning backups older than ${RETENTION_DAYS} day(s)"
+                  find "$backup_dir" -maxdepth 1 -name '*.ldif.gz' -mtime "+${RETENTION_DAYS}" -print -delete
+
+                  # Recording is best-effort and runs LAST, after both dumps
+                  # and pruning have already succeeded: a failure here must
+                  # never fail the Job (the backup itself is what matters,
+                  # and a "last success" that lies about failed dumps is
+                  # worse than no status at all). set -e is suspended only
+                  # for this call; its exit status is checked explicitly.
+                  if [ "$RECORD_TO_DIRECTORY" = "true" ]; then
+                    set +e
+                    record_backup_status "$data_entries" "$data_file" "$config_file"
+                    record_rc=$?
+                    set -e
+                    if [ "$record_rc" -ne 0 ]; then
+                      log "WARNING: could not record backup status to the directory (exit ${record_rc}) — backup itself still succeeded"
+                    fi
+                  fi
+
+                  log "backup complete"
+              env:
+                - name: LDAP_URL
+                  value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "openldap.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
+                - name: LDAP_ROOT_DN
+                  value: {{ .Values.ldap.rootDN | quote }}
+                - name: LDAP_ADMIN_DN
+                  value: {{ .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) | quote }}
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backup.retentionDays | quote }}
+                - name: RECORD_TO_DIRECTORY
+                  value: {{ .Values.backup.recordToDirectory | quote }}
+              volumeMounts:
+                - name: admin-password
+                  mountPath: /etc/openldap-backup
+                  readOnly: true
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            # Mounted as a volume, never read into an env var or a -w
+            # argument — see the file header for why.
+            - name: admin-password
+              secret:
+                secretName: {{ include "openldap.adminSecretName" . }}
+                # 0400, not the 0644 default. ldapsearch checks the mode of a
+                # -y file and warns on every run otherwise:
+                #   Warning: Password file /etc/openldap-backup/admin-password
+                #   is publicly readable/writeable
+                # A warning nobody can fix is a warning everyone learns to
+                # ignore, and it is right on the merits — other processes in
+                # the pod should not be able to read it.
+                defaultMode: 0400
+                items:
+                  - key: {{ .Values.auth.existingSecretKey }}
+                    path: admin-password
+                    mode: 0400
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ include "openldap.fullname" . }}-backup
+            # readOnlyRootFilesystem needs somewhere writable for the
+            # intermediate plaintext LDIF (see dump() above).
+            - name: tmp
+              emptyDir: {}
+{{- end }}

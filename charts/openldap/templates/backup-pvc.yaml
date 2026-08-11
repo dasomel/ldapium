@@ -1,0 +1,22 @@
+# Backup destination PVC. Deliberately separate from the server's own
+# persistence.data PVC (which the CronJob pod, on a different node, generally
+# cannot even attach — RWO) and separate from the server pod's lifecycle:
+# losing/recreating the release's data PVC must not take the backups with it.
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openldap.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.backup.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.backup.persistence.accessModes | nindent 4 }}
+  {{- if .Values.backup.persistence.storageClassName }}
+  storageClassName: {{ .Values.backup.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+{{- end }}

@@ -1,0 +1,53 @@
+openldap-suite has been deployed as "{{ include "openldap.fullname" . }}" in namespace {{ .Release.Namespace }}.
+
+Server:
+  Replicas: {{ .Values.replicaCount }}
+  Replication: {{ include "openldap.replicationEnabled" . }}
+  Service (clients): {{ include "openldap.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.replication.clusterDomain }}:{{ .Values.service.ldapPort }}{{ if .Values.tls.enabled }} (also ldaps:// on {{ .Values.service.ldapsPort }}){{ end }}
+  Headless (peer discovery): {{ include "openldap.headlessName" . }}.{{ .Release.Namespace }}.svc.{{ .Values.replication.clusterDomain }}
+
+Admin bind DN: {{ .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) }}
+Admin password Secret: {{ include "openldap.adminSecretName" . }} (key: {{ .Values.auth.existingSecretKey }})
+
+Check server status:
+  kubectl -n {{ .Release.Namespace }} get pods -l {{ include "openldap.selectorLabels" . | replace "\n" "," }}
+
+Port-forward and test a bind:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "openldap.fullname" . }} 3389:{{ .Values.service.ldapPort }}
+  ldapwhoami -x -H ldap://localhost:3389 \
+    -D {{ .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) | quote }} \
+    -w "$(kubectl -n {{ .Release.Namespace }} get secret {{ include "openldap.adminSecretName" . }} -o jsonpath='{.data.{{ .Values.auth.existingSecretKey }}}' | base64 -d)"
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+Replication is multi-provider (every replica accepts writes; see
+REPLICATION-CONTRACT.md in the repo for the design). Check convergence with:
+  kubectl -n {{ .Release.Namespace }} exec {{ include "openldap.fullname" . }}-0 -- \
+    ldapsearch -x -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -b cn=config olcServerID
+{{- end }}
+
+{{- if .Values.tls.enabled }}
+
+TLS is enabled. This path is UNVERIFIED end-to-end as of this chart's
+handoff — validate it in your environment before relying on it.
+{{- end }}
+
+{{- if .Values.backup.enabled }}
+
+Backup CronJob: {{ include "openldap.fullname" . }}-backup (schedule: {{ .Values.backup.schedule | quote }}, retention: {{ .Values.backup.retentionDays }}d)
+  Files land gzipped on PVC {{ include "openldap.fullname" . }}-backup — see
+  charts/openldap/README.md's Restore section before you need them.
+{{- end }}
+
+{{- if .Values.ui.enabled }}
+
+Management UI:
+  Service: {{ include "openldap.ui.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.replication.clusterDomain }}:{{ .Values.ui.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "openldap.ui.fullname" . }} 8080:{{ .Values.ui.service.port }}
+  then open http://localhost:8080
+{{- if .Values.ui.ingress.enabled }}
+{{- range .Values.ui.ingress.hosts }}
+  http{{ if $.Values.ui.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- end }}
+{{- end }}

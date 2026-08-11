@@ -1,0 +1,14 @@
+{{- if and .Values.seed.enabled .Values.seed.ldifs }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openldap.fullname" . }}-seed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+data:
+  {{- range $file, $content := .Values.seed.ldifs }}
+  {{ $file }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

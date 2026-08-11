@@ -1,0 +1,246 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "openldap.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "openldap.headlessName" . }}
+  replicas: {{ .Values.replicaCount }}
+  # Default (OrderedReady) podManagementPolicy is kept deliberately: it
+  # serializes pod creation, which reduces (does not eliminate) the window
+  # where two brand-new pods could both decide no peer holds the base DIT
+  # yet and both run slapadd -n 1 (see REPLICATION-CONTRACT.md D5).
+  selector:
+    matchLabels:
+      {{- include "openldap.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openldap.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- else if gt (int .Values.replicaCount) 1 }}
+      # HA is the point of running >1 replica — spread pods across nodes by
+      # default so it isn't defeated by the scheduler happening to pack them
+      # onto one. ScheduleAnyway (not hard-required) so a small/single-node
+      # cluster still schedules the chart at all.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "openldap.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: openldap
+          image: {{ include "openldap.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: ldap
+              containerPort: 389
+              protocol: TCP
+            {{- if .Values.tls.enabled }}
+            - name: ldaps
+              containerPort: 636
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: LDAP_ROOT_DN
+              value: {{ .Values.ldap.rootDN | quote }}
+            {{- if .Values.ldap.orgName }}
+            - name: LDAP_ORG_NAME
+              value: {{ .Values.ldap.orgName | quote }}
+            {{- end }}
+            {{- if .Values.ldap.adminDN }}
+            - name: LDAP_ADMIN_DN
+              value: {{ .Values.ldap.adminDN | quote }}
+            {{- end }}
+            - name: LDAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openldap.adminSecretName" . }}
+                  key: {{ .Values.auth.existingSecretKey }}
+            - name: LDAP_LOG_LEVEL
+              value: {{ .Values.ldap.logLevel | quote }}
+            # mdb's memory map. Sized from the data volume by default, because
+            # a map larger than its filesystem buys nothing and costs real
+            # memory — see resources.limits.memory in values.yaml.
+            - name: LDAP_MAX_OPEN_FILES
+              value: {{ .Values.ldap.maxOpenFiles | quote }}
+            - name: LDAP_DB_MAX_SIZE
+              value: {{ (default (include "openldap.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
+            - name: LDAP_TLS_ENABLED
+              value: {{ .Values.tls.enabled | quote }}
+            {{- if .Values.tls.enabled }}
+            - name: LDAP_TLS_CERT_FILE
+              value: {{ .Values.tls.certFile | quote }}
+            - name: LDAP_TLS_KEY_FILE
+              value: {{ .Values.tls.keyFile | quote }}
+            {{- if .Values.tls.caFile }}
+            - name: LDAP_TLS_CA_FILE
+              value: {{ .Values.tls.caFile | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.seed.enabled .Values.seed.ldifs }}
+            - name: LDAP_SEED_DIR
+              value: /opt/ldifs
+            {{- end }}
+            {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+            - name: LDAP_REPLICATION_ENABLED
+              value: "true"
+            # Ordinal-ascending, dense, self included — the image indexes
+            # this list by LDAP_SERVER_ID-1 to find itself. See the
+            # openldap.replicationPeers comment in _helpers.tpl before
+            # touching this.
+            - name: LDAP_REPLICATION_PEERS
+              value: {{ include "openldap.replicationPeers" . | quote }}
+            {{- if .Values.replication.bindDN }}
+            - name: LDAP_REPLICATION_BIND_DN
+              value: {{ .Values.replication.bindDN | quote }}
+            {{- end }}
+            {{- if .Values.replication.existingSecret }}
+            - name: LDAP_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.replication.existingSecret }}
+                  key: {{ .Values.replication.existingSecretKey }}
+            {{- end }}
+            - name: LDAP_REPLICATION_RETRY
+              value: {{ .Values.replication.retry | quote }}
+            - name: LDAP_REPLICATION_INTERVAL
+              value: {{ .Values.replication.interval | quote }}
+            {{- else }}
+            - name: LDAP_REPLICATION_ENABLED
+              value: "false"
+            {{- end }}
+          startupProbe:
+            exec:
+              command:
+                - ldapwhoami
+                - -x
+                - -H
+                - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          livenessProbe:
+            exec:
+              command:
+                - ldapwhoami
+                - -x
+                - -H
+                - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - ldapwhoami
+                - -x
+                - -H
+                - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openldap/slapd.d
+            - name: data
+              mountPath: /var/lib/openldap/data
+            # Not a PVC — pidfile/argsfile/ldapi socket, ephemeral by nature
+            # and re-created by entrypoint.sh (mkdir -p) on every start. Also
+            # what makes readOnlyRootFilesystem viable (see values.yaml).
+            - name: run
+              mountPath: /var/lib/openldap/run
+            # entrypoint.sh mktemp's here both at bootstrap and at every
+            # replication reconcile (see REPLICATION-CONTRACT.md) — needs to
+            # be writable under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/openldap/tls
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.seed.enabled .Values.seed.ldifs }}
+            - name: seed
+              mountPath: /opt/ldifs
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+        {{- end }}
+        {{- if and .Values.seed.enabled .Values.seed.ldifs }}
+        - name: seed
+          configMap:
+            name: {{ include "openldap.fullname" . }}-seed
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: config
+        labels:
+          {{- include "openldap.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.config.accessModes | nindent 10 }}
+        {{- if .Values.persistence.config.storageClassName }}
+        storageClassName: {{ .Values.persistence.config.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.config.size }}
+    - metadata:
+        name: data
+        labels:
+          {{- include "openldap.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.data.accessModes | nindent 10 }}
+        {{- if .Values.persistence.data.storageClassName }}
+        storageClassName: {{ .Values.persistence.data.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.data.size }}
