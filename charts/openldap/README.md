@@ -19,6 +19,26 @@ There is **no default admin password** — the chart refuses to render
 `auth.adminPassword` or `auth.existingSecret` is set. This mirrors
 `image/entrypoint.sh`, which refuses to start for the same reason.
 
+### Two `helm` footguns, hit for real while operating this chart
+
+- **`helm upgrade --reuse-values` does not pick up new chart defaults.**
+  Upgrading to a chart version that adds a key (e.g. `backup.recordToDirectory`)
+  with `--reuse-values` sends that key down as empty rather than as its new
+  default — observed as `RECORD_TO_DIRECTORY=` on the container, which the
+  backup CronJob's `[ "$RECORD_TO_DIRECTORY" = "true" ]` check silently
+  evaluates to false. Nothing errors, nothing logs a warning; the feature is
+  just off. When upgrading, pass `-f values.yaml` (your full values file) or
+  set every value explicitly — don't rely on `--reuse-values` to carry
+  forward a values file you didn't also pass.
+- **`--set` treats a bare comma as a value separator**, including inside a
+  DN. `--set ldap.rootDN=dc=example,dc=org` does not set `ldap.rootDN` to
+  `dc=example,dc=org` — it sets `ldap.rootDN=dc=example` and then parses
+  `dc=org` as a second, unrelated key=value pair (which usually fails to
+  parse as a key at all, or silently sets a garbage key). Escape the comma
+  (`--set ldap.rootDN=dc=example\,dc=org`) or, better, put DN-shaped values
+  in a `-f values.yaml` file instead of `--set` — this was hit for real and
+  put a bad value into a release.
+
 ## HA / replication
 
 Set `replicaCount` > 1 to get a StatefulSet with N pods. Multi-provider

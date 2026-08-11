@@ -46,6 +46,53 @@ without waiting for a release.
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Authenticates by LDAP bind and acts as the logged-in user, so the directory's own ACLs authorize every action. |
 | `charts/openldap/` | Helm chart deploying the server, with the UI as an optional component. |
 
+## Standalone (docker compose)
+
+Kubernetes is not required. `replicaCount: 1` in the chart already runs the
+server standalone (replication auto-disables), and the server/UI images
+don't know Kubernetes exists — they run identically under plain `docker
+run`. `docker-compose.yml` at the repo root wires server + UI together in
+one step, instead of two `docker run`s and a hand-built Docker network:
+
+```bash
+cp .env.example .env
+# edit .env: LDAP_ROOT_DN, LDAP_ADMIN_PASSWORD, SESSION_SECRET are required —
+# see the comments in .env.example, in particular `openssl rand -base64 32`
+# for SESSION_SECRET.
+docker compose up --build
+```
+
+Then open `http://localhost:8080` (or `${UI_PORT}`) for the UI, and
+`ldap://localhost:389` (or `${LDAP_PORT}`) for direct LDAP access. Data
+persists in the named `ldap-config`/`ldap-data` volumes — deliberately named
+ones, not anonymous, so they survive `docker compose down` (without `-v`)
+and recreates.
+
+No default admin password or session secret is baked in anywhere — same
+principle as the image and the Helm chart (see "No default admin password"
+above): compose refuses to start without them, loudly, rather than run with
+a guessable credential.
+
+### Backups without Kubernetes
+
+`charts/openldap`'s backup CronJob has no standalone equivalent by
+definition — there's no CronJob outside Kubernetes — so `scripts/backup.sh`
+covers the same ground for a `docker run`/`docker compose` deployment: it
+dumps the directory (data tree + `cn=config`) over `ldapsearch`, gzips it,
+prunes by retention, and records the backup's status into the directory
+itself (`ou=operations`) the same way the CronJob does — see
+`charts/openldap/README.md`'s "Status recorded in the directory" and
+"Restoring" sections, which apply unchanged to backups made by this script.
+
+```bash
+export LDAP_ADMIN_PASSWORD=...   # or --password-file
+./scripts/backup.sh -b dc=example,dc=org -o ./backups
+```
+
+Run it from cron or a systemd timer on the host; `./scripts/backup.sh --help`
+covers every option (custom LDAP URL/port, retention, skipping the
+`cn=config` dump or the directory record).
+
 ## License
 
 Original work in this repository is Apache-2.0 (`LICENSE`). Published images bundle

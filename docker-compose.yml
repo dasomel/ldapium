@@ -1,0 +1,68 @@
+# Standalone (non-Kubernetes) deployment: server + management UI, one
+# `docker compose up` away. See README.md's "Standalone (docker compose)"
+# section for the full walkthrough, including backups (scripts/backup.sh)
+# and restore (charts/openldap/README.md's Restore section — the procedure
+# is identical, this compose file's server is the same image).
+#
+# 1. cp .env.example .env, fill in the required values, then:
+#      docker compose up --build
+#
+# No default admin password or session secret is baked in anywhere here —
+# same principle as the image and the Helm chart: compose refuses to start
+# rather than silently run with a guessable credential. See the ${VAR:?...}
+# guards below.
+services:
+  ldap:
+    build:
+      context: ./image
+    # Local build tag by default — this project has not published images
+    # yet (see charts/openldap/values.yaml's image.repository comment).
+    # Once it has, set OPENLDAP_IMAGE to the published tag in .env and
+    # remove the `build:` block above (or `docker compose pull` instead of
+    # `--build`) so compose pulls it instead of rebuilding it locally.
+    image: ${OPENLDAP_IMAGE:-openldap-suite:local}
+    environment:
+      LDAP_ROOT_DN: ${LDAP_ROOT_DN:?set LDAP_ROOT_DN in .env, e.g. dc=example,dc=org — see .env.example}
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?set LDAP_ADMIN_PASSWORD in .env — this image ships no default admin password, see .env.example}
+      LDAP_LOG_LEVEL: ${LDAP_LOG_LEVEL:-stats}
+    ports:
+      - "${LDAP_PORT:-389}:389"
+    volumes:
+      # Named volumes, not anonymous ones: an anonymous volume gets a random
+      # name and is easy to lose on `docker compose down -v` or a recreate —
+      # exactly the "LDAP 이 없어지면 큰일난다" scenario this project exists
+      # to avoid. See scripts/backup.sh for backups on top of this.
+      - ldap-config:/etc/openldap/slapd.d
+      - ldap-data:/var/lib/openldap/data
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+    image: ${UI_IMAGE:-openldap-suite-ui:local}
+    environment:
+      LDAP_URL: ldap://ldap:389
+      LDAP_BASE_DN: ${LDAP_ROOT_DN:?set LDAP_ROOT_DN in .env — see .env.example}
+      LDAP_USER_SEARCH_FILTER: ${LDAP_USER_SEARCH_FILTER:-(uid=%s)}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env (32+ random bytes, e.g. `openssl rand -base64 32`) — see .env.example}
+      # Plain HTTP by default: this compose file publishes the UI on
+      # localhost with no TLS in front of it, and a cookie marked Secure is
+      # silently dropped by the browser over plain HTTP — login would
+      # appear to succeed and then nothing would stay logged in. Put this
+      # behind TLS (a reverse proxy, ingress, etc.) for anything beyond
+      # local use and set this back to "true" (or just remove the line —
+      # true is the image's own default).
+      COOKIE_SECURE: "false"
+    ports:
+      - "${UI_PORT:-8080}:8080"
+    depends_on:
+      # The image already ships a HEALTHCHECK (ldapwhoami over its local
+      # ldapi:// socket) — this just waits for it instead of racing slapd's
+      # first-boot bootstrap.
+      ldap:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ldap-config:
+  ldap-data:
