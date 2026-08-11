@@ -4,6 +4,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { EmptyState } from '@/components/ui/empty-state'
+import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 import type { Group } from '@/lib/types'
 
 interface MembersDialogProps {
@@ -64,7 +65,7 @@ export function MembersDialog({ open, onOpenChange, group, onAdd, onRemove }: Me
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users2 className="size-4 text-accent" />
-            Members
+            Members <span className="font-mono text-xs font-normal text-muted-foreground">(<GlossaryTerm term="member">member</GlossaryTerm>)</span>
           </DialogTitle>
           <DialogDescription className="font-mono">{group?.dn}</DialogDescription>
         </DialogHeader>

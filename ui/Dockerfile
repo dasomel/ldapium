@@ -24,6 +24,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server 
 # --- final image ------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS final
 COPY --from=backend /out/server /server
-USER nonroot:nonroot
+# Numeric, not `USER nonroot:nonroot`. Kubernetes' runAsNonRoot check rejects
+# a named user it cannot resolve to a uid ("image has non-numeric user
+# (nonroot), cannot verify user is non-root"). 65532 is distroless's nonroot,
+# confirmed from this image's own /etc/passwd.
+USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/server"]

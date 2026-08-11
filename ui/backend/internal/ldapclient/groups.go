@@ -9,28 +9,25 @@ import (
 	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
 )
 
-// ListGroups returns every groupOfNames entry under base.
-func (c *client) ListGroups(ctx context.Context, base string) ([]domain.Group, error) {
+var groupAttrs = []string{"cn", "description", "member"}
+
+// ListGroups returns every groupOfNames entry under base. See
+// searchAllPaged for how results larger than the server's admin size limit
+// are handled.
+func (c *client) ListGroups(ctx context.Context, base string) ([]domain.Group, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req := ldap.NewSearchRequest(
-		base,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
-		"(objectClass=groupOfNames)",
-		[]string{"cn", "description", "member"},
-		nil,
-	)
-	res, err := c.conn.Search(req)
+	entries, truncated, err := c.searchAllPaged(base, "(objectClass=groupOfNames)", groupAttrs)
 	if err != nil {
-		return nil, mapErr("list groups", err)
+		return nil, false, mapErr("list groups", err)
 	}
 
-	groups := make([]domain.Group, 0, len(res.Entries))
-	for _, e := range res.Entries {
+	groups := make([]domain.Group, 0, len(entries))
+	for _, e := range entries {
 		groups = append(groups, domain.Group{
 			DN:          e.DN,
 			CN:          e.GetAttributeValue("cn"),
@@ -38,7 +35,7 @@ func (c *client) ListGroups(ctx context.Context, base string) ([]domain.Group, e
 			Members:     e.GetAttributeValues("member"),
 		})
 	}
-	return groups, nil
+	return groups, truncated, nil
 }
 
 // CreateGroup creates a new groupOfNames entry under base. groupOfNames

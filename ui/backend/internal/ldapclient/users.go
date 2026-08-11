@@ -9,37 +9,36 @@ import (
 	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
 )
 
-var userAttrs = []string{"uid", "cn", "sn", "givenName", "mail", "displayName"}
+// memberOf and pwdAccountLockedTime are operational attributes (computed
+// by the memberof and ppolicy overlays, respectively), so neither is ever
+// returned by a "*" wildcard request — both must be listed explicitly,
+// same as any other requested attribute here.
+var userAttrs = []string{"uid", "cn", "sn", "givenName", "mail", "displayName", "memberOf", "pwdAccountLockedTime"}
 
-// ListUsers returns every inetOrgPerson entry under base.
-func (c *client) ListUsers(ctx context.Context, base string) ([]domain.User, error) {
+// ListUsers returns every inetOrgPerson entry under base. See
+// searchAllPaged for how results larger than the server's admin size limit
+// are handled.
+func (c *client) ListUsers(ctx context.Context, base string) ([]domain.User, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req := ldap.NewSearchRequest(
-		base,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
-		"(objectClass=inetOrgPerson)",
-		userAttrs,
-		nil,
-	)
-	res, err := c.conn.Search(req)
+	entries, truncated, err := c.searchAllPaged(base, "(objectClass=inetOrgPerson)", userAttrs)
 	if err != nil {
-		return nil, mapErr("list users", err)
+		return nil, false, mapErr("list users", err)
 	}
 
-	users := make([]domain.User, 0, len(res.Entries))
-	for _, e := range res.Entries {
+	users := make([]domain.User, 0, len(entries))
+	for _, e := range entries {
 		users = append(users, entryToUser(e))
 	}
-	return users, nil
+	return users, truncated, nil
 }
 
 func entryToUser(e *ldap.Entry) domain.User {
-	return domain.User{
+	u := domain.User{
 		DN:          e.DN,
 		UID:         e.GetAttributeValue("uid"),
 		CN:          e.GetAttributeValue("cn"),
@@ -47,7 +46,20 @@ func entryToUser(e *ldap.Entry) domain.User {
 		GivenName:   e.GetAttributeValue("givenName"),
 		Mail:        e.GetAttributeValue("mail"),
 		DisplayName: e.GetAttributeValue("displayName"),
+		MemberOf:    e.GetAttributeValues("memberOf"),
 	}
+	// Locked is derived from the attribute's mere presence, independent of
+	// whether its value happens to parse as a timestamp (see
+	// parseLDAPGeneralizedTime) — an unparseable value, such as the
+	// password policy draft's "locked indefinitely" sentinel, still means
+	// locked, just without a known LockedAt.
+	if lockedTime := e.GetAttributeValue("pwdAccountLockedTime"); lockedTime != "" {
+		u.Locked = true
+		if t, ok := parseLDAPGeneralizedTime(lockedTime); ok {
+			u.LockedAt = &t
+		}
+	}
+	return u
 }
 
 // CreateUser adds a new inetOrgPerson entry under base and, if in.Password
@@ -83,7 +95,10 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 	}
 
 	if in.Password != "" {
-		if _, err := c.SetPassword(ctx, dn, in.Password); err != nil {
+		// No old password: this is the initial password on a brand new
+		// entry, set by whoever is authorized to create users, not a
+		// self-service change.
+		if _, err := c.SetPassword(ctx, dn, "", in.Password); err != nil {
 			return dn, fmt.Errorf("user created but setting password failed: %w", err)
 		}
 	}
@@ -141,19 +156,64 @@ func (c *client) DeleteUser(ctx context.Context, dn string) error {
 }
 
 // SetPassword changes dn's password using the RFC 3062 Password Modify
-// extended operation. It never touches userPassword directly, so the
-// directory server's own hashing scheme and password policy apply.
-func (c *client) SetPassword(ctx context.Context, dn, newPassword string) (string, error) {
+// extended operation, passing oldPassword through unchanged. It never
+// touches userPassword directly, so the directory server's own hashing
+// scheme and password policy apply — including, for self-service changes,
+// verifying oldPassword server-side (ppolicy's pwdSafeModify) rather than
+// this package checking it itself.
+func (c *client) SetPassword(ctx context.Context, dn, oldPassword, newPassword string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req := ldap.NewPasswordModifyRequest(dn, "", newPassword)
+	req := ldap.NewPasswordModifyRequest(dn, oldPassword, newPassword)
 	res, err := c.conn.PasswordModify(req)
 	if err != nil {
 		return "", mapErr("set password", err)
 	}
 	return res.GeneratedPassword, nil
+}
+
+// unlockModify builds the modify request Unlock sends, factored out so the
+// exact set of attributes it touches is unit-testable without a live LDAP
+// connection.
+//
+// It deletes ONLY pwdAccountLockedTime. Do not also delete pwdFailureTime
+// here, even though it accumulates alongside the lock: pwdFailureTime is
+// declared NO-USER-MODIFICATION by the password policy schema, and slapd
+// rejects the whole modify — deleting nothing — if it's included:
+//
+//	ldap_modify: Constraint violation (19)
+//	additional info: pwdFailureTime: no user modification allowed
+//
+// Because an LDAP modify request is atomic, bundling the two turns a
+// working unlock into a failing no-op. The leftover pwdFailureTime values
+// are harmless and expire on their own once pwdFailureCountInterval (or
+// the next successful bind) passes.
+func unlockModify(dn string) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, nil)
+	mod.Delete("pwdAccountLockedTime", nil)
+	return mod
+}
+
+// Unlock clears a password-policy lockout on dn (see unlockModify for
+// exactly what it does and does not touch). Calling it on an account that
+// isn't currently locked is not specially handled: slapd rejects deleting
+// an attribute that isn't present, and that rejection is surfaced as an
+// ordinary error via mapErr rather than treated as a no-op success. That's
+// fine in practice — the frontend only offers Unlock for accounts it
+// already knows are locked.
+func (c *client) Unlock(ctx context.Context, dn string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.Modify(unlockModify(dn)); err != nil {
+		return mapErr("unlock user", err)
+	}
+	return nil
 }

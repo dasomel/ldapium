@@ -16,20 +16,28 @@ type fakeClient struct {
 	closed bool
 }
 
-func (f *fakeClient) WhoAmI() string                                           { return f.dn }
-func (f *fakeClient) Close() error                                             { f.closed = true; return nil }
-func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error)  { return nil, nil }
-func (f *fakeClient) GetEntry(context.Context, string) (*domain.Entry, error)  { return nil, nil }
-func (f *fakeClient) ListUsers(context.Context, string) ([]domain.User, error) { return nil, nil }
+func (f *fakeClient) WhoAmI() string                                          { return f.dn }
+func (f *fakeClient) Close() error                                            { f.closed = true; return nil }
+func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error) { return nil, nil }
+func (f *fakeClient) GetEntry(context.Context, string) (*domain.Entry, error) { return nil, nil }
+func (f *fakeClient) ListPasswordPolicies(context.Context, string) ([]domain.PasswordPolicy, error) {
+	return nil, nil
+}
+func (f *fakeClient) ListUsers(context.Context, string) ([]domain.User, bool, error) {
+	return nil, false, nil
+}
 func (f *fakeClient) CreateUser(context.Context, string, domain.UserInput) (string, error) {
 	return "", nil
 }
 func (f *fakeClient) UpdateUser(context.Context, string, domain.UserInput) error { return nil }
 func (f *fakeClient) DeleteUser(context.Context, string) error                   { return nil }
-func (f *fakeClient) SetPassword(context.Context, string, string) (string, error) {
+func (f *fakeClient) SetPassword(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (f *fakeClient) ListGroups(context.Context, string) ([]domain.Group, error) { return nil, nil }
+func (f *fakeClient) Unlock(context.Context, string) error { return nil }
+func (f *fakeClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
+	return nil, false, nil
+}
 func (f *fakeClient) CreateGroup(context.Context, string, domain.GroupInput) (string, error) {
 	return "", nil
 }

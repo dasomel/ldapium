@@ -1,6 +1,9 @@
 package validate
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUID(t *testing.T) {
 	valid := []string{"jdoe", "j.doe-2", "a", "user_123"}
@@ -43,11 +46,26 @@ func TestEmail(t *testing.T) {
 }
 
 func TestPassword(t *testing.T) {
-	if err := Password("short"); err == nil {
-		t.Error("expected error for short password")
+	if err := Password(""); err == nil {
+		t.Error("expected error for empty password")
+	}
+
+	// Strength (minimum length, complexity, history, ...) is the directory
+	// server's password policy to enforce, not this package's — a short
+	// but non-empty password must pass here so the server gets the final
+	// say, whatever that policy is currently configured to be.
+	if err := Password("sh"); err != nil {
+		t.Errorf("unexpected error for a short-but-non-empty password: %v", err)
 	}
 	if err := Password("longenoughpassword"); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := Password(strings.Repeat("a", 1024)); err != nil {
+		t.Errorf("unexpected error at the max length boundary: %v", err)
+	}
+	if err := Password(strings.Repeat("a", 1025)); err == nil {
+		t.Error("expected error for an unreasonably long password")
 	}
 }
 

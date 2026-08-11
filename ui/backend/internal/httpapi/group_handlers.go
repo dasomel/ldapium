@@ -10,11 +10,11 @@ import (
 )
 
 func (s *Server) handleListGroups(c echo.Context) error {
-	groups, err := currentSession(c).Bound.ListGroups(c.Request().Context(), s.cfg.BaseDN)
+	groups, truncated, err := currentSession(c).Bound.ListGroups(c.Request().Context(), s.cfg.BaseDN)
 	if err != nil {
 		return respondErr(c, err)
 	}
-	return c.JSON(http.StatusOK, groups)
+	return c.JSON(http.StatusOK, groupListResponse{Groups: groups, Truncated: truncated})
 }
 
 func (s *Server) handleCreateGroup(c echo.Context) error {

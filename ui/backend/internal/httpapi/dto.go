@@ -1,5 +1,24 @@
 package httpapi
 
+import "github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+
+// userListResponse and groupListResponse wrap list results with a
+// truncated flag so a listing cut off at ldapclient's maxListResults is
+// always visible to the caller instead of looking like a complete result.
+type userListResponse struct {
+	Users     []domain.User `json:"users"`
+	Truncated bool          `json:"truncated"`
+}
+
+type groupListResponse struct {
+	Groups    []domain.Group `json:"groups"`
+	Truncated bool           `json:"truncated"`
+}
+
+type passwordPolicyListResponse struct {
+	Policies []domain.PasswordPolicy `json:"policies"`
+}
+
 // loginRequest is the POST /api/login body. Identity is either a full DN
 // or a bare uid resolved server-side per LDAP_USER_SEARCH_FILTER.
 type loginRequest struct {
@@ -28,8 +47,18 @@ type groupRequest struct {
 }
 
 type setPasswordRequest struct {
-	DN       string `json:"dn"`
-	Password string `json:"password,omitempty"`
+	DN string `json:"dn"`
+	// OldPassword is required for self-service changes and forwarded as-is
+	// to the RFC 3062 Password Modify operation; it is left empty when an
+	// administrator resets another user's password. Whether it's actually
+	// required is a directory policy decision (ppolicy's pwdSafeModify),
+	// not something this handler enforces.
+	OldPassword string `json:"oldPassword,omitempty"`
+	Password    string `json:"password,omitempty"`
+}
+
+type unlockRequest struct {
+	DN string `json:"dn"`
 }
 
 type memberRequest struct {

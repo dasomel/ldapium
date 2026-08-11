@@ -3,7 +3,9 @@ import type {
   Entry,
   Group,
   GroupFormInput,
+  ListResult,
   Me,
+  PasswordPolicy,
   TreeNode,
   User,
   UserFormInput,
@@ -61,19 +63,31 @@ export const api = {
   tree: (dn?: string) => request<TreeNode[]>(`/tree${qs({ dn })}`),
   entry: (dn: string) => request<Entry>(`/entry${qs({ dn })}`),
 
-  listUsers: () => request<User[]>('/users'),
+  // An empty array is a normal response (the server may not run the
+  // ppolicy overlay at all) — never treat "no policies" as an error.
+  listPasswordPolicies: () =>
+    request<{ policies: PasswordPolicy[] }>('/password-policies').then((r) => r.policies),
+
+  listUsers: () =>
+    request<{ users: User[]; truncated: boolean }>('/users').then(
+      ({ users, truncated }): ListResult<User> => ({ items: users, truncated }),
+    ),
   createUser: (input: UserFormInput) =>
     request<{ dn: string }>('/users', { method: 'POST', body: JSON.stringify(input) }),
   updateUser: (input: UserFormInput) =>
     request<void>('/users', { method: 'PUT', body: JSON.stringify(input) }),
   deleteUser: (dn: string) => request<void>(`/users${qs({ dn })}`, { method: 'DELETE' }),
-  setPassword: (dn: string, password?: string) =>
+  setPassword: (dn: string, password?: string, oldPassword?: string) =>
     request<{ generatedPassword?: string }>('/users/password', {
       method: 'POST',
-      body: JSON.stringify({ dn, password }),
+      body: JSON.stringify({ dn, password, oldPassword }),
     }),
+  unlockUser: (dn: string) => request<void>('/users/unlock', { method: 'POST', body: JSON.stringify({ dn }) }),
 
-  listGroups: () => request<Group[]>('/groups'),
+  listGroups: () =>
+    request<{ groups: Group[]; truncated: boolean }>('/groups').then(
+      ({ groups, truncated }): ListResult<Group> => ({ items: groups, truncated }),
+    ),
   createGroup: (input: GroupFormInput) =>
     request<{ dn: string }>('/groups', { method: 'POST', body: JSON.stringify(input) }),
   updateGroup: (input: GroupFormInput) =>

@@ -3,6 +3,7 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTi
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 import type { User, UserFormInput } from '@/lib/types'
 
 interface UserFormDialogProps {
@@ -54,7 +55,9 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
           <DialogBody className="space-y-3.5">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="uid">uid</Label>
+                <Label htmlFor="uid">
+                  <GlossaryTerm term="uid">uid</GlossaryTerm>
+                </Label>
                 <Input
                   id="uid"
                   required
@@ -85,7 +88,9 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="sn">Surname (sn)</Label>
+                <Label htmlFor="sn">
+                  Surname (<GlossaryTerm term="sn">sn</GlossaryTerm>)
+                </Label>
                 <Input
                   id="sn"
                   required
@@ -95,7 +100,9 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cn">Common name (cn)</Label>
+              <Label htmlFor="cn">
+                Common name (<GlossaryTerm term="cn">cn</GlossaryTerm>)
+              </Label>
               <Input id="cn" required value={form.cn} onChange={(e) => setForm((f) => ({ ...f, cn: e.target.value }))} />
             </div>
             {!isEdit && (

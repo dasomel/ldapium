@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { FolderTree, LogOut, Moon, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
+import { FolderTree, KeyRound, LogOut, Moon, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useTheme } from '@/context/ThemeContext'
 import { useToast } from '@/context/ToastContext'
@@ -69,13 +69,30 @@ export function AppShell() {
               {dn}
             </p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 rounded-console px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <LogOut className="size-4" />
-            Log out
-          </button>
+          <div className="flex items-center gap-1">
+            <NavLink
+              to="/change-password"
+              title="Change your password"
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-1.5 rounded-console px-2.5 py-1.5 text-[13px] font-medium',
+                  isActive
+                    ? 'bg-accent-muted text-accent'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )
+              }
+            >
+              <KeyRound className="size-4" />
+              Change password
+            </NavLink>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 rounded-console px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <LogOut className="size-4" />
+              Log out
+            </button>
+          </div>
         </header>
         <main className="min-w-0 flex-1 overflow-auto p-5">
           <Outlet />

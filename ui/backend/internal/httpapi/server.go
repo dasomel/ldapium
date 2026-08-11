@@ -62,11 +62,14 @@ func (s *Server) routes(spa fs.FS) {
 	authed.GET("/tree", s.handleTreeChildren)
 	authed.GET("/entry", s.handleGetEntry)
 
+	authed.GET("/password-policies", s.handleListPasswordPolicies)
+
 	authed.GET("/users", s.handleListUsers)
 	authed.POST("/users", s.handleCreateUser)
 	authed.PUT("/users", s.handleUpdateUser)
 	authed.DELETE("/users", s.handleDeleteUser)
 	authed.POST("/users/password", s.handleSetPassword)
+	authed.POST("/users/unlock", s.handleUnlockUser)
 
 	authed.GET("/groups", s.handleListGroups)
 	authed.POST("/groups", s.handleCreateGroup)

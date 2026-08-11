@@ -57,12 +57,26 @@ func Email(email string) error {
 	return nil
 }
 
-// Password validates a new password's minimum strength. This is a floor,
-// not a full policy — the directory server's own password policy overlay
-// (if configured) is the authoritative check.
+// Password performs minimal format validation on a new password: non-empty
+// and within a sane size. It deliberately does not check length, character
+// classes, or any other strength rule — the directory's password policy
+// overlay is configurable at runtime (an operator can change it with
+// ldapmodify at any time) and is the sole authority on what makes a
+// password acceptable. Duplicating a rule here would drift from whatever
+// the server currently enforces: reject passwords the server would accept,
+// or worse, accept ones the server would reject anyway with a confusing
+// mismatched error. Callers that treat an empty password as "let the
+// server generate one" (e.g. SetPassword) must special-case that before
+// calling this, since here empty is always rejected.
 func Password(pw string) error {
-	if len(pw) < 8 {
-		return fmt.Errorf("password must be at least 8 characters")
+	if pw == "" {
+		return fmt.Errorf("password must not be empty")
+	}
+	// Not a policy opinion — just a sanity cap so a client bug or hostile
+	// request can't hand the directory server a multi-megabyte "password"
+	// to hash on every attempt.
+	if len(pw) > 1024 {
+		return fmt.Errorf("password must be at most 1024 characters")
 	}
 	return nil
 }

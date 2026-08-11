@@ -3,6 +3,7 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTi
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 import type { Group, GroupFormInput } from '@/lib/types'
 
 interface GroupFormDialogProps {
@@ -49,7 +50,9 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
           </DialogHeader>
           <DialogBody className="space-y-3.5">
             <div className="space-y-1.5">
-              <Label htmlFor="group-cn">Common name (cn)</Label>
+              <Label htmlFor="group-cn">
+                Common name (<GlossaryTerm term="cn">cn</GlossaryTerm>)
+              </Label>
               <Input
                 id="group-cn"
                 required
@@ -68,8 +71,9 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
             </div>
             {!isEdit && (
               <p className="text-[12px] text-muted-foreground">
-                groupOfNames requires at least one member, so the new group starts with you as its
-                first member — add the real member(s) and remove yourself afterwards if needed.
+                <GlossaryTerm term="groupOfNames">groupOfNames</GlossaryTerm> requires at least one{' '}
+                <GlossaryTerm term="member">member</GlossaryTerm>, so the new group starts with you as
+                its first member — add the real member(s) and remove yourself afterwards if needed.
               </p>
             )}
             {error && (

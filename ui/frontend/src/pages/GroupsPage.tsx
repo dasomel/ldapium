@@ -16,6 +16,7 @@ import { MembersDialog } from '@/components/groups/MembersDialog'
 export function GroupsPage() {
   const { notify } = useToast()
   const [groups, setGroups] = useState<Group[] | null>(null)
+  const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
 
@@ -30,7 +31,10 @@ export function GroupsPage() {
     setError(null)
     api
       .listGroups()
-      .then(setGroups)
+      .then(({ items, truncated }) => {
+        setGroups(items)
+        setTruncated(truncated)
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load groups'))
   }
 
@@ -116,6 +120,12 @@ export function GroupsPage() {
             {groups && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
           </CardTitle>
         </CardHeader>
+        {truncated && (
+          <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
+            Showing the first {groups?.length ?? 0} groups — the directory has more than fit in one
+            response. Filter below to find a specific group.
+          </div>
+        )}
         <CardContent className="p-0">
           {error && <ErrorState message={error} onRetry={load} />}
           {!error && groups === null && (

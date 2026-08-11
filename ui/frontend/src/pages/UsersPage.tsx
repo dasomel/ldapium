@@ -1,20 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { KeyRound, Pencil, Plus, Search, Trash2, UserRound } from 'lucide-react'
+import { KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { UserFormDialog } from '@/components/users/UserFormDialog'
 import { SetPasswordDialog } from '@/components/users/SetPasswordDialog'
+import { MemberOfDialog } from '@/components/users/MemberOfDialog'
 
 export function UsersPage() {
   const { notify } = useToast()
   const [users, setUsers] = useState<User[] | null>(null)
+  const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
 
@@ -22,6 +25,7 @@ export function UsersPage() {
   const [editing, setEditing] = useState<User | null>(null)
   const [passwordUser, setPasswordUser] = useState<User | null>(null)
   const [deleting, setDeleting] = useState<User | null>(null)
+  const [memberOfUser, setMemberOfUser] = useState<User | null>(null)
 
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
 
@@ -29,7 +33,10 @@ export function UsersPage() {
     setError(null)
     api
       .listUsers()
-      .then(setUsers)
+      .then(({ items, truncated }) => {
+        setUsers(items)
+        setTruncated(truncated)
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load users'))
   }
 
@@ -67,6 +74,20 @@ export function UsersPage() {
     notify('success', `Deleted ${deleting.uid}`)
     setDeleting(null)
     load()
+  }
+
+  // Not run through ConfirmDialog: unlocking isn't destructive (it can't
+  // lose data — the account was working fine before it got locked out),
+  // so it gets the same one-click treatment as Edit and Set password
+  // rather than the retype-to-confirm flow reserved for deletes.
+  async function handleUnlock(u: User) {
+    try {
+      await api.unlockUser(u.dn)
+      notify('success', `Unlocked ${u.uid}`)
+      load()
+    } catch (err) {
+      notify('error', err instanceof ApiError ? err.message : `Failed to unlock ${u.uid}`)
+    }
   }
 
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
@@ -113,6 +134,12 @@ export function UsersPage() {
             {users && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
           </CardTitle>
         </CardHeader>
+        {truncated && (
+          <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
+            Showing the first {users?.length ?? 0} users — the directory has more than fit in one
+            response. Filter below to find a specific user.
+          </div>
+        )}
         <CardContent className="p-0">
           {error && <ErrorState message={error} onRetry={load} />}
           {!error && users === null && (
@@ -142,6 +169,8 @@ export function UsersPage() {
                   <TableHeadCell>uid</TableHeadCell>
                   <TableHeadCell>Name</TableHeadCell>
                   <TableHeadCell>Mail</TableHeadCell>
+                  <TableHeadCell>Groups</TableHeadCell>
+                  <TableHeadCell>Status</TableHeadCell>
                   <TableHeadCell className="text-right">Actions</TableHeadCell>
                 </tr>
               </TableHead>
@@ -160,7 +189,40 @@ export function UsersPage() {
                     <TableCell>{u.cn}</TableCell>
                     <TableCell className="text-muted-foreground">{u.mail || '—'}</TableCell>
                     <TableCell>
+                      {u.memberOf?.length ? (
+                        <button onClick={() => setMemberOfUser(u)} className="hover:underline">
+                          <Badge variant="accent">{u.memberOf.length}</Badge>
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {u.locked ? (
+                        <Badge
+                          variant="danger"
+                          className="gap-1"
+                          title={u.lockedAt ? `Locked since ${new Date(u.lockedAt).toLocaleString()}` : 'Locked'}
+                        >
+                          <Lock className="size-3" />
+                          Locked
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       <div className="flex justify-end gap-1">
+                        {u.locked && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Unlock account"
+                            onClick={() => handleUnlock(u)}
+                          >
+                            <Unlock className="size-3.5" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -200,6 +262,7 @@ export function UsersPage() {
       </Card>
 
       <UserFormDialog open={formOpen} onOpenChange={setFormOpen} user={editing} onSubmit={handleCreateOrUpdate} />
+      <MemberOfDialog open={!!memberOfUser} onOpenChange={(o) => !o && setMemberOfUser(null)} user={memberOfUser} />
       <SetPasswordDialog
         open={!!passwordUser}
         onOpenChange={(o) => !o && setPasswordUser(null)}

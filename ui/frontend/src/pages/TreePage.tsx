@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { TreeNodeRow } from '@/components/tree/TreeNodeRow'
+import { GlossaryTerm } from '@/components/ldap/GlossaryTerm'
 
 export function TreePage() {
   const [roots, setRoots] = useState<TreeNode[] | null>(null)
@@ -101,18 +102,22 @@ export function TreePage() {
           {entry && !entryLoading && (
             <div className="divide-y divide-border">
               <div className="px-4 py-3">
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Distinguished Name</p>
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <GlossaryTerm term="dn">Distinguished Name</GlossaryTerm>
+                </p>
                 <p className="mt-0.5 break-all font-mono text-[13px]">{entry.dn}</p>
               </div>
               {Object.entries(entry.attributes)
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([name, values]) => (
                   <div key={name} className="grid grid-cols-[160px_1fr] gap-3 px-4 py-2.5">
-                    <p className="font-mono text-[12.5px] text-muted-foreground">{name}</p>
+                    <p className="font-mono text-[12.5px] text-muted-foreground">
+                      <GlossaryTerm term={name}>{name}</GlossaryTerm>
+                    </p>
                     <div className="flex flex-wrap gap-1.5">
                       {values.map((v, i) => (
                         <Badge key={i} variant="neutral" className="break-all font-mono">
-                          {v}
+                          {name.toLowerCase() === 'objectclass' ? <GlossaryTerm term={v}>{v}</GlossaryTerm> : v}
                         </Badge>
                       ))}
                     </div>

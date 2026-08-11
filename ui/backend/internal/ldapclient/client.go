@@ -32,8 +32,16 @@ type Client interface {
 	// GetEntry returns the full attribute set of dn.
 	GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 
-	// ListUsers returns all user entries under base.
-	ListUsers(ctx context.Context, base string) ([]domain.User, error)
+	// ListPasswordPolicies returns every pwdPolicy entry under base. See
+	// the method doc comment in policy.go for why an empty result is
+	// normal and must not be treated as an error.
+	ListPasswordPolicies(ctx context.Context, base string) ([]domain.PasswordPolicy, error)
+
+	// ListUsers returns all user entries under base, paging transparently
+	// past the server's admin size limit. truncated is true when the
+	// result was cut off at maxListResults rather than the directory
+	// genuinely containing no more entries.
+	ListUsers(ctx context.Context, base string) (users []domain.User, truncated bool, err error)
 	// CreateUser creates a new user entry under base and, if password is
 	// non-empty, sets its initial password via the Password Modify
 	// extended operation (RFC 3062).
@@ -43,11 +51,27 @@ type Client interface {
 	// DeleteUser removes the user entry at dn.
 	DeleteUser(ctx context.Context, dn string) error
 	// SetPassword changes the password of dn via RFC 3062 Password Modify.
-	// When newPassword is empty the server generates one and returns it.
-	SetPassword(ctx context.Context, dn, newPassword string) (generated string, err error)
+	// oldPassword is forwarded to the extended operation as-is; it may be
+	// empty (an administrator resetting another user's password typically
+	// doesn't have it), or required and verified server-side when the
+	// directory's password policy demands it (ppolicy's pwdSafeModify) —
+	// this package does not enforce that itself, matching the rest of the
+	// app's approach of leaving authorization to the directory's own ACLs
+	// and policies. When newPassword is empty the server generates one and
+	// returns it.
+	SetPassword(ctx context.Context, dn, oldPassword, newPassword string) (generated string, err error)
+	// Unlock clears a password-policy lockout (pwdAccountLockedTime) on dn,
+	// e.g. after too many failed bind attempts. As with every other method
+	// here, this package performs no authorization check of its own —
+	// whether the bound user may write dn's pwdAccountLockedTime is
+	// entirely up to the directory's ACLs.
+	Unlock(ctx context.Context, dn string) error
 
-	// ListGroups returns all groupOfNames entries under base.
-	ListGroups(ctx context.Context, base string) ([]domain.Group, error)
+	// ListGroups returns all groupOfNames entries under base, paging
+	// transparently past the server's admin size limit. truncated is true
+	// when the result was cut off at maxListResults rather than the
+	// directory genuinely containing no more entries.
+	ListGroups(ctx context.Context, base string) (groups []domain.Group, truncated bool, err error)
 	// CreateGroup creates a new groupOfNames entry under base.
 	CreateGroup(ctx context.Context, base string, in domain.GroupInput) (string, error)
 	// UpdateGroup replaces the given attributes on the group at dn.
