@@ -1,0 +1,44 @@
+name: Weekly rebuild
+
+# Rebuilds both images on a schedule so security patches landing in
+# debian:trixie-slim (and other base layers) reach users without waiting for
+# a version release. Shares the same multi-arch build logic as release.yml
+# via build-multiarch.yml — only the emitted tags differ.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Monday 04:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-server:
+    name: Rebuild server image
+    uses: ./.github/workflows/build-multiarch.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image-name: openldap-suite
+      context: image
+      metadata-tags: |
+        type=raw,value=main
+        type=raw,value=nightly
+        type=sha,prefix=nightly-
+
+  build-ui:
+    name: Rebuild UI image
+    uses: ./.github/workflows/build-multiarch.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image-name: openldap-suite-ui
+      context: ui
+      metadata-tags: |
+        type=raw,value=main
+        type=raw,value=nightly
+        type=sha,prefix=nightly-

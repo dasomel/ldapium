@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: UI backend (go)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build ./...
+
+  frontend:
+    name: UI frontend (npm)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - run: helm lint charts/openldap
+
+      # The chart deliberately refuses to render without an admin password
+      # (the image refuses to start without one), so every template call must
+      # supply a throwaway value. This is a CI fixture, not a credential.
+      # Both the single-node and the replicated path are rendered: the
+      # replicaCount>1 path is the only one that emits LDAP_REPLICATION_PEERS,
+      # whose ordinal ordering is a contract with image/entrypoint.sh.
+      - name: Render default (single node)
+        run: helm template t charts/openldap --set auth.adminPassword=ci-render-only-not-a-secret
+
+      - name: Render replicated + UI
+        run: |
+          helm template t charts/openldap \
+            --set auth.adminPassword=ci-render-only-not-a-secret \
+            --set replicaCount=3 \
+            --set ui.enabled=true
+
+      - name: Reject rendering with no admin password
+        run: |
+          if helm template t charts/openldap >/dev/null 2>&1; then
+            echo "::error::chart rendered without an admin password; the fail() guard regressed"
+            exit 1
+          fi
+          echo "chart correctly refused to render without an admin password"
+
+  shellcheck:
+    name: shellcheck (entrypoint.sh)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # shellcheck ships preinstalled on GitHub-hosted ubuntu runners.
+      - run: shellcheck -s sh image/entrypoint.sh
+
+  hadolint:
+    name: hadolint (Dockerfiles, informational)
+    runs-on: ubuntu-24.04
+    # Optional per project convention: findings are surfaced but never block CI.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint server Dockerfile
+        uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
+        with:
+          dockerfile: image/Dockerfile
+          # DL3008: apt-get install without pinned package versions. Intentional
+          # here — the OpenLDAP source tarball is pinned by sha256 in the
+          # Dockerfile itself, but base-OS packages deliberately float with
+          # debian:trixie-slim so weekly-rebuild.yml picks up security patches.
+          ignore: DL3008
+
+      - name: Lint UI Dockerfile
+        uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
+        with:
+          dockerfile: ui/Dockerfile
+          ignore: DL3008
