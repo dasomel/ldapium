@@ -6,19 +6,22 @@ import './index.css'
 import { AuthProvider } from '@/context/AuthContext'
 import { ThemeProvider } from '@/context/ThemeContext'
 import { ToastProvider } from '@/context/ToastContext'
+import { LanguageProvider } from '@/context/LanguageContext'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider>
-        <ToastProvider>
-          <AuthProvider>
-            <TooltipProvider delayDuration={200}>
-              <App />
-            </TooltipProvider>
-          </AuthProvider>
-        </ToastProvider>
+        <LanguageProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <TooltipProvider delayDuration={200}>
+                <App />
+              </TooltipProvider>
+            </AuthProvider>
+          </ToastProvider>
+        </LanguageProvider>
       </ThemeProvider>
     </BrowserRouter>
   </StrictMode>,

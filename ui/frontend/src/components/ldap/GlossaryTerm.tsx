@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Info } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useLanguage } from '@/context/LanguageContext'
 import { LDAP_GLOSSARY } from '@/lib/ldapGlossary'
 import { cn } from '@/lib/utils'
 
@@ -19,7 +20,8 @@ interface GlossaryTermProps {
  * when term has no glossary entry: an unexplained value is left alone
  * rather than given a guessed-at definition. */
 export function GlossaryTerm({ term, children, className }: GlossaryTermProps) {
-  const explanation = LDAP_GLOSSARY[term.toLowerCase()]
+  const { language } = useLanguage()
+  const explanation = LDAP_GLOSSARY[language][term.toLowerCase()]
   if (!explanation) return <>{children}</>
 
   return (

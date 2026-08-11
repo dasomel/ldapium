@@ -1,4 +1,11 @@
-# syntax=docker/dockerfile:1
+#
+# No `# syntax=docker/dockerfile:1` directive here, deliberately — the same
+# rule the server image follows (see image/Dockerfile). That directive makes
+# every build resolve and pull a remote Dockerfile frontend before doing any
+# work; observed stalling this build past 10 minutes once its cached frontend
+# image was no longer available locally. Nothing in this file needs BuildKit
+# syntax (no RUN --mount, no COPY --link, no heredocs), so it buys nothing —
+# and without it the image also builds on an air-gapped host.
 
 # --- frontend build -----------------------------------------------------
 FROM node:22-alpine AS frontend
