@@ -107,15 +107,57 @@ Nothing else. No `employee1`, no `guest1`, no `machine1`, no sample
 was built to avoid. Anything beyond the two entries above is your call via
 `LDAP_SEED_DIR`.
 
+## Access control (ACL)
+
+The `mdb` database ships with a default-deny-to-anonymous ACL (`olcAccess` on
+`olcDatabase={1}mdb,cn=config`), applied in order:
+
+1. `userPassword`, `shadowLastChange`: the entry itself may write; anonymous
+   may **bind** against it (`by anonymous auth`) but never **read** it;
+   everyone else gets nothing.
+2. `entry`, `uid`, `objectClass` only: readable by anonymous *and*
+   authenticated users. This is deliberately narrow — it's exactly what a
+   search-then-bind login flow needs to resolve a bare `uid` to a DN, and
+   nothing more (no `cn`, `mail`, `mobile`, etc. leaks to anonymous).
+   The `entry` pseudo-attribute is not optional here: rule 3's
+   `by anonymous none` covers `entry` too, so without it an anonymous
+   `(uid=...)` search fails with `No such object (32)` — the attribute is
+   readable but the entry's existence is never disclosed — and uid login
+   breaks entirely. Verified the hard way.
+3. Everything else: the entry itself may write, any authenticated user may
+   read, anonymous gets nothing.
+
+Without this, slapd's built-in default (`to * by * read`) lets anyone who can
+reach port 389 dump the whole tree, `userPassword` included.
+
+This is one ordered multi-valued attribute, not hardcoded logic — replace it
+wholesale for a different policy via `ldapmodify` as `cn=admin,cn=config`
+(see below), same as any other `cn=config` change.
+
+## Password hashing
+
+The `ppolicy` overlay is enabled on the `mdb` database with
+`olcPPolicyHashCleartext: TRUE`, so any client that writes a plaintext
+`userPassword` gets it hashed at rest instead of stored verbatim — this
+applies unconditionally, without needing a `pwdPolicy` subentry assigned to
+every user. The hash scheme is set explicitly via `olcPasswordHash: {SSHA}`
+on the frontend database (`olcDatabase=frontend,cn=config` — setting it on
+the global `cn=config` entry is deprecated as of 2.6 and slapd warns/may
+refuse to start). `{ARGON2}` is **not** available in this build (`libargon2`
+isn't linked in `image/Dockerfile`); `{SSHA}` — salted SHA-1, built into
+every OpenLDAP — is the conservative, universally-interoperable default.
+Want ARGON2 instead? Link `libargon2` in the builder stage and change
+`olcPasswordHash` in `image/ldifs/01-cn-config.ldif`.
+
 ## Overlays
 
-`memberof` and `refint` are loaded **and enabled** on the `mdb` database by
-default (they have sane parameter-free defaults). `ppolicy`, `unique`, and
-`syncprov` are loaded as modules but left uninstantiated — they need
-deployment-specific configuration (a policy object, uniqueness scope,
-replication topology) that shouldn't be guessed at by the image. Enable them
-yourself against `cn=config` (see below) — `LDAP_SEED_DIR` itself only ever
-binds as `LDAP_ADMIN_DN`, so it can't reach `cn=config` (see why below).
+`memberof`, `refint`, and `ppolicy` are loaded **and enabled** on the `mdb`
+database by default. `unique` and `syncprov` are loaded as modules but left
+uninstantiated — they need deployment-specific configuration (a uniqueness
+scope, replication topology) that shouldn't be guessed at by the image.
+Enable them yourself against `cn=config` (see below) — `LDAP_SEED_DIR` itself
+only ever binds as `LDAP_ADMIN_DN`, so it can't reach `cn=config` (see why
+below).
 
 ## Managing `cn=config` (advanced)
 
