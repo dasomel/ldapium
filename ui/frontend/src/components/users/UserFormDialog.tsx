@@ -1,0 +1,134 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import type { User, UserFormInput } from '@/lib/types'
+
+interface UserFormDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  user: User | null
+  onSubmit: (input: UserFormInput) => Promise<void>
+}
+
+const emptyForm: UserFormInput = { uid: '', cn: '', sn: '', givenName: '', mail: '', password: '' }
+
+export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormDialogProps) {
+  const [form, setForm] = useState<UserFormInput>(emptyForm)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const isEdit = Boolean(user)
+
+  useEffect(() => {
+    if (!open) return
+    setError(null)
+    setForm(
+      user
+        ? { dn: user.dn, uid: user.uid, cn: user.cn, sn: user.sn, givenName: user.givenName, mail: user.mail }
+        : emptyForm,
+    )
+  }, [open, user])
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError(null)
+    setBusy(true)
+    try {
+      await onSubmit(form)
+      onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save user')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle>{isEdit ? 'Edit user' : 'New user'}</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="space-y-3.5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="uid">uid</Label>
+                <Input
+                  id="uid"
+                  required
+                  disabled={isEdit}
+                  value={form.uid}
+                  onChange={(e) => setForm((f) => ({ ...f, uid: e.target.value }))}
+                  className="font-mono"
+                  autoFocus={!isEdit}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mail">mail</Label>
+                <Input
+                  id="mail"
+                  type="email"
+                  value={form.mail}
+                  onChange={(e) => setForm((f) => ({ ...f, mail: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="givenName">Given name</Label>
+                <Input
+                  id="givenName"
+                  value={form.givenName}
+                  onChange={(e) => setForm((f) => ({ ...f, givenName: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sn">Surname (sn)</Label>
+                <Input
+                  id="sn"
+                  required
+                  value={form.sn}
+                  onChange={(e) => setForm((f) => ({ ...f, sn: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cn">Common name (cn)</Label>
+              <Input id="cn" required value={form.cn} onChange={(e) => setForm((f) => ({ ...f, cn: e.target.value }))} />
+            </div>
+            {!isEdit && (
+              <div className="space-y-1.5">
+                <Label htmlFor="password">Initial password (optional)</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.password}
+                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                />
+                <p className="text-[12px] text-muted-foreground">
+                  Set via the LDAP Password Modify operation (RFC 3062). Leave blank to set it later.
+                </p>
+              </div>
+            )}
+            {error && (
+              <div className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+                {error}
+              </div>
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create user'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}

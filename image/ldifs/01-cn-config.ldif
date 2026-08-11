@@ -1,0 +1,147 @@
+#
+# cn=config bootstrap template — rendered by entrypoint.sh (token substitution)
+# and loaded once, on first launch, via:
+#   slapadd -n 0 -F <config-dir> -l <rendered-file>
+#
+# Derived from the stock /etc/openldap/slapd.ldif.default installed by
+# `make install` (verified: only loads back_mdb and includes core.ldif).
+# Extended here with the schema/module/overlay set this project requires.
+#
+# Tokens replaced by entrypoint.sh:
+#   __LDAP_ROOT_DN__        e.g. dc=example,dc=org
+#   __LDAP_ADMIN_DN__       e.g. cn=admin,dc=example,dc=org
+#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h {SSHA}`
+#   __LDAP_DATA_DIR__       e.g. /var/lib/openldap/data
+#   #__TLS_ATTRS__          replaced with olcTLS* lines, or dropped, by entrypoint.sh
+#
+dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcArgsFile: __LDAP_RUN_DIR__/slapd.args
+olcPidFile: __LDAP_RUN_DIR__/slapd.pid
+# Explicit default hash for any cleartext userPassword write (see the
+# ppolicy overlay below, which enforces that hashing). {ARGON2} is NOT
+# available in this build (libargon2 isn't linked — see image/README.md);
+# {SSHA} is the salted-SHA1 scheme built into every OpenLDAP, and is the
+# conservative, universally-interoperable choice for a general-purpose
+# directory.
+olcPasswordHash: {SSHA}
+#__TLS_ATTRS__
+
+#
+# Load dynamic backend + overlay modules
+#
+dn: cn=module,cn=config
+objectClass: olcModuleList
+cn: module
+olcModulepath: /usr/lib/openldap
+olcModuleload: back_mdb.la
+olcModuleload: memberof.la
+olcModuleload: refint.la
+olcModuleload: ppolicy.la
+olcModuleload: unique.la
+olcModuleload: syncprov.la
+
+#
+# Schema: core is required first; cosine before inetorgperson/nis since both
+# depend on cosine attribute types.
+#
+dn: cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: schema
+
+include: file:///etc/openldap/schema/core.ldif
+include: file:///etc/openldap/schema/cosine.ldif
+include: file:///etc/openldap/schema/inetorgperson.ldif
+include: file:///etc/openldap/schema/nis.ldif
+
+#
+# Frontend (defaults are fine — no global access override)
+#
+dn: olcDatabase=frontend,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcFrontendConfig
+olcDatabase: frontend
+
+#
+# Primary MDB database. Explicitly numbered {1} so the overlay entries below
+# have a stable, predictable parent DN.
+#
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: mdb
+olcDbMaxSize: 10737418240
+olcSuffix: __LDAP_ROOT_DN__
+olcRootDN: __LDAP_ADMIN_DN__
+olcRootPW: __LDAP_ADMIN_PW_HASH__
+olcDbDirectory: __LDAP_DATA_DIR__
+olcDbIndex: objectClass eq
+olcDbIndex: entryUUID eq
+olcDbIndex: entryCSN eq
+olcDbIndex: uid eq
+olcDbIndex: cn pres,eq,sub
+olcDbIndex: mail eq
+#
+# Baseline ACL — secure by default, but a single ordered multi-valued
+# attribute an operator can fully replace (via ldapmodify as
+# cn=admin,cn=config, or a fresh seed on an empty volume):
+#   {0} userPassword/shadowLastChange: self may write; anonymous may BIND
+#       against it (auth) but never read it; nobody else gets it at all.
+#   {1} uid/objectClass only: readable anonymously — this is the minimum
+#       needed for uid->DN resolution (an anonymous search-then-bind login
+#       flow) without exposing any other personal attribute to anonymous.
+#   {2} everything else: self may write, any authenticated user may read,
+#       anonymous gets nothing.
+olcAccess: {0}to attrs=userPassword,shadowLastChange
+  by self write
+  by anonymous auth
+  by * none
+olcAccess: {1}to attrs=entry,uid,objectClass
+  by anonymous read
+  by users read
+  by self write
+olcAccess: {2}to *
+  by self write
+  by users read
+  by anonymous none
+
+#
+# memberof + refint + ppolicy overlays, enabled by default (module-only for
+# unique, syncprov — those need deployment-specific config and are left for
+# the operator to enable via LDAP_SEED_DIR).
+#
+dn: olcOverlay=memberof,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcMemberOfConfig
+olcOverlay: memberof
+olcMemberOfRefint: TRUE
+
+dn: olcOverlay=refint,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcRefintConfig
+olcOverlay: refint
+olcRefintAttribute: memberof
+olcRefintAttribute: member
+olcRefintAttribute: manager
+olcRefintAttribute: owner
+
+#
+# ppolicy overlay: hash any cleartext userPassword given to Add/Modify at
+# write time, so a client that writes a plaintext password never gets it
+# stored verbatim. Hash algorithm used is olcPasswordHash on cn=config
+# above ({SSHA}). olcPPolicyHashCleartext makes ppolicy apply it
+# unconditionally, without requiring a pwdPolicy subentry to be assigned
+# to every user.
+#
+dn: olcOverlay=ppolicy,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcPPolicyConfig
+olcOverlay: ppolicy
+olcPPolicyHashCleartext: TRUE
+
+dn: olcDatabase=monitor,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: monitor
+olcRootDN: cn=config
+olcMonitoring: FALSE

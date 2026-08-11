@@ -1,0 +1,26 @@
+#
+# Grants a dedicated cn=config administrator identity. Applied via:
+#   slapmodify -n 0 -F <config-dir> -l <rendered-file>
+#
+# Cannot be folded into 01-cn-config.ldif: the config backend's own
+# "olcDatabase={0}config,cn=config" entry is created implicitly by slapd
+# itself the moment cn=config is initialized, so slapadd (add-only) always
+# fails with "Already exists" if the bootstrap LDIF also tries to add it.
+# slapmodify performs an offline MODIFY instead, which targets that
+# already-existing entry correctly.
+#
+# The rootdn for the config database must be under its own suffix
+# (cn=config) — it cannot be __LDAP_ADMIN_DN__, which lives under
+# __LDAP_ROOT_DN__. So this is a second identity, scoped only to cn=config,
+# reusing the same admin password for operator simplicity.
+#
+# Tokens replaced by entrypoint.sh:
+#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h {SSHA}`
+#
+dn: olcDatabase={0}config,cn=config
+changetype: modify
+replace: olcRootDN
+olcRootDN: cn=admin,cn=config
+-
+replace: olcRootPW
+olcRootPW: __LDAP_ADMIN_PW_HASH__

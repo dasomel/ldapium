@@ -1,0 +1,21 @@
+# build output
+dist/
+build/
+node_modules/
+*.tsbuildinfo
+
+# go
+bin/
+vendor/
+
+# local env / secrets
+.env
+.env.local
+*.key
+*.crt
+*.pem
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

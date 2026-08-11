@@ -1,0 +1,86 @@
+import { NavLink, Outlet } from 'react-router-dom'
+import { FolderTree, LogOut, Moon, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
+import { useTheme } from '@/context/ThemeContext'
+import { useToast } from '@/context/ToastContext'
+import { cn } from '@/lib/utils'
+
+const nav = [
+  { to: '/tree', label: 'DIT Tree', icon: FolderTree },
+  { to: '/users', label: 'Users', icon: UserRound },
+  { to: '/groups', label: 'Groups', icon: Users2 },
+]
+
+export function AppShell() {
+  const { dn, logout } = useAuth()
+  const { theme, toggle } = useTheme()
+  const { notify } = useToast()
+
+  async function handleLogout() {
+    try {
+      await logout()
+    } catch {
+      notify('error', 'Logout failed — try again.')
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-4">
+          <TerminalSquare className="size-5 text-accent" />
+          <span className="text-sm font-semibold tracking-tight">Directory Console</span>
+        </div>
+        <nav className="flex-1 space-y-0.5 px-2 py-3">
+          {nav.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-2.5 rounded-console px-2.5 py-2 text-[13px] font-medium transition-colors',
+                  isActive
+                    ? 'bg-accent-muted text-accent'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )
+              }
+            >
+              <item.icon className="size-4" />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="border-t border-border p-3">
+          <button
+            onClick={toggle}
+            className="flex w-full items-center gap-2.5 rounded-console px-2.5 py-2 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-2.5">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Bound as</p>
+            <p className="truncate font-mono text-[12.5px] text-foreground" title={dn ?? undefined}>
+              {dn}
+            </p>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 rounded-console px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <LogOut className="size-4" />
+            Log out
+          </button>
+        </header>
+        <main className="min-w-0 flex-1 overflow-auto p-5">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  )
+}

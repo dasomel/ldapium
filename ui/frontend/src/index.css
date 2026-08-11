@@ -1,0 +1,156 @@
+@import 'tailwindcss';
+
+/* Manual .dark toggle (persisted in localStorage, see index.html) rather
+   than relying purely on prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-muted: var(--accent-muted);
+
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-success: var(--success);
+  --color-info: var(--info);
+
+  --color-ring: var(--ring);
+
+  --shadow-panel: var(--panel-shadow);
+  --radius-console: 0.5rem;
+}
+
+:root {
+  --background: oklch(97.5% 0.006 90);
+  --foreground: oklch(21% 0.014 60);
+  --surface: oklch(99% 0.003 90);
+  --surface-raised: oklch(100% 0 0);
+  --border: oklch(88% 0.008 80);
+  --border-strong: oklch(78% 0.012 75);
+  --muted: oklch(93% 0.008 85);
+  --muted-foreground: oklch(46% 0.016 60);
+
+  --accent: oklch(64% 0.16 55);
+  --accent-foreground: oklch(99% 0.005 90);
+  --accent-muted: oklch(90% 0.04 60);
+
+  --danger: oklch(56% 0.2 25);
+  --danger-foreground: oklch(99% 0.005 90);
+  --success: oklch(58% 0.14 150);
+  --info: oklch(58% 0.11 235);
+
+  --ring: oklch(64% 0.16 55 / 0.5);
+  --panel-shadow: 0 1px 2px oklch(21% 0.014 60 / 0.06), 0 8px 24px oklch(21% 0.014 60 / 0.06);
+}
+
+.dark {
+  --background: oklch(17% 0.014 55);
+  --foreground: oklch(93% 0.01 80);
+  --surface: oklch(20% 0.015 55);
+  --surface-raised: oklch(24% 0.017 55);
+  --border: oklch(30% 0.018 55);
+  --border-strong: oklch(38% 0.02 55);
+  --muted: oklch(24% 0.016 55);
+  --muted-foreground: oklch(68% 0.02 70);
+
+  --accent: oklch(74% 0.15 60);
+  --accent-foreground: oklch(15% 0.02 55);
+  --accent-muted: oklch(30% 0.05 60);
+
+  --danger: oklch(65% 0.19 25);
+  --danger-foreground: oklch(12% 0.01 25);
+  --success: oklch(68% 0.15 150);
+  --info: oklch(70% 0.11 235);
+
+  --ring: oklch(74% 0.15 60 / 0.55);
+  --panel-shadow: 0 1px 2px oklch(0% 0 0 / 0.3), 0 12px 32px oklch(0% 0 0 / 0.4);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: 'ss01' 1, 'cv01' 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint fixed grid + noise atmosphere so large flat panels read as a
+   "console" surface rather than a blank admin page. Kept subtle enough to
+   never fight with data legibility. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--color-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.35;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 70%);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-accent-foreground);
+}
+
+/* Thin, low-contrast scrollbars that fit the console aesthetic instead of
+   the default chunky browser bars, which fight with dense data views. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+@keyframes console-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-console-in {
+  animation: console-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}

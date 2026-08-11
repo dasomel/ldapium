@@ -1,0 +1,38 @@
+openldap-suite
+Copyright 2026 dasomel
+
+This product includes software developed by the OpenLDAP Project.
+
+The container images published by this project bundle unmodified binaries of
+OpenLDAP Software, compiled from the official upstream source release.
+
+    OpenLDAP Software
+    Copyright 1998-2026 The OpenLDAP Foundation.  All rights reserved.
+    Portions Copyright, individual contributors — see the CONTRIBUTORS and
+    COPYRIGHT files distributed inside the image at
+    /usr/share/doc/openldap/.
+
+    Licensed under the OpenLDAP Public License, Version 2.8.
+    The verbatim license text is included in this repository at
+    docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt and inside every published image at
+    /usr/share/doc/openldap/LICENSE, satisfying clauses 1-3 of that license.
+
+OpenLDAP is a registered trademark of the OpenLDAP Foundation. This project is
+not affiliated with, endorsed by, or sponsored by the OpenLDAP Foundation or
+the OpenLDAP Project. Per clause 4 of the OpenLDAP Public License, neither the
+Foundation nor contributor names are used here to endorse or promote this
+project.
+
+Linked third-party libraries and their licenses:
+
+    OpenSSL          Apache License 2.0
+    Cyrus SASL       BSD (4-clause, UC Regents variant)
+    libltdl (GNU libtool) LGPL-2.1-or-later — dynamically linked only
+    LMDB             The OpenLDAP Public License
+
+The experimental back-sql backend is deliberately NOT built, so unixODBC
+(LGPL-2.1 libraries / GPL-2.0 programs) is neither linked nor distributed.
+
+Everything else in this repository — the Dockerfile and entrypoint, the
+management UI, the Helm chart, and the CI workflows — is original work
+licensed under the Apache License, Version 2.0. See LICENSE.

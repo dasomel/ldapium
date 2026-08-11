@@ -1,0 +1,29 @@
+#
+# Base DIT template — rendered by entrypoint.sh and loaded once, on first
+# launch, directly into the mdb database via:
+#   slapadd -n 1 -F <config-dir> -l <rendered-file>
+#
+# This creates ONLY the root suffix entry and the admin entry — no sample
+# users, groups, or OUs. That is intentional: this image never seeds demo
+# data. Anything beyond these two entries belongs in LDAP_SEED_DIR.
+#
+# Tokens replaced by entrypoint.sh:
+#   __LDAP_ROOT_DN__        e.g. dc=example,dc=org
+#   __LDAP_ROOT_DC__        first dc= RDN value, e.g. example
+#   __LDAP_ORG_NAME__       e.g. Example Org
+#   __LDAP_ADMIN_DN__       e.g. cn=admin,dc=example,dc=org
+#   __LDAP_ADMIN_RDN_VALUE__ first RDN value of the admin DN, e.g. admin
+#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h {SSHA}`
+#
+dn: __LDAP_ROOT_DN__
+objectClass: dcObject
+objectClass: organization
+o: __LDAP_ORG_NAME__
+dc: __LDAP_ROOT_DC__
+
+dn: __LDAP_ADMIN_DN__
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: __LDAP_ADMIN_RDN_VALUE__
+description: LDAP administrator
+userPassword: __LDAP_ADMIN_PW_HASH__
