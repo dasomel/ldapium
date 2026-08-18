@@ -43,6 +43,14 @@ server-side short-lived single-use state, and an ID-token nonce. The backend
 verifies the ID token's signature, issuer, audience, and expiry using
 Keycloak's published keys.
 
+Each login is also bound to the browser that started it: `/api/sso/start`
+sets a single-use `HttpOnly`, `SameSite=Lax` cookie (`ldapui_sso_login`,
+scoped to `/api/sso`) and the callback refuses a state that arrives without
+the matching value. Without that, anyone holding a valid state and code —
+obtainable by running the flow against their own account — could lure a
+victim to the callback URL and have the server hand the victim's browser a
+session for the attacker's account.
+
 The Keycloak subject must have `SSO_ADMIN_ROLE` (default `ldap-admin`) in
 either the custom array-valued `roles` claim or Keycloak's standard
 `realm_access.roles`. Its `preferred_username` is resolved to exactly one

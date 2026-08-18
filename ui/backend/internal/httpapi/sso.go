@@ -92,6 +92,8 @@ func (s *Server) handleSSOStart(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "could not begin SSO login")
 	}
 
+	s.setSSOLoginCookie(c, login.binding)
+
 	oauthConfig := s.sso.oauthConfig
 	oauthConfig.RedirectURL = redirectURI
 	authURL := oauthConfig.AuthCodeURL(
@@ -107,7 +109,16 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "SSO is not enabled")
 	}
 
-	state, ok := s.sso.states.Consume(c.QueryParam("state"))
+	// Cleared before anything else can return: this cookie is single-use,
+	// and leaving it behind on a failed login would let the next attempt
+	// inherit a binding it did not create.
+	binding := ""
+	if cookie, err := c.Cookie(ssoLoginCookieName); err == nil {
+		binding = cookie.Value
+	}
+	s.clearSSOLoginCookie(c)
+
+	state, ok := s.sso.states.Consume(c.QueryParam("state"), binding)
 	if !ok {
 		return echo.NewHTTPError(http.StatusBadRequest, "SSO login state is invalid or expired")
 	}
@@ -308,12 +319,16 @@ type oidcLoginState struct {
 	redirectURI string
 	verifier    string
 	nonce       string
-	expiresAt   time.Time
+	// binding ties this login to the browser that started it. Its value
+	// goes out as a cookie on /api/sso/start and must come back on the
+	// callback; see Consume.
+	binding   string
+	expiresAt time.Time
 }
 
-// oidcStateStore guarantees one-time state consumption. State, nonce, and
-// PKCE verifier stay server-side and expire quickly, so neither CSRF state
-// nor a verifier can be replayed from browser storage.
+// oidcStateStore guarantees one-time state consumption. State, nonce, PKCE
+// verifier and the browser binding stay server-side and expire quickly, so
+// none of them can be replayed from browser storage.
 type oidcStateStore struct {
 	mu     sync.Mutex
 	states map[string]oidcLoginState
@@ -349,6 +364,10 @@ func (s *oidcStateStore) Create(redirectURI string) (oidcLoginState, error) {
 	if err != nil {
 		return oidcLoginState{}, err
 	}
+	binding, err := randomURLToken(32)
+	if err != nil {
+		return oidcLoginState{}, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,20 +394,41 @@ func (s *oidcStateStore) Create(redirectURI string) (oidcLoginState, error) {
 		redirectURI: redirectURI,
 		verifier:    verifier,
 		nonce:       nonce,
+		binding:     binding,
 		expiresAt:   now.Add(s.ttl),
 	}
 	s.states[state] = entry
 	return entry, nil
 }
 
-func (s *oidcStateStore) Consume(state string) (oidcLoginState, bool) {
-	if state == "" {
+// Consume requires both halves of the login: the state, which travels
+// through the identity provider and comes back in the URL, and the binding,
+// which never leaves the browser that started the login except as a cookie.
+//
+// The state alone is not enough, and that is the whole point. An attacker
+// can obtain a valid state and code by running the flow against their own
+// account and simply not letting their browser finish the callback. If the
+// callback accepted that state from anyone, luring the victim to the
+// callback URL would log the victim's browser into the attacker's account —
+// login CSRF (RFC 6749 §10.12). The victim then administers the directory
+// inside a session the attacker owns, and everything they type there,
+// including passwords they set for other users, lands somewhere the attacker
+// can read. PKCE does not help: the verifier lives here, not in the browser.
+//
+// A binding mismatch deliberately does NOT consume the entry. Deleting on
+// mismatch would let anyone who learns a state cancel somebody else's
+// pending login; leaving it costs nothing, since it expires on its own.
+func (s *oidcStateStore) Consume(state, binding string) (oidcLoginState, bool) {
+	if state == "" || binding == "" {
 		return oidcLoginState{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.states[state]
 	if !ok {
+		return oidcLoginState{}, false
+	}
+	if subtle.ConstantTimeCompare([]byte(entry.binding), []byte(binding)) != 1 {
 		return oidcLoginState{}, false
 	}
 	delete(s.states, state)

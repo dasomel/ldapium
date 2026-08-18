@@ -13,6 +13,10 @@ const (
 	// ever a signed, opaque session ID (see internal/session/cookie.go),
 	// never a credential.
 	sessionCookieName = "ldapui_session"
+	// Set when an SSO login starts and required back on the callback, so a
+	// login can only be completed by the browser that began it. Scoped to
+	// /api/sso because nothing else ever reads it.
+	ssoLoginCookieName = "ldapui_sso_login"
 	// sessionContextKey is where requireSession stashes the resolved
 	// *session.Session for downstream handlers.
 	sessionContextKey = "session"
@@ -59,6 +63,34 @@ func (s *Server) setSessionCookie(c echo.Context, signedValue string) {
 		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(s.cfg.SessionTTL.Seconds()),
+	})
+}
+
+// SameSite=Lax rather than Strict: the callback arrives as a top-level GET
+// navigation from the identity provider, which is cross-site. Strict would
+// withhold the cookie there and break every SSO login; Lax still withholds it
+// from cross-site subresource requests, which is what matters here.
+func (s *Server) setSSOLoginCookie(c echo.Context, binding string) {
+	c.SetCookie(&http.Cookie{
+		Name:     ssoLoginCookieName,
+		Value:    binding,
+		Path:     "/api/sso",
+		HttpOnly: true,
+		Secure:   s.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(oidcStateTTL.Seconds()),
+	})
+}
+
+func (s *Server) clearSSOLoginCookie(c echo.Context) {
+	c.SetCookie(&http.Cookie{
+		Name:     ssoLoginCookieName,
+		Value:    "",
+		Path:     "/api/sso",
+		HttpOnly: true,
+		Secure:   s.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
 	})
 }
 

@@ -40,9 +40,11 @@ First release.
   paged listings, and a password-policy view.
 - Every request binds as the logged-in user, so the directory's own ACLs decide
   what a session can do. The UI holds no service account.
-- Optional Keycloak SSO (OIDC with PKCE), gated on a realm role. This is the
-  one path that uses a dedicated LDAP service account, because a token carries
-  no password to bind with.
+- Optional Keycloak SSO (OIDC with PKCE), gated on a realm role. The login
+  state is bound to the browser that began it, so a state and code obtained
+  elsewhere cannot be used to log somebody else's browser into the attacker's
+  account. This is the one path that uses a dedicated LDAP service account,
+  because a token carries no password to bind with.
 - Korean and English throughout, and inline explanations of LDAP terminology
   for people who do not work with directories daily.
 - Backup status is read from the directory itself, so the UI needs no

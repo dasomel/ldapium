@@ -19,17 +19,17 @@ func TestOIDCStateStoreConsumesStateOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if len(login.state) < 43 || len(login.verifier) < 43 || len(login.nonce) < 43 {
-		t.Fatal("expected cryptographically-sized state, verifier, and nonce")
+	if len(login.state) < 43 || len(login.verifier) < 43 || len(login.nonce) < 43 || len(login.binding) < 43 {
+		t.Fatal("expected cryptographically-sized state, verifier, nonce, and binding")
 	}
-	entry, ok := store.Consume(login.state)
+	entry, ok := store.Consume(login.state, login.binding)
 	if !ok {
 		t.Fatal("expected first state consumption to succeed")
 	}
 	if entry.verifier != login.verifier || entry.nonce != login.nonce {
 		t.Fatal("state entry did not retain PKCE verifier and nonce")
 	}
-	if _, ok := store.Consume(login.state); ok {
+	if _, ok := store.Consume(login.state, login.binding); ok {
 		t.Fatal("replayed state must be rejected")
 	}
 }
@@ -43,8 +43,76 @@ func TestOIDCStateStoreRejectsExpiredState(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	store.now = func() time.Time { return now.Add(time.Minute) }
-	if _, ok := store.Consume(login.state); ok {
+	if _, ok := store.Consume(login.state, login.binding); ok {
 		t.Fatal("expired state must be rejected")
+	}
+}
+
+// The state travels through the identity provider and is visible to whoever
+// runs the flow; the binding only ever exists as a cookie in the browser that
+// started the login. Without the second half, an attacker who holds a valid
+// state and code can lure a victim to the callback URL and have the server
+// set a session cookie for the ATTACKER's account in the VICTIM's browser.
+func TestOIDCStateStoreRejectsStateFromAnotherBrowser(t *testing.T) {
+	store := newOIDCStateStore(time.Minute)
+	store.now = func() time.Time { return time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC) }
+
+	attacker, err := store.Create("https://ui.example.com/api/sso/callback")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	victim, err := store.Create("https://ui.example.com/api/sso/callback")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// The victim's browser carries its own binding, or none at all.
+	if _, ok := store.Consume(attacker.state, victim.binding); ok {
+		t.Fatal("a state must not be consumable with another login's binding")
+	}
+	if _, ok := store.Consume(attacker.state, ""); ok {
+		t.Fatal("a state must not be consumable without a binding")
+	}
+
+	// A rejected attempt must not consume the entry: otherwise anyone who
+	// learns a state can cancel somebody else's pending login.
+	if _, ok := store.Consume(attacker.state, attacker.binding); !ok {
+		t.Fatal("a mismatched binding must not consume the pending login")
+	}
+}
+
+func TestSSOStartIssuesBindingCookieAndCallbackRequiresIt(t *testing.T) {
+	store := newOIDCStateStore(time.Minute)
+	login, err := store.Create("https://ui.example.com/api/sso/callback")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	srv := &Server{}
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(httptest.NewRequest("GET", "/api/sso/start", nil), rec)
+	srv.setSSOLoginCookie(c, login.binding)
+
+	var issued *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == ssoLoginCookieName {
+			issued = cookie
+		}
+	}
+	if issued == nil {
+		t.Fatal("/api/sso/start must set the binding cookie")
+	}
+	if issued.Value != login.binding {
+		t.Error("cookie does not carry this login's binding")
+	}
+	if !issued.HttpOnly {
+		t.Error("binding cookie must be HttpOnly — script must not be able to read it")
+	}
+	if issued.SameSite != http.SameSiteLaxMode {
+		t.Error("binding cookie must be SameSite=Lax: Strict would be withheld on the provider's callback redirect")
+	}
+	if issued.Path != "/api/sso" {
+		t.Errorf("binding cookie path = %q, want /api/sso", issued.Path)
 	}
 }
 
