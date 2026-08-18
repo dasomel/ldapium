@@ -33,15 +33,11 @@ func (c *client) Tree(ctx context.Context, parentDN string) ([]domain.TreeNode, 
 
 	nodes := make([]domain.TreeNode, 0, len(res.Entries))
 	for _, e := range res.Entries {
-		hasChildren, err := c.hasChildrenLocked(e.DN)
-		if err != nil {
-			return nil, err
-		}
 		nodes = append(nodes, domain.TreeNode{
 			DN:            e.DN,
 			RDN:           rdnOf(e.DN),
 			ObjectClasses: e.GetAttributeValues("objectClass"),
-			HasChildren:   hasChildren,
+			HasChildren:   c.hasChildrenLocked(e.DN),
 		})
 	}
 	return nodes, nil
@@ -50,7 +46,11 @@ func (c *client) Tree(ctx context.Context, parentDN string) ([]domain.TreeNode, 
 // hasChildrenLocked probes for at least one subordinate entry. Callers must
 // already hold c.mu. This costs one extra round-trip per node; acceptable
 // for the entry counts a directory admin tool typically browses.
-func (c *client) hasChildrenLocked(dn string) (bool, error) {
+//
+// The probe asks for a single entry, which makes "more than one child" an
+// error rather than a result — see hasChildrenFromProbe for why that is the
+// answer and not a failure.
+func (c *client) hasChildrenLocked(dn string) bool {
 	req := ldap.NewSearchRequest(
 		dn,
 		ldap.ScopeSingleLevel, ldap.NeverDerefAliases, 1, 0, false,
@@ -60,11 +60,28 @@ func (c *client) hasChildrenLocked(dn string) (bool, error) {
 	)
 	res, err := c.conn.Search(req)
 	if err != nil {
-		// A subtree that exists but denies read on children isn't a
-		// fatal error for the tree view: just report no children.
-		return false, nil
+		return hasChildrenFromProbe(0, err)
 	}
-	return len(res.Entries) > 0, nil
+	return hasChildrenFromProbe(len(res.Entries), nil)
+}
+
+// hasChildrenFromProbe interprets the outcome of that one-entry probe.
+//
+// sizeLimitExceeded is not a failure here, it *is* the answer: RFC 4511
+// says the server returns it once matches exceed the requested limit, so
+// asking for one entry and being told the limit was exceeded means there
+// were at least two children. Treating it as an error is what made every
+// node with two or more children — ou=people and ou=groups in any real
+// directory, i.e. exactly the ones worth expanding — render as a leaf.
+//
+// Any other error stays non-fatal for the tree view: a subtree that exists
+// but denies read on its children should show as empty, not break the
+// browser.
+func hasChildrenFromProbe(entries int, err error) bool {
+	if err != nil {
+		return ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded)
+	}
+	return entries > 0
 }
 
 // GetEntry returns the full attribute set of a single entry.
