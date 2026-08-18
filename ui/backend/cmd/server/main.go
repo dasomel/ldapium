@@ -38,7 +38,10 @@ func main() {
 	defer stopJanitor()
 	go sessions.RunJanitor(janitorCtx, time.Minute)
 
-	srv := httpapi.New(cfg, dialer, sessions, spa)
+	srv, err := httpapi.New(cfg, dialer, sessions, spa)
+	if err != nil {
+		log.Fatalf("initialize HTTP server: %v", err)
+	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,

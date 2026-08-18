@@ -4,14 +4,17 @@ A self-contained LDAP management web app: a Go + Echo backend that speaks
 LDAP directly and also serves the built React SPA, shipped as a single
 container image.
 
-## How authentication works
+## Authentication modes
 
-There is no local user database and no privileged service account. Logging
-in performs an actual LDAP bind with the credentials you type. If the bind
-succeeds, that exact bound connection is kept server-side for the rest of
-your session, and **every subsequent LDAP operation you make runs over that
-same connection** — so the directory's own ACLs decide what you're allowed
-to do, not this app.
+There is no local user database. The UI has two mutually exclusive modes:
+
+### LDAP login (default)
+
+When SSO is disabled, logging in performs an actual LDAP bind with the
+credentials you type. If the bind succeeds, that exact bound connection is
+kept server-side for the rest of your session, and **every subsequent LDAP
+operation you make runs over that same connection** — so the directory's own
+ACLs decide what you're allowed to do, not this app.
 
 The identifier field on the login form accepts either:
 
@@ -30,6 +33,38 @@ connection and the DN it authenticated as live in an in-memory server-side
 table, never in the cookie, never in localStorage. Idle sessions expire
 after `SESSION_TTL` (sliding — any request extends it) and a background
 janitor closes their LDAP connections; logout closes it immediately.
+
+### Keycloak SSO
+
+Set `SSO_ENABLED=true` only after all SSO variables below are configured.
+This makes the UI **SSO-only**: the password form and `POST /api/login` are
+disabled. The browser uses OIDC authorization code flow with PKCE (S256),
+server-side short-lived single-use state, and an ID-token nonce. The backend
+verifies the ID token's signature, issuer, audience, and expiry using
+Keycloak's published keys.
+
+The Keycloak subject must have `SSO_ADMIN_ROLE` (default `ldap-admin`) in
+either the custom array-valued `roles` claim or Keycloak's standard
+`realm_access.roles`. Its `preferred_username` is resolved to exactly one
+LDAP `uid` under `LDAP_USER_SEARCH_BASE` with the configured, RFC 4515
+escaped `LDAP_USER_SEARCH_FILTER`; no matching LDAP entry is rejected.
+
+SSO mode binds LDAP as `LDAP_SERVICE_ACCOUNT_DN`, not as the Keycloak user.
+The service account is therefore responsible for the **full existing UI
+scope**: DIT read/write, user and group CRUD, password reset, account
+unlock, and all related searches. Grant only this UI-specific account the
+required LDAP ACLs; it is never provisioned automatically by this project.
+The user's display DN remains in the application session and `/api/me`.
+The self-password page becomes a service-account reset in SSO mode, so a
+Keycloak user is never asked for an LDAP password.
+
+`POST /api/logout` always ends the local UI session and clears its cookie.
+When Keycloak advertises an `end_session_endpoint`, the UI sends the
+server-side ID-token hint there for RP-initiated logout, then returns to its
+login page without auto-starting a new session. Register
+`<origin>/login` as a valid post-logout redirect URI in Keycloak. If the
+provider does not advertise that endpoint, logout is local-only; use
+Keycloak's own session controls when provider-session logout is required.
 
 ## Configuration (environment variables)
 
@@ -51,6 +86,44 @@ LDAP connection details and a session secret explicitly.
 | `LDAP_TLS_INSECURE_SKIP_VERIFY` | no | `false` | Skip TLS certificate verification — local dev only |
 | `SESSION_TTL` | no | `30m` | Idle session lifetime (Go duration syntax, e.g. `1h`) |
 | `COOKIE_SECURE` | no | `true` | Mark the session cookie `Secure`; disable only for plain-HTTP local dev |
+| `SSO_ENABLED` | no | `false` | Enable Keycloak SSO; disables LDAP password login |
+| `SSO_ISSUER_URL` | SSO | — | Keycloak realm issuer, e.g. `https://sso.example.com/realms/example` |
+| `SSO_CLIENT_ID` | SSO | — | Confidential Keycloak OIDC client ID |
+| `SSO_CLIENT_SECRET` | SSO | — | Confidential OIDC client secret; inject from a Secret, never a manifest literal |
+| `SSO_ADMIN_ROLE` | no | `ldap-admin` | Required Keycloak realm role |
+| `SSO_CALLBACK_ORIGINS` | SSO | — | Comma-separated exact browser origins allowed to form the callback URI; no paths |
+| `LDAP_SERVICE_ACCOUNT_DN` | SSO | — | Dedicated LDAP UI service-account DN |
+| `LDAP_SERVICE_ACCOUNT_PASSWORD` | SSO | — | Dedicated LDAP UI service-account password |
+
+### Keycloak client setup
+
+Create a **confidential** client in the Beluga realm
+(`https://sso.example.com/realms/example`) with Standard Flow
+(authorization code) enabled and PKCE method **S256**. Store its client
+secret in Kubernetes rather than application configuration. Request/allow
+the `openid` and `profile` scopes so the ID token has `preferred_username`.
+
+Register every browser-facing callback URI exactly. For local backend and
+Vite development, register both:
+
+```text
+http://127.0.0.1:5173/api/sso/callback
+http://127.0.0.1:8080/api/sso/callback
+```
+
+Also register `<production-origin>/api/sso/callback` for every production
+origin placed in `SSO_CALLBACK_ORIGINS`. The backend derives the callback
+from the request host/scheme (including forwarded host/proto) only after an
+exact allowlist check, so do not use wildcards.
+
+For RP-initiated logout, also register `<origin>/login` as a valid
+post-logout redirect URI for each allowed browser origin.
+
+Create the realm role `ldap-admin` (or override `SSO_ADMIN_ROLE`) and map
+realm roles into the ID token. The UI accepts either an array custom claim
+named `roles` or Keycloak's `realm_access.roles`; ensure one is present in
+the **ID token**, not only an access token. Do not map a display name in
+place of `preferred_username`: it is used as the LDAP `uid` lookup key.
 
 ## Running
 

@@ -68,13 +68,16 @@ export function GroupsPage() {
     load()
   }
 
-  async function handleAddMember(groupDn: string, memberDn: string) {
-    await api.addMember(groupDn, memberDn)
-    load()
-  }
+  async function handleSaveMembers(groupDn: string, members: string[]) {
+    const group = groups?.find((candidate) => candidate.dn === groupDn)
+    if (!group) return
+    const previous = new Set(group.members)
+    const next = new Set(members)
 
-  async function handleRemoveMember(groupDn: string, memberDn: string) {
-    await api.removeMember(groupDn, memberDn)
+    await Promise.all([
+      ...members.filter((memberDn) => !previous.has(memberDn)).map((memberDn) => api.addMember(groupDn, memberDn)),
+      ...group.members.filter((memberDn) => !next.has(memberDn)).map((memberDn) => api.removeMember(groupDn, memberDn)),
+    ])
     load()
   }
 
@@ -225,8 +228,7 @@ export function GroupsPage() {
         open={!!membersGroup}
         onOpenChange={(o) => !o && setMembersGroup(null)}
         group={membersGroup}
-        onAdd={handleAddMember}
-        onRemove={handleRemoveMember}
+        onSave={handleSaveMembers}
       />
       <ConfirmDialog
         open={!!deleting}

@@ -4,8 +4,11 @@
 package httpapi
 
 import (
+	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -23,27 +26,41 @@ type Server struct {
 	cfg      config.Config
 	dialer   ldapclient.Dialer
 	sessions *session.Store
+	sso      *oidcAuthenticator
 }
 
 // New builds the Echo application: middleware, the JSON API under /api,
 // and the embedded SPA (with client-side-routing fallback to index.html)
 // for everything else.
-func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS) *Server {
+func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS) (*Server, error) {
 	s := &Server{
 		echo:     echo.New(),
 		cfg:      cfg,
 		dialer:   dialer,
 		sessions: sessions,
 	}
+	if cfg.SSO.Enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		authenticator, err := newOIDCAuthenticator(ctx, cfg.SSO)
+		if err != nil {
+			return nil, fmt.Errorf("initialize OIDC: %w", err)
+		}
+		s.sso = authenticator
+	}
 	s.echo.HideBanner = true
 	s.echo.HidePort = true
 
 	s.echo.Use(middleware.Recover())
-	s.echo.Use(middleware.Logger())
+	// Do not log RequestURI: the OIDC callback carries authorization code
+	// and state in its query string. `${path}` excludes the query entirely.
+	s.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: `{"time":"${time_rfc3339}","method":"${method}","path":"${path}","status":${status},"latency":${latency},"bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
+	}))
 	s.echo.Use(middleware.Secure())
 
 	s.routes(spa)
-	return s
+	return s, nil
 }
 
 // Handler returns the http.Handler to pass to http.Server, so main.go
@@ -53,11 +70,15 @@ func (s *Server) Handler() http.Handler { return s.echo }
 func (s *Server) routes(spa fs.FS) {
 	api := s.echo.Group("/api")
 
+	api.GET("/auth/config", s.handleAuthConfig)
 	api.POST("/login", s.handleLogin)
 	api.POST("/logout", s.handleLogout)
+	api.GET("/sso/start", s.handleSSOStart)
+	api.GET("/sso/callback", s.handleSSOCallback)
 
 	authed := api.Group("", s.requireSession)
 	authed.GET("/me", s.handleMe)
+	authed.GET("/server-settings", s.handleGetServerSettings)
 
 	authed.GET("/tree", s.handleTreeChildren)
 	authed.GET("/entry", s.handleGetEntry)

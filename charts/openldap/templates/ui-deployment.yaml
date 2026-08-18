@@ -1,4 +1,27 @@
 {{- if .Values.ui.enabled }}
+{{- if .Values.ui.sso.enabled }}
+{{- /*
+  Every value SSO cannot run without, checked in one pass so a misconfigured
+  install is told about all of them at once. Failing on the first one turns a
+  single fix-up into one round of `helm install` per missing value.
+
+  The "why" for the two non-obvious entries: ldap.userSearchFilter is what
+  maps the token's preferred_username onto a directory entry (with SSO there
+  is no password to bind with, so the filter is the only route), and the
+  ldapServiceAccount keys exist for the same reason — see values.yaml.
+*/ -}}
+{{- $missing := list -}}
+{{- if not .Values.ui.sso.issuerURL }}{{ $missing = append $missing "ui.sso.issuerURL" }}{{ end -}}
+{{- if not .Values.ui.sso.clientID }}{{ $missing = append $missing "ui.sso.clientID" }}{{ end -}}
+{{- if not .Values.ui.sso.existingSecret }}{{ $missing = append $missing "ui.sso.existingSecret (confidential OIDC client secret)" }}{{ end -}}
+{{- if not .Values.ui.sso.existingSecretKey }}{{ $missing = append $missing "ui.sso.existingSecretKey" }}{{ end -}}
+{{- if not .Values.ui.sso.callbackOrigins }}{{ $missing = append $missing "ui.sso.callbackOrigins (every allowed browser origin)" }}{{ end -}}
+{{- if not .Values.ui.ldap.userSearchFilter }}{{ $missing = append $missing "ui.ldap.userSearchFilter" }}{{ end -}}
+{{- if not .Values.ui.ldapServiceAccount.existingSecret }}{{ $missing = append $missing "ui.ldapServiceAccount.existingSecret" }}{{ end -}}
+{{- if not .Values.ui.ldapServiceAccount.dnKey }}{{ $missing = append $missing "ui.ldapServiceAccount.dnKey" }}{{ end -}}
+{{- if not .Values.ui.ldapServiceAccount.passwordKey }}{{ $missing = append $missing "ui.ldapServiceAccount.passwordKey" }}{{ end -}}
+{{- if $missing }}{{ fail (printf "ui.sso.enabled=true requires: %s" (join ", " $missing)) }}{{ end -}}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -78,6 +101,33 @@ spec:
           {{- end }}
           {{- end }}
           env:
+            - name: APP_VERSION
+              value: {{ .Chart.Version | quote }}
+            - name: OPENLDAP_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: OPENLDAP_PASSWORD_HASH
+              value: {{ .Values.ldap.passwordHash | quote }}
+            - name: OPENLDAP_PASSWORD_POLICY_ENABLED
+              value: {{ .Values.ldap.passwordPolicyEnabled | quote }}
+            - name: OPENLDAP_UNIQUE_ATTRIBUTES
+              value: {{ .Values.ldap.uniqueAttributes | quote }}
+            # These are the ONLY source for what the settings page shows, and
+            # they are a hand-kept copy of what image/Dockerfile builds and
+            # image/ldifs/01-cn-config.ldif loads. Keep them in step by hand:
+            # the list had already drifted once (back_mdb was missing).
+            #
+            # Reading the real values from the server is the obvious fix and
+            # does not work: they live in cn=config, which has its own admin
+            # identity. Binding as the directory admin (cn=admin,<rootDN>) is
+            # answered with "No such object" — verified against a running
+            # server — and this UI only ever binds as a directory user, so no
+            # session it can create could read them. Making it possible would
+            # mean giving the UI a second, cn=config-capable service account,
+            # which is exactly the thing this project avoids.
+            - name: OPENLDAP_MODULES
+              value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp"
+            - name: OPENLDAP_OVERLAYS
+              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "openldap.replicationEnabled" .) "true" }},syncprov{{ end }}"
             - name: LDAP_URL
               value: {{ $ldapURL | quote }}
             - name: LDAP_BASE_DN
@@ -123,6 +173,33 @@ spec:
               value: {{ .Values.ui.session.ttl | quote }}
             - name: COOKIE_SECURE
               value: {{ .Values.ui.session.cookieSecure | quote }}
+            {{- if .Values.ui.sso.enabled }}
+            - name: SSO_ENABLED
+              value: "true"
+            - name: SSO_ISSUER_URL
+              value: {{ .Values.ui.sso.issuerURL | quote }}
+            - name: SSO_CLIENT_ID
+              value: {{ .Values.ui.sso.clientID | quote }}
+            - name: SSO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ui.sso.existingSecret }}
+                  key: {{ .Values.ui.sso.existingSecretKey }}
+            - name: SSO_ADMIN_ROLE
+              value: {{ .Values.ui.sso.adminRole | quote }}
+            - name: SSO_CALLBACK_ORIGINS
+              value: {{ join "," .Values.ui.sso.callbackOrigins | quote }}
+            - name: LDAP_SERVICE_ACCOUNT_DN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ui.ldapServiceAccount.existingSecret }}
+                  key: {{ .Values.ui.ldapServiceAccount.dnKey }}
+            - name: LDAP_SERVICE_ACCOUNT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ui.ldapServiceAccount.existingSecret }}
+                  key: {{ .Values.ui.ldapServiceAccount.passwordKey }}
+            {{- end }}
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
 {{- end }}

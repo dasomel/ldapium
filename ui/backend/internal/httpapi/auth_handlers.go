@@ -15,6 +15,12 @@ import (
 // on — so every later operation is authorized by the directory's ACLs for
 // this exact user, not by any permission model of this app.
 func (s *Server) handleLogin(c echo.Context) error {
+	if s.cfg.SSO.Enabled {
+		// Password authentication is intentionally unavailable in SSO mode:
+		// accepting it would bypass the Keycloak role gate.
+		return echo.NewHTTPError(http.StatusNotFound, "password login is disabled")
+	}
+
 	var req loginRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -43,17 +49,38 @@ func (s *Server) handleLogin(c echo.Context) error {
 // already-logged-out client should still be able to clear its cookie
 // without an error.
 func (s *Server) handleLogout(c echo.Context) error {
+	var oidcLogoutIDToken string
 	cookie, err := c.Cookie(sessionCookieName)
 	if err == nil && cookie.Value != "" {
 		if id, err := session.Verify([]byte(s.cfg.SessionSecret), cookie.Value); err == nil {
+			if sess, ok := s.sessions.Get(id); ok {
+				oidcLogoutIDToken = sess.OIDCLogoutIDToken
+			}
 			s.sessions.Delete(id)
 		}
 	}
 	s.clearSessionCookie(c)
+	if s.sso != nil {
+		postLogoutURI := ""
+		if callbackURI, err := s.sso.callbackURI(c.Request()); err == nil {
+			postLogoutURI = callbackOrigin(callbackURI) + "/login?sso_logged_out=1"
+		}
+		return c.JSON(http.StatusOK, logoutResponse{
+			RedirectURL: s.sso.logoutURL(oidcLogoutIDToken, postLogoutURI),
+		})
+	}
 	return c.NoContent(http.StatusNoContent)
 }
 
 func (s *Server) handleMe(c echo.Context) error {
 	sess := currentSession(c)
 	return c.JSON(http.StatusOK, meResponse{DN: sess.DN})
+}
+
+func (s *Server) handleAuthConfig(c echo.Context) error {
+	mode := "ldap"
+	if s.cfg.SSO.Enabled {
+		mode = "sso"
+	}
+	return c.JSON(http.StatusOK, authConfigResponse{Mode: mode})
 }

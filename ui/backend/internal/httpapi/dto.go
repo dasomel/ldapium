@@ -19,6 +19,34 @@ type passwordPolicyListResponse struct {
 	Policies []domain.PasswordPolicy `json:"policies"`
 }
 
+// serverSettingsResponse only includes settings useful for directory
+// administration. Connection hosts, certificate paths, and session secrets
+// remain server-only infrastructure details.
+type serverSettingsResponse struct {
+	ApplicationVersion string       `json:"applicationVersion"`
+	OpenLDAPVersion    string       `json:"openLdapVersion"`
+	OSSVersions        []ossVersion `json:"ossVersions"`
+	PasswordHash       string       `json:"passwordHash"`
+	PasswordPolicy     bool         `json:"passwordPolicy"`
+	UniqueAttributes   []string     `json:"uniqueAttributes"`
+	LoadedModules      []string     `json:"loadedModules"`
+	ActiveOverlays     []string     `json:"activeOverlays"`
+	BaseDN             string       `json:"baseDn"`
+	UserSearchBase     string       `json:"userSearchBase"`
+	UserCreateBase     string       `json:"userCreateBase"`
+	GroupSearchBase    string       `json:"groupSearchBase"`
+	GroupCreateBase    string       `json:"groupCreateBase"`
+	ConnectionSecurity string       `json:"connectionSecurity"`
+	TLSVerified        bool         `json:"tlsVerified"`
+	SessionTTLSeconds  int64        `json:"sessionTtlSeconds"`
+	CookieSecure       bool         `json:"cookieSecure"`
+}
+
+type ossVersion struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 // loginRequest is the POST /api/login body. Identity is either a full DN
 // or a bare uid resolved server-side per LDAP_USER_SEARCH_FILTER.
 type loginRequest struct {
@@ -28,6 +56,14 @@ type loginRequest struct {
 
 type meResponse struct {
 	DN string `json:"dn"`
+}
+
+type authConfigResponse struct {
+	Mode string `json:"mode"`
+}
+
+type logoutResponse struct {
+	RedirectURL string `json:"redirectURL,omitempty"`
 }
 
 type userRequest struct {

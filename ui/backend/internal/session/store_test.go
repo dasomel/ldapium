@@ -18,6 +18,8 @@ type fakeClient struct {
 
 func (f *fakeClient) WhoAmI() string                                          { return f.dn }
 func (f *fakeClient) Close() error                                            { f.closed = true; return nil }
+func (f *fakeClient) ResolveUID(context.Context, string) (string, error)      { return "", nil }
+func (f *fakeClient) ServerVersion(context.Context) (string, error)           { return "", nil }
 func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error) { return nil, nil }
 func (f *fakeClient) GetEntry(context.Context, string) (*domain.Entry, error) { return nil, nil }
 func (f *fakeClient) ListPasswordPolicies(context.Context, string) ([]domain.PasswordPolicy, error) {
@@ -64,6 +66,26 @@ func TestStore_CreateAndGet(t *testing.T) {
 	}
 	if got.DN != fc.dn {
 		t.Errorf("DN = %q, want %q", got.DN, fc.dn)
+	}
+}
+
+func TestStore_CreateSSORetainsDirectoryIdentity(t *testing.T) {
+	s := NewStore(time.Minute)
+	serviceClient := &fakeClient{dn: "uid=ldap-ui,ou=services,dc=example,dc=com"}
+	userDN := "uid=jdoe,ou=people,dc=example,dc=com"
+
+	sess, err := s.CreateSSO(userDN, serviceClient, "test-id-token")
+	if err != nil {
+		t.Fatalf("CreateSSO: %v", err)
+	}
+	if sess.DN != userDN {
+		t.Errorf("DN = %q, want user DN %q", sess.DN, userDN)
+	}
+	if sess.Bound.WhoAmI() != serviceClient.dn {
+		t.Errorf("Bound identity = %q, want service identity %q", sess.Bound.WhoAmI(), serviceClient.dn)
+	}
+	if sess.OIDCLogoutIDToken != "test-id-token" {
+		t.Error("expected server-side OIDC logout hint to be retained")
 	}
 }
 

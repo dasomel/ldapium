@@ -119,8 +119,95 @@ rendered when `replicaCount > 1`.
 | `ui.session.existingSecret` / `existingSecretKey` | `""` / `session-secret` | → `SESSION_SECRET`. Auto-generated (48 bytes) and reused across upgrades via `lookup` when unset. |
 | `ui.session.ttl` | `30m` | → `SESSION_TTL`. |
 | `ui.session.cookieSecure` | `true` | → `COOKIE_SECURE`. Disable only for local HTTP dev. |
+| `ui.sso.enabled` | `false` | Enables Keycloak OIDC SSO and disables LDAP password login. |
+| `ui.sso.issuerURL` | Beluga realm issuer | → `SSO_ISSUER_URL`. Required when SSO is enabled. |
+| `ui.sso.clientID` | `""` | Confidential OIDC client ID. Required when SSO is enabled. |
+| `ui.sso.adminRole` | `ldap-admin` | Required Keycloak realm role → `SSO_ADMIN_ROLE`. |
+| `ui.sso.existingSecret` / `existingSecretKey` | `""` / `oidc-client-secret` | Existing Secret/key holding the confidential OIDC client secret. Required when SSO is enabled. |
+| `ui.sso.callbackOrigins` | `[]` | Exact browser origins → `SSO_CALLBACK_ORIGINS`; required when SSO is enabled. |
+| `ui.ldapServiceAccount.existingSecret` | `""` | Existing Secret holding the dedicated LDAP UI service account's DN and password. Required when SSO is enabled. |
+| `ui.ldapServiceAccount.dnKey` / `passwordKey` | `ldap-service-account-dn` / `ldap-service-account-password` | Keys in `ui.ldapServiceAccount.existingSecret`. |
 | `ui.ingress.enabled` | `false` | |
 | `ui.ingress.className` / `annotations` / `hosts` / `tls` | see values.yaml | Standard `networking.k8s.io/v1` Ingress shape. |
+
+## Keycloak SSO
+
+`ui.sso.enabled=false` is the default and keeps the original LDAP password
+form and per-user LDAP bind behavior. Enabling it makes the UI SSO-only:
+`POST /api/login` rejects password logins, and every browser starts the
+Keycloak authorization-code + PKCE flow.
+
+The chart intentionally uses a **confidential** OIDC client, so
+`ui.sso.existingSecret` is mandatory. It also requires a separate
+`ui.ldapServiceAccount.existingSecret`; `auth.adminPassword` is never reused
+as the UI service account. Rendering fails with an explicit message if any
+required SSO value or secret reference is absent. The chart does not create
+either Secret and never provisions the LDAP account.
+
+Create a Keycloak client in the Beluga realm with:
+
+- issuer: `https://sso.example.com/realms/example`;
+- Standard Flow (authorization code) enabled, confidential client
+  authentication enabled, and PKCE method `S256`;
+- `openid` and `profile` scopes, so the ID token contains
+  `preferred_username`;
+- a realm role `ldap-admin` (or the configured `ui.sso.adminRole`);
+- an ID-token role mapper providing either an array `roles` claim or
+  Keycloak's standard `realm_access.roles`.
+
+Register exact redirect URIs for every origin in `ui.sso.callbackOrigins`.
+For forwarded local development, configure both:
+
+```text
+http://127.0.0.1:5173/api/sso/callback
+http://127.0.0.1:8080/api/sso/callback
+```
+
+The backend derives its callback URI from the incoming/forwarded host and
+scheme, but accepts it only when its origin exactly matches
+`ui.sso.callbackOrigins`; do not configure wildcards.
+
+An SSO user's `preferred_username` is looked up as LDAP `uid` using the
+existing `ui.ldap.userSearchBase` and `ui.ldap.userSearchFilter`. The
+filter is required in SSO mode, is RFC 4515 escaped by the backend, and
+must resolve exactly one LDAP entry. A Keycloak account with no matching
+LDAP uid is refused.
+
+The dedicated LDAP account needs ACLs for the full UI feature set: DIT
+read/write, user/group CRUD, user password reset, account unlock, and the
+searches those views issue. The Keycloak role is the application gate;
+LDAP ACLs still limit what the service identity can do. Provision and scope
+that identity deliberately—this chart does **not** create it automatically.
+
+Example values (the referenced Secrets must already exist and contain no
+values in this file):
+
+```yaml
+ui:
+  enabled: true
+  ldap:
+    userSearchBase: ou=people,dc=example,dc=org
+    userSearchFilter: "(uid=%s)"
+  sso:
+    enabled: true
+    issuerURL: https://sso.example.com/realms/example
+    clientID: ldap-ui
+    existingSecret: ldap-ui-oidc
+    existingSecretKey: oidc-client-secret
+    callbackOrigins:
+      - http://127.0.0.1:5173
+      - http://127.0.0.1:8080
+  ldapServiceAccount:
+    existingSecret: ldap-ui-service-account
+    dnKey: ldap-service-account-dn
+    passwordKey: ldap-service-account-password
+```
+
+`POST /api/logout` clears the local UI session and, when Keycloak advertises
+an `end_session_endpoint`, uses the server-side ID-token hint for
+RP-initiated logout. Register `<origin>/login` as a valid post-logout
+redirect URI for every `ui.sso.callbackOrigins` entry. If Keycloak does not
+advertise an end-session endpoint, logout remains local-only.
 
 ## Backup / Restore
 

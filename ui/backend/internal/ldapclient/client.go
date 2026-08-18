@@ -25,6 +25,18 @@ type Client interface {
 	// once.
 	Close() error
 
+	// ResolveUID finds exactly one directory DN for uid using the configured
+	// user-search base and escaped filter. SSO uses this after binding a
+	// dedicated service account; it never requires the Keycloak user to know
+	// an LDAP password.
+	ResolveUID(ctx context.Context, uid string) (string, error)
+
+	// ServerVersion reports the directory's own vendorVersion from the Root
+	// DSE. Root DSE reads can be restricted by deployment ACLs, so callers
+	// must treat an error or an empty string as "unavailable" and fall back
+	// to whatever the deployment declared — not as a server failure.
+	ServerVersion(ctx context.Context) (string, error)
+
 	// Tree returns the immediate children of parentDN. Pass the
 	// configured base DN to list the root.
 	Tree(ctx context.Context, parentDN string) ([]domain.TreeNode, error)

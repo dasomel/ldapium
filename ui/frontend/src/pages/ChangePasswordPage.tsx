@@ -7,7 +7,7 @@ import { api, ApiError } from '@/lib/api'
 import type { PasswordPolicy } from '@/lib/types'
 import type { DictKey } from '@/lib/i18n/en'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { PasswordInput } from '@/components/ui/password-input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -85,12 +85,14 @@ function describeSetPasswordError(t: TFunction, err: unknown): string {
  * rejection (e.g. quality/history violations) — see describeSetPasswordError
  * for the one deliberate exception. */
 export function ChangePasswordPage() {
-  const { dn } = useAuth()
+  const { dn, authMode } = useAuth()
   const { notify } = useToast()
   const t = useT()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [policies, setPolicies] = useState<PasswordPolicy[] | null>(null)
@@ -106,6 +108,7 @@ export function ChangePasswordPage() {
 
   const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword
   const { policy, ambiguous } = pickPrimaryPolicy(policies ?? [])
+  const isSSO = authMode === 'sso'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -117,7 +120,14 @@ export function ChangePasswordPage() {
     }
     setBusy(true)
     try {
-      await api.setPassword(dn, newPassword, currentPassword)
+      // No isSSO check here: the current-password field is only rendered when
+      // !isSSO, so under SSO this is already the empty string — and the API
+      // treats "" and undefined the same, because the server only ever looks
+      // at whether an old password was supplied and knows nothing about SSO.
+      // Re-testing isSSO would mean two places had to agree about when the
+      // field exists; now only the render condition decides, so changing it
+      // later (for pwdSafeModify, say) cannot leave the two out of step.
+      await api.setPassword(dn, newPassword, currentPassword || undefined)
       notify('success', t('changePassword.successToast'))
       setCurrentPassword('')
       setNewPassword('')
@@ -176,42 +186,51 @@ export function ChangePasswordPage() {
               </div>
             )}
             {ambiguous && <p className="text-[12px] text-muted-foreground">{t('changePassword.ambiguousPolicy')}</p>}
-            <div className="space-y-1.5">
-              <Label htmlFor="current-password">{t('changePassword.currentPasswordLabel')}</Label>
-              <Input
-                id="current-password"
-                type="password"
-                autoComplete="current-password"
-                required
-                autoFocus
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-              />
-            </div>
+            {!isSSO && (
+              <div className="space-y-1.5">
+                <Label htmlFor="current-password">{t('changePassword.currentPasswordLabel')}</Label>
+                <PasswordInput
+                  id="current-password"
+                  autoComplete="current-password"
+                  required
+                  autoFocus
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  visible={showCurrentPassword}
+                  onVisibleChange={setShowCurrentPassword}
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="new-password">{t('common.newPasswordLabel')}</Label>
-              <Input
+              <PasswordInput
                 id="new-password"
-                type="password"
                 autoComplete="new-password"
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
+                visible={showNewPassword}
+                onVisibleChange={setShowNewPassword}
               />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="confirm-password">{t('changePassword.confirmPasswordLabel')}</Label>
-              <Input
+              {/* Shares showNewPassword with the field above on purpose: the
+                  two are compared by eye, so they reveal together. */}
+              <PasswordInput
                 id="confirm-password"
-                type="password"
                 autoComplete="new-password"
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
+                visible={showNewPassword}
+                onVisibleChange={setShowNewPassword}
               />
               {mismatch && <p className="text-[12px] text-danger">{t('changePassword.mismatchInline')}</p>}
             </div>
-            <p className="text-[12px] text-muted-foreground">{t('changePassword.disclaimer')}</p>
+            <p className="text-[12px] text-muted-foreground">
+              {t(isSSO ? 'changePassword.ssoDisclaimer' : 'changePassword.disclaimer')}
+            </p>
             {error && (
               <div className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
                 {error}

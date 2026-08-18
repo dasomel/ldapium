@@ -6,6 +6,7 @@ import { TreePage } from '@/pages/TreePage'
 import { UsersPage } from '@/pages/UsersPage'
 import { GroupsPage } from '@/pages/GroupsPage'
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage'
+import { ServerSettingsPage } from '@/pages/ServerSettingsPage'
 import { Spinner } from '@/components/ui/empty-state'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/users" element={<UsersPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/change-password" element={<ChangePasswordPage />} />
+        <Route path="/server-settings" element={<ServerSettingsPage />} />
         <Route path="/" element={<Navigate to="/tree" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

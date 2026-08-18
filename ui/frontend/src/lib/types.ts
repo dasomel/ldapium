@@ -2,6 +2,41 @@ export interface Me {
   dn: string
 }
 
+export type AuthMode = 'ldap' | 'sso'
+
+export interface AuthConfig {
+  mode: AuthMode
+}
+
+export interface LogoutResponse {
+  redirectURL?: string
+}
+
+export interface ServerSettings {
+  applicationVersion: string
+  openLdapVersion: string
+  ossVersions: OSSVersion[]
+  passwordHash: string
+  passwordPolicy: boolean
+  uniqueAttributes: string[]
+  loadedModules: string[]
+  activeOverlays: string[]
+  baseDn: string
+  userSearchBase: string
+  userCreateBase: string
+  groupSearchBase: string
+  groupCreateBase: string
+  connectionSecurity: 'LDAP' | 'LDAPS' | 'StartTLS'
+  tlsVerified: boolean
+  sessionTtlSeconds: number
+  cookieSecure: boolean
+}
+
+export interface OSSVersion {
+  name: string
+  version: string
+}
+
 export interface TreeNode {
   dn: string
   rdn: string

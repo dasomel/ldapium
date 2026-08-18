@@ -70,16 +70,20 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 // requires the directory to permit anonymous read of the uid attribute
 // under UserSearchBase, which is documented in the README.
 func (d *dialer) resolveUID(c *ldap.Conn, uid string) (string, error) {
-	if d.cfg.UserSearchFilter == "" {
+	return resolveUID(c, d.cfg, uid)
+}
+
+func resolveUID(c *ldap.Conn, cfg config.Config, uid string) (string, error) {
+	if cfg.UserSearchFilter == "" {
 		return "", fmt.Errorf("%w: %q is not a DN and no LDAP_USER_SEARCH_FILTER is configured", domain.ErrInvalidInput, uid)
 	}
-	filter, err := BuildUserFilter(d.cfg.UserSearchFilter, uid)
+	filter, err := BuildUserFilter(cfg.UserSearchFilter, uid)
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", domain.ErrInvalidInput, err)
 	}
 
 	req := ldap.NewSearchRequest(
-		d.cfg.UserSearchBase,
+		cfg.UserSearchBase,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 0, false,
 		filter,
 		[]string{"dn"},

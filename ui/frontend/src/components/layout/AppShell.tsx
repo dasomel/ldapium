@@ -1,16 +1,18 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { FolderTree, KeyRound, Languages, LogOut, Moon, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
+import { FolderTree, KeyRound, Languages, LogOut, Moon, Server, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useTheme } from '@/context/ThemeContext'
 import { useToast } from '@/context/ToastContext'
 import { useLanguage, type Language } from '@/context/LanguageContext'
 import type { DictKey } from '@/lib/i18n/en'
 import { cn } from '@/lib/utils'
+import { StatusHud } from './StatusHud'
 
 const nav: { to: string; labelKey: DictKey; icon: typeof FolderTree }[] = [
   { to: '/tree', labelKey: 'nav.tree', icon: FolderTree },
   { to: '/users', labelKey: 'nav.users', icon: UserRound },
   { to: '/groups', labelKey: 'nav.groups', icon: Users2 },
+  { to: '/server-settings', labelKey: 'nav.serverSettings', icon: Server },
 ]
 
 export function AppShell() {
@@ -21,7 +23,8 @@ export function AppShell() {
 
   async function handleLogout() {
     try {
-      await logout()
+      const redirectURL = await logout()
+      if (redirectURL) window.location.assign(redirectURL)
     } catch {
       notify('error', t('common.logoutFailed'))
     }
@@ -117,6 +120,7 @@ export function AppShell() {
         <main className="min-w-0 flex-1 overflow-auto p-5">
           <Outlet />
         </main>
+        <StatusHud />
       </div>
     </div>
   )

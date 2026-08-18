@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
@@ -15,6 +15,9 @@ import { UserFormDialog } from '@/components/users/UserFormDialog'
 import { SetPasswordDialog } from '@/components/users/SetPasswordDialog'
 import { MemberOfDialog } from '@/components/users/MemberOfDialog'
 
+const PAGE_SIZES = [10, 20, 50, 100]
+const PAGE_WINDOW_SIZE = 10
+
 export function UsersPage() {
   const { notify } = useToast()
   const { language, t } = useLanguage()
@@ -22,6 +25,8 @@ export function UsersPage() {
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
@@ -38,6 +43,7 @@ export function UsersPage() {
       .then(({ items, truncated }) => {
         setUsers(items)
         setTruncated(truncated)
+        setPage(1)
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : t('users.loadFailed')))
   }
@@ -52,6 +58,19 @@ export function UsersPage() {
       [u.uid, u.cn, u.mail, u.displayName].some((v) => v?.toLowerCase().includes(q)),
     )
   }, [users, query])
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageUsers = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const pageNumbers = useMemo(() => {
+    const visiblePages = Math.min(PAGE_WINDOW_SIZE, pageCount)
+    const firstPage = Math.floor((currentPage - 1) / visiblePages) * visiblePages + 1
+    return Array.from({ length: Math.min(visiblePages, pageCount - firstPage + 1) }, (_, index) => firstPage + index)
+  }, [currentPage, pageCount])
+
+  useEffect(() => {
+    setPage(1)
+  }, [query])
 
   async function handleCreateOrUpdate(input: UserFormInput) {
     if (editing) {
@@ -100,7 +119,7 @@ export function UsersPage() {
       e.preventDefault()
       rowRefs.current[index - 1]?.focus()
     } else if (e.key === 'Enter') {
-      setEditing(filtered[index])
+      setEditing(pageUsers[index])
       setFormOpen(true)
     }
   }
@@ -114,8 +133,19 @@ export function UsersPage() {
             placeholder={t('users.filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="pl-8"
+            className="pl-8 pr-8"
           />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              title={t('users.clearFilter')}
+              className="absolute right-1.5 top-1/2 rounded-console p-1.5 -translate-y-1/2 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="size-3.5" />
+              <span className="sr-only">{t('users.clearFilter')}</span>
+            </button>
+          )}
         </div>
         <Button
           onClick={() => {
@@ -133,7 +163,11 @@ export function UsersPage() {
           <CardTitle className="flex items-center gap-2">
             <UserRound className="size-4 text-accent" />
             {t('users.title')}
-            {users && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
+            {users && (
+              <span className="font-mono text-xs font-normal text-muted-foreground">
+                {t('users.totalCount', { count: filtered.length })}
+              </span>
+            )}
           </CardTitle>
         </CardHeader>
         {truncated && (
@@ -176,7 +210,7 @@ export function UsersPage() {
                 </tr>
               </TableHead>
               <TableBody>
-                {filtered.map((u, i) => (
+                {pageUsers.map((u, i) => (
                   <TableRow
                     key={u.dn}
                     ref={(el) => {
@@ -264,6 +298,86 @@ export function UsersPage() {
                 ))}
               </TableBody>
             </Table>
+          )}
+          {filtered.length > 0 && (
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-t border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                  {t('users.rowsPerPage')}
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      setPage(1)
+                    }}
+                    className="h-8 rounded-console border border-input bg-surface px-2 text-[12.5px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {PAGE_SIZES.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <nav className="flex items-center gap-2" aria-label={t('users.paginationNavigation')}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={currentPage === 1}
+                  onClick={() => setPage(1)}
+                  title={t('users.firstPage')}
+                >
+                  <ChevronsLeft className="size-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={currentPage === 1}
+                  onClick={() => setPage(Math.max(1, pageNumbers[0] - 1))}
+                  title={t('users.previousPage')}
+                >
+                  &lt;
+                </Button>
+                {pageNumbers.map((pageNumber) => (
+                  <Button
+                    key={pageNumber}
+                    variant={pageNumber === currentPage ? 'subtle' : 'outline'}
+                    size="icon"
+                    onClick={() => setPage(pageNumber)}
+                    aria-current={pageNumber === currentPage ? 'page' : undefined}
+                    title={t('users.pageNumber', { page: pageNumber })}
+                  >
+                    {pageNumber}
+                  </Button>
+                ))}
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={currentPage === pageCount}
+                  onClick={() => setPage(Math.min(pageCount, pageNumbers[pageNumbers.length - 1] + 1))}
+                  title={t('users.nextPage')}
+                >
+                  &gt;
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={currentPage === pageCount}
+                  onClick={() => setPage(pageCount)}
+                  title={t('users.lastPage')}
+                >
+                  <ChevronsRight className="size-4" />
+                </Button>
+              </nav>
+              <span className="justify-self-end text-[12.5px] text-muted-foreground">
+                {t('users.paginationSummary', {
+                  from: (currentPage - 1) * pageSize + 1,
+                  to: Math.min(currentPage * pageSize, filtered.length),
+                  total: filtered.length,
+                })}
+              </span>
+            </div>
           )}
         </CardContent>
       </Card>

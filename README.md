@@ -43,7 +43,7 @@ without waiting for a release.
 | Path | What |
 |---|---|
 | `image/` | OpenLDAP 2.6.14 server, built from source. Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
-| `ui/` | Management UI — DIT browser, user and group CRUD, password set. Authenticates by LDAP bind and acts as the logged-in user, so the directory's own ACLs authorize every action. |
+| `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. |
 | `charts/openldap/` | Helm chart deploying the server, with the UI as an optional component. |
 
 ## Standalone (docker compose)
@@ -55,11 +55,8 @@ run`. `docker-compose.yml` at the repo root wires server + UI together in
 one step, instead of two `docker run`s and a hand-built Docker network:
 
 ```bash
-cp .env.example .env
-# edit .env: LDAP_ROOT_DN, LDAP_ADMIN_PASSWORD, SESSION_SECRET are required —
-# see the comments in .env.example, in particular `openssl rand -base64 32`
-# for SESSION_SECRET.
-docker compose up --build
+make local-up
+make local-credentials
 ```
 
 Then open `http://localhost:8080` (or `${UI_PORT}`) for the UI, and
@@ -67,6 +64,44 @@ Then open `http://localhost:8080` (or `${UI_PORT}`) for the UI, and
 persists in the named `ldap-config`/`ldap-data` volumes — deliberately named
 ones, not anonymous, so they survive `docker compose down` (without `-v`)
 and recreates.
+
+To retrieve the local admin bind DN and password from the running Compose
+container, run:
+
+```bash
+./scripts/get-credentials.sh --local
+```
+
+The command prints the password to the terminal; use
+`--password-only` only when piping it into another local command.
+
+For UI changes, keep the Compose services running and start Vite separately:
+
+```bash
+make frontend-dev
+```
+
+It serves `http://127.0.0.1:5173` and proxies API requests to the local UI
+backend on port 8080.
+
+### Developing against a Kubernetes deployment
+
+For an existing Helm deployment, use the current `kubectl` context. The credential command reads the deployed StatefulSet and
+its referenced Secret; it does not require a local Compose deployment:
+
+```bash
+make k8s-credentials
+make k8s-ui-forward
+```
+
+In another terminal, run `make frontend-dev` and open
+`http://127.0.0.1:5173`. To select a non-current namespace or disambiguate
+multiple deployments, pass `KUBE_NAMESPACE` and `KUBE_RELEASE`:
+
+```bash
+make k8s-credentials KUBE_NAMESPACE=directory KUBE_RELEASE=openldap
+make k8s-ui-forward KUBE_NAMESPACE=directory
+```
 
 No default admin password or session secret is baked in anywhere — same
 principle as the image and the Helm chart (see "No default admin password"

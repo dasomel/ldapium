@@ -1,11 +1,14 @@
 import type {
   ApiErrorBody,
+  AuthConfig,
   Entry,
   Group,
   GroupFormInput,
   ListResult,
+  LogoutResponse,
   Me,
   PasswordPolicy,
+  ServerSettings,
   TreeNode,
   User,
   UserFormInput,
@@ -55,10 +58,12 @@ function qs(params: Record<string, string | undefined>): string {
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>('/auth/config'),
   login: (identity: string, password: string) =>
     request<Me>('/login', { method: 'POST', body: JSON.stringify({ identity, password }) }),
-  logout: () => request<void>('/logout', { method: 'POST' }),
+  logout: () => request<LogoutResponse>('/logout', { method: 'POST' }),
   me: () => request<Me>('/me'),
+  serverSettings: () => request<ServerSettings>('/server-settings'),
 
   tree: (dn?: string) => request<TreeNode[]>(`/tree${qs({ dn })}`),
   entry: (dn: string) => request<Entry>(`/entry${qs({ dn })}`),

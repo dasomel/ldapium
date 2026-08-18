@@ -30,6 +30,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server 
 
 # --- final image ------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS final
+ARG APP_VERSION=development
+ENV APP_VERSION=${APP_VERSION}
 COPY --from=backend /out/server /server
 # Numeric, not `USER nonroot:nonroot`. Kubernetes' runAsNonRoot check rejects
 # a named user it cannot resolve to a uid ("image has non-numeric user

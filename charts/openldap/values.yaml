@@ -57,6 +57,14 @@ ldap:
   maxOpenFiles: 4096
   # -- LDAP_LOG_LEVEL. "stats" matches the image default.
   logLevel: stats
+  # -- Password hash scheme for cleartext password changes. The default is
+  # Argon2, provided by the image's loaded argon2 module.
+  passwordHash: "{ARGON2}"
+  # -- Attributes enforced by the unique overlay. Set empty to omit that
+  # overlay at first bootstrap.
+  uniqueAttributes: "uid,mail"
+  # -- Enables the default ppolicy entry (lockout, history, and safe modify).
+  passwordPolicyEnabled: true
 
 auth:
   # -- Admin password, injected via a chart-created Secret (secretKeyRef,
@@ -355,6 +363,40 @@ ui:
     ttl: 30m
     # -- COOKIE_SECURE. Disable only for local HTTP development.
     cookieSecure: true
+
+  # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
+  # Enabling SSO makes the UI SSO-only: LDAP passwords are never accepted by
+  # the UI login endpoint. This chart configures a confidential OIDC client;
+  # its client secret and the LDAP service-account credentials must come from
+  # existing Kubernetes Secrets.
+  sso:
+    enabled: false
+    # -- Keycloak realm issuer. The Beluga realm issuer is shown here; change
+    # it only when deploying the UI against a different realm.
+    issuerURL: "https://sso.example.com/realms/example"
+    # -- OIDC client ID. Required when enabled.
+    clientID: ""
+    # -- Realm role required to administer the UI.
+    adminRole: ldap-admin
+    # -- Existing Secret with the confidential OIDC client's secret. Required
+    # when SSO is enabled; this chart never creates or prints it.
+    existingSecret: ""
+    existingSecretKey: oidc-client-secret
+    # -- Browser origins allowed to derive the OIDC callback URI. Required
+    # when enabled. Include each externally reachable UI origin, for example:
+    #   - http://127.0.0.1:5173
+    #   - http://127.0.0.1:8080
+    # Keycloak must register <origin>/api/sso/callback for every entry.
+    callbackOrigins: []
+
+  # -- Dedicated LDAP service account used only after a Keycloak user passes
+  # the ldap-admin role gate. Required when ui.sso.enabled. The secret must
+  # contain both the service-account DN and password; do not reuse
+  # auth.adminPassword as this identity.
+  ldapServiceAccount:
+    existingSecret: ""
+    dnKey: ldap-service-account-dn
+    passwordKey: ldap-service-account-password
 
   ingress:
     enabled: false

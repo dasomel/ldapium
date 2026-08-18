@@ -11,15 +11,17 @@ import (
 	"github.com/dasomel/openldap-suite/ui/backend/internal/ldapclient"
 )
 
-// Session is one logged-in user. Bound holds the user's own live LDAP
-// connection (via ldapclient.Client) — the credential itself is never
-// stored, only the already-authenticated connection, which is closed the
-// moment the session ends or expires.
+// Session is one logged-in user. DN always holds the user's directory
+// identity. Bound is the live LDAP connection used for operations: it is the
+// user's own bind in LDAP-login mode and the dedicated service-account bind
+// in SSO mode. Credentials are never stored; only the already-authenticated
+// connection is retained and closed when the session ends or expires.
 type Session struct {
-	ID        string
-	DN        string
-	Bound     ldapclient.Client
-	expiresAt time.Time
+	ID                string
+	DN                string
+	Bound             ldapclient.Client
+	OIDCLogoutIDToken string
+	expiresAt         time.Time
 }
 
 // Store is an in-memory, server-side session table keyed by session ID.
@@ -46,11 +48,28 @@ func NewStore(ttl time.Duration) *Store {
 // Create registers a new session for an already-bound LDAP client and
 // returns it with a fresh, cryptographically random ID.
 func (s *Store) Create(dn string, bound ldapclient.Client) (*Session, error) {
+	return s.create(dn, bound, "")
+}
+
+// CreateSSO registers an SSO session. The ID token remains server-side and
+// is used only as an optional RP-initiated logout hint; it is never placed in
+// the browser session cookie or returned by the API.
+func (s *Store) CreateSSO(dn string, bound ldapclient.Client, idToken string) (*Session, error) {
+	return s.create(dn, bound, idToken)
+}
+
+func (s *Store) create(dn string, bound ldapclient.Client, idToken string) (*Session, error) {
 	id, err := newSessionID()
 	if err != nil {
 		return nil, err
 	}
-	sess := &Session{ID: id, DN: dn, Bound: bound, expiresAt: s.now().Add(s.ttl)}
+	sess := &Session{
+		ID:                id,
+		DN:                dn,
+		Bound:             bound,
+		OIDCLogoutIDToken: idToken,
+		expiresAt:         s.now().Add(s.ttl),
+	}
 
 	s.mu.Lock()
 	s.sessions[id] = sess

@@ -95,6 +95,12 @@ spec:
                   key: {{ .Values.auth.existingSecretKey }}
             - name: LDAP_LOG_LEVEL
               value: {{ .Values.ldap.logLevel | quote }}
+            - name: LDAP_PASSWORD_HASH
+              value: {{ .Values.ldap.passwordHash | quote }}
+            - name: LDAP_UNIQUE_ATTRIBUTES
+              value: {{ .Values.ldap.uniqueAttributes | quote }}
+            - name: LDAP_PASSWORD_POLICY_ENABLED
+              value: {{ .Values.ldap.passwordPolicyEnabled | quote }}
             # mdb's memory map. Sized from the data volume by default, because
             # a map larger than its filesystem buys nothing and costs real
             # memory — see resources.limits.memory in values.yaml.

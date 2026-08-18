@@ -90,3 +90,62 @@ func TestLoad_InvalidBoolAndDuration(t *testing.T) {
 		t.Fatal("expected error for invalid duration")
 	}
 }
+
+func TestLoad_SSORequiresCompleteConfiguration(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"LDAP_URL":       "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":   "dc=example,dc=com",
+		"SESSION_SECRET": "01234567890123456789012345678901",
+		"SSO_ENABLED":    "true",
+	}))
+	if err == nil {
+		t.Fatal("expected incomplete SSO configuration to fail")
+	}
+}
+
+func TestLoad_SSOConfiguration(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"LDAP_URL":                      "ldaps://ldap.example.com:636",
+		"LDAP_BASE_DN":                  "dc=example,dc=com",
+		"LDAP_USER_SEARCH_FILTER":       "(uid=%s)",
+		"SESSION_SECRET":                "01234567890123456789012345678901",
+		"SSO_ENABLED":                   "true",
+		"SSO_ISSUER_URL":                "https://sso.example.com/realms/example",
+		"SSO_CLIENT_ID":                 "ldap-ui",
+		"SSO_CLIENT_SECRET":             "not-a-real-secret",
+		"SSO_CALLBACK_ORIGINS":          "http://127.0.0.1:5173/, http://127.0.0.1:8080",
+		"LDAP_SERVICE_ACCOUNT_DN":       "uid=ldap-ui,ou=services,dc=example,dc=com",
+		"LDAP_SERVICE_ACCOUNT_PASSWORD": "not-a-real-password",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.SSO.Enabled {
+		t.Fatal("SSO should be enabled")
+	}
+	if cfg.SSO.AdminRole != "ldap-admin" {
+		t.Errorf("AdminRole = %q, want ldap-admin", cfg.SSO.AdminRole)
+	}
+	if len(cfg.SSO.CallbackOrigins) != 2 || cfg.SSO.CallbackOrigins[0] != "http://127.0.0.1:5173" {
+		t.Errorf("CallbackOrigins = %#v", cfg.SSO.CallbackOrigins)
+	}
+}
+
+func TestLoad_SSORejectsCallbackPath(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"LDAP_URL":                      "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":                  "dc=example,dc=com",
+		"LDAP_USER_SEARCH_FILTER":       "(uid=%s)",
+		"SESSION_SECRET":                "01234567890123456789012345678901",
+		"SSO_ENABLED":                   "true",
+		"SSO_ISSUER_URL":                "https://sso.example.com/realms/example",
+		"SSO_CLIENT_ID":                 "ldap-ui",
+		"SSO_CLIENT_SECRET":             "not-a-real-secret",
+		"SSO_CALLBACK_ORIGINS":          "http://127.0.0.1:5173/not-an-origin",
+		"LDAP_SERVICE_ACCOUNT_DN":       "uid=ldap-ui,ou=services,dc=example,dc=com",
+		"LDAP_SERVICE_ACCOUNT_PASSWORD": "not-a-real-password",
+	}))
+	if err == nil {
+		t.Fatal("expected callback origin with a path to fail")
+	}
+}
