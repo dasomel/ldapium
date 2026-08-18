@@ -3,7 +3,7 @@
 KUBE_NAMESPACE ?=
 KUBE_RELEASE ?=
 
-.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward
+.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward check licenses sbom
 
 help: ## Show local development commands
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -51,3 +51,31 @@ k8s-ui-forward: ## Forward the deployed UI to http://127.0.0.1:8080 for Vite
 	ns=$${target%%/*}; svc=$${target#*/}; \
 	echo "Forwarding svc/$$svc in namespace $$ns to http://127.0.0.1:8080"; \
 	kubectl -n "$$ns" port-forward "svc/$$svc" 8080:8080
+
+check: ## Run everything CI runs, in the same order
+	@# Frontend first: ui/backend/web embeds the built SPA, so the Go module
+	@# does not compile until ui/frontend has been built at least once.
+	@cd ui/frontend && npm run lint && npm run build
+	@cd ui/backend && test -z "$$(gofmt -l .)" || { echo "gofmt would reformat files in ui/backend" >&2; exit 1; }
+	@cd ui/backend && go vet ./... && go test ./... && go build ./...
+	@helm lint charts/openldap
+	@./scripts/check-versions.sh
+	@shellcheck -s sh image/entrypoint.sh
+	@shellcheck scripts/*.sh
+	@./scripts/licenses.sh --check
+
+licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
+	@./scripts/licenses.sh
+
+sbom: ## Write SBOMs for the local images to ./sbom (requires syft)
+	@command -v syft >/dev/null 2>&1 || { echo "syft not found: https://github.com/anchore/syft" >&2; exit 1; }
+	@mkdir -p sbom
+	@version=$$(awk '/^version:/ { print $$2; exit }' charts/openldap/Chart.yaml); \
+	for image in openldap-suite openldap-suite-ui; do \
+		ref="ghcr.io/dasomel/$$image:$$version"; \
+		echo "syft $$ref"; \
+		syft "$$ref" -o spdx-json > "sbom/$$image.spdx.json"; \
+		syft "$$ref" -o cyclonedx-json > "sbom/$$image.cdx.json"; \
+	done
+	@echo "wrote sbom/ — released images carry the same SBOM as a signed attestation:"
+	@echo "  gh attestation verify oci://ghcr.io/dasomel/openldap-suite:<version> --repo dasomel/openldap-suite"

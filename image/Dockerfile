@@ -33,7 +33,7 @@ RUN curl -fsSL -o openldap.tgz \
     && tar xzf openldap.tgz \
     && rm openldap.tgz
 
-WORKDIR /usr/src/openldap-2.6.14
+WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
 # Verified configure line (2.6.14): mdb/syncprov are on by default, these
 # overlays are off-by-default and must be requested explicitly. The
 # accesslog/auditlog/constraint/deref/dynlist/sssvlv/otp block below is for

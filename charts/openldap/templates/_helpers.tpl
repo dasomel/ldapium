@@ -133,16 +133,23 @@ Admin password Secret name: existingSecret when set, else the chart-created one.
 
 {{/*
 Server image reference.
+
+The tag falls back to .Chart.Version, not .Chart.AppVersion, because the
+chart version is what the release pipeline publishes images under: a git tag
+vX.Y.Z drives both `helm package --version X.Y.Z` and the semver image tags
+emitted by .github/workflows/release.yml. AppVersion is the OpenLDAP release
+this chart pins (2.6.x) and is never an image tag — defaulting to it points
+the chart at a tag that does not exist.
 */}}
 {{- define "openldap.image" -}}
-{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
 {{/*
-UI image reference.
+UI image reference. Same tag rule as the server image above.
 */}}
 {{- define "openldap.ui.image" -}}
-{{- printf "%s:%s" .Values.ui.image.repository (.Values.ui.image.tag | default .Chart.AppVersion) -}}
+{{- printf "%s:%s" .Values.ui.image.repository (.Values.ui.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
 {{/*

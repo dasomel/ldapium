@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/dasomel/openldap-suite/security/advisories/new
+    about: Report privately instead of opening an issue.
+  - name: OpenLDAP itself
+    url: https://bugs.openldap.org/
+    about: This project compiles unmodified upstream OpenLDAP. Bugs in the server belong upstream.

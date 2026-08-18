@@ -1,0 +1,40 @@
+# Grouped so a normal week produces a few reviewable PRs instead of a dozen
+# one-line ones. Security updates are never grouped away — Dependabot opens
+# those separately regardless of these settings.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /ui/backend
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /ui/frontend
+    schedule:
+      interval: weekly
+    groups:
+      # React, Vite, Tailwind and friends move together; a split PR per
+      # package tends not to build on its own.
+      frontend-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images only. The OpenLDAP source tarball is pinned by version and
+  # sha256 inside image/Dockerfile, not by a registry tag, so Dependabot
+  # cannot see it — bumping it stays a manual, deliberate step.
+  - package-ecosystem: docker
+    directories:
+      - /image
+      - /ui
+    schedule:
+      interval: weekly

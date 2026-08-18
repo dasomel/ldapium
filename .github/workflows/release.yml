@@ -59,8 +59,8 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       # Tag pushes (vX.Y.Z) drive the chart version directly; a manual
-      # workflow_dispatch run (no tag) gets a non-publishable dev version so
-      # it can still be smoke-tested without colliding with real releases.
+      # workflow_dispatch run (no tag) gets a dev version so the packaging
+      # step still runs as a smoke test. Only tags are pushed — see below.
       - name: Determine chart version
         id: chart_version
         env:
@@ -75,19 +75,102 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # --app-version is deliberately NOT overridden. appVersion is the
+      # OpenLDAP release this chart pins (Chart.yaml: 2.6.x); the UI shows it
+      # as the directory version on its settings page. Setting it to the
+      # chart version made a released chart report OpenLDAP "0.1.0".
+      # Image tags follow --version instead — see _helpers.tpl.
       - name: Package chart
         run: |
           helm package charts/openldap \
             --version "${{ steps.chart_version.outputs.version }}" \
-            --app-version "${{ steps.chart_version.outputs.version }}" \
             --destination /tmp/chart-out
 
+      # A dev package is built above but never published: a registry is not a
+      # scratch pad, and 0.0.0-dev.<sha> charts would sit next to real
+      # releases forever with no way to tell a user they are not supported.
       - name: Log in to GHCR
+        if: github.ref_type == 'tag'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push chart
+        if: github.ref_type == 'tag'
         run: |
           helm push /tmp/chart-out/openldap-*.tgz \
             "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+      - name: Upload packaged chart
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chart-package
+          path: /tmp/chart-out/*.tgz
+          if-no-files-found: error
+
+  # Everything a consumer might want without a registry client: the chart
+  # tarball and an SBOM per image, in both SPDX and CycloneDX. The images
+  # themselves carry the same SBOM as a signed attestation (see
+  # build-multiarch.yml); this is the copy you can download and read.
+  github-release:
+    name: Publish GitHub release
+    if: github.ref_type == 'tag'
+    needs: [build-server, build-ui, helm-push]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Two explicit patterns rather than one broad one: this run also holds
+      # per-architecture `digests-*` artifacts, which are empty marker files
+      # for the manifest merge and must not end up attached to the release.
+      - name: Download SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sbom-*
+          path: /tmp/release-assets
+          merge-multiple: true
+
+      - name: Download packaged chart
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: chart-package
+          path: /tmp/release-assets
+
+      - name: List what will be attached
+        run: ls -l /tmp/release-assets
+
+      # CHANGELOG.md is the source of truth for what a release contains, so
+      # the notes are its section for this version rather than a rewrite of
+      # it. Missing the section is a hard failure: shipping a release whose
+      # notes silently fall back to a commit list is how the changelog stops
+      # being maintained.
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          cat /tmp/release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: /tmp/release-assets/*
+          body_path: /tmp/release-notes.md
+          # Appends the auto-generated commit/contributor list under the
+          # hand-written notes rather than instead of them.
+          append_body: true
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

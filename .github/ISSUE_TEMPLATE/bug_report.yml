@@ -1,0 +1,71 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here — see
+        [SECURITY.md](https://github.com/dasomel/openldap-suite/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server image (image/)
+        - Management UI (ui/)
+        - Helm chart (charts/)
+        - Scripts (scripts/)
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Chart version, image tag, or commit. `helm list` and the UI's settings page both show it.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How is it running?
+      options:
+        - Helm chart on Kubernetes
+        - docker compose
+        - docker run
+        - Built from source locally
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The values you installed with are usually the important part. Redact passwords.
+      placeholder: |
+        1. helm install ols oci://ghcr.io/dasomel/charts/openldap --version 0.1.0 --set ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        `kubectl logs` from the slapd pod is usually decisive. Raising the log
+        level helps: `--set ldap.logLevel=stats,sync` for replication issues.
+      render: shell

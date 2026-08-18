@@ -15,7 +15,13 @@ vendor/
 *.crt
 *.pem
 
+# agent/tooling scratch state
+.omc/
+
 # os / editor
 .DS_Store
 .idea/
 .vscode/
+
+# generated SBOMs (make sbom)
+sbom/

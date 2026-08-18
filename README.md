@@ -4,7 +4,16 @@ A maintained OpenLDAP stack for Kubernetes: a server image **compiled from upstr
 source**, a management UI, and a Helm chart — built because the existing options stopped
 being viable.
 
-> Status: early development. Nothing here is released yet.
+[![CI](https://github.com/dasomel/openldap-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/openldap-suite/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/dasomel/openldap-suite/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/openldap-suite/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dasomel/openldap-suite/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/openldap-suite)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.14-informational)](https://www.openldap.org/)
+
+> **Status: 0.1.0, the first release.** It runs, and every claim in this README
+> was checked against something running — but this is a young project with one
+> maintainer. The TLS path is the one part still marked unverified; see
+> [CHANGELOG.md](CHANGELOG.md) for what that means in practice.
 
 ## Why this exists
 
@@ -45,6 +54,49 @@ without waiting for a release.
 | `image/` | OpenLDAP 2.6.14 server, built from source. Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. |
 | `charts/openldap/` | Helm chart deploying the server, with the UI as an optional component. |
+
+## Install
+
+Both images and the chart are published to GHCR and cut from the same git tag,
+so `0.1.0` means the same thing everywhere.
+
+### Kubernetes (Helm)
+
+```bash
+helm install directory oci://ghcr.io/dasomel/charts/openldap \
+  --version 0.1.0 \
+  --namespace directory --create-namespace \
+  --set auth.adminPassword="$(openssl rand -base64 24)" \
+  --set ldap.rootDN=dc=example,dc=org
+```
+
+There is no default admin password — the chart refuses to render without one,
+because the image refuses to start without one. To keep the password out of
+your shell history and out of `helm get values`, create the Secret yourself
+and point `auth.existingSecret` at it instead.
+
+Useful from there:
+
+```bash
+--set replicaCount=3      # N-way multi-provider replication, peers wired automatically
+--set ui.enabled=true     # the management UI
+--set backup.enabled=true # scheduled dumps of the data tree and cn=config
+```
+
+`charts/openldap/README.md` documents every value, the replication design, the
+backup/restore procedure, and the optional Keycloak SSO setup.
+
+### Images
+
+| Image | Contents |
+|---|---|
+| `ghcr.io/dasomel/openldap-suite:0.1.0` | OpenLDAP 2.6.14 server |
+| `ghcr.io/dasomel/openldap-suite-ui:0.1.0` | Management UI |
+
+Both are `linux/amd64` + `linux/arm64` and carry build provenance attestations.
+A `:main` tag is rebuilt weekly from the same source so base-image security
+updates are available without waiting for a release; released tags are
+immutable.
 
 ## Standalone (docker compose)
 
@@ -128,9 +180,46 @@ Run it from cron or a systemd timer on the host; `./scripts/backup.sh --help`
 covers every option (custom LDAP URL/port, retention, skipping the
 `cn=config` dump or the directory record).
 
+## Supply chain
+
+Every released image carries, in the registry alongside it, a **build
+provenance attestation** and an **SBOM attestation**, both signed by GitHub's
+OIDC identity for this repository:
+
+```bash
+gh attestation verify oci://ghcr.io/dasomel/openldap-suite:0.1.0 \
+  --repo dasomel/openldap-suite
+```
+
+SPDX and CycloneDX SBOMs for both images are also attached to each GitHub
+Release, so you can read one without a registry client. `syft` against the
+published tag should agree with them — that is the point of publishing them.
+
+Dependency licences are permissive-only and enforced, not merely observed:
+`./scripts/licenses.sh --check` runs in CI and fails on a licence outside the
+allow-list or a stale [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
+Trivy scans dependencies and manifests on every change and the published
+images weekly; CodeQL analyses the Go and TypeScript sources.
+[docs/legal.md](docs/legal.md) covers the licensing position in full,
+including why the Debian base's GPL packages do not reach this project's code.
+
+## Contributing, security, releases
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — local setup, what the project is
+  opinionated about, and the checks CI runs
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability privately, and
+  what is in scope (bugs in OpenLDAP itself belong upstream)
+- [CHANGELOG.md](CHANGELOG.md) — what changed, and what is still unverified
+- [RELEASING.md](RELEASING.md) — how a release is cut
+
 ## License
 
-Original work in this repository is Apache-2.0 (`LICENSE`). Published images bundle
-OpenLDAP Software under the OpenLDAP Public License 2.8 — see `NOTICE` and
-`docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt`. This project is not affiliated with the OpenLDAP
-Foundation.
+Original work in this repository is Apache-2.0 ([LICENSE](LICENSE)). Published images
+bundle OpenLDAP Software under the OpenLDAP Public License 2.8 — see [NOTICE](NOTICE)
+and [docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt](docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt).
+Third-party dependency licences are inventoried in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
+
+OpenLDAP is a registered trademark of the OpenLDAP Foundation. This project is not
+affiliated with, endorsed by, or supported by the OpenLDAP Foundation, and builds of it
+are not official OpenLDAP releases.

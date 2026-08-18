@@ -9,11 +9,13 @@
 replicaCount: 1
 
 image:
-  # -- Server image repository. PLACEHOLDER — this project has not published
-  #    images yet (see SESSION-HANDOFF.md); override before any real install.
-  #    Must match what .github/workflows/release.yml publishes.
+  # -- Server image repository. Must match what
+  #    .github/workflows/release.yml publishes.
   repository: ghcr.io/dasomel/openldap-suite
-  # -- Defaults to .Chart.AppVersion (the pinned OpenLDAP version) when empty.
+  # -- Defaults to .Chart.Version when empty — the chart and its images are
+  #    released together under the same vX.Y.Z tag. Set this to pin an image
+  #    independently of the chart. It is NOT the OpenLDAP version; that is
+  #    .Chart.AppVersion, which the UI reports but never pulls.
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -85,9 +87,11 @@ auth:
   existingSecretKey: admin-password
 
 tls:
-  # -- UNVERIFIED PATH: TLS has not been exercised end-to-end on this image
-  #    as of this handoff (see SESSION-HANDOFF.md item 3). Enable at your
-  #    own risk and validate before relying on it.
+  # -- UNVERIFIED PATH: as of 0.1.0 the TLS path (server certificates and
+  #    TLS-protected replication) has not been exercised end-to-end against a
+  #    running cluster. The templates render and the entrypoint handles it,
+  #    but nobody has watched it work. Validate it yourself before relying on
+  #    it, and please report what you find.
   enabled: false
   # -- Secret containing the TLS material, mounted read-only at /etc/openldap/tls.
   #    Expected keys match the standard kubernetes.io/tls Secret shape
@@ -167,8 +171,9 @@ resources:
 
 # Pod-level securityContext. fsGroup is needed so the PVC-backed
 # config/data directories are group-writable by the image's non-root user —
-# the image runs as uid 999 (verified via `docker run --rm ... id` per
-# SESSION-HANDOFF.md), so 999 is used here too. fsGroup works by adding this
+# the image runs as uid 999 (verified by running `id` inside the built
+# image, and pinned by `USER 999:999` in image/Dockerfile), so 999 is used
+# here too. fsGroup works by adding this
 # GID as a supplemental group at the kubelet level, so it doesn't actually
 # depend on /etc/passwd inside the image matching — but 999 is kept in sync
 # with the image's real uid for clarity.

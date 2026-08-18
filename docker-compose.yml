@@ -13,14 +13,14 @@
 # guards below.
 services:
   ldap:
+    # Published image by default, so `docker compose up` works without a
+    # local toolchain. The `build:` block stays for development: `docker
+    # compose up --build` rebuilds from ./image and tags the result as
+    # OPENLDAP_IMAGE, overwriting the pulled tag locally — set OPENLDAP_IMAGE
+    # in .env to something else if you want both side by side.
     build:
       context: ./image
-    # Local build tag by default — this project has not published images
-    # yet (see charts/openldap/values.yaml's image.repository comment).
-    # Once it has, set OPENLDAP_IMAGE to the published tag in .env and
-    # remove the `build:` block above (or `docker compose pull` instead of
-    # `--build`) so compose pulls it instead of rebuilding it locally.
-    image: ${OPENLDAP_IMAGE:-openldap-suite:local}
+    image: ${OPENLDAP_IMAGE:-ghcr.io/dasomel/openldap-suite:0.1.0}
     environment:
       LDAP_ROOT_DN: ${LDAP_ROOT_DN:?set LDAP_ROOT_DN in .env, e.g. dc=example,dc=org — see .env.example}
       LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?set LDAP_ADMIN_PASSWORD in .env — this image ships no default admin password, see .env.example}
@@ -30,8 +30,8 @@ services:
     volumes:
       # Named volumes, not anonymous ones: an anonymous volume gets a random
       # name and is easy to lose on `docker compose down -v` or a recreate —
-      # exactly the "LDAP 이 없어지면 큰일난다" scenario this project exists
-      # to avoid. See scripts/backup.sh for backups on top of this.
+      # exactly the "the directory is simply gone" scenario this project
+      # exists to avoid. See scripts/backup.sh for backups on top of this.
       - ldap-config:/etc/openldap/slapd.d
       - ldap-data:/var/lib/openldap/data
     restart: unless-stopped
@@ -39,7 +39,7 @@ services:
   ui:
     build:
       context: ./ui
-    image: ${UI_IMAGE:-openldap-suite-ui:local}
+    image: ${UI_IMAGE:-ghcr.io/dasomel/openldap-suite-ui:0.1.0}
     environment:
       APP_VERSION: ${APP_VERSION:-development}
       LDAP_URL: ldap://ldap:389

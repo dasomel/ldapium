@@ -2,9 +2,9 @@
 
 Deploys the `image/` OpenLDAP 2.6.14 server as a StatefulSet, with an optional
 management UI (`ui/`). See the repo root [README.md](../../README.md) for why
-this project exists, and [SESSION-HANDOFF.md](../../SESSION-HANDOFF.md) for
-background on the replication design this chart implements (multi-provider,
-peer list injected by this chart from `replicaCount`, admin-identity bind).
+this project exists. The replication design this chart implements
+(N-way multi-provider, peer list injected from `replicaCount`, admin-identity
+bind) is described under Replication below.
 
 ## Quick start
 

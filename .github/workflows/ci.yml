@@ -29,6 +29,31 @@ jobs:
           go-version-file: ui/backend/go.mod
           cache-dependency-path: ui/backend/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      # internal/web embeds the built SPA (`//go:embed all:dist`), and the
+      # build output is not committed, so nothing in this module compiles
+      # until the frontend has been built. Same ordering as ui/Dockerfile.
+      - name: Build frontend for embedding
+        working-directory: ui/frontend
+        run: npm ci && npm run build
+
+      # gofmt has no exit code of its own — it prints offending files and
+      # succeeds — so the file list is what has to be turned into a failure.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would reformat:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
@@ -51,6 +76,8 @@ jobs:
           cache-dependency-path: ui/frontend/package-lock.json
 
       - run: npm ci
+      - run: npm run lint
+      # `build` is `tsc -b && vite build`, so this is the type check too.
       - run: npm run build
 
   helm:
@@ -81,6 +108,11 @@ jobs:
             --set replicaCount=3 \
             --set ui.enabled=true
 
+      # The chart, both images and docker-compose.yml are all cut from one
+      # git tag and each carries its own copy of the version.
+      - name: Check version consistency
+        run: ./scripts/check-versions.sh
+
       - name: Reject rendering with no admin password
         run: |
           if helm template t charts/openldap >/dev/null 2>&1; then
@@ -89,15 +121,48 @@ jobs:
           fi
           echo "chart correctly refused to render without an admin password"
 
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ui/frontend
+        run: npm ci
+
+      # Fails on a dependency whose licence is not on the permissive
+      # allow-list, and on a THIRD-PARTY-LICENSES.md that no longer matches
+      # the dependency tree.
+      - run: ./scripts/licenses.sh --check
+
   shellcheck:
-    name: shellcheck (entrypoint.sh)
+    name: shellcheck (shell scripts)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # shellcheck ships preinstalled on GitHub-hosted ubuntu runners.
+      # entrypoint.sh runs under the image's /bin/sh (dash), so it is checked
+      # as POSIX sh; the scripts/ helpers declare their own shebangs and are
+      # checked against whatever each one asks for.
       - run: shellcheck -s sh image/entrypoint.sh
+      - run: shellcheck scripts/*.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)
