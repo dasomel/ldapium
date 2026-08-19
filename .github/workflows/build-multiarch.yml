@@ -26,12 +26,6 @@ on:
         required: true
         type: string
 
-# Top level is read-only. Every job that needs to write — pushing images or
-# a chart to GHCR, minting an attestation, creating a release — declares that
-# itself, so a job added later starts with no write access rather than
-# inheriting it silently. OpenSSF Scorecard flags the inherited form
-# (TokenPermissions), and it is right: a workflow-wide `packages: write` is
-# granted to steps that never publish anything, including third-party actions.
 permissions:
   contents: read
 
@@ -73,20 +67,6 @@ jobs:
         with:
           context: ${{ inputs.context }}
           platforms: linux/${{ matrix.arch }}
-          # Attestations are deliberately OFF for the per-arch digest push and
-          # are attached to the merged manifest instead (see the merge job).
-          #
-          # With provenance/sbom enabled, a single-platform build no longer
-          # pushes a plain image manifest — it pushes an index wrapping the
-          # image plus its attestation manifests. push-by-digest then yields
-          # the digest of that index, and the merge step would be combining
-          # indexes of indexes. That path is reported to produce bogus
-          # `unknown/unknown` platform entries in GHCR's package UI and has a
-          # history of manifest errors, and we cannot exercise a real GHA run
-          # from here to prove otherwise. Signing the final manifest with
-          # GitHub's OIDC-backed attestation instead is unambiguous, verifiable
-          # with `gh attestation verify`, and does not touch the merge path.
-          # Refs: docker/build-push-action#755, community discussion #45969.
           provenance: false
           sbom: false
           cache-from: type=gha,scope=${{ inputs.image-name }}-${{ matrix.arch }}
@@ -97,6 +77,7 @@ jobs:
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
+          test -n "$digest"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
@@ -114,8 +95,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # id-token/attestations are what actions/attest-build-provenance needs to
-      # mint a Sigstore certificate bound to this repository's OIDC identity.
       id-token: write
       attestations: write
     outputs:
@@ -148,13 +127,18 @@ jobs:
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
+          set -euo pipefail
+          ls -la
+          digests=$(printf '${{ env.IMAGE }}@sha256:%s ' *)
+          test -n "$digests"
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+            $digests
 
       - name: Inspect pushed manifest list
         id: manifest
         run: |
+          set -euo pipefail
           primary="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
           docker buildx imagetools inspect "$primary"
           digest=$(docker buildx imagetools inspect "$primary" --format '{{json .Manifest.Digest}}' | tr -d '"')
@@ -164,10 +148,6 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # Signs the merged manifest list itself, so the attestation covers what
-      # users actually pull (the multi-arch tag), not one architecture's layer.
-      # Verify with:
-      #   gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> --repo <owner>/<repo>
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -175,11 +155,9 @@ jobs:
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
-      # SBOM is generated from the pushed image rather than during the build:
-      # buildx's own sbom/provenance are disabled above because they break the
-      # push-by-digest merge path, and scanning the finished artifact is in any
-      # case the thing users can reproduce — `syft ghcr.io/<owner>/<image>:<tag>`
-      # against the published tag should agree with what ships here.
+      - name: Prepare SBOM directory
+        run: mkdir -p /tmp/sbom
+
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -196,11 +174,6 @@ jobs:
           artifact-name: ${{ inputs.image-name }}.cdx.json
           output-file: /tmp/sbom/${{ inputs.image-name }}.cdx.json
 
-      # Attaches the SBOM to the image in the registry the same way provenance
-      # is attached, so it travels with the image instead of only living on a
-      # release page. Verify with:
-      #   gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> \
-      #     --repo <owner>/<repo> --predicate-type https://spdx.dev/Document
       - name: Attest SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
@@ -209,8 +182,6 @@ jobs:
           sbom-path: /tmp/sbom/${{ inputs.image-name }}.spdx.json
           push-to-registry: true
 
-      # Collected by the caller (release.yml) and attached to the GitHub
-      # Release, so an SBOM is available without a registry client.
       - name: Upload SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
