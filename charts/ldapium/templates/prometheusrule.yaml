@@ -1,0 +1,37 @@
+{{- if and .Values.metrics .Values.metrics.enabled .Values.metrics.prometheusRule .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ldapium.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: ldapium.rules
+      rules:
+        - alert: LDAPiumExporterDown
+          expr: up{service=~"{{ include "ldapium.fullname" . }}-metrics"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "LDAPium metrics endpoint is down"
+            description: "Prometheus cannot scrape the LDAPium metrics endpoint for 5 minutes."
+        - alert: LDAPiumReplicationLag
+          expr: openldap_replication_delta > {{ .Values.metrics.prometheusRule.replicationLagThreshold }}
+          for: {{ .Values.metrics.prometheusRule.replicationLagFor }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "LDAPium replication lag is high"
+            description: "Replication delta exceeded the configured threshold."
+        - alert: LDAPiumTLSCertificateExpiringSoon
+          expr: (kube_secret_info{namespace="{{ .Release.Namespace }}", secret="{{ .Values.tls.existingSecret }}"} * 0) + ((time() + {{ .Values.metrics.prometheusRule.tlsExpiryFallbackSeconds }}) < time())
+          for: 1m
+          labels:
+            severity: info
+          annotations:
+            summary: "LDAPium TLS certificate expiry monitoring requires certificate metrics"
+            description: "Enable a certificate exporter (for example cert-manager or kube-state-metrics certificate metrics) and replace this rule with the cluster-specific certificate expression."
+{{- end }}
