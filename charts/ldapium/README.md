@@ -234,7 +234,11 @@ What it checks:
 | Entry reaches every peer (replicated installs) | Replication configured but not converging |
 
 The write checks create `ou=helm-test,<rootDN>` and remove it again, deleting
-any leftovers from an interrupted earlier run first. Against a directory you
+any leftovers from an interrupted earlier run first. On a replicated install
+they go to one specific pod rather than through the Service: the `memberOf`
+assertion has to read back from the node that performed the write, since a
+Service read can land on a pod the entry has not reached yet. Propagation to
+the other pods is what the replication check covers. Against a directory you
 would rather nothing wrote to, `--set tests.write=false` leaves only the
 read-only checks.
 

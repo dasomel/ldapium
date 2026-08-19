@@ -35,6 +35,19 @@ TEST_OU="ou=helm-test,${LDAP_ROOT_DN}"
 TEST_USER="uid=helm-test-user,${TEST_OU}"
 TEST_GROUP="cn=helm-test-group,${TEST_OU}"
 
+# Writes go to ONE node, not through the load-balanced Service. The memberof
+# overlay updates memberOf on the node that performs the write, as part of
+# that write — but a read through the Service can land on any pod, including
+# one the entry has not replicated to yet. That made the memberOf check a
+# coin flip on a replicated install: it passed twice and then failed, with
+# nothing wrong with the server. Pinning the write path makes the assertion
+# deterministic, and propagation is what the replication check below is for.
+WRITE_URL="$LDAP_URL"
+for first in $REPLICA_URLS; do
+	WRITE_URL="$first"
+	break
+done
+
 failures=0
 log() { printf '[test] %s\n' "$*"; }
 pass() { printf '[test]   PASS  %s\n' "$*"; }
@@ -83,7 +96,7 @@ if [ "$TEST_WRITE" = "1" ]; then
 	cleanup() {
 		# Children first: the directory refuses to delete a non-leaf entry.
 		for dn in "$TEST_USER" "$TEST_GROUP" "$TEST_OU"; do
-			ldapdelete -x -o nettimeout=10 -H "$LDAP_URL" \
+			ldapdelete -x -o nettimeout=10 -H "$WRITE_URL" \
 				-D "$LDAP_ADMIN_DN" -y "$PASSWORD_FILE" "$dn" >/dev/null 2>&1 || true
 		done
 	}
@@ -95,7 +108,7 @@ if [ "$TEST_WRITE" = "1" ]; then
 	# password would be subject to quality/history rules, and a policy
 	# rejection would look like a write failure when it is the policy doing
 	# its job. Group membership is what this checks.
-	if ldapadd -x -o nettimeout=10 -H "$LDAP_URL" \
+	if ldapadd -x -o nettimeout=10 -H "$WRITE_URL" \
 		-D "$LDAP_ADMIN_DN" -y "$PASSWORD_FILE" >/dev/null 2>&1 <<-LDIF
 			dn: ${TEST_OU}
 			objectClass: organizationalUnit
@@ -113,7 +126,7 @@ if [ "$TEST_WRITE" = "1" ]; then
 			member: ${TEST_USER}
 		LDIF
 	then
-		pass "created a scratch OU, user and group under $TEST_OU"
+		pass "created a scratch OU, user and group under $TEST_OU (via $WRITE_URL)"
 	else
 		fail "could not write to $TEST_OU — admin bind cannot create entries"
 	fi
@@ -122,7 +135,7 @@ if [ "$TEST_WRITE" = "1" ]; then
 	# populated only if the overlay is really loaded on the running server.
 	# The chart advertises memberof; nothing else here would notice if the
 	# module failed to load and slapd carried on without it.
-	if search "$LDAP_URL" -b "$TEST_USER" -s base memberOf 2>/dev/null |
+	if search "$WRITE_URL" -b "$TEST_USER" -s base memberOf 2>/dev/null |
 		grep -qi "^memberOf: ${TEST_GROUP}$"; then
 		pass "memberof overlay populated memberOf on the test user"
 	else
@@ -131,7 +144,7 @@ if [ "$TEST_WRITE" = "1" ]; then
 
 	# ------------------------------------------------------- replication
 	for replica in $REPLICA_URLS; do
-		[ "$replica" = "$LDAP_URL" ] && continue
+		[ "$replica" = "$WRITE_URL" ] && continue
 		waited=0
 		converged=0
 		while [ "$waited" -lt "$TIMEOUT_SECONDS" ]; do
