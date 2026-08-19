@@ -14,6 +14,7 @@ on:
     # Weekly, so a newly published query catches an old commit that nothing
     # has touched since.
     - cron: "0 5 * * 2"
+  workflow_dispatch: {}
 
 permissions:
   contents: read

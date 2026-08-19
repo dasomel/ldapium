@@ -91,7 +91,10 @@ flipping the repository to public:
       private vulnerability reporting (SECURITY.md links to the latter, so it
       404s until it is on).
 
-      Note while the repository is still private: **CodeQL, OpenSSF Scorecard
+      Done for this repository on 2026-08-19, along with Dependabot security
+      updates and vulnerability alerts.
+
+      Note while a repository is still private: **CodeQL, OpenSSF Scorecard
       and the SARIF upload in Security scan cannot pass.** Code scanning needs
       GitHub Advanced Security on a private repo, and Scorecard's
       publish_results needs a public one, so those three report red for a
