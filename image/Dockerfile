@@ -4,8 +4,6 @@
 # image/ldifs/*.ldif for the bootstrap templates.
 
 ARG OPENLDAP_VERSION=2.6.14
-# sha256 of openldap-2.6.14.tgz, pinned from a direct fetch of
-# https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-2.6.14.tgz
 ARG OPENLDAP_SHA256=806dcd21d366428187fba3278da773d5930f774852c9e92517f950d585f19107
 
 FROM debian:trixie-slim AS builder
@@ -34,21 +32,6 @@ RUN curl -fsSL -o openldap.tgz \
     && rm openldap.tgz
 
 WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
-# Verified configure line (2.6.14): mdb/syncprov are on by default, these
-# overlays are off-by-default and must be requested explicitly. The
-# accesslog/auditlog/constraint/deref/dynlist/sssvlv/otp block below is for
-# scale (indexed paging, deref-in-one-roundtrip for large group lookups) and
-# audit — loaded as modules only, see image/ldifs/01-cn-config.ldif for which
-# ones are also enabled by default. --enable-argon2 is `no|yes`, not `mod`
-# (verified against `./configure --help`) — but that flag only controls
-# whether argon2 support is BUILT at all. Combined with --enable-modules
-# (set above), the result is still a LOADABLE module (argon2.la/.so), not
-# code linked into slapd: confirmed with `ldd /usr/lib/slapd` (no argon2
-# symbol) and the runtime failure without it —
-#   Password generation failed for scheme {ARGON2}: scheme not recognized
-# See image/ldifs/01-cn-config.ldif (olcModuleload: argon2.la) and
-# image/entrypoint.sh (the bootstrap `slappasswd -o module-load=argon2`
-# call) for where it actually gets loaded.
 RUN ./configure \
         --prefix=/usr \
         --sysconfdir=/etc \
@@ -76,21 +59,18 @@ RUN ./configure \
     && make -j"$(nproc)" \
     && make install
 
-# Verified installed layout (do not re-derive without checking a real
-# `make install` — libexecdir places slapd outside the usual sbin path):
-#   /usr/lib/slapd                     slapd binary (NOT /usr/sbin/slapd)
-#   /usr/sbin/slap{add,cat,index,...}  admin/maintenance tools
-#   /usr/bin/ldap*                     client tools
-#   /usr/lib/libldap.so*, /usr/lib/liblber.so*
-#   /usr/lib/openldap/*.la, *.so*      loadable modules (module path)
-#   /etc/openldap/schema/*.ldif        schema (core, cosine, inetorgperson, nis, ...)
-#   /etc/openldap/slapd.ldif.default   stock cn=config template (superseded by our own)
+# Keep the exporter build isolated from the OpenLDAP source toolchain so the
+# application build cache is not invalidated when exporter code changes.
+FROM golang:1.26-bookworm AS exporter-builder
+ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=linux
+RUN go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION} \
+    && case "${TARGETARCH}" in amd64) arch=amd64 ;; arm64) arch=arm64 ;; *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; esac \
+    && test -x "$(go env GOPATH)/bin/openldap-exporter"
 
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
-
-# libssl3 does not exist on trixie (time_t64 transition) — it's libssl3t64.
-# Fail the build loudly if any of these are missing rather than guessing.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libssl3t64 \
@@ -103,7 +83,6 @@ RUN apt-get update \
     && useradd --system --no-create-home --home-dir /var/lib/openldap \
         --shell /usr/sbin/nologin --gid ldap ldap
 
-# --- OpenLDAP binaries, libraries, and modules from the builder stage ---
 COPY --from=builder /usr/lib/slapd /usr/lib/slapd
 COPY --from=builder /usr/lib/openldap/ /usr/lib/openldap/
 COPY --from=builder /usr/lib/libldap.so* /usr/lib/liblber.so* /usr/lib/
@@ -111,13 +90,11 @@ COPY --from=builder /usr/sbin/slap* /usr/sbin/
 COPY --from=builder /usr/bin/ldap* /usr/bin/
 COPY --from=builder /etc/openldap/schema/ /etc/openldap/schema/
 COPY --from=builder /etc/openldap/ldap.conf /etc/openldap/ldap.conf
+COPY --from=exporter-builder /go/bin/openldap-exporter /usr/local/bin/openldap_exporter
 
-# slapd is installed under libexecdir (/usr/lib/slapd, not /usr/sbin/slapd) —
-# symlink it onto PATH so `exec slapd ...` in entrypoint.sh resolves normally.
 RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
     && ldconfig
 
-# --- Our own bootstrap templates + entrypoint ---
 COPY ldifs/01-cn-config.ldif ldifs/02-cn-config-admin.ldif ldifs/03-base-structure.ldif \
     /usr/local/share/ldapium/bootstrap/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -131,19 +108,9 @@ RUN mkdir -p /etc/openldap/slapd.d /var/lib/openldap/data /var/lib/openldap/run 
 
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV LDAP_SEED_DIR=/opt/ldifs
-# OpenLDAP client defaults used by syncrepl and the ldap* utilities.
-# When the chart enables TLS, the mounted CA is available at this path and
-# certificate verification is fail-closed. Plain LDAP replication is still
-# selected by the chart only when TLS is disabled.
 ENV LDAPTLS_REQCERT=demand
 ENV LDAPTLS_CACERT=/etc/openldap/tls/ca.crt
 
-# Numeric, not `USER ldap`. Kubernetes' runAsNonRoot check refuses to start a
-# container whose image declares a NAMED user, because the kubelet cannot
-# resolve the name to a uid to prove it isn't root:
-#   Error: container has runAsNonRoot and image has non-numeric user (ldap),
-#   cannot verify user is non-root
-# 999:999 is the ldap user/group created above.
 USER 999:999
 WORKDIR /var/lib/openldap
 
