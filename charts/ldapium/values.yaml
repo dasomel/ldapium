@@ -164,39 +164,24 @@ backup:
     seccompProfile:
       type: RuntimeDefault
 
-# -- Prometheus/OpenLDAP observability profile.
-#    Opt-in so existing LDAPium installs do not gain an additional sidecar by
-#    surprise. When enabled the chart exposes the OpenLDAP exporter on 9330.
-metrics:
-  enabled: false
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      memory: 64Mi
-  serviceMonitor:
-    enabled: false
-    interval: 30s
-    scrapeTimeout: 10s
-  prometheusRule:
-    enabled: false
-    replicationLagThreshold: 300
-    replicationLagFor: 5m
-    connectionSaturationPercent: 80
-    backupMaxAgeSeconds: 93600
-    backupFailureFor: 5m
-    # TLS expiry is intentionally disabled by default because the exact
-    # certificate metric differs between cert-manager/kube-state-metrics
-    # deployments. Operators can provide a PromQL selector that yields the
-    # certificate expiration timestamp in seconds, for example:
-    # certmanager_certificate_expiration_timestamp_seconds{namespace="ldap",name="ldapium"}
-    tlsCertificateExpirationExpr: ""
-    tlsExpiryWarningSeconds: 2592000
-  dashboard:
-    enabled: true
+topologySpreadConstraints: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
 
-# -- Optional management UI (ui/). Off by default.
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 60
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Optional management UI (ui/). Off by default.
 ui:
   enabled: false
   image:
