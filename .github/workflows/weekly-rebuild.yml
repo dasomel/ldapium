@@ -1,32 +1,28 @@
-name: Weekly rebuild
+name: Build and publish images
 
-# Rebuilds both images on a schedule so security patches landing in
-# debian:trixie-slim (and other base layers) reach users without waiting for
-# a version release. Shares the same multi-arch build logic as release.yml
-# via build-multiarch.yml — only the emitted tags differ.
+# Publishes both images when main changes, rebuilds weekly for base-image
+# security updates, and supports manual runs for on-demand rebuilds.
+# Shares the multi-arch build logic with build-multiarch.yml.
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "0 4 * * 1" # Monday 04:00 UTC
   workflow_dispatch: {}
 
-# Top level is read-only. Every job that needs to write — pushing images or
-# a chart to GHCR, minting an attestation, creating a release — declares that
-# itself, so a job added later starts with no write access rather than
-# inheriting it silently. OpenSSF Scorecard flags the inherited form
-# (TokenPermissions), and it is right: a workflow-wide `packages: write` is
-# granted to steps that never publish anything, including third-party actions.
+# Top level is read-only. Every job that needs to write declares it explicitly.
 permissions:
   contents: read
 
 jobs:
   build-server:
-    name: Rebuild server image
+    name: Build server image
     uses: ./.github/workflows/build-multiarch.yml
     permissions:
       contents: read
       packages: write
-      # Same ceiling as release.yml — the weekly rebuild attests too.
       id-token: write
       attestations: write
     with:
@@ -38,12 +34,11 @@ jobs:
         type=sha,prefix=nightly-
 
   build-ui:
-    name: Rebuild UI image
+    name: Build UI image
     uses: ./.github/workflows/build-multiarch.yml
     permissions:
       contents: read
       packages: write
-      # Same ceiling as release.yml — the weekly rebuild attests too.
       id-token: write
       attestations: write
     with:
