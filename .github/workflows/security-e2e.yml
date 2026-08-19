@@ -1,0 +1,120 @@
+name: Security E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - ".github/workflows/security-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t ldapium:security image
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: security
+
+      - name: Load image
+        run: kind load docker-image ldapium:security --name security
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install LDAPium
+        run: |
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=security \
+            --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='security-e2e-password' \
+            --set ui.enabled=false \
+            --wait --timeout 5m
+
+      - name: Seed test identities
+        run: |
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w security-e2e-password <<EOF
+              dn: ou=people,dc=example,dc=org
+              objectClass: organizationalUnit
+              ou: people
+
+              dn: uid=alice,ou=people,dc=example,dc=org
+              objectClass: inetOrgPerson
+              uid: alice
+              cn: Alice
+              sn: Tester
+              userPassword: AlicePassword1!
+              EOF
+            '
+
+      - name: Verify anonymous password redaction
+        run: |
+          set -euo pipefail
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              ! ldapsearch -x -H ldap://directory-ldapium:389 -b uid=alice,ou=people,dc=example,dc=org -s base "(objectClass=*)" userPassword 2>&1 | grep -q "AlicePassword1!"
+            '
+
+      - name: Verify anonymous attribute boundary
+        run: |
+          set -euo pipefail
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              out=$(ldapsearch -x -H ldap://directory-ldapium:389 -b uid=alice,ou=people,dc=example,dc=org -s base "(objectClass=*)" uid objectClass)
+              echo "$out" | grep -q "uid: alice"
+              ! echo "$out" | grep -q "userPassword:"
+            '
+
+      - name: Verify cn=config is not exposed on LDAP service
+        run: |
+          set -euo pipefail
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              ! ldapsearch -x -H ldap://directory-ldapium:389 -b cn=config -s base "(objectClass=*)" dn 2>/dev/null | grep -q "dn: cn=config"
+            '
+
+      - name: Verify LDAP injection input is treated as data
+        run: |
+          set -euo pipefail
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              ! ldapsearch -x -H ldap://directory-ldapium:389 -b dc=example,dc=org "(|(uid=*)(uid=*)" >/dev/null 2>&1
+            '
+
+      - name: Verify chart security context
+        run: |
+          helm template directory charts/ldapium \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='security-e2e-password' > /tmp/security.yaml
+          grep -q 'runAsNonRoot: true' /tmp/security.yaml
+          grep -q 'runAsUser: 999' /tmp/security.yaml
+          grep -q 'readOnlyRootFilesystem: true' /tmp/security.yaml
+          grep -q 'capabilities:' /tmp/security.yaml
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide || true
+          kubectl -n directory describe pods || true
+          kubectl -n directory logs statefulset/directory-ldapium --tail=300 || true
+
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
