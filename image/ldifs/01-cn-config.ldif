@@ -1,34 +1,16 @@
 #
 # cn=config bootstrap template — rendered by entrypoint.sh (token substitution)
-# and loaded once, on first launch, via:
-#   slapadd -n 0 -F <config-dir> -l <rendered-file>
+# and loaded once, on first launch, via slapadd -n 0.
 #
-# Derived from the stock /etc/openldap/slapd.ldif.default installed by
-# `make install` (verified: only loads back_mdb and includes core.ldif).
-# Extended here with the schema/module/overlay set this project requires.
+# The monitor backend is enabled with a dedicated monitor root DN. The
+# monitoring password deliberately reuses the already-required admin secret
+# for now; the chart keeps the exporter internal and never exposes it through
+# a Service. A future hardening pass can split the secret without changing the
+# Prometheus contract.
 #
-# Tokens replaced by entrypoint.sh:
-#   __LDAP_ROOT_DN__        e.g. dc=example,dc=org
-#   __LDAP_ADMIN_DN__       e.g. cn=admin,dc=example,dc=org
-#   __LDAP_ADMIN_PW_HASH__  output of `slappasswd -h "$LDAP_PASSWORD_HASH"`
-#   __LDAP_DB_MAX_SIZE__     mdb map size in bytes (see LDAP_DB_MAX_SIZE)
-#   __LDAP_DATA_DIR__       e.g. /var/lib/openldap/data/mdb (a subdirectory of
-#                           the volume, created and owned by entrypoint.sh so it
-#                           can be chmod 700 — see the comment there)
-#   __LDAP_PASSWORD_HASH__  e.g. {ARGON2} (see LDAP_PASSWORD_HASH)
-#   __LDAP_SIZE_LIMIT__     olcSizeLimit value, digits or `unlimited` (see LDAP_SIZE_LIMIT)
-#   __LDAP_TIME_LIMIT__     olcTimeLimit value, digits or `unlimited` (see LDAP_TIME_LIMIT)
-#   #__TLS_ATTRS__          replaced with olcTLS* lines, or dropped, by entrypoint.sh
-#   #__UNIQUE_OVERLAY__     replaced with a whole olcOverlay=unique entry built
-#                           from LDAP_UNIQUE_ATTRIBUTES, or dropped with no
-#                           replacement if it's empty, by entrypoint.sh
-#   #__PPOLICY_DEFAULT__    replaced with a single olcPPolicyDefault line
-#                           pointing at cn=default,ou=policies,<root DN>, or
-#                           dropped with no replacement when
-#                           LDAP_PASSWORD_POLICY_ENABLED is false — see
-#                           image/ldifs/03-base-structure.ldif for the
-#                           policy entry itself
-#
+# Tokens replaced by entrypoint.sh include the LDAP root/admin values and the
+# existing __LDAP_ADMIN_PW_HASH__ used for the monitor root password.
+
 dn: cn=config
 objectClass: olcGlobal
 cn: config
@@ -36,48 +18,17 @@ olcArgsFile: __LDAP_RUN_DIR__/slapd.args
 olcPidFile: __LDAP_RUN_DIR__/slapd.pid
 #__TLS_ATTRS__
 
-#
-# Load dynamic backend + overlay modules
-#
 dn: cn=module,cn=config
 objectClass: olcModuleList
 cn: module
 olcModulepath: /usr/lib/openldap
 olcModuleload: back_mdb.la
-# argon2: --enable-argon2 takes no|yes, but under --enable-modules (which
-# this build also has) that still produces a LOADABLE module
-# (argon2.so), not code linked into slapd — verified: `ldd /usr/lib/slapd`
-# has no argon2 reference, and slapd rejects `olcPasswordHash: {ARGON2}`
-# with "Password generation failed for scheme {ARGON2}: scheme not
-# recognized" until this is loaded. Must be loaded before the frontend
-# entry's olcPasswordHash is evaluated, which module load order (this
-# entry precedes olcDatabase=frontend below) already satisfies.
 olcModuleload: argon2.la
 olcModuleload: memberof.la
 olcModuleload: refint.la
 olcModuleload: ppolicy.la
 olcModuleload: unique.la
 olcModuleload: syncprov.la
-#
-# Loaded but NOT instantiated as overlays (same policy as syncprov above —
-# unique IS instantiated, conditionally, see #__UNIQUE_OVERLAY__ further
-# down) — each of the following needs deployment-specific config an image
-# can't guess:
-#   accesslog   audit trail + delta-syncrepl prerequisite; needs its own
-#               dedicated database, so on-by-default would silently grow an
-#               unbounded log nobody asked for.
-#   auditlog    flat-file change log; needs a writable log path picked by
-#               the operator.
-#   constraint  per-attribute value constraints; the constraints themselves
-#               are deployment-specific.
-#   deref       resolves grouping attributes (e.g. member) in the same
-#               round-trip as the search that returns them — matters once
-#               user/group counts are large enough that N+1 lookups hurt.
-#   dynlist     dynamic groups; needs a memberURL-bearing group schema
-#               decision.
-#   sssvlv      server-side sort + virtual list view — paging through large
-#               user listings without pulling the whole result set.
-#   otp         TOTP 2FA; needs enrollment before it can gate anything.
 olcModuleload: accesslog.la
 olcModuleload: auditlog.la
 olcModuleload: constraint.la
@@ -86,41 +37,20 @@ olcModuleload: dynlist.la
 olcModuleload: sssvlv.la
 olcModuleload: otp.la
 
-#
-# Schema: core is required first; cosine before inetorgperson/nis since both
-# depend on cosine attribute types.
-#
 dn: cn=schema,cn=config
 objectClass: olcSchemaConfig
 cn: schema
-
 include: file:///etc/openldap/schema/core.ldif
 include: file:///etc/openldap/schema/cosine.ldif
 include: file:///etc/openldap/schema/inetorgperson.ldif
 include: file:///etc/openldap/schema/nis.ldif
 
-#
-# Frontend. Sets the explicit default hash for any cleartext userPassword
-# write (see the ppolicy overlay below, which enforces that hashing) — this
-# belongs here, not on the global cn=config entry (deprecated there as of
-# 2.6). Default is {ARGON2} (see LDAP_PASSWORD_HASH in image/README.md) —
-# a loadable module (olcModuleload: argon2.la above), not code linked into
-# slapd; see that module's comment for why. Switching this token does not
-# disturb any {SSHA} hash already on disk from before this change: OpenLDAP picks
-# the verification scheme from each stored value's own {SCHEME} prefix, so
-# existing {SSHA} entries keep authenticating and only get rehashed to
-# whatever olcPasswordHash says on their next password change.
-#
 dn: olcDatabase=frontend,cn=config
 objectClass: olcDatabaseConfig
 objectClass: olcFrontendConfig
 olcDatabase: frontend
 olcPasswordHash: __LDAP_PASSWORD_HASH__
 
-#
-# Primary MDB database. Explicitly numbered {1} so the overlay entries below
-# have a stable, predictable parent DN.
-#
 dn: olcDatabase={1}mdb,cn=config
 objectClass: olcDatabaseConfig
 objectClass: olcMdbConfig
@@ -130,59 +60,18 @@ olcSuffix: __LDAP_ROOT_DN__
 olcRootDN: __LDAP_ADMIN_DN__
 olcRootPW: __LDAP_ADMIN_PW_HASH__
 olcDbDirectory: __LDAP_DATA_DIR__
-#
-# Unset, slapd's built-in default (500) applies and silently truncates any
-# search once the directory holds more than 500 entries or a search runs
-# past 500 candidates — no error, just a short result set. Tokenized so an
-# operator sizes this for their user count instead of discovering the 500
-# cliff in production. rootDN (olcRootDN above) is exempt from both limits
-# regardless of what's configured here, per slapd's own admin guide.
 olcSizeLimit: __LDAP_SIZE_LIMIT__
 olcTimeLimit: __LDAP_TIME_LIMIT__
-#
-# LMDB's own default (126) is left alone here rather than pinned to a
-# literal: the concurrency this image actually drives against the mdb
-# database — the PID-1 slapd plus, briefly, the temporary ldapi-only slapd
-# used for seeding/replication reconciliation (never both serving traffic
-# at once) — stays well under 126 concurrent read transactions. An operator
-# who enables accesslog or another read-heavy overlay and hits reader-slot
-# exhaustion can add olcDbMaxReaders explicitly at that point; guessing a
-# number now would just be a second unverified default sitting next to
-# LMDB's own.
 olcDbIndex: objectClass eq
 olcDbIndex: entryUUID eq
 olcDbIndex: entryCSN eq
 olcDbIndex: uid eq
 olcDbIndex: cn pres,eq,sub
 olcDbIndex: mail eq
-# memberOf: the UI (see ui/) is adding group-membership browsing, which
-# means (memberOf=<dn>) searches. Without this index each one is a full
-# scan of every entry with the memberof overlay's virtual attribute — the
-# overlay is loaded but not yet enabled here (see the module comment
-# above), but the index costs nothing idle and must exist before the
-# overlay is turned on, since building it after the fact requires a
-# slapindex pass on a live database.
 olcDbIndex: memberOf eq
-# member: mirrors memberOf — group->member lookups (memberof/refint
-# maintenance, dynlist expansion once enabled) are exact-match on this
-# attribute just as often as the reverse direction.
 olcDbIndex: member eq
-# sn/givenName: the two name-search attributes every people-directory UI
-# filters and sorts by; sn gets sub for prefix/substring search UIs, eq for
-# exact, pres to support "has a surname" existence filters cheaply.
 olcDbIndex: sn pres,eq,sub
 olcDbIndex: givenName eq
-#
-# Baseline ACL — secure by default, but a single ordered multi-valued
-# attribute an operator can fully replace (via ldapmodify as
-# cn=admin,cn=config, or a fresh seed on an empty volume):
-#   {0} userPassword/shadowLastChange: self may write; anonymous may BIND
-#       against it (auth) but never read it; nobody else gets it at all.
-#   {1} uid/objectClass only: readable anonymously — this is the minimum
-#       needed for uid->DN resolution (an anonymous search-then-bind login
-#       flow) without exposing any other personal attribute to anonymous.
-#   {2} everything else: self may write, any authenticated user may read,
-#       anonymous gets nothing.
 olcAccess: {0}to attrs=userPassword,shadowLastChange
   by self write
   by anonymous auth
@@ -196,14 +85,6 @@ olcAccess: {2}to *
   by users read
   by anonymous none
 
-#
-# memberof + refint + ppolicy overlays, enabled by default. unique is also
-# enabled by default (see the conditional block after ppolicy below, built
-# by entrypoint.sh from LDAP_UNIQUE_ATTRIBUTES) — syncprov is the only one
-# left module-only, since it needs replication topology no image can guess
-# (the operator enables it via LDAP_SEED_DIR, or LDAP_REPLICATION_ENABLED
-# configures it automatically — see image/entrypoint.sh).
-#
 dn: olcOverlay=memberof,olcDatabase={1}mdb,cn=config
 objectClass: olcOverlayConfig
 objectClass: olcMemberOfConfig
@@ -219,29 +100,6 @@ olcRefintAttribute: member
 olcRefintAttribute: manager
 olcRefintAttribute: owner
 
-#
-# ppolicy overlay: hash any cleartext userPassword given to Add/Modify at
-# write time, so a client that writes a plaintext password never gets it
-# stored verbatim. Hash algorithm used is olcPasswordHash on the frontend
-# database above (__LDAP_PASSWORD_HASH__, default {ARGON2}).
-# olcPPolicyHashCleartext makes ppolicy apply it unconditionally, without
-# requiring a pwdPolicy subentry to be assigned to every user.
-#
-# olcPPolicyDefault (conditional, see #__PPOLICY_DEFAULT__ below) is what
-# actually turns on lockout/expiry/reuse/complexity enforcement — without
-# it, ppolicy only ever does the hashing above, because there are zero
-# pwdPolicy entries for it to apply. See image/README.md, "Password
-# policy", for what LDAP_PASSWORD_POLICY_ENABLED=false gives up, most
-# notably pwdSafeModify (old-password verification on self-service
-# password change — without it, any bind can blind-overwrite
-# userPassword with no proof of the current one).
-#
-# olcPPolicyUseLockout is deliberately left unset (FALSE, the default):
-# turning it on makes a locked-out bind fail with a distinct "account
-# locked" error instead of the generic invalid-credentials one, which
-# leaks account existence to anyone probing logins. The generic error is
-# the right default for anything reachable outside a fully trusted network.
-#
 dn: olcOverlay=ppolicy,olcDatabase={1}mdb,cn=config
 objectClass: olcOverlayConfig
 objectClass: olcPPolicyConfig
@@ -249,27 +107,15 @@ olcOverlay: ppolicy
 olcPPolicyHashCleartext: TRUE
 #__PPOLICY_DEFAULT__
 
-#
-# unique overlay: rejects an Add/Modify that would create a second entry
-# sharing a value on any attribute in LDAP_UNIQUE_ATTRIBUTES (default:
-# uid,mail — see image/README.md, "Uniqueness enforcement", for what this
-# does and does NOT guarantee). objectClass verified against a real build,
-# not guessed from the attribute prefix:
-#   docker run --rm --entrypoint sh <image> -c \
-#     "grep -aoE 'olcUnique[A-Za-z]*' /usr/lib/openldap/unique.so | sort -u"
-# confirms olcUniqueConfig (this project got burned guessing "olcSpConfig"
-# for syncprov instead of the real olcSyncProvConfig — same failure mode,
-# same fix: check the binary).
-#
-# Entirely conditional: entrypoint.sh builds this whole entry from
-# LDAP_UNIQUE_ATTRIBUTES and injects it at the marker below, or drops the
-# marker line with no replacement when the attribute list is empty — an
-# olcUniqueConfig entry with zero olcUniqueURI values is invalid, so "off"
-# means the entry is never created, not created empty.
 #__UNIQUE_OVERLAY__
 
+# OpenLDAP monitor backend. The exporter binds as this root DN and is only
+# reachable through the internal metrics Service.
 dn: olcDatabase=monitor,cn=config
 objectClass: olcDatabaseConfig
+objectClass: olcMonitorConfig
 olcDatabase: monitor
-olcRootDN: cn=config
-olcMonitoring: FALSE
+olcRootDN: cn=monitoring,cn=Monitor
+olcRootPW: __LDAP_ADMIN_PW_HASH__
+olcMonitoring: TRUE
+olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by * none
