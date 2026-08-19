@@ -39,4 +39,12 @@ COPY --from=backend /out/server /server
 # confirmed from this image's own /etc/passwd.
 USER 65532:65532
 EXPOSE 8080
+
+# The binary checks itself: this image has no shell and no curl, so a
+# HEALTHCHECK has nothing else to call. Kubernetes ignores this and uses the
+# chart's httpGet probes instead; it exists for `docker run` and docker
+# compose, where the UI otherwise reports no health at all.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["/server", "-healthcheck"]
+
 ENTRYPOINT ["/server"]
