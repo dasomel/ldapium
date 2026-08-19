@@ -61,17 +61,23 @@ RUN ./configure \
 
 # Keep the exporter build isolated from the OpenLDAP source toolchain so the
 # application build cache is not invalidated when exporter code changes.
-FROM golang:1.26-bookworm AS exporter-builder
+# v2.9.14 declares toolchain go1.26.5, so pin the builder to that exact
+# toolchain instead of relying on Go's automatic toolchain download.
+FROM golang:1.26.5-bookworm AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
 ARG TARGETARCH
-ENV CGO_ENABLED=0 GOOS=linux
-RUN case "${TARGETARCH}" in \
+ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
+RUN set -eux; \
+    case "${TARGETARCH}" in \
       amd64) export GOARCH=amd64 ;; \
       arm64) export GOARCH=arm64 ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION} \
-    && test -x "$(go env GOPATH)/bin/openldap-exporter"
+    esac; \
+    go version; \
+    go env GOOS GOARCH; \
+    go mod download github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION}; \
+    go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION}; \
+    test -x "$(go env GOPATH)/bin/openldap_exporter" || test -x "$(go env GOPATH)/bin/openldap-exporter"
 
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
@@ -94,7 +100,7 @@ COPY --from=builder /usr/sbin/slap* /usr/sbin/
 COPY --from=builder /usr/bin/ldap* /usr/bin/
 COPY --from=builder /etc/openldap/schema/ /etc/openldap/schema/
 COPY --from=builder /etc/openldap/ldap.conf /etc/openldap/ldap.conf
-COPY --from=exporter-builder /go/bin/openldap-exporter /usr/local/bin/openldap_exporter
+COPY --from=exporter-builder /go/bin/openldap_exporter /usr/local/bin/openldap_exporter
 
 RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
     && ldconfig
