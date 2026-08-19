@@ -4,6 +4,8 @@ A maintained OpenLDAP stack for Kubernetes: a server image **compiled from upstr
 source**, a management UI, and a Helm chart — built because the existing options stopped
 being viable.
 
+**English | [한국어](README_ko.md)**
+
 [![CI](https://github.com/dasomel/ldapium/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dasomel/ldapium/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/ldapium)
@@ -17,6 +19,10 @@ being viable.
 > been exercised end to end. `helm test` (below) is there so you can check an
 > install rather than take this paragraph's word for it. See
 > [CHANGELOG.md](CHANGELOG.md) for the known gaps.
+
+> **Registry note:** the repository contains the GHCR release workflow, but
+> registry publication must be verified from the actual GitHub Release/Actions
+> run before treating `0.1.0` images and the OCI chart as published artifacts.
 
 ## Why this exists
 
@@ -60,8 +66,9 @@ without waiting for a release.
 
 ## Install
 
-Both images and the chart are published to GHCR and cut from the same git tag,
-so `0.1.0` means the same thing everywhere.
+Both images and the chart are **intended** to be published to GHCR and cut from the same git tag,
+so `0.1.0` means the same thing everywhere. Confirm the corresponding GitHub Release and GHCR
+packages exist before using the commands below as published-artifact instructions.
 
 ### Kubernetes (Helm)
 
@@ -107,10 +114,8 @@ backup/restore procedure, and the optional Keycloak SSO setup.
 | `ghcr.io/dasomel/ldapium:0.1.0` | OpenLDAP 2.6.14 server |
 | `ghcr.io/dasomel/ldapium-ui:0.1.0` | Management UI |
 
-Both are `linux/amd64` + `linux/arm64` and carry build provenance attestations.
-A `:main` tag is rebuilt weekly from the same source so base-image security
-updates are available without waiting for a release; released tags are
-immutable.
+Both are designed for `linux/amd64` + `linux/arm64` and carry build provenance attestations
+when the release workflow completes successfully.
 
 ## Standalone (docker compose)
 
@@ -196,9 +201,9 @@ covers every option (custom LDAP URL/port, retention, skipping the
 
 ## Supply chain
 
-Every released image carries, in the registry alongside it, a **build
-provenance attestation** and an **SBOM attestation**, both signed by GitHub's
-OIDC identity for this repository:
+Every released image is designed to carry, in the registry alongside it, a **build
+provenance attestation** and an **SBOM attestation**, signed by GitHub's OIDC identity
+when the release workflow completes successfully.
 
 ```bash
 gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.0 \
@@ -219,12 +224,10 @@ including why the Debian base's GPL packages do not reach this project's code.
 
 ## Contributing, security, releases
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — local setup, what the project is
-  opinionated about, and the checks CI runs
-- [SECURITY.md](SECURITY.md) — how to report a vulnerability privately, and
-  what is in scope (bugs in OpenLDAP itself belong upstream)
-- [CHANGELOG.md](CHANGELOG.md) — what changed, and what is still unverified
-- [RELEASING.md](RELEASING.md) — how a release is cut
+- [CONTRIBUTING.md](CONTRIBUTING.md) / [한국어](CONTRIBUTING_ko.md) — local setup, project rules, and CI checks
+- [SECURITY.md](SECURITY.md) / [한국어](SECURITY_ko.md) — vulnerability reporting and security scope
+- [CHANGELOG.md](CHANGELOG.md) / [한국어](CHANGELOG_ko.md) — changes and known gaps
+- [RELEASING.md](RELEASING.md) / [한국어](RELEASING_ko.md) — release procedure
 
 ## License
 
