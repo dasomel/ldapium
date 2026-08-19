@@ -237,7 +237,9 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     esac
     LDAP_SERVER_ID=$((ldap_hostname_ordinal + 1))
   fi
-  [ "$LDAP_SERVER_ID" -ge 1 ] && [ "$LDAP_SERVER_ID" -le 4095 ] || die "LDAP_SERVER_ID must be 1..4095 (got: ${LDAP_SERVER_ID})"
+  if [ "$LDAP_SERVER_ID" -lt 1 ] || [ "$LDAP_SERVER_ID" -gt 4095 ]; then
+    die "LDAP_SERVER_ID must be 1..4095 (got: ${LDAP_SERVER_ID})"
+  fi
 
   # LDAP_SERVER_ID doubles as this node's 1-based position in
   # LDAP_REPLICATION_PEERS (used below to exclude self from olcSyncrepl —

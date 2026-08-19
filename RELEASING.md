@@ -90,6 +90,15 @@ flipping the repository to public:
 - [ ] **Code security:** enable secret scanning **and push protection**, and
       private vulnerability reporting (SECURITY.md links to the latter, so it
       404s until it is on).
+
+      Note while the repository is still private: **CodeQL, OpenSSF Scorecard
+      and the SARIF upload in Security scan cannot pass.** Code scanning needs
+      GitHub Advanced Security on a private repo, and Scorecard's
+      publish_results needs a public one, so those three report red for a
+      reason that has nothing to do with the code — the scans themselves run
+      and succeed, only the upload fails. The set that can be green while
+      private is **CI and E2E**; expect the other three to go green on the
+      flip to public, and check them afterwards rather than assuming.
 - [ ] **Branch protection on `main`:** require the CI checks and a review.
       Scorecard grades this, so it also shows up in the badge.
 - [ ] **Make the GHCR packages public.** They are private by default, and the

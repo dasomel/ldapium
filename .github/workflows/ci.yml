@@ -197,7 +197,10 @@ jobs:
   hadolint:
     name: hadolint (Dockerfiles, informational)
     runs-on: ubuntu-24.04
-    # Optional per project convention: findings are surfaced but never block CI.
+    # Advisory by project convention: findings are printed in the log but never
+    # block CI. That needs BOTH settings — continue-on-error keeps the run
+    # green, while no-fail keeps the job itself from reporting a red check for
+    # something nobody is expected to act on immediately.
     continue-on-error: true
     steps:
       - name: Checkout
@@ -207,6 +210,7 @@ jobs:
         uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
           dockerfile: image/Dockerfile
+          no-fail: true
           # DL3008: apt-get install without pinned package versions. Intentional
           # here — the OpenLDAP source tarball is pinned by sha256 in the
           # Dockerfile itself, but base-OS packages deliberately float with
@@ -217,4 +221,5 @@ jobs:
         uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
           dockerfile: ui/Dockerfile
+          no-fail: true
           ignore: DL3008
