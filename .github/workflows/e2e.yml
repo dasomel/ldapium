@@ -58,13 +58,21 @@ jobs:
       - name: Build server image
         run: docker build -t ldapium:e2e image
 
+      # Built here and nowhere else in the pre-release path: release.yml is
+      # the only other workflow that touches ui/Dockerfile, which made every
+      # base-image bump (golang, node) unverified until release day.
+      - name: Build UI image
+        run: docker build -t ldapium-ui:e2e ui
+
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: e2e
 
-      - name: Load image into the cluster
-        run: kind load docker-image ldapium:e2e --name e2e
+      - name: Load images into the cluster
+        run: |
+          kind load docker-image ldapium:e2e --name e2e
+          kind load docker-image ldapium-ui:e2e --name e2e
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -79,6 +87,10 @@ jobs:
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
+            --set ui.enabled=true \
+            --set ui.image.repository=ldapium-ui \
+            --set ui.image.tag=e2e \
+            --set ui.image.pullPolicy=Never \
             ${{ matrix.values }} \
             --wait --timeout 5m
 

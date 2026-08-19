@@ -92,6 +92,23 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # /api/auth/config is unauthenticated and answers from configuration
+          # alone — no LDAP round-trip — so a probe against it reports on this
+          # process rather than on the directory's health. A UI that cannot
+          # reach the directory should still come up and say so.
+          readinessProbe:
+            httpGet:
+              path: /api/auth/config
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/auth/config
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
           {{- $ldapURL := .Values.ui.ldap.url }}
           {{- if not $ldapURL }}
           {{- if .Values.tls.enabled }}

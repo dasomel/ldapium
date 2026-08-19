@@ -8,7 +8,7 @@
 # and without it the image also builds on an air-gapped host.
 
 # --- frontend build -----------------------------------------------------
-FROM node:22-alpine AS frontend
+FROM node:26-alpine AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -18,7 +18,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- backend build --------------------------------------------------------
-FROM golang:1.25-alpine AS backend
+FROM golang:1.26-alpine AS backend
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download

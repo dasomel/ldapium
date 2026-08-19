@@ -32,12 +32,12 @@ SBOM attached to that release, or:
 
 | Module | License | Source |
 |---|---|---|
-| `github.com/Azure/go-ntlmssp` | MIT | [link](https://github.com/Azure/go-ntlmssp/blob/754e69321358/LICENSE) |
+| `github.com/Azure/go-ntlmssp` | MIT | [link](https://github.com/Azure/go-ntlmssp/blob/v0.1.1/LICENSE) |
 | `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | [link](https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE) |
-| `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.7/LICENSE) |
+| `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.8/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
-| `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.10/v3/LICENSE) |
+| `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.14/v3/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.15.4/LICENSE) |
 | `github.com/labstack/gommon` | MIT | [link](https://github.com/labstack/gommon/blob/v0.5.0/LICENSE) |
@@ -45,11 +45,11 @@ SBOM attached to that release, or:
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
 | `github.com/valyala/bytebufferpool` | MIT | [link](https://github.com/valyala/bytebufferpool/blob/v1.0.0/LICENSE) |
 | `github.com/valyala/fasttemplate` | MIT | [link](https://github.com/valyala/fasttemplate/blob/v1.2.2/LICENSE) |
-| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.53.0:LICENSE) |
-| `golang.org/x/net` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/net/+/v0.56.0:LICENSE) |
+| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.54.0:LICENSE) |
+| `golang.org/x/net` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE) |
 | `golang.org/x/oauth2` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
-| `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.46.0:LICENSE) |
-| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.38.0:LICENSE) |
+| `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
+| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE) |
 | `golang.org/x/time/rate` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 
 ## UI frontend (npm, production dependencies)
