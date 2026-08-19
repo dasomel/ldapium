@@ -1,10 +1,9 @@
 name: Build multi-arch image (reusable)
 
-# Builds and pushes a single image to GHCR for linux/amd64 and linux/arm64
-# using GitHub's native arm64 hosted runners. Each architecture is first
-# published under a unique temporary tag; the merge job then combines those
-# concrete image tags into the requested multi-arch tags. This avoids relying
-# on registry-side digest-only references, which GHCR can reject as not found.
+# Shared image publisher used by main builds and releases.
+# Follow the proven OSS pattern: one Buildx job publishes the complete
+# multi-architecture image directly. Do not create per-architecture digest
+# marker artifacts and merge them later.
 
 on:
   workflow_call:
@@ -29,17 +28,9 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}
 
 jobs:
-  build:
-    name: build (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+  build-and-push:
+    name: Build and push multi-arch image
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -47,6 +38,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e3b0f6f8c9c0a8c1d1d8f5a6f6c1c1f5c6a7b8c9 # v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -57,74 +51,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push architecture image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: ${{ inputs.context }}
-          platforms: linux/${{ matrix.arch }}
-          provenance: false
-          sbom: false
-          cache-from: type=gha,scope=${{ inputs.image-name }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}-${{ matrix.arch }}
-          tags: ${{ env.IMAGE }}:build-${{ github.run_id }}-${{ matrix.arch }}
-          push: true
-
-  merge:
-    name: merge manifest list
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    outputs:
-      digest: ${{ steps.manifest.outputs.digest }}
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute tags
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           tags: ${{ inputs.metadata-tags }}
 
-      - name: Create manifest list and push
-        run: |
-          set -euo pipefail
-          sources="${{ env.IMAGE }}:build-${{ github.run_id }}-amd64 ${{ env.IMAGE }}:build-${{ github.run_id }}-arm64"
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $sources
-
-      - name: Inspect pushed manifest list
-        id: manifest
-        run: |
-          set -euo pipefail
-          primary="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
-          docker buildx imagetools inspect "$primary"
-          digest=$(docker buildx imagetools inspect "$primary" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          if [ -z "$digest" ]; then
-            echo "::error::could not read the merged manifest digest"
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.manifest.outputs.digest }}
-          push-to-registry: true
+          context: ${{ inputs.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ inputs.image-name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}
+          sbom: true
+          provenance: mode=max
 
       - name: Prepare SBOM directory
         run: mkdir -p /tmp/sbom
@@ -132,7 +77,7 @@ jobs:
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
+          image: ${{ env.IMAGE }}:${{ fromJSON(steps.meta.outputs.json).tags[0] }}
           format: spdx-json
           artifact-name: ${{ inputs.image-name }}.spdx.json
           output-file: /tmp/sbom/${{ inputs.image-name }}.spdx.json
@@ -140,18 +85,10 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
+          image: ${{ env.IMAGE }}:${{ fromJSON(steps.meta.outputs.json).tags[0] }}
           format: cyclonedx-json
           artifact-name: ${{ inputs.image-name }}.cdx.json
           output-file: /tmp/sbom/${{ inputs.image-name }}.cdx.json
-
-      - name: Attest SBOM
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.manifest.outputs.digest }}
-          sbom-path: /tmp/sbom/${{ inputs.image-name }}.spdx.json
-          push-to-registry: true
 
       - name: Upload SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
