@@ -130,8 +130,9 @@ when replicaCount > 1.
 {{- end -}}
 
 {{/*
-Comma-separated replication peer URLs in ordinal order. When replication TLS
-is enabled, use LDAPS so syncrepl cannot silently fall back to plaintext.
+Comma-separated replication peer URLs in ordinal order. When server TLS is
+enabled, replication is also forced over LDAPS so the chart cannot advertise
+TLS for clients while silently using plaintext for syncrepl.
 */}}
 {{- define "ldapium.replicationPeers" -}}
 {{- $fullname := include "ldapium.fullname" . -}}
@@ -141,7 +142,7 @@ is enabled, use LDAPS so syncrepl cannot silently fall back to plaintext.
 {{- $count := int .Values.replicaCount -}}
 {{- $scheme := "ldap" -}}
 {{- $port := 389 -}}
-{{- if .Values.replication.tls.enabled -}}
+{{- if .Values.tls.enabled -}}
 {{- $scheme = "ldaps" -}}
 {{- $port = 636 -}}
 {{- end -}}
