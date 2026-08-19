@@ -1,0 +1,82 @@
+name: Metrics E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - ".github/workflows/metrics-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: metrics
+
+      - name: Load image
+        run: kind load docker-image ldapium:e2e --name metrics
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install LDAPium with metrics
+        run: |
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='metrics-e2e-password' \
+            --set ui.enabled=false \
+            --set metrics.enabled=true \
+            --wait --timeout 5m
+
+      - name: Wait for metrics endpoint
+        run: |
+          set -euo pipefail
+          kubectl -n directory run metrics-client --rm -i --restart=Never --image=curlimages/curl:8.16.0 -- \
+            sh -ec 'until curl -fsS http://directory-ldapium-metrics.directory.svc.cluster.local:9330/metrics | grep -q "openldap_scrape"; do sleep 2; done'
+
+      - name: Verify core metrics
+        run: |
+          set -euo pipefail
+          kubectl -n directory run metrics-client --rm -i --restart=Never --image=curlimages/curl:8.16.0 -- \
+            sh -ec 'curl -fsS http://directory-ldapium-metrics.directory.svc.cluster.local:9330/metrics | grep -E "openldap_(scrape|bind|dial|monitor_counter_object|monitored_object)"'
+
+      - name: Verify Helm rendering
+        run: |
+          helm template directory charts/ldapium \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='metrics-e2e-password' \
+            --set metrics.enabled=true > /tmp/rendered.yaml
+          grep -q 'name: directory-ldapium-metrics' /tmp/rendered.yaml
+          grep -q 'containerPort: 9330' /tmp/rendered.yaml
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide || true
+          kubectl -n directory get svc || true
+          kubectl -n directory describe pods || true
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -80 || true
+          kubectl -n directory logs statefulset/directory-ldapium -c metrics --tail=300 || true
+
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
