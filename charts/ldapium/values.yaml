@@ -1,1 +1,450 @@
-# RESTORE BASELINE
+# Default values for ldapium.
+# Every env var this chart sets maps 1:1 to image/entrypoint.sh (server) or
+# ui/backend/internal/config/config.go (UI) — see charts/ldapium/README.md
+# for the full mapping.
+
+# -- Number of server replicas. StatefulSet only (no Deployment variant).
+#    >1 enables multi-provider replication by default; see replication.enabled
+#    to override that inference explicitly.
+replicaCount: 1
+
+image:
+  # -- Server image repository. Must match what
+  #    .github/workflows/release.yml publishes.
+  repository: ghcr.io/dasomel/ldapium
+  # -- Defaults to .Chart.Version when empty — the chart and its images are
+  #    released together under the same vX.Y.Z tag. Set this to pin an image
+  #    independently of the chart. It is NOT the OpenLDAP version; that is
+  #    .Chart.AppVersion, which the UI reports but never pulls.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+ldap:
+  # -- Root DN of the directory, e.g. dc=example,dc=org. The placeholder
+  #    below is only good for `helm template`/smoke-testing — override for
+  #    any real install. Must start with "dc=" (entrypoint.sh enforces this).
+  rootDN: dc=example,dc=org
+  # -- Optional: LDAP_ORG_NAME. Defaults (in the image) to the first RDN
+  #    value of rootDN when unset.
+  orgName: ""
+  # -- Optional: LDAP_ADMIN_DN. Defaults (in the image) to cn=admin,<rootDN>.
+  #    Must use "cn=" as its RDN if set.
+  adminDN: ""
+  # -- LDAP_DB_MAX_SIZE: mdb's olcDbMaxSize, in BYTES. Empty means "derive it
+  #    from persistence.data.size", which is almost always what you want.
+  #    A map larger than the filesystem behind it buys nothing, which is the
+  #    only reason to derive it. It is NOT what makes slapd's RSS large —
+  #    measured, changing it from 10 GiB to 2 GiB moved RSS by under 1 MiB;
+  #    see maxOpenFiles below for what actually does. Applied at first
+  #    bootstrap only (it lives in cn=config).
+  dbMaxSize: ""
+  # -- LDAP_MAX_OPEN_FILES: cap on slapd's file-descriptor limit, and thus on
+  #    the connection table it reserves at startup (~680 bytes per fd). The
+  #    runtime's default of 1048576 costs ~680 MiB of resident memory for
+  #    nothing. Raise this only if you genuinely expect more than 4096
+  #    concurrent LDAP connections, and raise resources.limits.memory with it.
+  maxOpenFiles: 4096
+  # -- LDAP_LOG_LEVEL. "stats" matches the image default.
+  logLevel: stats
+  # -- Password hash scheme for cleartext password changes. The default is
+  # Argon2, provided by the image's loaded argon2 module.
+  passwordHash: "{ARGON2}"
+  # -- Attributes enforced by the unique overlay. Set empty to omit that
+  # overlay at first bootstrap.
+  uniqueAttributes: "uid,mail"
+  # -- Enables the default ppolicy entry (lockout, history, and safe modify).
+  passwordPolicyEnabled: true
+
+auth:
+  # -- Admin password, injected via a chart-created Secret (secretKeyRef,
+  #    never a plaintext env var). Leave empty and use existingSecret
+  #    instead for anything beyond local smoke-testing.
+  #
+  #    There is intentionally NO default here: image/entrypoint.sh refuses to
+  #    start without LDAP_ADMIN_PASSWORD, and this chart enforces the same
+  #    rule at render time — `helm template`/`install` fails loudly if
+  #    neither adminPassword nor existingSecret is set, rather than silently
+  #    shipping a default credential.
+  adminPassword: ""
+  # -- Name of a pre-existing Secret to source the admin password from
+  #    instead of adminPassword. Takes precedence when set.
+  existingSecret: ""
+  # -- Key within existingSecret (or the chart-created Secret) holding the
+  #    password.
+  existingSecretKey: admin-password
+
+tls:
+  # -- UNVERIFIED PATH: as of 0.1.0 the TLS path (server certificates and
+  #    TLS-protected replication) has not been exercised end-to-end against a
+  #    running cluster. The templates render and the entrypoint handles it,
+  #    but nobody has watched it work. Validate it yourself before relying on
+  #    it, and please report what you find.
+  enabled: false
+  # -- Secret containing the TLS material, mounted read-only at /etc/openldap/tls.
+  #    Expected keys match the standard kubernetes.io/tls Secret shape
+  #    (tls.crt / tls.key), plus an optional ca.crt.
+  existingSecret: ""
+  certFile: /etc/openldap/tls/tls.crt
+  keyFile: /etc/openldap/tls/tls.key
+  # -- Set to a path (e.g. /etc/openldap/tls/ca.crt) to also set LDAP_TLS_CA_FILE.
+  caFile: ""
+
+replication:
+  # -- Leave unset (commented out) to auto-enable replication when
+  #    replicaCount > 1. Set explicitly to force it on or off regardless of
+  #    replicaCount.
+  # enabled: true
+  # -- Used to build peer FQDNs: <fullname>-<i>.<fullname>-headless.<ns>.svc.<clusterDomain>.
+  #    CONTRACT: LDAP_REPLICATION_PEERS (rendered by templates/_helpers.tpl's
+  #    ldapium.replicationPeers) MUST stay pod-ordinal ascending (0..N-1),
+  #    dense, self included — the image looks up its own entry by
+  #    LDAP_SERVER_ID - 1, not by matching its own URL. Do not "clean up"
+  #    that ordering; see the comment on ldapium.replicationPeers.
+  clusterDomain: cluster.local
+  # -- olcSyncrepl retry= value.
+  retry: "5 10 30 +"
+  # -- olcSyncrepl interval= value.
+  interval: "00:00:00:10"
+  # -- Optional override of the replication bind DN. Defaults (in the image)
+  #    to LDAP_ADMIN_DN — deliberately, since the ACLs deny userPassword
+  #    reads to any other identity (see REPLICATION-CONTRACT.md D3).
+  bindDN: ""
+  # -- Optional Secret to source LDAP_REPLICATION_PASSWORD from, only needed
+  #    if bindDN above points at an identity other than the admin DN.
+  existingSecret: ""
+  existingSecretKey: replication-password
+
+seed:
+  # -- Mounts values below as a ConfigMap at LDAP_SEED_DIR (/opt/ldifs),
+  #    applied by the image on first boot only. Off by default — this
+  #    project ships no sample data on principle (see README.md).
+  enabled: false
+  # -- Map of filename -> LDIF content, e.g.:
+  #    ldifs:
+  #      10-ou-people.ldif: |
+  #        dn: ou=people,dc=example,dc=org
+  #        objectClass: organizationalUnit
+  #        ou: people
+  ldifs: {}
+
+# `helm test <release>` — see charts/ldapium/files/tests/directory-test.sh.
+#
+# Deliberately chart-side, not image-side: the server image ships a directory
+# server and nothing else, so what gets tested and whether it runs at all is
+# decided at install time rather than baked into the artifact. The image is
+# reused only as an LDAP client, exactly as the backup CronJob does.
+tests:
+  # -- Render the test hook. `helm test` is never run automatically, so this
+  #    only controls whether the manifests exist at all.
+  enabled: true
+  # -- Create a scratch OU/user/group under the root DN, assert the memberof
+  #    overlay populated memberOf, and (when replicated) that the entry
+  #    reaches every peer — then delete them again. Set false to run only the
+  #    read-only checks against a directory you would rather nothing wrote to.
+  write: true
+  # -- Budget for each wait: the server answering, and replication
+  #    converging on each peer.
+  timeoutSeconds: 60
+  resources: {}
+  podSecurityContext:
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+
+persistence:
+  config:
+    size: 1Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+  data:
+    size: 2Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    # -- No cpu limit by default: LDAP is not cpu-bound, and a cpu limit
+    #    mainly risks throttling syncrepl catch-up.
+    # -- 512Mi OOMKilled (exit 137) on a real cluster before the image began
+    #    lowering RLIMIT_NOFILE. The cause was not the database: slapd sizes
+    #    its connection table from the fd limit at startup, ~680 bytes per
+    #    fd, and container runtimes default to 1048576 fds — ~680 MiB
+    #    reserved before serving a request. image/entrypoint.sh now caps that
+    #    (LDAP_MAX_OPEN_FILES, default 4096), which drops an idle server to
+    #    tens of MiB, so 256Mi is comfortable. Raise it with the directory
+    #    size and with ldap.maxOpenFiles, not with persistence.data.size.
+    memory: 256Mi
+
+# Pod-level securityContext. fsGroup is needed so the PVC-backed
+# config/data directories are group-writable by the image's non-root user —
+# the image runs as uid 999 (verified by running `id` inside the built
+# image, and pinned by `USER 999:999` in image/Dockerfile), so 999 is used
+# here too. fsGroup works by adding this
+# GID as a supplemental group at the kubelet level, so it doesn't actually
+# depend on /etc/passwd inside the image matching — but 999 is kept in sync
+# with the image's real uid for clarity.
+podSecurityContext:
+  fsGroup: 999
+  fsGroupChangePolicy: OnRootMismatch
+
+# Container-level securityContext.
+securityContext:
+  runAsNonRoot: true
+  # runAsUser/runAsGroup must be set explicitly, and numerically. runAsNonRoot
+  # alone is not enough: the kubelet has to prove the user isn't root before
+  # starting the container, and it cannot do that from a name. Deploying with
+  # only runAsNonRoot against an image whose Dockerfile said `USER ldap`
+  # failed on a real cluster with:
+  #   container has runAsNonRoot and image has non-numeric user (ldap),
+  #   cannot verify user is non-root
+  # (The image's Dockerfile now also declares 999:999 numerically, so this is
+  # belt-and-braces — but keep it, since it's what makes the chart work
+  # against any build of the image.)
+  runAsUser: 999
+  runAsGroup: 999
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  # -- entrypoint.sh only writes under the two PVC mounts (both writable),
+  #    /tmp (mktemp, both at bootstrap and at every replication reconcile),
+  #    and RUN_DIR (/var/lib/openldap/run — pidfile/argsfile/ldapi socket,
+  #    not a PVC). Both /tmp and RUN_DIR get their own emptyDir mounts (see
+  #    templates/statefulset.yaml), which is what makes this safe to enable.
+  readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  ldapPort: 389
+  ldapsPort: 636
+
+pdb:
+  # -- Only actually rendered when replicaCount > 1.
+  enabled: true
+  minAvailable: 1
+
+backup:
+  # -- Replication is NOT backup. A bad delete (or a bad ACL, or an attacker)
+  #    propagates to every replica within seconds via multi-provider
+  #    syncrepl — there is no "the other node still has it" safety net.
+  #    This CronJob is the only thing in this chart that protects against
+  #    that class of loss. Off by default; turn it on for anything you would
+  #    be upset to lose. See README.md's Restore section before you need it.
+  enabled: false
+  # -- Standard cron syntax, evaluated in the cluster's local time (usually
+  #    UTC). Default: daily at 02:00.
+  schedule: "0 2 * * *"
+  # -- Backup files older than this many days are deleted, at the END of
+  #    each successful run (so a run that fails never deletes the last known
+  #    good backup, and the count on the PVC always matches this number).
+  retentionDays: 7
+  # -- CronJob concurrencyPolicy. Forbid, not Allow: the backup PVC has a
+  #    single writer by design, and two overlapping runs would race on the
+  #    same timestamp-prefixed files for no benefit.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # -- Job-level backoffLimit — caps retries of a wedged/misconfigured job
+  #    instead of letting Kubernetes retry it indefinitely.
+  backoffLimit: 2
+  # -- Kills a stuck run instead of letting it hold the (Forbid-policy) slot
+  #    forever and block every future scheduled run.
+  activeDeadlineSeconds: 3600
+  # -- After a successful backup, record it under ou=operations in the
+  #    directory itself (cn=backup, timestamp + entry counts + filenames as
+  #    multi-valued `description: key=value` — see README.md). This is how
+  #    the management UI shows "last backup" without ever talking to
+  #    Kubernetes or holding a ServiceAccount: it just reads the entry over
+  #    its own bound LDAP connection like anything else it displays. A
+  #    failure to record never fails the backup Job itself. Set false to
+  #    keep the directory free of anything but user/group data — the backup
+  #    still runs and still prunes, it just isn't visible from the UI.
+  recordToDirectory: true
+  persistence:
+    size: 5Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+  # Same reasoning as the top-level podSecurityContext/securityContext: the
+  # image runs as uid/gid 999, and runAsNonRoot needs that spelled out
+  # numerically (see the comment on the top-level securityContext for the
+  # "named USER gets rejected by the kubelet" failure this avoids).
+  podSecurityContext:
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    # Safe because the backup container only ever writes under the backup
+    # PVC (/backup) and /tmp, both given their own volumes below — same
+    # pattern as the server StatefulSet.
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+
+# -- Only actually rendered when replicaCount > 1 and this list is empty (a
+#    sane default spread across nodes is injected in that case). Set
+#    explicitly to override.
+topologySpreadConstraints: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# First boot runs slapadd (+ optional seeding) before the ldapi socket
+# exists at all, so startupProbe needs generous slack; liveness/readiness
+# only take over once startup succeeds.
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 60
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Optional management UI (ui/). Off by default.
+ui:
+  enabled: false
+
+  image:
+    repository: ghcr.io/dasomel/ldapium-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  podAnnotations: {}
+  podLabels: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  ldap:
+    # -- LDAP_URL. Defaults to this release's own server Service
+    #    (ldap://<fullname>.<ns>.svc.<clusterDomain>:389, or ldaps:// on 636
+    #    when tls.enabled) when left empty.
+    url: ""
+    # -- LDAP_BASE_DN. Defaults to ldap.rootDN when left empty.
+    baseDN: ""
+    userSearchBase: ""
+    # -- LDAP_USER_SEARCH_FILTER. Empty means DN-only login (config.go's
+    #    default): users must type "uid=alice,dc=example,dc=org" instead of
+    #    "alice", and every bare-uid login is rejected with HTTP 400.
+    #    "(uid=%s)" is the default here because the server shipped in this
+    #    same chart is built for exactly this flow — its baseline ACL grants
+    #    anonymous read on entry/uid/objectClass and nothing else, purely so
+    #    the UI can resolve a uid to a DN before binding as that user.
+    #    Leaving it empty ships a UI that cannot log in to the directory it
+    #    is paired with. The uid is escaped before substitution.
+    userSearchFilter: "(uid=%s)"
+    groupSearchBase: ""
+    userCreateBase: ""
+    groupCreateBase: ""
+    startTLS: false
+    tlsCACert: ""
+    tlsInsecureSkipVerify: false
+
+  session:
+    # -- Secret to source SESSION_SECRET from. When empty, the chart
+    #    generates a random 48-byte value and reuses it across upgrades
+    #    (via `lookup`, so this only holds on a live cluster — `helm
+    #    template` alone regenerates it every render).
+    existingSecret: ""
+    existingSecretKey: session-secret
+    ttl: 30m
+    # -- COOKIE_SECURE. Disable only for local HTTP development.
+    cookieSecure: true
+
+  # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
+  # Enabling SSO makes the UI SSO-only: LDAP passwords are never accepted by
+  # the UI login endpoint. This chart configures a confidential OIDC client;
+  # its client secret and the LDAP service-account credentials must come from
+  # existing Kubernetes Secrets.
+  sso:
+    enabled: false
+    # -- Keycloak realm issuer. The Beluga realm issuer is shown here; change
+    # it only when deploying the UI against a different realm.
+    issuerURL: "https://sso.example.com/realms/example"
+    # -- OIDC client ID. Required when enabled.
+    clientID: ""
+    # -- Realm role required to administer the UI.
+    adminRole: ldap-admin
+    # -- Existing Secret with the confidential OIDC client's secret. Required
+    # when SSO is enabled; this chart never creates or prints it.
+    existingSecret: ""
+    existingSecretKey: oidc-client-secret
+    # -- Browser origins allowed to derive the OIDC callback URI. Required
+    # when enabled. Include each externally reachable UI origin, for example:
+    #   - http://127.0.0.1:5173
+    #   - http://127.0.0.1:8080
+    # Keycloak must register <origin>/api/sso/callback for every entry.
+    callbackOrigins: []
+
+  # -- Dedicated LDAP service account used only after a Keycloak user passes
+  # the ldap-admin role gate. Required when ui.sso.enabled. The secret must
+  # contain both the service-account DN and password; do not reuse
+  # auth.adminPassword as this identity.
+  ldapServiceAccount:
+    existingSecret: ""
+    dnKey: ldap-service-account-dn
+    passwordKey: ldap-service-account-password
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    # Example:
+    # hosts:
+    #   - host: ldap-ui.example.com
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    tls: []
