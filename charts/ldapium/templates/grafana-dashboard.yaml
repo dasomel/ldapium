@@ -1,0 +1,48 @@
+{{- if and .Values.metrics .Values.metrics.enabled .Values.metrics.grafanaDashboard .Values.metrics.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ldapium.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "ldapium.labels" . | nindent 4 }}
+data:
+  ldapium-overview.json: |
+    {
+      "title": "LDAPium Overview",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "stat",
+          "title": "LDAP Scrape",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "targets": [{"expr": "openldap_scrape", "refId": "A"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "Replication Delta",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [{"expr": "openldap_replication_delta", "refId": "A"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "OpenLDAP Monitor Counters",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "targets": [{"expr": "openldap_monitor_counter_object", "refId": "A"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "MDB Pages",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [
+            {"expr": "openldap_pages_used", "refId": "A"},
+            {"expr": "openldap_pages_free", "refId": "B"},
+            {"expr": "openldap_pages_max", "refId": "C"}
+          ]
+        }
+      ]
+    }
+{{- end }}
