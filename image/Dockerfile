@@ -131,6 +131,12 @@ RUN mkdir -p /etc/openldap/slapd.d /var/lib/openldap/data /var/lib/openldap/run 
 
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV LDAP_SEED_DIR=/opt/ldifs
+# OpenLDAP client defaults used by syncrepl and the ldap* utilities.
+# When the chart enables TLS, the mounted CA is available at this path and
+# certificate verification is fail-closed. Plain LDAP replication is still
+# selected by the chart only when TLS is disabled.
+ENV LDAPTLS_REQCERT=demand
+ENV LDAPTLS_CACERT=/etc/openldap/tls/ca.crt
 
 # Numeric, not `USER ldap`. Kubernetes' runAsNonRoot check refuses to start a
 # container whose image declares a NAMED user, because the kubelet cannot
