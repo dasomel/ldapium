@@ -86,21 +86,69 @@ jobs:
             '
 
       - name: Wait for failed provider to rejoin
-        run: kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-1 --timeout=300s
+        run: |
+          start=$(date +%s)
+          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-1 --timeout=300s
+          elapsed=$(( $(date +%s) - start ))
+          echo "single-provider recovery seconds=${elapsed}" | tee /tmp/chaos-evidence.txt
+          test "$elapsed" -le 300
 
       - name: Verify convergence on all three providers
         run: |
           set -euo pipefail
+          start=$(date +%s)
           for pod in directory-ldapium-0 directory-ldapium-1 directory-ldapium-2; do
             kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
               sh -ec "ldapsearch -x -H ldap://${pod}:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=chaos-*)' uid | grep -c '^uid: chaos-' | grep -q 5"
           done
+          elapsed=$(( $(date +%s) - start ))
+          echo "single-provider convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
+          test "$elapsed" -le 300
+
+      - name: Sequentially fail a second provider
+        run: |
+          kubectl -n directory delete pod directory-ldapium-2 --wait=true
+          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-0 --timeout=180s
+
+      - name: Continue writes with only one provider available
+        run: |
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+            sh -ec '
+              for i in 6 7 8; do
+                ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
+              dn: uid=sequential-${i},ou=chaos,dc=example,dc=org
+              objectClass: inetOrgPerson
+              uid: sequential-${i}
+              cn: Sequential ${i}
+              sn: Test
+              EOF
+              done
+            '
+
+      - name: Recover second provider and converge
+        run: |
+          start=$(date +%s)
+          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-2 --timeout=300s
+          for pod in directory-ldapium-0 directory-ldapium-1 directory-ldapium-2; do
+            kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+              sh -ec "ldapsearch -x -H ldap://${pod}:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=sequential-*)' uid | grep -c '^uid: sequential-' | grep -q 3"
+          done
+          elapsed=$(( $(date +%s) - start ))
+          echo "two-node-sequential recovery+convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
+          test "$elapsed" -le 300
 
       - name: Verify replication metadata
         run: |
           set -euo pipefail
           kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
             sh -ec 'ldapsearch -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password -b dc=example,dc=org -s base contextCSN | grep -q contextCSN'
+
+      - name: Upload chaos evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: replication-chaos-evidence
+          path: /tmp/chaos-evidence.txt
+          if-no-files-found: error
 
       - name: Diagnostics
         if: failure()
