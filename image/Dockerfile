@@ -65,8 +65,12 @@ FROM golang:1.26-bookworm AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux
-RUN go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION} \
-    && case "${TARGETARCH}" in amd64) arch=amd64 ;; arm64) arch=arm64 ;; *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; esac \
+RUN case "${TARGETARCH}" in \
+      amd64) export GOARCH=amd64 ;; \
+      arm64) export GOARCH=arm64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION} \
     && test -x "$(go env GOPATH)/bin/openldap-exporter"
 
 FROM debian:trixie-slim AS runtime
