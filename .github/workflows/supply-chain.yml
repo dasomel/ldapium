@@ -1,0 +1,147 @@
+name: Supply-chain evidence
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to inspect, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  evidence:
+    name: Verify release supply chain
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+      }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.workflow_run.head_branch }}
+
+      - name: Determine release identity
+        id: identity
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_TAG: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+            sha="$(git rev-list -n1 "$tag")"
+          else
+            tag="$WORKFLOW_TAG"
+            sha="$WORKFLOW_SHA"
+          fi
+          version="${tag#v}"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Install inspection tools
+        run: |
+          set -euo pipefail
+          docker version
+          docker buildx version
+
+      - name: Verify image manifests and digests
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/evidence
+          for image in ldapium ldapium-ui; do
+            ref="ghcr.io/${{ github.repository_owner }}/${image}:${VERSION}"
+            docker buildx imagetools inspect "$ref" | tee "/tmp/evidence/${image}-manifest.txt"
+            docker buildx imagetools inspect "$ref" --format '{{json .}}' > "/tmp/evidence/${image}-manifest.json"
+            grep -q 'linux/amd64' "/tmp/evidence/${image}-manifest.txt"
+            grep -q 'linux/arm64' "/tmp/evidence/${image}-manifest.txt"
+          done
+
+      - name: Verify Helm OCI chart
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/ldapium" --version "$VERSION" \
+            > /tmp/evidence/chart.yaml
+          grep -q "^version: $VERSION$" /tmp/evidence/chart.yaml
+          helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/ldapium" --version "$VERSION" --output json \
+            > /tmp/evidence/chart.json
+
+      - name: Verify dependency/license gate
+        run: ./scripts/licenses.sh --check
+
+      - name: Verify chart rendering and version contract
+        run: |
+          set -euo pipefail
+          ./scripts/check-versions.sh
+          helm lint charts/ldapium
+          helm template evidence charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret >/tmp/evidence/chart-render.yaml
+
+      - name: Generate evidence manifest
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          SHA: ${{ steps.identity.outputs.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+
+          root = pathlib.Path('/tmp/evidence')
+          files = {}
+          for path in sorted(root.rglob('*')):
+              if path.is_file():
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  files[str(path.relative_to(root))] = digest
+
+          manifest = {
+              'schemaVersion': 'ldapium.supply-chain/v1',
+              'repository': os.environ.get('GITHUB_REPOSITORY'),
+              'releaseTag': os.environ['TAG'],
+              'version': os.environ['VERSION'],
+              'sourceCommit': os.environ['SHA'],
+              'verificationWorkflowRun': os.environ['RUN_ID'],
+              'artifacts': {
+                  'serverImage': f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/ldapium:{os.environ['VERSION']}",
+                  'uiImage': f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/ldapium-ui:{os.environ['VERSION']}",
+                  'helmChart': f"oci://ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/charts/ldapium:{os.environ['VERSION']}",
+              },
+              'evidenceFilesSha256': files,
+          }
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          (root / 'SHA256SUMS').write_text(
+              ''.join(f"{digest}  {name}\n" for name, digest in sorted(files.items())),
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Upload evidence bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-evidence-${{ steps.identity.outputs.tag }}
+          path: /tmp/evidence/
+          if-no-files-found: error
