@@ -1,0 +1,172 @@
+name: Upgrade and rollback E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - ".github/workflows/upgrade-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: rolling upgrade + rollback (${{ matrix.scenario }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: standalone
+            replicas: 1
+          - scenario: replicated
+            replicas: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: e2e
+
+      - name: Load image
+        run: kind load docker-image ldapium:e2e --name e2e
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install baseline release
+        run: |
+          set -euo pipefail
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='upgrade-e2e-password' \
+            --set ui.enabled=false \
+            --set replicaCount=${{ matrix.replicas }} \
+            --wait --timeout 5m
+          helm test directory --namespace directory --logs
+
+      - name: Seed upgrade canary data
+        run: |
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapadd -x -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "upgrade-e2e-password" <<EOF
+          dn: uid=upgrade-e2e,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: upgrade-e2e
+          cn: upgrade e2e
+          sn: e2e
+          mail: upgrade-e2e@example.org
+          EOF'
+
+          if [ "${{ matrix.replicas }}" -ge 2 ]; then
+            for ordinal in 1 2; do
+              kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+                "i=0; until ldapsearch -x -LLL -H \"ldap://directory-ldapium-${ordinal}.directory-ldapium-headless.directory.svc.cluster.local:389\" -D \"cn=admin,dc=example,dc=org\" -w \"upgrade-e2e-password\" -b \"uid=upgrade-e2e,dc=example,dc=org\" -s base dn >/dev/null 2>&1; do i=\$((i+1)); [ \"\$i\" -lt 30 ] || exit 1; sleep 2; done"
+            done
+          fi
+
+      - name: Capture pre-upgrade evidence
+        run: |
+          mkdir -p /tmp/upgrade-evidence
+          date -u +%FT%TZ > /tmp/upgrade-evidence/start.txt
+          helm history directory -n directory > /tmp/upgrade-evidence/helm-history-before.txt
+
+      - name: Rolling upgrade
+        run: |
+          set -euo pipefail
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          helm upgrade directory charts/ldapium \
+            --namespace directory \
+            --reuse-values \
+            --set-string podAnnotations.upgrade-test="$stamp" \
+            --wait --timeout 5m
+          date -u +%FT%TZ > /tmp/upgrade-evidence/rolling-upgrade-complete.txt
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
+          kubectl -n directory get pods -o wide > /tmp/upgrade-evidence/pods-after-upgrade.txt
+
+      - name: Verify data survived upgrade
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -LLL -H 'ldap://localhost:389' \
+            -D 'cn=admin,dc=example,dc=org' -w 'upgrade-e2e-password' \
+            -b 'uid=upgrade-e2e,dc=example,dc=org' -s base uid mail \
+            | tee /tmp/upgrade-evidence/data-after-upgrade.txt
+          grep -q '^uid: upgrade-e2e$' /tmp/upgrade-evidence/data-after-upgrade.txt
+          grep -q '^mail: upgrade-e2e@example.org$' /tmp/upgrade-evidence/data-after-upgrade.txt
+
+      - name: Attempt failed upgrade
+        id: failed_upgrade
+        continue-on-error: true
+        run: |
+          set +e
+          helm upgrade directory charts/ldapium \
+            --namespace directory \
+            --reuse-values \
+            --set image.tag=this-image-must-not-exist \
+            --set image.pullPolicy=Always \
+            --wait --timeout 30s > /tmp/upgrade-evidence/failed-upgrade.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/upgrade-evidence/failed-upgrade.log
+          test "$rc" -ne 0
+          echo "expected failed upgrade rc=$rc"
+
+      - name: Verify failed rollout is visible
+        run: |
+          kubectl -n directory get pods -o wide > /tmp/upgrade-evidence/pods-failed-upgrade.txt
+          grep -q 'this-image-must-not-exist' <(kubectl -n directory get statefulset directory-ldapium -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+      - name: Roll back to known-good revision
+        run: |
+          helm rollback directory 1 -n directory --wait --timeout 5m
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
+          helm history directory -n directory > /tmp/upgrade-evidence/helm-history-after-rollback.txt
+
+      - name: Verify rollback restored service and data
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -LLL -H 'ldap://localhost:389' \
+            -D 'cn=admin,dc=example,dc=org' -w 'upgrade-e2e-password' \
+            -b 'uid=upgrade-e2e,dc=example,dc=org' -s base uid mail \
+            | tee /tmp/upgrade-evidence/data-after-rollback.txt
+          grep -q '^uid: upgrade-e2e$' /tmp/upgrade-evidence/data-after-rollback.txt
+          grep -q '^mail: upgrade-e2e@example.org$' /tmp/upgrade-evidence/data-after-rollback.txt
+          kubectl -n directory get pods -o wide
+
+      - name: Upload upgrade evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upgrade-evidence-${{ matrix.scenario }}
+          path: /tmp/upgrade-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide || true
+          kubectl -n directory describe pods || true
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -80 || true
+          for pod in $(kubectl -n directory get pods -o name 2>/dev/null); do
+            echo "::group::logs $pod"
+            kubectl -n directory logs "$pod" --all-containers --tail=300 || true
+            echo "::endgroup::"
+          done
+
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
