@@ -108,6 +108,33 @@ jobs:
             --set replicaCount=3 \
             --set ui.enabled=true
 
+      # TLS is off by default and unverified at runtime (see values.yaml), so
+      # nothing else here would notice it stopped rendering. Rendering is not
+      # working, but a template that does not even produce manifests cannot
+      # be debugged by whoever first tries to turn it on.
+      - name: Render with TLS enabled
+        run: |
+          rendered=$(helm template t charts/openldap \
+            --set auth.adminPassword=ci-render-only-not-a-secret \
+            --set tls.enabled=true \
+            --set tls.existingSecret=ci-tls \
+            --set replicaCount=3)
+          # Asserted on what the chart actually emits. It never writes an
+          # "ldaps://" URL: the entrypoint appends that listener itself when
+          # LDAP_TLS_ENABLED is set (image/entrypoint.sh, LISTEN_URLS), and
+          # plain ldap:// stays alongside it — which is why the backup CronJob
+          # and the helm test can keep using ldap:// with TLS on.
+          for expected in \
+            "name: LDAP_TLS_ENABLED" \
+            "containerPort: 636" \
+            "/etc/openldap/tls"; do
+            if ! printf '%s' "$rendered" | grep -q "$expected"; then
+              echo "::error::tls.enabled=true rendered nothing matching '$expected'"
+              exit 1
+            fi
+          done
+          echo "TLS path renders: env, ldaps port and certificate mount all present"
+
       # The chart, both images and docker-compose.yml are all cut from one
       # git tag and each carries its own copy of the version.
       - name: Check version consistency
@@ -163,6 +190,9 @@ jobs:
       # checked against whatever each one asks for.
       - run: shellcheck -s sh image/entrypoint.sh
       - run: shellcheck scripts/*.sh
+      # The `helm test` script is a chart file, not an inline blob in a
+      # template, precisely so it can be linted here and run by hand.
+      - run: shellcheck charts/openldap/files/tests/*.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)

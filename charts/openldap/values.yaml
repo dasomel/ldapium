@@ -140,6 +140,39 @@ seed:
   #        ou: people
   ldifs: {}
 
+# `helm test <release>` — see charts/openldap/files/tests/directory-test.sh.
+#
+# Deliberately chart-side, not image-side: the server image ships a directory
+# server and nothing else, so what gets tested and whether it runs at all is
+# decided at install time rather than baked into the artifact. The image is
+# reused only as an LDAP client, exactly as the backup CronJob does.
+tests:
+  # -- Render the test hook. `helm test` is never run automatically, so this
+  #    only controls whether the manifests exist at all.
+  enabled: true
+  # -- Create a scratch OU/user/group under the root DN, assert the memberof
+  #    overlay populated memberOf, and (when replicated) that the entry
+  #    reaches every peer — then delete them again. Set false to run only the
+  #    read-only checks against a directory you would rather nothing wrote to.
+  write: true
+  # -- Budget for each wait: the server answering, and replication
+  #    converging on each peer.
+  timeoutSeconds: 60
+  resources: {}
+  podSecurityContext:
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+
 persistence:
   config:
     size: 1Gi

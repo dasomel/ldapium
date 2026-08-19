@@ -209,6 +209,38 @@ RP-initiated logout. Register `<origin>/login` as a valid post-logout
 redirect URI for every `ui.sso.callbackOrigins` entry. If Keycloak does not
 advertise an end-session endpoint, logout remains local-only.
 
+## Verifying an install
+
+```bash
+helm test <release> --namespace <ns>
+helm test <release> --logs        # print the report without kubectl
+```
+
+The hook runs `files/tests/directory-test.sh` in a pod built from the server
+image — used only as an LDAP client, the same way the backup CronJob uses it.
+Nothing test-related exists inside the image itself, so what is checked, and
+whether the manifests exist at all (`tests.enabled`), is decided at install
+time.
+
+What it checks:
+
+| Check | Catches |
+|---|---|
+| Anonymous root DSE search | Service/DNS wiring, server not listening |
+| Admin bind | Wrong or unsynchronised admin Secret |
+| Root DN exists | Bootstrap never completed |
+| Create OU + user + group, then delete | Admin identity cannot write |
+| `memberOf` appears on the test user | **The memberof overlay is not actually loaded** — slapd starts happily without it, so nothing else notices |
+| Entry reaches every peer (replicated installs) | Replication configured but not converging |
+
+The write checks create `ou=helm-test,<rootDN>` and remove it again, deleting
+any leftovers from an interrupted earlier run first. Against a directory you
+would rather nothing wrote to, `--set tests.write=false` leaves only the
+read-only checks.
+
+A failed test pod is deliberately **not** deleted — its log is the entire
+report. `helm test` again removes it before creating the next one.
+
 ## Backup / Restore
 
 `backup.enabled=true` renders a CronJob that dumps the directory over the

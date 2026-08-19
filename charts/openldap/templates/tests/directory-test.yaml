@@ -1,0 +1,118 @@
+{{- if .Values.tests.enabled }}
+{{- /*
+  `helm test <release>` runs the script in
+  charts/openldap/files/tests/directory-test.sh against the deployed
+  directory. The script is a chart file rather than an inline blob so it can
+  be shellcheck'd in CI and run by hand against any LDAP server — which is
+  how it was developed and how its failure modes were verified.
+
+  Two hooks, ordered by weight: the ConfigMap carrying the script has to
+  exist before the Pod that mounts it.
+
+  hook-delete-policy keeps a FAILED pod around (only before-hook-creation and
+  hook-succeeded are listed), because the pod's log is the entire test report.
+  Deleting it on failure would leave the operator with "test failed" and
+  nothing else.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openldap.fullname" . }}-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  directory-test.sh: |
+{{ .Files.Get "files/tests/directory-test.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "openldap.fullname" . }}-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    {{- toYaml .Values.tests.podSecurityContext | nindent 4 }}
+  containers:
+    - name: test
+      # The server image, used as an LDAP client — ldapsearch/ldapadd/
+      # ldapdelete are already in it. No test-only image to pull, and nothing
+      # test-related has to exist inside the product image.
+      image: {{ include "openldap.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext:
+        {{- toYaml .Values.tests.securityContext | nindent 8 }}
+      command: ["/bin/sh", "/etc/openldap-test/directory-test.sh"]
+      env:
+        - name: LDAP_URL
+          value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "openldap.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
+        - name: LDAP_ROOT_DN
+          value: {{ .Values.ldap.rootDN | quote }}
+        - name: LDAP_ADMIN_DN
+          value: {{ .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) | quote }}
+        - name: PASSWORD_FILE
+          value: /etc/openldap-test/admin-password
+        - name: TEST_WRITE
+          value: {{ ternary "1" "0" .Values.tests.write | quote }}
+        - name: TIMEOUT_SECONDS
+          value: {{ .Values.tests.timeoutSeconds | quote }}
+        {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+        # Per-pod addresses through the headless Service. The load-balanced
+        # Service above cannot answer "did this reach every node" — it would
+        # keep hitting whichever pod it chooses, so a replica that never
+        # converges would go unnoticed.
+        {{- $peers := list }}
+        {{- range $i := until (int .Values.replicaCount) }}
+        {{- $peers = append $peers (printf "ldap://%s-%d.%s.%s.svc.%s:%d" (include "openldap.fullname" $) $i (include "openldap.headlessName" $) $.Release.Namespace $.Values.replication.clusterDomain (int $.Values.service.ldapPort)) }}
+        {{- end }}
+        - name: REPLICA_URLS
+          value: {{ join " " $peers | quote }}
+        {{- end }}
+      volumeMounts:
+        - name: test
+          mountPath: /etc/openldap-test/directory-test.sh
+          subPath: directory-test.sh
+          readOnly: true
+        - name: admin-password
+          mountPath: /etc/openldap-test/admin-password
+          subPath: admin-password
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      resources:
+        {{- toYaml .Values.tests.resources | nindent 8 }}
+  volumes:
+    - name: test
+      configMap:
+        name: {{ include "openldap.fullname" . }}-test
+    # Mounted as a file and read with ldapsearch -y, never -w: an argument is
+    # visible in the process list. Same rule as the backup CronJob.
+    - name: admin-password
+      secret:
+        secretName: {{ include "openldap.adminSecretName" . }}
+        defaultMode: 0400
+        items:
+          - key: {{ .Values.auth.existingSecretKey }}
+            path: admin-password
+            mode: 0400
+    # readOnlyRootFilesystem: the shell needs somewhere writable for the
+    # here-document the test script feeds to ldapadd.
+    - name: tmp
+      emptyDir: {}
+{{- end }}

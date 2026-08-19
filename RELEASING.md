@@ -66,6 +66,20 @@ One git tag publishes everything. `v0.1.0` produces:
    The `imagetools inspect` output must list both `linux/amd64` and
    `linux/arm64`.
 
+8. **Install the published chart somewhere and test it**, rather than trusting
+   that a rendered template means a working release:
+
+   ```sh
+   helm install smoke oci://ghcr.io/dasomel/charts/openldap --version 0.1.0 \
+     --namespace smoke --create-namespace \
+     --set auth.adminPassword="$(openssl rand -base64 24)"
+   helm test smoke --namespace smoke --logs
+   helm uninstall smoke --namespace smoke && kubectl delete ns smoke
+   ```
+
+   `helm test` is what verifies the overlays are really loaded on the running
+   server — a missing overlay does not stop slapd from starting.
+
 ## Going public (once)
 
 Things no file in this repo can set. Do them before, or immediately after,

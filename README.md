@@ -10,10 +10,13 @@ being viable.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.14-informational)](https://www.openldap.org/)
 
-> **Status: 0.1.0, the first release.** It runs, and every claim in this README
-> was checked against something running — but this is a young project with one
-> maintainer. The TLS path is the one part still marked unverified; see
-> [CHANGELOG.md](CHANGELOG.md) for what that means in practice.
+> **Status: prototype.** Published early on purpose — the packaging is the
+> point of the project and it is easier to judge in the open. Every claim in
+> this README was checked against something actually running, but nothing here
+> has been run by anyone other than its author, and the TLS path has never
+> been exercised end to end. `helm test` (below) is there so you can check an
+> install rather than take this paragraph's word for it. See
+> [CHANGELOG.md](CHANGELOG.md) for the known gaps.
 
 ## Why this exists
 
@@ -82,6 +85,17 @@ Useful from there:
 --set ui.enabled=true     # the management UI
 --set backup.enabled=true # scheduled dumps of the data tree and cn=config
 ```
+
+Then check the install rather than assuming it:
+
+```bash
+helm test directory --namespace directory --logs
+```
+
+That binds as the admin, creates and deletes a scratch entry, and asserts the
+`memberof` overlay actually populated `memberOf` — on a replicated install it
+also waits for the entry to reach every pod. A directory server starts happily
+with an overlay missing, so this is the only check that notices.
 
 `charts/openldap/README.md` documents every value, the replication design, the
 backup/restore procedure, and the optional Keycloak SSO setup.

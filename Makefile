@@ -62,6 +62,7 @@ check: ## Run everything CI runs, in the same order
 	@./scripts/check-versions.sh
 	@shellcheck -s sh image/entrypoint.sh
 	@shellcheck scripts/*.sh
+	@shellcheck charts/openldap/files/tests/*.sh
 	@./scripts/licenses.sh --check
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree

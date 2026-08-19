@@ -1,0 +1,105 @@
+name: E2E (kind)
+
+# Installs the chart into a throwaway cluster and runs `helm test` against it.
+#
+# This is the only job that answers "does it work", as opposed to "does it
+# compile and render". A missing overlay, a bootstrap that never finishes, or
+# replication that is configured but never converges all produce a perfectly
+# healthy-looking slapd — ci.yml would pass on every one of them.
+#
+# Images are built locally and loaded into the kind node rather than pulled:
+# the chart under test must be exercised against the code in this commit, not
+# against whatever ghcr.io last published.
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - "ui/**"
+      - ".github/workflows/e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: install + helm test (${{ matrix.scenario }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The single-node path is what most people install. The replicated
+          # path is the one with real failure modes — serverID election,
+          # syncrepl peer wiring — and it is the reason `helm test` probes
+          # each pod individually rather than through the Service.
+          - scenario: standalone
+            values: --set replicaCount=1
+          - scenario: replicated
+            values: --set replicaCount=3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Single-arch and no registry: this image exists for the next four
+      # minutes only. The multi-arch, attested build lives in release.yml.
+      - name: Build server image
+        run: docker build -t openldap-suite:e2e image
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: e2e
+
+      - name: Load image into the cluster
+        run: kind load docker-image openldap-suite:e2e --name e2e
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      # --wait blocks until every pod is Ready, so a bootstrap that crash-loops
+      # fails here with a timeout rather than confusing the test that follows.
+      - name: Install chart
+        run: |
+          helm install directory charts/openldap \
+            --namespace directory --create-namespace \
+            --set image.repository=openldap-suite \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
+            ${{ matrix.values }} \
+            --wait --timeout 5m
+
+      - name: Run helm test
+        run: helm test directory --namespace directory --logs
+
+      # Everything below only runs when something failed, and exists because a
+      # red X with no context is a bad bug report — including one filed by CI
+      # against its own maintainer.
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide
+          kubectl -n directory describe pods
+          for pod in $(kubectl -n directory get pods -o name); do
+            echo "::group::logs $pod"
+            kubectl -n directory logs "$pod" --all-containers --tail=200 || true
+            echo "::endgroup::"
+          done
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -40
+
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true

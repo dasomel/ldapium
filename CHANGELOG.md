@@ -10,7 +10,10 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [0.1.0] — 2026-08-18
 
-First release.
+First release, and a prototype: everything below was verified against
+something running, but nothing has been run outside its author's environment.
+`helm test <release>` is shipped with the chart so an install can be checked
+rather than assumed.
 
 ### Server image (`ghcr.io/dasomel/openldap-suite`)
 
@@ -77,5 +80,9 @@ First release.
   `image/Dockerfile` by hand.
 - **No upgrade path is promised yet.** 0.1.0 is the first release; there is
   nothing to upgrade from.
+- **The e2e workflow has never run.** It installs the chart into a kind
+  cluster and runs `helm test`; the test script itself was developed against a
+  live directory and its failure modes verified, but the CI wiring around it
+  is new.
 
 [0.1.0]: https://github.com/dasomel/openldap-suite/releases/tag/v0.1.0
