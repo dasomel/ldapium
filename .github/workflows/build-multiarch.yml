@@ -26,6 +26,15 @@ on:
         required: true
         type: string
 
+# Top level is read-only. Every job that needs to write — pushing images or
+# a chart to GHCR, minting an attestation, creating a release — declares that
+# itself, so a job added later starts with no write access rather than
+# inheriting it silently. OpenSSF Scorecard flags the inherited form
+# (TokenPermissions), and it is right: a workflow-wide `packages: write` is
+# granted to steps that never publish anything, including third-party actions.
+permissions:
+  contents: read
+
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}
 

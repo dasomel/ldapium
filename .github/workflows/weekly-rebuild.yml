@@ -10,9 +10,14 @@ on:
     - cron: "0 4 * * 1" # Monday 04:00 UTC
   workflow_dispatch: {}
 
+# Top level is read-only. Every job that needs to write — pushing images or
+# a chart to GHCR, minting an attestation, creating a release — declares that
+# itself, so a job added later starts with no write access rather than
+# inheriting it silently. OpenSSF Scorecard flags the inherited form
+# (TokenPermissions), and it is right: a workflow-wide `packages: write` is
+# granted to steps that never publish anything, including third-party actions.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-server:
@@ -21,6 +26,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Same ceiling as release.yml — the weekly rebuild attests too.
+      id-token: write
+      attestations: write
     with:
       image-name: ldapium
       context: image
@@ -35,6 +43,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Same ceiling as release.yml — the weekly rebuild attests too.
+      id-token: write
+      attestations: write
     with:
       image-name: ldapium-ui
       context: ui

@@ -61,6 +61,31 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
+  govulncheck:
+    name: Go vulnerabilities (reachable)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      # This blocks, unlike the Trivy job above, because it reports on symbols
+      # this code actually reaches rather than on modules it merely requires.
+      # Both directions were worth having: Trivy flagged golang.org/x/crypto
+      # for an openpgp advisory nothing here calls, and missed six standard
+      # library vulnerabilities that this code does call. A red build here
+      # means a real, reachable vulnerability, and the fix is usually one line
+      # — raising the go directive in ui/backend/go.mod to the patch release
+      # that fixed it.
+      - name: govulncheck
+        working-directory: ui/backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   images:
     name: Published images
     # Only where a published image exists to scan: a pull request from a fork

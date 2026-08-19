@@ -64,6 +64,7 @@ check: ## Run everything CI runs, in the same order
 	@shellcheck scripts/*.sh
 	@shellcheck charts/ldapium/files/tests/*.sh
 	@./scripts/licenses.sh --check
+	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
 	@./scripts/licenses.sh
