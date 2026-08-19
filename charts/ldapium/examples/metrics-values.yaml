@@ -1,7 +1,7 @@
 # Optional Prometheus/OpenLDAP metrics profile.
 #
 # Enable the sidecar exporter and, when Prometheus Operator is installed,
-# create a ServiceMonitor automatically.
+# create a ServiceMonitor, alert rules, and an optional Grafana dashboard.
 metrics:
   enabled: true
   resources:
@@ -14,6 +14,12 @@ metrics:
     enabled: true
     interval: 30s
     scrapeTimeout: 10s
+  prometheusRule:
+    enabled: true
+    replicationLagThreshold: 30
+    replicationLagFor: 5m
+  grafanaDashboard:
+    enabled: true
 
 # For multi-provider deployments the exporter also reports contextCSN-based
 # replication deltas between the local provider and its peers.
