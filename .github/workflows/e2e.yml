@@ -37,29 +37,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
       - name: Build server image
         run: docker build -t ldapium:e2e image
-
       - name: Build UI image
         run: docker build -t ldapium-ui:e2e ui
-
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: e2e
-
       - name: Load images into the cluster
         run: |
           kind load docker-image ldapium:e2e --name e2e
           kind load docker-image ldapium-ui:e2e --name e2e
-
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
       - name: Install chart
         run: |
           helm install directory charts/ldapium \
@@ -67,6 +60,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
             --set ui.enabled=true \
             --set ui.image.repository=ldapium-ui \
@@ -74,10 +68,8 @@ jobs:
             --set ui.image.pullPolicy=Never \
             --set replicaCount=${{ matrix.replicas }} \
             --wait --timeout 5m
-
       - name: Run helm test
         run: helm test directory --namespace directory --logs
-
       - name: Diagnostics
         if: failure()
         run: |
@@ -89,7 +81,6 @@ jobs:
             echo "::endgroup::"
           done
           kubectl -n directory get events --sort-by=.lastTimestamp | tail -40
-
       - name: Uninstall
         if: always()
         run: helm uninstall directory --namespace directory || true
@@ -108,39 +99,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
       - name: Build server image
         run: docker build -t ldapium:e2e image
-
       - name: Build UI image
         run: docker build -t ldapium-ui:e2e ui
-
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: e2e
-
       - name: Load images into the cluster
         run: |
           kind load docker-image ldapium:e2e --name e2e
           kind load docker-image ldapium-ui:e2e --name e2e
-
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
       - name: Generate test CA and server certificate
         run: |
           set -euo pipefail
           mkdir -p /tmp/ldapium-tls
           openssl genrsa -out /tmp/ldapium-tls/ca.key 2048
-          openssl req -x509 -new -nodes \
-            -key /tmp/ldapium-tls/ca.key \
-            -sha256 -days 1 \
-            -subj "/CN=ldapium-e2e-ca" \
-            -out /tmp/ldapium-tls/ca.crt
+          openssl req -x509 -new -nodes -key /tmp/ldapium-tls/ca.key -sha256 -days 1 -subj "/CN=ldapium-e2e-ca" -out /tmp/ldapium-tls/ca.crt
           cat >/tmp/ldapium-tls/server.cnf <<'EOF'
           [req]
           distinguished_name = req_dn
@@ -155,20 +135,8 @@ jobs:
           DNS.2 = *.directory-ldapium-headless.directory.svc.cluster.local
           EOF
           openssl genrsa -out /tmp/ldapium-tls/tls.key 2048
-          openssl req -new \
-            -key /tmp/ldapium-tls/tls.key \
-            -out /tmp/ldapium-tls/server.csr \
-            -config /tmp/ldapium-tls/server.cnf
-          openssl x509 -req \
-            -in /tmp/ldapium-tls/server.csr \
-            -CA /tmp/ldapium-tls/ca.crt \
-            -CAkey /tmp/ldapium-tls/ca.key \
-            -CAcreateserial \
-            -out /tmp/ldapium-tls/tls.crt \
-            -days 1 -sha256 \
-            -extensions req_ext \
-            -extfile /tmp/ldapium-tls/server.cnf
-
+          openssl req -new -key /tmp/ldapium-tls/tls.key -out /tmp/ldapium-tls/server.csr -config /tmp/ldapium-tls/server.cnf
+          openssl x509 -req -in /tmp/ldapium-tls/server.csr -CA /tmp/ldapium-tls/ca.crt -CAkey /tmp/ldapium-tls/ca.key -CAcreateserial -out /tmp/ldapium-tls/tls.crt -days 1 -sha256 -extensions req_ext -extfile /tmp/ldapium-tls/server.cnf
       - name: Set up TLS Secret
         run: |
           kubectl create namespace directory
@@ -176,7 +144,6 @@ jobs:
             --from-file=tls.crt=/tmp/ldapium-tls/tls.crt \
             --from-file=tls.key=/tmp/ldapium-tls/tls.key \
             --from-file=ca.crt=/tmp/ldapium-tls/ca.crt
-
       - name: Install TLS chart
         run: |
           set -euo pipefail
@@ -185,6 +152,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
             --set ui.enabled=false \
             --set replicaCount=${{ matrix.replicas }} \
@@ -192,7 +160,6 @@ jobs:
             --set tls.existingSecret=ldapium-tls \
             --set tls.caFile=/etc/openldap/tls/ca.crt \
             --wait --timeout 5m
-
       - name: Verify LDAPS and strict certificate validation
         env:
           REPLICAS: ${{ matrix.replicas }}
@@ -202,65 +169,46 @@ jobs:
           service_host="directory-ldapium.directory.svc.cluster.local"
           ldap_base="dc=example,dc=org"
           password=$(kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' | base64 -d)
-
-          echo "Checking LDAPS root DSE and authenticated bind..."
+          echo "Checking LDAPS authenticated bind..."
           kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-            'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-             ldapwhoami -x -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
-             -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD"' >/tmp/ldaps-bind.out
-          cat /tmp/ldaps-bind.out
-
+            'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD"'
           echo "Checking invalid CA is rejected..."
           if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-            'printf "%s\n" invalid-ca > /tmp/bad-ca.pem; \
-             LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/tmp/bad-ca.pem \
-             ldapwhoami -x -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
-             -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD"' >/tmp/bad-ca.out 2>&1; then
+            'printf "%s\n" invalid-ca > /tmp/bad-ca.pem; LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/tmp/bad-ca.pem ldapwhoami -x -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD"' >/tmp/bad-ca.out 2>&1; then
             echo "::error::LDAP bind unexpectedly succeeded with an invalid CA"
             cat /tmp/bad-ca.out
             exit 1
           else
             echo "PASS: invalid CA rejected"
           fi
-
           echo "Checking hostname mismatch is rejected..."
           if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-            'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-             ldapwhoami -x -H "ldaps://directory-ldapium:636" \
-             -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD"' >/tmp/bad-san.out 2>&1; then
+            'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H "ldaps://directory-ldapium:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD"' >/tmp/bad-san.out 2>&1; then
             echo "::error::LDAP bind unexpectedly succeeded with a hostname mismatch"
             cat /tmp/bad-san.out
             exit 1
           else
             echo "PASS: hostname mismatch rejected"
           fi
-
           if [ "$REPLICAS" -ge 2 ]; then
             echo "Checking syncrepl uses ldaps:// and not plaintext..."
             kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-              'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-               ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi \
-               -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
-               -b "olcDatabase={1}mdb,cn=config" -s base olcSyncrepl' \
+              'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "olcDatabase={1}mdb,cn=config" -s base olcSyncrepl' \
               | tee /tmp/syncrepl.txt
             grep -q 'provider=ldaps://' /tmp/syncrepl.txt
             if grep -q 'provider=ldap://' /tmp/syncrepl.txt; then
               echo "::error::plaintext LDAP replication provider detected"
               exit 1
             fi
-
             echo "Creating a test entry through LDAPS on provider 0..."
             kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-              'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-               ldapadd -x -H "ldaps://directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:636" \
-               -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" <<EOF
+              'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapadd -x -H "ldaps://directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" <<EOF
             dn: uid=tls-e2e,dc=example,dc=org
             objectClass: inetOrgPerson
             uid: tls-e2e
             cn: tls e2e
             sn: e2e
             EOF'
-
             for ordinal in 1 2; do
               echo "Checking replicated entry on provider $ordinal over LDAPS..."
               kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
@@ -268,13 +216,8 @@ jobs:
               echo "PASS: provider $ordinal converged over LDAPS"
             done
           fi
-
       - name: Run helm test
-        run: |
-          # The generic helm test already validates the directory/overlay path.
-          # The explicit TLS checks above validate the TLS-specific contract.
-          helm test directory --namespace directory --logs
-
+        run: helm test directory --namespace directory --logs
       - name: Diagnostics
         if: failure()
         run: |
@@ -286,7 +229,6 @@ jobs:
             echo "::endgroup::"
           done
           kubectl -n directory get events --sort-by=.lastTimestamp | tail -60
-
       - name: Uninstall
         if: always()
         run: helm uninstall directory --namespace directory || true
