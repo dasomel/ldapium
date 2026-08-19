@@ -6,7 +6,6 @@ import { useToast } from '@/context/ToastContext'
 import { useLanguage, type Language } from '@/context/LanguageContext'
 import type { DictKey } from '@/lib/i18n/en'
 import { cn } from '@/lib/utils'
-import { StatusHud } from './StatusHud'
 
 const nav: { to: string; labelKey: DictKey; icon: typeof FolderTree }[] = [
   { to: '/tree', labelKey: 'nav.tree', icon: FolderTree },
@@ -120,7 +119,6 @@ export function AppShell() {
         <main className="min-w-0 flex-1 overflow-auto p-5">
           <Outlet />
         </main>
-        <StatusHud />
       </div>
     </div>
   )

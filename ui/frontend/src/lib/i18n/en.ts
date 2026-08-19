@@ -70,10 +70,6 @@ const en = {
   'settings.disabled': 'Disabled',
   'settings.securityNote':
     'Connection addresses, certificate paths, and secrets are intentionally not displayed. These OpenLDAP values are read-only deployment metadata; change them through the server deployment and bootstrap process.',
-  'hud.openSidebar': 'open sidebar',
-  'hud.commands': '/ commands',
-  'hud.help': '? help',
-  'hud.nextTab': 'tab next tab',
 
   'changePassword.title': 'Change password',
   'changePassword.currentPasswordLabel': 'Current password',

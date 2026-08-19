@@ -66,10 +66,6 @@ const ko: Record<DictKey, string> = {
   'settings.disabled': '비활성화됨',
   'settings.securityNote':
     '연결 주소, 인증서 경로, 비밀값은 표시하지 않습니다. OpenLDAP 값은 읽기 전용 배포 메타데이터이며 서버 배포 및 초기화 과정에서 변경합니다.',
-  'hud.openSidebar': '사이드바 열기',
-  'hud.commands': '/ 명령어',
-  'hud.help': '? 도움말',
-  'hud.nextTab': 'tab 다음 탭',
 
   'changePassword.title': '비밀번호 변경',
   'changePassword.currentPasswordLabel': '현재 비밀번호',
