@@ -35,6 +35,11 @@ limit.
 {{- printf "%s-ui" (include "ldapium.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* Chart label value. */}}
+{{- define "ldapium.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* Common labels. */}}
 {{- define "ldapium.labels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}
