@@ -45,6 +45,8 @@ jobs:
             --set auth.adminPassword='metrics-e2e-password' \
             --set ui.enabled=false \
             --set metrics.enabled=true \
+            --set metrics.serviceMonitor.enabled=false \
+            --set metrics.prometheusRule.enabled=false \
             --wait --timeout 5m
 
       - name: Wait for metrics endpoint
@@ -59,14 +61,19 @@ jobs:
           kubectl -n directory run metrics-client --rm -i --restart=Never --image=curlimages/curl:8.16.0 -- \
             sh -ec 'curl -fsS http://directory-ldapium-metrics.directory.svc.cluster.local:9330/metrics | grep -E "openldap_(scrape|bind|dial|monitor_counter_object|monitored_object)"'
 
-      - name: Verify Helm rendering
+      - name: Verify Helm rendering with observability profile
         run: |
           helm template directory charts/ldapium \
+            -f charts/ldapium/examples/metrics-values.yaml \
             --set ldap.adminDN=cn=admin,dc=example,dc=org \
-            --set auth.adminPassword='metrics-e2e-password' \
-            --set metrics.enabled=true > /tmp/rendered.yaml
-          grep -q 'name: directory-ldapium-metrics' /tmp/rendered.yaml
-          grep -q 'containerPort: 9330' /tmp/rendered.yaml
+            --set auth.adminPassword='metrics-e2e-password' > /tmp/rendered-metrics.yaml
+          grep -q 'name: directory-ldapium-metrics' /tmp/rendered-metrics.yaml
+          grep -q 'containerPort: 9330' /tmp/rendered-metrics.yaml
+          grep -q 'kind: ServiceMonitor' /tmp/rendered-metrics.yaml
+          grep -q 'kind: PrometheusRule' /tmp/rendered-metrics.yaml
+          grep -q 'LDAPiumConnectionSaturation' /tmp/rendered-metrics.yaml
+          grep -q 'LDAPiumBackupStale' /tmp/rendered-metrics.yaml
+          grep -q 'LDAPiumMDBUsageHigh' /tmp/rendered-metrics.yaml
 
       - name: Diagnostics
         if: failure()
