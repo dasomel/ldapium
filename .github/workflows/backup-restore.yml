@@ -1,0 +1,167 @@
+name: Backup and restore E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "scripts/backup.sh"
+      - "scripts/verify-backup.sh"
+      - "scripts/restore.sh"
+      - ".github/workflows/backup-restore.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup-restore:
+    name: backup → verify → corrupt-check → restore
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Create network
+        run: docker network create ldapium-e2e
+
+      - name: Start source directory
+        run: |
+          docker run -d --name ldapium-source --network ldapium-e2e \
+            -e LDAP_ROOT_DN=dc=example,dc=org \
+            -e LDAP_ADMIN_PASSWORD='restore-e2e-password' \
+            ldapium:e2e
+          for i in $(seq 1 60); do
+            if docker exec ldapium-source ldapwhoami -x -H 'ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs ldapium-source
+          exit 1
+
+      - name: Seed source data
+        run: |
+          cat > /tmp/source.ldif <<'EOF'
+          dn: ou=restore-test,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: restore-test
+
+          dn: uid=restore-e2e,ou=restore-test,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: restore-e2e
+          cn: restore e2e
+          sn: e2e
+          mail: restore-e2e@example.org
+          EOF
+          docker cp /tmp/source.ldif ldapium-source:/tmp/source.ldif
+          docker exec ldapium-source ldapadd -x \
+            -H 'ldap://localhost:389' \
+            -D 'cn=admin,dc=example,dc=org' \
+            -w 'restore-e2e-password' \
+            -f /tmp/source.ldif
+
+      - name: Create backup
+        run: |
+          mkdir -p /tmp/ldap-backup
+          docker run --rm --network ldapium-e2e \
+            -e LDAP_URL='ldap://ldapium-source:389' \
+            -e LDAP_ROOT_DN='dc=example,dc=org' \
+            -e LDAP_ADMIN_PASSWORD='restore-e2e-password' \
+            -v "$PWD/scripts:/scripts:ro" \
+            -v /tmp/ldap-backup:/backup \
+            ldapium:e2e \
+            /bin/bash /scripts/backup.sh -b dc=example,dc=org -o /backup --no-record
+
+      - name: Verify backup integrity
+        run: |
+          manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          test -n "$manifest"
+          docker run --rm -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
+            ldapium:e2e /bin/bash /scripts/verify-backup.sh "/backup/$(basename "$manifest")"
+
+      - name: Prove corrupt backup fails closed
+        run: |
+          manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          data_file=$(awk '/data-.*\.ldif\.gz/{print $2; exit}' "$manifest")
+          cp "/tmp/ldap-backup/$data_file" /tmp/corrupt.ldif.gz
+          printf 'corruption' >> /tmp/corrupt.ldif.gz
+          cp /tmp/corrupt.ldif.gz "/tmp/ldap-backup/$data_file"
+          if docker run --rm -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
+            ldapium:e2e /bin/bash /scripts/verify-backup.sh "/backup/$(basename "$manifest")"; then
+            echo '::error::corrupted backup was accepted'
+            exit 1
+          fi
+          echo 'PASS: corrupt backup rejected'
+
+      - name: Recreate clean restore targets
+        run: |
+          rm -rf /tmp/restore-config /tmp/restore-data
+          mkdir -p /tmp/restore-config /tmp/restore-data
+
+      - name: Restore into clean offline instance
+        run: |
+          manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          docker run --rm --user 0 \
+            -v /tmp/ldap-backup:/backup:ro \
+            -v /tmp/restore-config:/restore/config \
+            -v /tmp/restore-data:/restore/data \
+            -v "$PWD/scripts:/scripts:ro" \
+            ldapium:e2e \
+            /bin/bash /scripts/restore.sh \
+              --backup-dir /backup \
+              --manifest "/backup/$(basename "$manifest")" \
+              --target-config /restore/config \
+              --target-data /restore/data \
+              --confirm-offline
+
+      - name: Start restored directory
+        run: |
+          docker run -d --name ldapium-restored --network ldapium-e2e \
+            -e LDAP_ROOT_DN=dc=example,dc=org \
+            -e LDAP_ADMIN_PASSWORD='restore-e2e-password' \
+            -v /tmp/restore-config:/etc/openldap/slapd.d \
+            -v /tmp/restore-data:/var/lib/openldap/data \
+            ldapium:e2e
+          for i in $(seq 1 60); do
+            if docker exec ldapium-restored ldapwhoami -x -H 'ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs ldapium-restored
+          exit 1
+
+      - name: Verify restored data
+        run: |
+          output=$(docker exec ldapium-restored ldapsearch -x -LLL \
+            -H 'ldap://localhost:389' \
+            -D 'cn=admin,dc=example,dc=org' \
+            -w 'restore-e2e-password' \
+            -b 'uid=restore-e2e,ou=restore-test,dc=example,dc=org' \
+            -s base uid mail)
+          echo "$output"
+          grep -q '^uid: restore-e2e$' <<<"$output"
+          grep -q '^mail: restore-e2e@example.org$' <<<"$output"
+
+      - name: Verify restore marker and ownership
+        run: |
+          test -f /tmp/restore-config/.bootstrapped
+          test "$(stat -c '%u:%g' /tmp/restore-config/.bootstrapped)" = '999:999'
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker logs ldapium-source || true
+          docker logs ldapium-restored || true
+          find /tmp/ldap-backup -maxdepth 1 -type f -ls || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f ldapium-source ldapium-restored 2>/dev/null || true
+          docker network rm ldapium-e2e 2>/dev/null || true
