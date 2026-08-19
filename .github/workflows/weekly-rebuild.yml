@@ -22,7 +22,7 @@ jobs:
       contents: read
       packages: write
     with:
-      image-name: openldap-suite
+      image-name: ldapium
       context: image
       metadata-tags: |
         type=raw,value=main
@@ -36,7 +36,7 @@ jobs:
       contents: read
       packages: write
     with:
-      image-name: openldap-suite-ui
+      image-name: ldapium-ui
       context: ui
       metadata-tags: |
         type=raw,value=main

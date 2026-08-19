@@ -1,12 +1,12 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "openldap.fullname" . }}
+  name: {{ include "ldapium.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "openldap.labels" . | nindent 4 }}
+    {{- include "ldapium.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "openldap.headlessName" . }}
+  serviceName: {{ include "ldapium.headlessName" . }}
   replicas: {{ .Values.replicaCount }}
   # Default (OrderedReady) podManagementPolicy is kept deliberately: it
   # serializes pod creation, which reduces (does not eliminate) the window
@@ -14,11 +14,11 @@ spec:
   # yet and both run slapadd -n 1 (see REPLICATION-CONTRACT.md D5).
   selector:
     matchLabels:
-      {{- include "openldap.selectorLabels" . | nindent 6 }}
+      {{- include "ldapium.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "openldap.selectorLabels" . | nindent 8 }}
+        {{- include "ldapium.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -27,7 +27,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+      serviceAccountName: {{ include "ldapium.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -48,7 +48,7 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              {{- include "openldap.selectorLabels" . | nindent 14 }}
+              {{- include "ldapium.selectorLabels" . | nindent 14 }}
       {{- end }}
       {{- with .Values.affinity }}
       affinity:
@@ -64,7 +64,7 @@ spec:
       {{- end }}
       containers:
         - name: openldap
-          image: {{ include "openldap.image" . }}
+          image: {{ include "ldapium.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -91,7 +91,7 @@ spec:
             - name: LDAP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "openldap.adminSecretName" . }}
+                  name: {{ include "ldapium.adminSecretName" . }}
                   key: {{ .Values.auth.existingSecretKey }}
             - name: LDAP_LOG_LEVEL
               value: {{ .Values.ldap.logLevel | quote }}
@@ -107,7 +107,7 @@ spec:
             - name: LDAP_MAX_OPEN_FILES
               value: {{ .Values.ldap.maxOpenFiles | quote }}
             - name: LDAP_DB_MAX_SIZE
-              value: {{ (default (include "openldap.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
+              value: {{ (default (include "ldapium.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
             - name: LDAP_TLS_ENABLED
               value: {{ .Values.tls.enabled | quote }}
             {{- if .Values.tls.enabled }}
@@ -124,15 +124,15 @@ spec:
             - name: LDAP_SEED_DIR
               value: /opt/ldifs
             {{- end }}
-            {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+            {{- if eq (include "ldapium.replicationEnabled" .) "true" }}
             - name: LDAP_REPLICATION_ENABLED
               value: "true"
             # Ordinal-ascending, dense, self included — the image indexes
             # this list by LDAP_SERVER_ID-1 to find itself. See the
-            # openldap.replicationPeers comment in _helpers.tpl before
+            # ldapium.replicationPeers comment in _helpers.tpl before
             # touching this.
             - name: LDAP_REPLICATION_PEERS
-              value: {{ include "openldap.replicationPeers" . | quote }}
+              value: {{ include "ldapium.replicationPeers" . | quote }}
             {{- if .Values.replication.bindDN }}
             - name: LDAP_REPLICATION_BIND_DN
               value: {{ .Values.replication.bindDN | quote }}
@@ -221,13 +221,13 @@ spec:
         {{- if and .Values.seed.enabled .Values.seed.ldifs }}
         - name: seed
           configMap:
-            name: {{ include "openldap.fullname" . }}-seed
+            name: {{ include "ldapium.fullname" . }}-seed
         {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: config
         labels:
-          {{- include "openldap.selectorLabels" . | nindent 10 }}
+          {{- include "ldapium.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.config.accessModes | nindent 10 }}
@@ -240,7 +240,7 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "openldap.selectorLabels" . | nindent 10 }}
+          {{- include "ldapium.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.data.accessModes | nindent 10 }}

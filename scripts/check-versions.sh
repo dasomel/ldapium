@@ -3,7 +3,7 @@
 # drifted apart. Three of them are copies of the same fact and one is a
 # different fact that is easy to confuse with the others:
 #
-#   release version  — charts/openldap Chart.yaml `version`. A git tag vX.Y.Z
+#   release version  — charts/ldapium Chart.yaml `version`. A git tag vX.Y.Z
 #                      publishes the chart AND both images under X.Y.Z (see
 #                      .github/workflows/release.yml), so the chart's default
 #                      image tag and docker-compose.yml's default images must
@@ -25,8 +25,8 @@ note() {
 	fail=1
 }
 
-chart_version=$(awk '/^version:/ { print $2; exit }' charts/openldap/Chart.yaml)
-app_version=$(awk '/^appVersion:/ { gsub(/"/, "", $2); print $2; exit }' charts/openldap/Chart.yaml)
+chart_version=$(awk '/^version:/ { print $2; exit }' charts/ldapium/Chart.yaml)
+app_version=$(awk '/^appVersion:/ { gsub(/"/, "", $2); print $2; exit }' charts/ldapium/Chart.yaml)
 dockerfile_version=$(awk -F= '/^ARG OPENLDAP_VERSION=/ { print $2; exit }' image/Dockerfile)
 
 printf 'release version (Chart.yaml version): %s\n' "$chart_version"
@@ -68,7 +68,7 @@ fi
 
 # README.md's install examples are what people copy; a stale version there
 # sends them to a tag that may not exist yet.
-readme_tags=$(grep -oE 'openldap-suite(-ui)?:[0-9]+\.[0-9]+\.[0-9]+' README.md | sed 's/.*://' | sort -u)
+readme_tags=$(grep -oE 'ldapium(-ui)?:[0-9]+\.[0-9]+\.[0-9]+' README.md | sed 's/.*://' | sort -u)
 readme_chart=$(grep -oE -- '--version [0-9]+\.[0-9]+\.[0-9]+' README.md | awk '{ print $2 }' | sort -u)
 for v in $readme_tags $readme_chart; do
 	if [ "$v" != "$chart_version" ]; then
@@ -79,7 +79,7 @@ done
 # The chart's own rendering is the thing users actually pull, so assert on
 # the rendered output rather than on the template that produces it.
 if command -v helm >/dev/null 2>&1; then
-	rendered=$(helm template versioncheck charts/openldap \
+	rendered=$(helm template versioncheck charts/ldapium \
 		--set auth.adminPassword=render-only-not-a-secret \
 		--set ui.enabled=true |
 		sed -n 's/^[[:space:]]*image:[[:space:]]*//p' | sort -u)

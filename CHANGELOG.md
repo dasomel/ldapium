@@ -15,7 +15,7 @@ something running, but nothing has been run outside its author's environment.
 `helm test <release>` is shipped with the chart so an install can be checked
 rather than assumed.
 
-### Server image (`ghcr.io/dasomel/openldap-suite`)
+### Server image (`ghcr.io/dasomel/ldapium`)
 
 - OpenLDAP **2.6.14** compiled from the upstream tarball, pinned by version and
   sha256, on `debian:trixie-slim`. `linux/amd64` and `linux/arm64`, each built
@@ -34,7 +34,7 @@ rather than assumed.
   and an explicit file-descriptor limit (slapd reserves memory per descriptor,
   so an inherited 1M-descriptor limit alone cost ~650MB of RSS).
 
-### Management UI (`ghcr.io/dasomel/openldap-suite-ui`)
+### Management UI (`ghcr.io/dasomel/ldapium-ui`)
 
 - Go backend, React frontend, shipped as one distroless static image running as
   uid 65532.
@@ -53,7 +53,7 @@ rather than assumed.
 - Backup status is read from the directory itself, so the UI needs no
   Kubernetes access to show it.
 
-### Helm chart (`oci://ghcr.io/dasomel/charts/openldap`)
+### Helm chart (`oci://ghcr.io/dasomel/charts/ldapium`)
 
 - StatefulSet with per-replica PVCs, headless Service, PDB, and topology
   spread. `replicaCount: 1` runs standalone; above that, replication turns on
@@ -85,4 +85,4 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
-[0.1.0]: https://github.com/dasomel/openldap-suite/releases/tag/v0.1.0
+[0.1.0]: https://github.com/dasomel/ldapium/releases/tag/v0.1.0

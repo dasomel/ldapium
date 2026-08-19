@@ -1,4 +1,4 @@
-# openldap-suite / ui
+# ldapium / ui
 
 A self-contained LDAP management web app: a Go + Echo backend that speaks
 LDAP directly and also serves the built React SPA, shipped as a single
@@ -28,7 +28,7 @@ The identifier field on the login form accepts either:
   unset.
 
 Sessions are server-side: the browser only ever holds a signed, opaque
-session ID in an `HttpOnly` cookie (`ldapui_session`). The bound LDAP
+session ID in an `HttpOnly` cookie (`ldapium_session`). The bound LDAP
 connection and the DN it authenticated as live in an in-memory server-side
 table, never in the cookie, never in localStorage. Idle sessions expire
 after `SESSION_TTL` (sliding — any request extends it) and a background
@@ -44,7 +44,7 @@ verifies the ID token's signature, issuer, audience, and expiry using
 Keycloak's published keys.
 
 Each login is also bound to the browser that started it: `/api/sso/start`
-sets a single-use `HttpOnly`, `SameSite=Lax` cookie (`ldapui_sso_login`,
+sets a single-use `HttpOnly`, `SameSite=Lax` cookie (`ldapium_sso_login`,
 scoped to `/api/sso`) and the callback refuses a state that arrives without
 the matching value. Without that, anyone holding a valid state and code —
 obtainable by running the flow against their own account — could lure a
@@ -136,13 +136,13 @@ place of `preferred_username`: it is used as the LDAP `uid` lookup key.
 ## Running
 
 ```sh
-docker build -t openldap-suite-ui .
+docker build -t ldapium-ui .
 docker run -p 8080:8080 \
   -e LDAP_URL="ldaps://ldap.example.com:636" \
   -e LDAP_BASE_DN="dc=example,dc=com" \
   -e LDAP_USER_SEARCH_FILTER="(uid=%s)" \
   -e SESSION_SECRET="$(openssl rand -base64 32)" \
-  openldap-suite-ui
+  ldapium-ui
 ```
 
 ## v1 scope

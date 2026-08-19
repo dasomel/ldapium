@@ -58,11 +58,11 @@ check: ## Run everything CI runs, in the same order
 	@cd ui/frontend && npm run lint && npm run build
 	@cd ui/backend && test -z "$$(gofmt -l .)" || { echo "gofmt would reformat files in ui/backend" >&2; exit 1; }
 	@cd ui/backend && go vet ./... && go test ./... && go build ./...
-	@helm lint charts/openldap
+	@helm lint charts/ldapium
 	@./scripts/check-versions.sh
 	@shellcheck -s sh image/entrypoint.sh
 	@shellcheck scripts/*.sh
-	@shellcheck charts/openldap/files/tests/*.sh
+	@shellcheck charts/ldapium/files/tests/*.sh
 	@./scripts/licenses.sh --check
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
@@ -71,12 +71,12 @@ licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
 sbom: ## Write SBOMs for the local images to ./sbom (requires syft)
 	@command -v syft >/dev/null 2>&1 || { echo "syft not found: https://github.com/anchore/syft" >&2; exit 1; }
 	@mkdir -p sbom
-	@version=$$(awk '/^version:/ { print $$2; exit }' charts/openldap/Chart.yaml); \
-	for image in openldap-suite openldap-suite-ui; do \
+	@version=$$(awk '/^version:/ { print $$2; exit }' charts/ldapium/Chart.yaml); \
+	for image in ldapium ldapium-ui; do \
 		ref="ghcr.io/dasomel/$$image:$$version"; \
 		echo "syft $$ref"; \
 		syft "$$ref" -o spdx-json > "sbom/$$image.spdx.json"; \
 		syft "$$ref" -o cyclonedx-json > "sbom/$$image.cdx.json"; \
 	done
 	@echo "wrote sbom/ — released images carry the same SBOM as a signed attestation:"
-	@echo "  gh attestation verify oci://ghcr.io/dasomel/openldap-suite:<version> --repo dasomel/openldap-suite"
+	@echo "  gh attestation verify oci://ghcr.io/dasomel/ldapium:<version> --repo dasomel/ldapium"

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/ldapclient"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 )
 
 // Session is one logged-in user. DN always holds the user's directory

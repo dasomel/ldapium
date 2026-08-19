@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "openldap.ui.fullname" . }}
+  name: {{ include "ldapium.ui.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "openldap.ui.labels" . | nindent 4 }}
+    {{- include "ldapium.ui.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.ui.service.type }}
   ports:
@@ -14,5 +14,5 @@ spec:
       targetPort: http
       protocol: TCP
   selector:
-    {{- include "openldap.ui.selectorLabels" . | nindent 4 }}
+    {{- include "ldapium.ui.selectorLabels" . | nindent 4 }}
 {{- end }}

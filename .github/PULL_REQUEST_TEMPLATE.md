@@ -14,6 +14,6 @@ entrypoint does most of the work and only runs at startup.
 
 - [ ] `gofmt -l .`, `go vet ./...`, `go test ./...` in `ui/backend`
 - [ ] `npm run lint && npm run build` in `ui/frontend`
-- [ ] `helm lint charts/openldap` and `./scripts/check-versions.sh`
+- [ ] `helm lint charts/ldapium` and `./scripts/check-versions.sh`
 - [ ] `shellcheck -s sh image/entrypoint.sh` / `shellcheck scripts/*.sh` if shell changed
-- [ ] Docs updated (`README.md`, `charts/openldap/README.md`, `ui/README.md`) if behaviour or values changed
+- [ ] Docs updated (`README.md`, `charts/ldapium/README.md`, `ui/README.md`) if behaviour or values changed

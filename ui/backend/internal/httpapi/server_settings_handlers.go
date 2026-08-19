@@ -60,7 +60,7 @@ func (s *Server) handleGetServerSettings(c echo.Context) error {
 	// gets "No such object", verified against a running server. This UI only
 	// ever binds as a directory user, so no session it can create is able to
 	// read them, and a live-read-with-fallback here would be code that never
-	// runs. See charts/openldap/templates/ui-deployment.yaml for where the
+	// runs. See charts/ldapium/templates/ui-deployment.yaml for where the
 	// declared values come from and how to keep them honest.
 	openLDAPVersion := s.cfg.OpenLDAPVersion
 	if version, err := currentSession(c).Bound.ServerVersion(c.Request().Context()); err == nil && version != "" {

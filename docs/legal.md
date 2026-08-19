@@ -66,16 +66,16 @@ Every released image carries an SBOM in two ways:
 - **Attached to the image in the registry** as a signed attestation, so it
   travels with the artifact:
 
-      gh attestation verify oci://ghcr.io/dasomel/openldap-suite:0.1.0 \
-        --repo dasomel/openldap-suite
+      gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.0 \
+        --repo dasomel/ldapium
 
-- **Attached to the GitHub Release** as `openldap-suite.spdx.json`,
-  `openldap-suite.cdx.json` and the same pair for the UI image — SPDX 2.3 and
+- **Attached to the GitHub Release** as `ldapium.spdx.json`,
+  `ldapium.cdx.json` and the same pair for the UI image — SPDX 2.3 and
   CycloneDX, for whichever your tooling reads.
 
 Regenerate one yourself and compare; that is the point of publishing it:
 
-    syft ghcr.io/dasomel/openldap-suite:0.1.0 -o spdx-json
+    syft ghcr.io/dasomel/ldapium:0.1.0 -o spdx-json
 
 Build provenance is attested the same way, so an image can be traced to the
 workflow run and commit that produced it.
@@ -84,7 +84,7 @@ workflow run and commit that produced it.
 
 OpenLDAP is a registered trademark of the OpenLDAP Foundation. **This project
 is not affiliated with, endorsed by, or supported by the OpenLDAP Foundation
-or Symas.** The name `openldap-suite` describes what the software packages;
+or Symas.** The name `ldapium` describes what the software packages;
 it does not claim to be an official distribution, and the README says so
 explicitly. Do not present builds of this project as official OpenLDAP
 releases.

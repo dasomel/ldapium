@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
 )
 
 // client is the production Client implementation: a single bound *ldap.Conn

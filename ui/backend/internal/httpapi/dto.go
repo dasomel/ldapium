@@ -1,6 +1,6 @@
 package httpapi
 
-import "github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+import "github.com/dasomel/ldapium/ui/backend/internal/domain"
 
 // userListResponse and groupListResponse wrap list results with a
 // truncated flag so a listing cut off at ldapclient's maxListResults is

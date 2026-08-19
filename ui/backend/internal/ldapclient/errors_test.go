@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 func TestMapErr_InvalidCredentials_WithDiagnosticText(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/dasomel/openldap-suite/ui/backend
+module github.com/dasomel/ldapium/ui/backend
 
 go 1.25.0
 

@@ -17,9 +17,9 @@ import (
 	"github.com/labstack/echo/v4"
 	"golang.org/x/oauth2"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/config"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/session"
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
 const (

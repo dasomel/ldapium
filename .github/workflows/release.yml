@@ -20,7 +20,7 @@ jobs:
       packages: write
       id-token: write
     with:
-      image-name: openldap-suite
+      image-name: ldapium
       context: image
       metadata-tags: |
         type=semver,pattern={{version}}
@@ -36,7 +36,7 @@ jobs:
       packages: write
       id-token: write
     with:
-      image-name: openldap-suite-ui
+      image-name: ldapium-ui
       context: ui
       metadata-tags: |
         type=semver,pattern={{version}}
@@ -82,7 +82,7 @@ jobs:
       # Image tags follow --version instead — see _helpers.tpl.
       - name: Package chart
         run: |
-          helm package charts/openldap \
+          helm package charts/ldapium \
             --version "${{ steps.chart_version.outputs.version }}" \
             --destination /tmp/chart-out
 
@@ -98,7 +98,7 @@ jobs:
       - name: Push chart
         if: github.ref_type == 'tag'
         run: |
-          helm push /tmp/chart-out/openldap-*.tgz \
+          helm push /tmp/chart-out/ldapium-*.tgz \
             "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
       - name: Upload packaged chart

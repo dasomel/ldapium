@@ -1,4 +1,4 @@
-# openldap-suite image
+# ldapium image
 
 A from-source OpenLDAP **2.6.14** container image that this project owns outright —
 no dependency on [osixia/docker-openldap](https://github.com/osixia/docker-openldap)
@@ -18,7 +18,7 @@ LDIFs in `LDAP_SEED_DIR`.
 ## Build
 
 ```bash
-docker build --platform linux/arm64 -t openldap-suite:dev image/
+docker build --platform linux/arm64 -t ldapium:dev image/
 ```
 
 Multi-stage build: a `debian:trixie-slim` builder stage compiles OpenLDAP 2.6.14
@@ -54,7 +54,7 @@ docker run -d --name ldap \
   -p 389:389 -p 636:636 \
   -v ldap-data:/var/lib/openldap/data \
   -v ldap-config:/etc/openldap/slapd.d \
-  openldap-suite:dev
+  ldapium:dev
 ```
 
 ## Environment variables

@@ -25,19 +25,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "openldap.ui.fullname" . }}
+  name: {{ include "ldapium.ui.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "openldap.ui.labels" . | nindent 4 }}
+    {{- include "ldapium.ui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ui.replicaCount }}
   selector:
     matchLabels:
-      {{- include "openldap.ui.selectorLabels" . | nindent 6 }}
+      {{- include "ldapium.ui.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "openldap.ui.selectorLabels" . | nindent 8 }}
+        {{- include "ldapium.ui.selectorLabels" . | nindent 8 }}
         {{- with .Values.ui.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -46,7 +46,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "openldap.ui.serviceAccountName" . }}
+      serviceAccountName: {{ include "ldapium.ui.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -79,7 +79,7 @@ spec:
       {{- end }}
       containers:
         - name: ui
-          image: {{ include "openldap.ui.image" . }}
+          image: {{ include "ldapium.ui.image" . }}
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
           # Distroless nonroot base (ui/Dockerfile) — USER nonroot:nonroot is
           # already baked in, so no runAsUser override needed here either.
@@ -95,9 +95,9 @@ spec:
           {{- $ldapURL := .Values.ui.ldap.url }}
           {{- if not $ldapURL }}
           {{- if .Values.tls.enabled }}
-          {{- $ldapURL = printf "ldaps://%s.%s.svc.%s:%d" (include "openldap.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapsPort) }}
+          {{- $ldapURL = printf "ldaps://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapsPort) }}
           {{- else }}
-          {{- $ldapURL = printf "ldap://%s.%s.svc.%s:%d" (include "openldap.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) }}
+          {{- $ldapURL = printf "ldap://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) }}
           {{- end }}
           {{- end }}
           env:
@@ -127,7 +127,7 @@ spec:
             - name: OPENLDAP_MODULES
               value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp"
             - name: OPENLDAP_OVERLAYS
-              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "openldap.replicationEnabled" .) "true" }},syncprov{{ end }}"
+              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "ldapium.replicationEnabled" .) "true" }},syncprov{{ end }}"
             - name: LDAP_URL
               value: {{ $ldapURL | quote }}
             - name: LDAP_BASE_DN
@@ -166,7 +166,7 @@ spec:
                   {{- if .Values.ui.session.existingSecret }}
                   name: {{ .Values.ui.session.existingSecret }}
                   {{- else }}
-                  name: {{ include "openldap.ui.fullname" . }}-session
+                  name: {{ include "ldapium.ui.fullname" . }}-session
                   {{- end }}
                   key: {{ .Values.ui.session.existingSecretKey }}
             - name: SESSION_TTL

@@ -5,8 +5,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/validate"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/validate"
 )
 
 func (s *Server) handleListUsers(c echo.Context) error {

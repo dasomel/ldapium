@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/config"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // dialer is the config-backed Dialer implementation used in production.

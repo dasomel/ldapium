@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 var groupAttrs = []string{"cn", "description", "member"}

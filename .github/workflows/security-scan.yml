@@ -75,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [openldap-suite, openldap-suite-ui]
+        image: [ldapium, ldapium-ui]
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

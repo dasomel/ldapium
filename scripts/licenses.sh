@@ -45,7 +45,7 @@ go_licenses() {
 # go-licenses reports this repo's own packages as Unknown (the LICENSE lives at
 # the repo root, above the Go module), so they are excluded rather than
 # silencing Unknown in general — an actually unknown dependency must still fail.
-go_csv=$(cd ui/backend && go_licenses csv ./... 2>/dev/null | grep -v '^github.com/dasomel/openldap-suite' | sort)
+go_csv=$(cd ui/backend && go_licenses csv ./... 2>/dev/null | grep -v '^github.com/dasomel/ldapium' | sort)
 npm_csv=$(cd ui/frontend && npx --yes license-checker-rseidelsohn \
 	--production --excludePrivatePackages --csv --nopeer 2>/dev/null | tail -n +2 | sort)
 
@@ -79,7 +79,7 @@ container-base arrangement. Their licence files stay in place inside the image
 under \`/usr/share/doc/\`. For the exact package list of a given image, use the
 SBOM attached to that release, or:
 
-    syft ghcr.io/dasomel/openldap-suite:<release> -o spdx-json
+    syft ghcr.io/dasomel/ldapium:<release> -o spdx-json
 
 ## UI backend (Go)
 
@@ -109,7 +109,7 @@ if [ "$check" -eq 1 ]; then
 	echo "checking Go dependency licences against: $GO_ALLOWED"
 	(cd ui/backend && go_licenses check ./... \
 		--allowed_licenses="$GO_ALLOWED" \
-		--ignore github.com/dasomel/openldap-suite)
+		--ignore github.com/dasomel/ldapium)
 
 	echo "checking npm dependency licences against: $NPM_ALLOWED"
 	(cd ui/frontend && npx --yes license-checker-rseidelsohn \

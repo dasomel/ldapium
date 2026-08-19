@@ -26,7 +26,7 @@ container-base arrangement. Their licence files stay in place inside the image
 under `/usr/share/doc/`. For the exact package list of a given image, use the
 SBOM attached to that release, or:
 
-    syft ghcr.io/dasomel/openldap-suite:<release> -o spdx-json
+    syft ghcr.io/dasomel/ldapium:<release> -o spdx-json
 
 ## UI backend (Go)
 

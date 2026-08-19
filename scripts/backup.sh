@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Back up an openldap-suite directory (data tree + cn=config) over the
+# Back up an ldapium directory (data tree + cn=config) over the
 # network with ldapsearch — for standalone (docker run / docker compose)
 # deployments that have no CronJob to do this for them.
 #
-# Same mechanism as charts/openldap's Kubernetes backup CronJob, on purpose:
+# Same mechanism as charts/ldapium's Kubernetes backup CronJob, on purpose:
 # ldapsearch, not slapcat. slapcat would work fine with direct container
 # access (docker exec) and needs no password at all — see the note in
 # --help — but using it here would mean two dump mechanisms and, sooner or
 # later, two restore procedures that quietly drift apart. One mechanism
-# means charts/openldap/README.md's Restore section (slapadd, '+' 연산
+# means charts/ldapium/README.md's Restore section (slapadd, '+' 연산
 # attributes 보존) applies unmodified to backups made by either this script
 # or the CronJob.
 #
-# KEEP IN SYNC: charts/openldap/templates/backup-cronjob.yaml implements the
+# KEEP IN SYNC: charts/ldapium/templates/backup-cronjob.yaml implements the
 # same dump/gzip/mv/prune/record sequence for Kubernetes. The logic is
 # deliberately duplicated rather than shared (sharing would mean a
 # ConfigMap-mounted script and more chart complexity for one script) — if
@@ -29,7 +29,7 @@ Usage: $prog -b ROOT_DN [options]
 Back up an OpenLDAP directory (data tree + cn=config) via ldapsearch, gzip
 the result, and write timestamped files to an output directory. Optionally
 record the backup's status into the directory itself (ou=operations,
-same as charts/openldap's CronJob — see charts/openldap/README.md's
+same as charts/ldapium's CronJob — see charts/ldapium/README.md's
 "Status recorded in the directory" section for the entry format).
 
 Required:
@@ -198,7 +198,7 @@ find "$output_dir" -maxdepth 1 -name '*.ldif.gz' -mtime "+${retention_days}" -pr
 
 # --- record backup status in the directory -------------------------------
 # Same entry (ou=operations / cn=backup, applicationProcess, multi-valued
-# `description: key=value`) that charts/openldap's CronJob writes — see
+# `description: key=value`) that charts/ldapium's CronJob writes — see
 # that chart's README for the full format/rationale, which applies here
 # unchanged. Best-effort and last: it runs only after the dump(s) and prune
 # above already succeeded, and a failure to record must never fail this

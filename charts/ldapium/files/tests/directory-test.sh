@@ -1,5 +1,5 @@
 #!/bin/sh
-# `helm test` for an openldap-suite release: does the deployed directory
+# `helm test` for an ldapium release: does the deployed directory
 # actually answer, and do the overlays the chart claims to enable actually
 # work?
 #

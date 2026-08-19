@@ -2,13 +2,13 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "openldap.fullname" . }}
+  name: {{ include "ldapium.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "openldap.labels" . | nindent 4 }}
+    {{- include "ldapium.labels" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.pdb.minAvailable }}
   selector:
     matchLabels:
-      {{- include "openldap.selectorLabels" . | nindent 6 }}
+      {{- include "ldapium.selectorLabels" . | nindent 6 }}
 {{- end }}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the admin credentials for an openldap-suite release running in
+# Print the admin credentials for an ldapium release running in
 # Kubernetes.
 #
 # There is no such thing as a generated "initial password" in this project:
@@ -14,7 +14,7 @@
 #
 #   ./scripts/get-credentials.sh --local             # read the docker-compose .env
 #   ./scripts/get-credentials.sh                     # auto-discover in current namespace
-#   ./scripts/get-credentials.sh -n openldap-suite   # explicit namespace
+#   ./scripts/get-credentials.sh -n ldapium   # explicit namespace
 #   ./scripts/get-credentials.sh -n ns -r ols        # explicit release/StatefulSet
 #   ./scripts/get-credentials.sh --password-only     # just the password, for scripts
 set -euo pipefail
@@ -38,7 +38,7 @@ Usage: get-credentials.sh [-n NAMESPACE] [-r RELEASE] [--password-only]
                     talking to Kubernetes.
   -n, --namespace   Kubernetes namespace (default: current kubectl context's)
   -r, --release     Helm release name. Only needed when a namespace holds more
-                    than one openldap-suite install.
+                    than one ldapium install.
       --password-only
                     Print only the password, with no trailing newline and no
                     other output. For command substitution:
@@ -103,7 +103,7 @@ command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found on PATH" >&2; ex
 # The chart labels the UI Service with the chart-wide name plus component=ui —
 # not name=openldap-ui, which is the obvious guess and matches nothing. Defined
 # once so the two lookups below cannot drift apart.
-UI_LABELS='app.kubernetes.io/name=openldap,app.kubernetes.io/component=ui'
+UI_LABELS='app.kubernetes.io/name=ldapium,app.kubernetes.io/component=ui'
 
 if [ -z "$ns" ]; then
   ns=$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null || true)
@@ -136,19 +136,19 @@ if [ "$ui_service" = 1 ]; then
   exit 0
 fi
 
-# The chart labels its StatefulSet app.kubernetes.io/name=openldap. Finding it
+# The chart labels its StatefulSet app.kubernetes.io/name=ldapium. Finding it
 # by label rather than by "<release>-openldap" survives nameOverride and
 # fullnameOverride.
 if [ -z "$sts" ]; then
-  found=$(kubectl -n "$ns" get statefulset -l app.kubernetes.io/name=openldap \
+  found=$(kubectl -n "$ns" get statefulset -l app.kubernetes.io/name=ldapium \
             -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
   count=$(printf '%s' "$found" | grep -c . || true)
   case "$count" in
-    0) echo "no openldap-suite StatefulSet found in namespace '${ns}'." >&2
+    0) echo "no ldapium StatefulSet found in namespace '${ns}'." >&2
        echo "Pass -n NAMESPACE, or -r RELEASE if it is labelled differently." >&2
        exit 1 ;;
     1) sts=$(printf '%s' "$found" | head -1) ;;
-    *) echo "found more than one openldap-suite StatefulSet in '${ns}':" >&2
+    *) echo "found more than one ldapium StatefulSet in '${ns}':" >&2
        printf '%s\n' "$found" | sed 's/^/  /' >&2
        echo "Disambiguate with -r RELEASE." >&2
        exit 1 ;;

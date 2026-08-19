@@ -12,17 +12,17 @@
 #
 # Password is passed via -y (a file), never -w (a command-line arg visible to
 # any local user via `ps`). The file comes from the same admin Secret the
-# server itself uses (openldap.adminSecretName) — this chart fails render
+# server itself uses (ldapium.adminSecretName) — this chart fails render
 # rather than ship a default admin password, and the backup job piggybacks on
 # that same guarantee instead of needing its own.
 {{- if .Values.backup.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "openldap.fullname" . }}-backup
+  name: {{ include "ldapium.fullname" . }}-backup
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "openldap.backup.labels" . | nindent 4 }}
+    {{- include "ldapium.backup.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
   concurrencyPolicy: {{ .Values.backup.concurrencyPolicy }}
@@ -35,14 +35,14 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "openldap.backup.selectorLabels" . | nindent 12 }}
+            {{- include "ldapium.backup.selectorLabels" . | nindent 12 }}
           {{- with .Values.podAnnotations }}
           annotations:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         spec:
           restartPolicy: OnFailure
-          serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+          serviceAccountName: {{ include "ldapium.serviceAccountName" . }}
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -51,7 +51,7 @@ spec:
             {{- toYaml .Values.backup.podSecurityContext | nindent 12 }}
           containers:
             - name: backup
-              image: {{ include "openldap.image" . }}
+              image: {{ include "ldapium.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               securityContext:
                 {{- toYaml .Values.backup.securityContext | nindent 16 }}
@@ -183,7 +183,7 @@ spec:
                   log "backup complete"
               env:
                 - name: LDAP_URL
-                  value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "openldap.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
+                  value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
                 - name: LDAP_ROOT_DN
                   value: {{ .Values.ldap.rootDN | quote }}
                 - name: LDAP_ADMIN_DN
@@ -207,7 +207,7 @@ spec:
             # argument — see the file header for why.
             - name: admin-password
               secret:
-                secretName: {{ include "openldap.adminSecretName" . }}
+                secretName: {{ include "ldapium.adminSecretName" . }}
                 # 0400, not the 0644 default. ldapsearch checks the mode of a
                 # -y file and warns on every run otherwise:
                 #   Warning: Password file /etc/openldap-backup/admin-password
@@ -222,7 +222,7 @@ spec:
                     mode: 0400
             - name: backup
               persistentVolumeClaim:
-                claimName: {{ include "openldap.fullname" . }}-backup
+                claimName: {{ include "ldapium.fullname" . }}-backup
             # readOnlyRootFilesystem needs somewhere writable for the
             # intermediate plaintext LDIF (see dump() above).
             - name: tmp

@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/config"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/httpapi"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/ldapclient"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/session"
-	"github.com/dasomel/openldap-suite/ui/backend/web"
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/httpapi"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
+	"github.com/dasomel/ldapium/ui/backend/internal/session"
+	"github.com/dasomel/ldapium/ui/backend/web"
 )
 
 func main() {

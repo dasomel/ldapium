@@ -4,9 +4,9 @@ One git tag publishes everything. `v0.1.0` produces:
 
 | Artifact | Where |
 |---|---|
-| Server image | `ghcr.io/dasomel/openldap-suite:0.1.0`, `:0.1`, `:latest`, `:sha-<sha>` |
-| UI image | `ghcr.io/dasomel/openldap-suite-ui:` (same tags) |
-| Helm chart | `oci://ghcr.io/dasomel/charts/openldap` version `0.1.0` |
+| Server image | `ghcr.io/dasomel/ldapium:0.1.0`, `:0.1`, `:latest`, `:sha-<sha>` |
+| UI image | `ghcr.io/dasomel/ldapium-ui:` (same tags) |
+| Helm chart | `oci://ghcr.io/dasomel/charts/ldapium` version `0.1.0` |
 | GitHub Release | Notes from `CHANGELOG.md`, with the chart tarball and four SBOMs attached |
 | Attestations | Build provenance and SBOM, signed and pushed to the registry alongside each image |
 
@@ -19,7 +19,7 @@ One git tag publishes everything. `v0.1.0` produces:
    script confirm you found them all:
 
    ```sh
-   # charts/openldap/Chart.yaml   version:
+   # charts/ldapium/Chart.yaml   version:
    # docker-compose.yml           OPENLDAP_IMAGE / UI_IMAGE default tags
    # ui/frontend/package.json     version
    # README.md                    install examples
@@ -46,7 +46,7 @@ One git tag publishes everything. `v0.1.0` produces:
 6. **Tag and push:**
 
    ```sh
-   git tag -a v0.1.0 -m "openldap-suite 0.1.0"
+   git tag -a v0.1.0 -m "ldapium 0.1.0"
    git push origin v0.1.0
    ```
 
@@ -57,10 +57,10 @@ One git tag publishes everything. `v0.1.0` produces:
    it worked:
 
    ```sh
-   helm pull oci://ghcr.io/dasomel/charts/openldap --version 0.1.0
-   docker buildx imagetools inspect ghcr.io/dasomel/openldap-suite:0.1.0
-   gh attestation verify oci://ghcr.io/dasomel/openldap-suite:0.1.0 \
-     --repo dasomel/openldap-suite
+   helm pull oci://ghcr.io/dasomel/charts/ldapium --version 0.1.0
+   docker buildx imagetools inspect ghcr.io/dasomel/ldapium:0.1.0
+   gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.0 \
+     --repo dasomel/ldapium
    ```
 
    The `imagetools inspect` output must list both `linux/amd64` and
@@ -70,7 +70,7 @@ One git tag publishes everything. `v0.1.0` produces:
    that a rendered template means a working release:
 
    ```sh
-   helm install smoke oci://ghcr.io/dasomel/charts/openldap --version 0.1.0 \
+   helm install smoke oci://ghcr.io/dasomel/charts/ldapium --version 0.1.0 \
      --namespace smoke --create-namespace \
      --set auth.adminPassword="$(openssl rand -base64 24)"
    helm test smoke --namespace smoke --logs
@@ -103,12 +103,12 @@ flipping the repository to public:
       Scorecard grades this, so it also shows up in the badge.
 - [ ] **Make the GHCR packages public.** They are private by default, and the
       first release will publish images nobody can pull. Under
-      `github.com/users/dasomel/packages`, set `openldap-suite`,
-      `openldap-suite-ui` and `charts/openldap` to public, and link each to
+      `github.com/users/dasomel/packages`, set `ldapium`,
+      `ldapium-ui` and `charts/ldapium` to public, and link each to
       this repository so the provenance attestation is discoverable.
 - [ ] **Verify a clean pull from a machine that has never authenticated:**
-      `docker pull ghcr.io/dasomel/openldap-suite:0.1.0` and
-      `helm pull oci://ghcr.io/dasomel/charts/openldap --version 0.1.0`.
+      `docker pull ghcr.io/dasomel/ldapium:0.1.0` and
+      `helm pull oci://ghcr.io/dasomel/charts/ldapium --version 0.1.0`.
       This is the only check that catches package visibility being wrong.
 - [ ] Add topics (`openldap`, `ldap`, `kubernetes`, `helm-chart`, `directory`)
       and a description so the repo is findable.
@@ -120,7 +120,7 @@ Separate from a release of this project, though it usually triggers one:
 1. Fetch the new tarball and its sha256 directly from openldap.org — take the
    digest from the file you downloaded, not from a mirror's listing.
 2. Update `OPENLDAP_VERSION` and `OPENLDAP_SHA256` in `image/Dockerfile` and
-   `appVersion` in `charts/openldap/Chart.yaml`. `./scripts/check-versions.sh`
+   `appVersion` in `charts/ldapium/Chart.yaml`. `./scripts/check-versions.sh`
    asserts those two agree.
 3. Build the image and **boot it**, then check the overlays are still loaded
    and replication still converges on a 3-node install. A configure flag being

@@ -1,12 +1,12 @@
-# openldap-suite
+# ldapium
 
 A maintained OpenLDAP stack for Kubernetes: a server image **compiled from upstream
 source**, a management UI, and a Helm chart — built because the existing options stopped
 being viable.
 
-[![CI](https://github.com/dasomel/openldap-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/openldap-suite/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/dasomel/openldap-suite/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/openldap-suite/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dasomel/openldap-suite/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/openldap-suite)
+[![CI](https://github.com/dasomel/ldapium/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dasomel/ldapium/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/ldapium)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.14-informational)](https://www.openldap.org/)
 
@@ -56,7 +56,7 @@ without waiting for a release.
 |---|---|
 | `image/` | OpenLDAP 2.6.14 server, built from source. Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. |
-| `charts/openldap/` | Helm chart deploying the server, with the UI as an optional component. |
+| `charts/ldapium/` | Helm chart deploying the server, with the UI as an optional component. |
 
 ## Install
 
@@ -66,7 +66,7 @@ so `0.1.0` means the same thing everywhere.
 ### Kubernetes (Helm)
 
 ```bash
-helm install directory oci://ghcr.io/dasomel/charts/openldap \
+helm install directory oci://ghcr.io/dasomel/charts/ldapium \
   --version 0.1.0 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
@@ -97,15 +97,15 @@ That binds as the admin, creates and deletes a scratch entry, and asserts the
 also waits for the entry to reach every pod. A directory server starts happily
 with an overlay missing, so this is the only check that notices.
 
-`charts/openldap/README.md` documents every value, the replication design, the
+`charts/ldapium/README.md` documents every value, the replication design, the
 backup/restore procedure, and the optional Keycloak SSO setup.
 
 ### Images
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/dasomel/openldap-suite:0.1.0` | OpenLDAP 2.6.14 server |
-| `ghcr.io/dasomel/openldap-suite-ui:0.1.0` | Management UI |
+| `ghcr.io/dasomel/ldapium:0.1.0` | OpenLDAP 2.6.14 server |
+| `ghcr.io/dasomel/ldapium-ui:0.1.0` | Management UI |
 
 Both are `linux/amd64` + `linux/arm64` and carry build provenance attestations.
 A `:main` tag is rebuilt weekly from the same source so base-image security
@@ -165,7 +165,7 @@ In another terminal, run `make frontend-dev` and open
 multiple deployments, pass `KUBE_NAMESPACE` and `KUBE_RELEASE`:
 
 ```bash
-make k8s-credentials KUBE_NAMESPACE=directory KUBE_RELEASE=openldap
+make k8s-credentials KUBE_NAMESPACE=directory KUBE_RELEASE=ldapium
 make k8s-ui-forward KUBE_NAMESPACE=directory
 ```
 
@@ -176,13 +176,13 @@ a guessable credential.
 
 ### Backups without Kubernetes
 
-`charts/openldap`'s backup CronJob has no standalone equivalent by
+`charts/ldapium`'s backup CronJob has no standalone equivalent by
 definition — there's no CronJob outside Kubernetes — so `scripts/backup.sh`
 covers the same ground for a `docker run`/`docker compose` deployment: it
 dumps the directory (data tree + `cn=config`) over `ldapsearch`, gzips it,
 prunes by retention, and records the backup's status into the directory
 itself (`ou=operations`) the same way the CronJob does — see
-`charts/openldap/README.md`'s "Status recorded in the directory" and
+`charts/ldapium/README.md`'s "Status recorded in the directory" and
 "Restoring" sections, which apply unchanged to backups made by this script.
 
 ```bash
@@ -201,8 +201,8 @@ provenance attestation** and an **SBOM attestation**, both signed by GitHub's
 OIDC identity for this repository:
 
 ```bash
-gh attestation verify oci://ghcr.io/dasomel/openldap-suite:0.1.0 \
-  --repo dasomel/openldap-suite
+gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.0 \
+  --repo dasomel/ldapium
 ```
 
 SPDX and CycloneDX SBOMs for both images are also attached to each GitHub

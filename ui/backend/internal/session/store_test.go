@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // fakeClient is a minimal ldapclient.Client double that only tracks

@@ -6,7 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // respondErr maps a domain/validation error to an HTTP status and a small

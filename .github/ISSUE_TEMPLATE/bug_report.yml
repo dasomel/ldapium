@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Please do not report security vulnerabilities here — see
-        [SECURITY.md](https://github.com/dasomel/openldap-suite/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/dasomel/ldapium/blob/main/SECURITY.md).
 
   - type: dropdown
     id: component
@@ -56,7 +56,7 @@ body:
       label: Steps to reproduce
       description: The values you installed with are usually the important part. Redact passwords.
       placeholder: |
-        1. helm install ols oci://ghcr.io/dasomel/charts/openldap --version 0.1.0 --set ...
+        1. helm install ols oci://ghcr.io/dasomel/charts/ldapium --version 0.1.0 --set ...
         2. ...
     validations:
       required: true

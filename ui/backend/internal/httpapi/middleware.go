@@ -5,18 +5,18 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/session"
+	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
 const (
 	// sessionCookieName is the browser-visible cookie; its value is only
 	// ever a signed, opaque session ID (see internal/session/cookie.go),
 	// never a credential.
-	sessionCookieName = "ldapui_session"
+	sessionCookieName = "ldapium_session"
 	// Set when an SSO login starts and required back on the callback, so a
 	// login can only be completed by the browser that began it. Scoped to
 	// /api/sso because nothing else ever reads it.
-	ssoLoginCookieName = "ldapui_sso_login"
+	ssoLoginCookieName = "ldapium_sso_login"
 	// sessionContextKey is where requireSession stashes the resolved
 	// *session.Session for downstream handlers.
 	sessionContextKey = "session"

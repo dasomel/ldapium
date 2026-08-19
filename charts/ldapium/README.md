@@ -1,4 +1,4 @@
-# openldap Helm chart
+# ldapium Helm chart
 
 Deploys the `image/` OpenLDAP 2.6.14 server as a StatefulSet, with an optional
 management UI (`ui/`). See the repo root [README.md](../../README.md) for why
@@ -9,8 +9,8 @@ bind) is described under Replication below.
 ## Quick start
 
 ```bash
-helm install ldap charts/openldap \
-  --set image.repository=<your-registry>/openldap-suite-server \
+helm install ldap charts/ldapium \
+  --set image.repository=<your-registry>/ldapium \
   --set auth.adminPassword="$(openssl rand -base64 24)"
 ```
 
@@ -55,7 +55,7 @@ rendered when `replicaCount > 1`.
 | Key | Default | Description |
 |---|---|---|
 | `replicaCount` | `1` | Server replica count. StatefulSet only. |
-| `image.repository` | `ghcr.io/dasomel/openldap-suite-server` | Placeholder — override before real use. |
+| `image.repository` | `ghcr.io/dasomel/ldapium` | Placeholder — override before real use. |
 | `image.tag` | `""` (→ `.Chart.AppVersion`) | Server image tag. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
@@ -106,7 +106,7 @@ rendered when `replicaCount > 1`.
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | |
 | `startupProbe` / `livenessProbe` / `readinessProbe` | see values.yaml | All exec `ldapwhoami` over the ldapi socket, matching the image's own `HEALTHCHECK`. |
 | `ui.enabled` | `false` | |
-| `ui.image.repository` / `ui.image.tag` | `ghcr.io/dasomel/openldap-suite-ui` / `""` | Placeholder — override before real use. |
+| `ui.image.repository` / `ui.image.tag` | `ghcr.io/dasomel/ldapium-ui` / `""` | Placeholder — override before real use. |
 | `ui.replicaCount` | `1` | |
 | `ui.service.type` / `ui.service.port` | `ClusterIP` / `8080` | |
 | `ui.ldap.url` | `""` (→ this release's server Service) | → `LDAP_URL`. |

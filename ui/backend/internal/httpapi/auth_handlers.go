@@ -5,7 +5,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/session"
+	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
 // handleLogin performs the actual LDAP bind that authenticates a user.

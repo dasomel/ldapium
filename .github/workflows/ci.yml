@@ -90,7 +90,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
-      - run: helm lint charts/openldap
+      - run: helm lint charts/ldapium
 
       # The chart deliberately refuses to render without an admin password
       # (the image refuses to start without one), so every template call must
@@ -99,11 +99,11 @@ jobs:
       # replicaCount>1 path is the only one that emits LDAP_REPLICATION_PEERS,
       # whose ordinal ordering is a contract with image/entrypoint.sh.
       - name: Render default (single node)
-        run: helm template t charts/openldap --set auth.adminPassword=ci-render-only-not-a-secret
+        run: helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret
 
       - name: Render replicated + UI
         run: |
-          helm template t charts/openldap \
+          helm template t charts/ldapium \
             --set auth.adminPassword=ci-render-only-not-a-secret \
             --set replicaCount=3 \
             --set ui.enabled=true
@@ -114,7 +114,7 @@ jobs:
       # be debugged by whoever first tries to turn it on.
       - name: Render with TLS enabled
         run: |
-          rendered=$(helm template t charts/openldap \
+          rendered=$(helm template t charts/ldapium \
             --set auth.adminPassword=ci-render-only-not-a-secret \
             --set tls.enabled=true \
             --set tls.existingSecret=ci-tls \
@@ -142,7 +142,7 @@ jobs:
 
       - name: Reject rendering with no admin password
         run: |
-          if helm template t charts/openldap >/dev/null 2>&1; then
+          if helm template t charts/ldapium >/dev/null 2>&1; then
             echo "::error::chart rendered without an admin password; the fail() guard regressed"
             exit 1
           fi
@@ -192,7 +192,7 @@ jobs:
       - run: shellcheck scripts/*.sh
       # The `helm test` script is a chart file, not an inline blob in a
       # template, precisely so it can be linted here and run by hand.
-      - run: shellcheck charts/openldap/files/tests/*.sh
+      - run: shellcheck charts/ldapium/files/tests/*.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)

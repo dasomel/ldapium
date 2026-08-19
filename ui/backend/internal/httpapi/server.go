@@ -13,9 +13,9 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/config"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/ldapclient"
-	"github.com/dasomel/openldap-suite/ui/backend/internal/session"
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
+	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
 // Server holds everything the HTTP handlers need. It is deliberately a

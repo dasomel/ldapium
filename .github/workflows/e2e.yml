@@ -56,7 +56,7 @@ jobs:
       # Single-arch and no registry: this image exists for the next four
       # minutes only. The multi-arch, attested build lives in release.yml.
       - name: Build server image
-        run: docker build -t openldap-suite:e2e image
+        run: docker build -t ldapium:e2e image
 
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
@@ -64,7 +64,7 @@ jobs:
           cluster_name: e2e
 
       - name: Load image into the cluster
-        run: kind load docker-image openldap-suite:e2e --name e2e
+        run: kind load docker-image ldapium:e2e --name e2e
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -73,9 +73,9 @@ jobs:
       # fails here with a timeout rather than confusing the test that follows.
       - name: Install chart
         run: |
-          helm install directory charts/openldap \
+          helm install directory charts/ldapium \
             --namespace directory --create-namespace \
-            --set image.repository=openldap-suite \
+            --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \

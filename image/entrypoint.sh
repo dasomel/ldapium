@@ -7,7 +7,7 @@
 #   MDB_DIR    = $DATA_DIR/mdb           (actual mdb files; created & owned
 #                                         by us so chmod 700 always applies)
 #   RUN_DIR    = /var/lib/openldap/run   (pidfile, argsfile, ldapi socket)
-#   BOOTSTRAP  = /usr/local/share/openldap-suite/bootstrap (baked-in templates, read-only)
+#   BOOTSTRAP  = /usr/local/share/ldapium/bootstrap (baked-in templates, read-only)
 #   SEED_DIR   = $LDAP_SEED_DIR, default /opt/ldifs (operator extension point)
 #
 # First-launch detection: CONFIG_DIR/.bootstrapped marker file.
@@ -17,7 +17,7 @@ CONFIG_DIR="/etc/openldap/slapd.d"
 DATA_DIR="/var/lib/openldap/data"
 MDB_DIR="${DATA_DIR}/mdb"
 RUN_DIR="/var/lib/openldap/run"
-BOOTSTRAP_DIR="/usr/local/share/openldap-suite/bootstrap"
+BOOTSTRAP_DIR="/usr/local/share/ldapium/bootstrap"
 MARKER="${CONFIG_DIR}/.bootstrapped"
 
 log() { printf '[entrypoint] %s\n' "$*" >&2; }

@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "openldap.name" -}}
+{{- define "ldapium.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
@@ -12,7 +12,7 @@ StatefulSet pod ordinals (-0, -1, ...) add further suffix, so the headless
 service name (which gets its own "-headless" suffix) is kept well under the
 limit.
 */}}
-{{- define "openldap.fullname" -}}
+{{- define "ldapium.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -28,27 +28,27 @@ limit.
 {{/*
 Headless service name (StatefulSet peer discovery).
 */}}
-{{- define "openldap.headlessName" -}}
-{{- printf "%s-headless" (include "openldap.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "ldapium.headlessName" -}}
+{{- printf "%s-headless" (include "ldapium.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 UI component fullname.
 */}}
-{{- define "openldap.ui.fullname" -}}
-{{- printf "%s-ui" (include "openldap.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "ldapium.ui.fullname" -}}
+{{- printf "%s-ui" (include "ldapium.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "openldap.chart" -}}
+{{- define "ldapium.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Common labels.
 */}}
-{{- define "openldap.labels" -}}
-helm.sh/chart: {{ include "openldap.chart" . }}
-{{ include "openldap.selectorLabels" . }}
+{{- define "ldapium.labels" -}}
+helm.sh/chart: {{ include "ldapium.chart" . }}
+{{ include "ldapium.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -58,8 +58,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels (server component).
 */}}
-{{- define "openldap.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "openldap.name" . }}
+{{- define "ldapium.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "ldapium.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: server
 {{- end -}}
@@ -67,37 +67,37 @@ app.kubernetes.io/component: server
 {{/*
 UI labels / selector labels.
 */}}
-{{- define "openldap.ui.labels" -}}
-helm.sh/chart: {{ include "openldap.chart" . }}
-{{ include "openldap.ui.selectorLabels" . }}
+{{- define "ldapium.ui.labels" -}}
+helm.sh/chart: {{ include "ldapium.chart" . }}
+{{ include "ldapium.ui.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "openldap.ui.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "openldap.name" . }}
+{{- define "ldapium.ui.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "ldapium.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ui
 {{- end -}}
 
 {{/*
 Backup CronJob labels / selector labels. Own component value (not the server
-"server" one from openldap.selectorLabels) — separate helper for the same
+"server" one from ldapium.selectorLabels) — separate helper for the same
 reason ui.* has its own, rather than emitting the same key twice.
 */}}
-{{- define "openldap.backup.labels" -}}
-helm.sh/chart: {{ include "openldap.chart" . }}
-{{ include "openldap.backup.selectorLabels" . }}
+{{- define "ldapium.backup.labels" -}}
+helm.sh/chart: {{ include "ldapium.chart" . }}
+{{ include "ldapium.backup.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "openldap.backup.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "openldap.name" . }}
+{{- define "ldapium.backup.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "ldapium.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: backup
 {{- end -}}
@@ -105,9 +105,9 @@ app.kubernetes.io/component: backup
 {{/*
 Server ServiceAccount name.
 */}}
-{{- define "openldap.serviceAccountName" -}}
+{{- define "ldapium.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- .Values.serviceAccount.name | default (include "openldap.fullname" .) -}}
+{{- .Values.serviceAccount.name | default (include "ldapium.fullname" .) -}}
 {{- else -}}
 {{- .Values.serviceAccount.name | default "default" -}}
 {{- end -}}
@@ -116,9 +116,9 @@ Server ServiceAccount name.
 {{/*
 UI ServiceAccount name (reuses the same create toggle).
 */}}
-{{- define "openldap.ui.serviceAccountName" -}}
+{{- define "ldapium.ui.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- .Values.serviceAccount.name | default (include "openldap.ui.fullname" .) -}}
+{{- .Values.serviceAccount.name | default (include "ldapium.ui.fullname" .) -}}
 {{- else -}}
 {{- .Values.serviceAccount.name | default "default" -}}
 {{- end -}}
@@ -127,8 +127,8 @@ UI ServiceAccount name (reuses the same create toggle).
 {{/*
 Admin password Secret name: existingSecret when set, else the chart-created one.
 */}}
-{{- define "openldap.adminSecretName" -}}
-{{- .Values.auth.existingSecret | default (printf "%s-admin" (include "openldap.fullname" .)) -}}
+{{- define "ldapium.adminSecretName" -}}
+{{- .Values.auth.existingSecret | default (printf "%s-admin" (include "ldapium.fullname" .)) -}}
 {{- end -}}
 
 {{/*
@@ -141,14 +141,14 @@ emitted by .github/workflows/release.yml. AppVersion is the OpenLDAP release
 this chart pins (2.6.x) and is never an image tag — defaulting to it points
 the chart at a tag that does not exist.
 */}}
-{{- define "openldap.image" -}}
+{{- define "ldapium.image" -}}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
 {{/*
 UI image reference. Same tag rule as the server image above.
 */}}
-{{- define "openldap.ui.image" -}}
+{{- define "ldapium.ui.image" -}}
 {{- printf "%s:%s" .Values.ui.image.repository (.Values.ui.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
@@ -157,7 +157,7 @@ Whether replication is enabled: explicit replication.enabled override wins;
 otherwise auto-enable when replicaCount > 1. Renders the literal string
 "true" or "false".
 */}}
-{{- define "openldap.replicationEnabled" -}}
+{{- define "ldapium.replicationEnabled" -}}
 {{- if hasKey .Values.replication "enabled" -}}
 {{- .Values.replication.enabled -}}
 {{- else -}}
@@ -179,9 +179,9 @@ anything that sorts, dedupes, or reorders the result (e.g. alphabetically,
 or by `sortAlpha`), and do not exclude "self" here — the image does that
 itself via the index, not by pattern-matching the URL.
 */}}
-{{- define "openldap.replicationPeers" -}}
-{{- $fullname := include "openldap.fullname" . -}}
-{{- $headless := include "openldap.headlessName" . -}}
+{{- define "ldapium.replicationPeers" -}}
+{{- $fullname := include "ldapium.fullname" . -}}
+{{- $headless := include "ldapium.headlessName" . -}}
 {{- $ns := .Release.Namespace -}}
 {{- $domain := .Values.replication.clusterDomain -}}
 {{- $count := int .Values.replicaCount -}}
@@ -205,7 +205,7 @@ Accepts Ki/Mi/Gi/Ti (and the k8s-legal bare-byte form). Anything else is a
 hard error rather than a silent fallback, since a wrong map size surfaces much
 later as an OOMKill.
 */}}
-{{- define "openldap.dataVolumeBytes" -}}
+{{- define "ldapium.dataVolumeBytes" -}}
 {{- $s := .Values.persistence.data.size | toString -}}
 {{- if regexMatch "^[0-9]+Ti$" $s -}}
 {{- mul (trimSuffix "Ti" $s | int64) 1099511627776 -}}

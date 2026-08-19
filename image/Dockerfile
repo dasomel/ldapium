@@ -119,7 +119,7 @@ RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
 
 # --- Our own bootstrap templates + entrypoint ---
 COPY ldifs/01-cn-config.ldif ldifs/02-cn-config-admin.ldif ldifs/03-base-structure.ldif \
-    /usr/local/share/openldap-suite/bootstrap/
+    /usr/local/share/ldapium/bootstrap/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 

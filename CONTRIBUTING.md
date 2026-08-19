@@ -53,7 +53,7 @@ a round trip. Individually:
 # not compile until this has been run at least once.
 cd ui/frontend && npm ci && npm run lint && npm run build
 cd ui/backend  && gofmt -l . && go vet ./... && go test ./...
-helm lint charts/openldap
+helm lint charts/ldapium
 shellcheck -s sh image/entrypoint.sh && shellcheck scripts/*.sh
 ./scripts/check-versions.sh
 ./scripts/licenses.sh --check
@@ -68,22 +68,22 @@ one CI runs (`.github/workflows/e2e.yml`), locally:
 
 ```sh
 kind create cluster --name dev
-docker build -t openldap-suite:dev image
-kind load docker-image openldap-suite:dev --name dev
-helm install directory charts/openldap --namespace directory --create-namespace \
-  --set image.repository=openldap-suite --set image.tag=dev --set image.pullPolicy=Never \
+docker build -t ldapium:dev image
+kind load docker-image ldapium:dev --name dev
+helm install directory charts/ldapium --namespace directory --create-namespace \
+  --set image.repository=ldapium --set image.tag=dev --set image.pullPolicy=Never \
   --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" --wait
 helm test directory --namespace directory --logs
 ```
 
-`charts/openldap/files/tests/directory-test.sh` is a plain script, so it can
+`charts/ldapium/files/tests/directory-test.sh` is a plain script, so it can
 also be pointed at any LDAP server directly — which is how it was developed:
 
 ```sh
 printf 'secret' > /tmp/pw && chmod 400 /tmp/pw
 LDAP_URL=ldap://127.0.0.1:389 LDAP_ROOT_DN=dc=example,dc=org \
 LDAP_ADMIN_DN=cn=admin,dc=example,dc=org PASSWORD_FILE=/tmp/pw \
-  sh charts/openldap/files/tests/directory-test.sh
+  sh charts/ldapium/files/tests/directory-test.sh
 ```
 
 ## Commits

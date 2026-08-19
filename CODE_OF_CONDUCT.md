@@ -37,7 +37,7 @@ Examples of unacceptable behavior:
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the maintainers via GitHub — open a private security advisory or
-contact the maintainer listed in `charts/openldap/Chart.yaml`. All complaints
+contact the maintainer listed in `charts/ldapium/Chart.yaml`. All complaints
 will be reviewed and investigated promptly and fairly. Maintainers are
 obligated to respect the privacy and security of the reporter of any incident.
 

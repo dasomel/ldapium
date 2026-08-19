@@ -1,7 +1,7 @@
 # Standalone (non-Kubernetes) deployment: server + management UI, one
 # `docker compose up` away. See README.md's "Standalone (docker compose)"
 # section for the full walkthrough, including backups (scripts/backup.sh)
-# and restore (charts/openldap/README.md's Restore section — the procedure
+# and restore (charts/ldapium/README.md's Restore section — the procedure
 # is identical, this compose file's server is the same image).
 #
 # 1. cp .env.example .env, fill in the required values, then:
@@ -20,7 +20,7 @@ services:
     # in .env to something else if you want both side by side.
     build:
       context: ./image
-    image: ${OPENLDAP_IMAGE:-ghcr.io/dasomel/openldap-suite:0.1.0}
+    image: ${OPENLDAP_IMAGE:-ghcr.io/dasomel/ldapium:0.1.0}
     environment:
       LDAP_ROOT_DN: ${LDAP_ROOT_DN:?set LDAP_ROOT_DN in .env, e.g. dc=example,dc=org — see .env.example}
       LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?set LDAP_ADMIN_PASSWORD in .env — this image ships no default admin password, see .env.example}
@@ -39,7 +39,7 @@ services:
   ui:
     build:
       context: ./ui
-    image: ${UI_IMAGE:-ghcr.io/dasomel/openldap-suite-ui:0.1.0}
+    image: ${UI_IMAGE:-ghcr.io/dasomel/ldapium-ui:0.1.0}
     environment:
       APP_VERSION: ${APP_VERSION:-development}
       LDAP_URL: ldap://ldap:389

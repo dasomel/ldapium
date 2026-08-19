@@ -1,6 +1,6 @@
-# Default values for openldap.
+# Default values for ldapium.
 # Every env var this chart sets maps 1:1 to image/entrypoint.sh (server) or
-# ui/backend/internal/config/config.go (UI) — see charts/openldap/README.md
+# ui/backend/internal/config/config.go (UI) — see charts/ldapium/README.md
 # for the full mapping.
 
 # -- Number of server replicas. StatefulSet only (no Deployment variant).
@@ -11,7 +11,7 @@ replicaCount: 1
 image:
   # -- Server image repository. Must match what
   #    .github/workflows/release.yml publishes.
-  repository: ghcr.io/dasomel/openldap-suite
+  repository: ghcr.io/dasomel/ldapium
   # -- Defaults to .Chart.Version when empty — the chart and its images are
   #    released together under the same vX.Y.Z tag. Set this to pin an image
   #    independently of the chart. It is NOT the OpenLDAP version; that is
@@ -109,10 +109,10 @@ replication:
   # enabled: true
   # -- Used to build peer FQDNs: <fullname>-<i>.<fullname>-headless.<ns>.svc.<clusterDomain>.
   #    CONTRACT: LDAP_REPLICATION_PEERS (rendered by templates/_helpers.tpl's
-  #    openldap.replicationPeers) MUST stay pod-ordinal ascending (0..N-1),
+  #    ldapium.replicationPeers) MUST stay pod-ordinal ascending (0..N-1),
   #    dense, self included — the image looks up its own entry by
   #    LDAP_SERVER_ID - 1, not by matching its own URL. Do not "clean up"
-  #    that ordering; see the comment on openldap.replicationPeers.
+  #    that ordering; see the comment on ldapium.replicationPeers.
   clusterDomain: cluster.local
   # -- olcSyncrepl retry= value.
   retry: "5 10 30 +"
@@ -140,7 +140,7 @@ seed:
   #        ou: people
   ldifs: {}
 
-# `helm test <release>` — see charts/openldap/files/tests/directory-test.sh.
+# `helm test <release>` — see charts/ldapium/files/tests/directory-test.sh.
 #
 # Deliberately chart-side, not image-side: the server image ships a directory
 # server and nothing else, so what gets tested and whether it runs at all is
@@ -349,7 +349,7 @@ ui:
   enabled: false
 
   image:
-    repository: ghcr.io/dasomel/openldap-suite-ui
+    repository: ghcr.io/dasomel/ldapium-ui
     tag: ""
     pullPolicy: IfNotPresent
 

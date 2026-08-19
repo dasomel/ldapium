@@ -1,5 +1,5 @@
 apiVersion: v2
-name: openldap
+name: ldapium
 description: >-
   OpenLDAP 2.6, compiled from upstream source, deployed as a replicated
   StatefulSet with an optional management UI. No sample data, no default
@@ -7,9 +7,9 @@ description: >-
 type: application
 version: 0.1.0
 appVersion: "2.6.14"
-home: https://github.com/dasomel/openldap-suite
+home: https://github.com/dasomel/ldapium
 sources:
-  - https://github.com/dasomel/openldap-suite
+  - https://github.com/dasomel/ldapium
 keywords:
   - openldap
   - ldap

@@ -7,7 +7,7 @@ package ldapclient
 import (
 	"context"
 
-	"github.com/dasomel/openldap-suite/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // Client is a single authenticated LDAP session, bound as one directory

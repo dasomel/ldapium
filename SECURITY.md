@@ -4,7 +4,7 @@
 
 Please report privately, not in a public issue:
 
-- GitHub [private vulnerability reporting](https://github.com/dasomel/openldap-suite/security/advisories/new)
+- GitHub [private vulnerability reporting](https://github.com/dasomel/ldapium/security/advisories/new)
   (Security → Report a vulnerability) — preferred, it keeps the discussion and
   the eventual advisory in one place.
 
