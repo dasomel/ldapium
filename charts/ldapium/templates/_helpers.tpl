@@ -25,27 +25,17 @@ limit.
 {{- end -}}
 {{- end -}}
 
-{{/*
-Headless service name (StatefulSet peer discovery).
-*/}}
+{{/* Headless service name. */}}
 {{- define "ldapium.headlessName" -}}
 {{- printf "%s-headless" (include "ldapium.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/*
-UI component fullname.
-*/}}
+{{/* UI component fullname. */}}
 {{- define "ldapium.ui.fullname" -}}
 {{- printf "%s-ui" (include "ldapium.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "ldapium.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{/*
-Common labels.
-*/}}
+{{/* Common labels. */}}
 {{- define "ldapium.labels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}
 {{ include "ldapium.selectorLabels" . }}
@@ -55,18 +45,14 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{/*
-Selector labels (server component).
-*/}}
+{{/* Server selector labels. */}}
 {{- define "ldapium.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "ldapium.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: server
 {{- end -}}
 
-{{/*
-UI labels / selector labels.
-*/}}
+{{/* UI labels / selector labels. */}}
 {{- define "ldapium.ui.labels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}
 {{ include "ldapium.ui.selectorLabels" . }}
@@ -82,11 +68,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ui
 {{- end -}}
 
-{{/*
-Backup CronJob labels / selector labels. Own component value (not the server
-"server" one from ldapium.selectorLabels) — separate helper for the same
-reason ui.* has its own, rather than emitting the same key twice.
-*/}}
+{{/* Backup labels / selector labels. */}}
 {{- define "ldapium.backup.labels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}
 {{ include "ldapium.backup.selectorLabels" . }}
@@ -102,9 +84,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: backup
 {{- end -}}
 
-{{/*
-Server ServiceAccount name.
-*/}}
+{{/* Server ServiceAccount name. */}}
 {{- define "ldapium.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- .Values.serviceAccount.name | default (include "ldapium.fullname" .) -}}
@@ -113,9 +93,7 @@ Server ServiceAccount name.
 {{- end -}}
 {{- end -}}
 
-{{/*
-UI ServiceAccount name (reuses the same create toggle).
-*/}}
+{{/* UI ServiceAccount name. */}}
 {{- define "ldapium.ui.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- .Values.serviceAccount.name | default (include "ldapium.ui.fullname" .) -}}
@@ -124,38 +102,24 @@ UI ServiceAccount name (reuses the same create toggle).
 {{- end -}}
 {{- end -}}
 
-{{/*
-Admin password Secret name: existingSecret when set, else the chart-created one.
-*/}}
+{{/* Admin password Secret name. */}}
 {{- define "ldapium.adminSecretName" -}}
 {{- .Values.auth.existingSecret | default (printf "%s-admin" (include "ldapium.fullname" .)) -}}
 {{- end -}}
 
-{{/*
-Server image reference.
-
-The tag falls back to .Chart.Version, not .Chart.AppVersion, because the
-chart version is what the release pipeline publishes images under: a git tag
-vX.Y.Z drives both `helm package --version X.Y.Z` and the semver image tags
-emitted by .github/workflows/release.yml. AppVersion is the OpenLDAP release
-this chart pins (2.6.x) and is never an image tag — defaulting to it points
-the chart at a tag that does not exist.
-*/}}
+{{/* Server image reference. */}}
 {{- define "ldapium.image" -}}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
-{{/*
-UI image reference. Same tag rule as the server image above.
-*/}}
+{{/* UI image reference. */}}
 {{- define "ldapium.ui.image" -}}
 {{- printf "%s:%s" .Values.ui.image.repository (.Values.ui.image.tag | default .Chart.Version) -}}
 {{- end -}}
 
 {{/*
-Whether replication is enabled: explicit replication.enabled override wins;
-otherwise auto-enable when replicaCount > 1. Renders the literal string
-"true" or "false".
+Whether replication is enabled: explicit override wins; otherwise auto-enable
+when replicaCount > 1.
 */}}
 {{- define "ldapium.replicationEnabled" -}}
 {{- if hasKey .Values.replication "enabled" -}}
@@ -166,18 +130,8 @@ otherwise auto-enable when replicaCount > 1. Renders the literal string
 {{- end -}}
 
 {{/*
-Comma-separated LDAP_REPLICATION_PEERS: every replica's headless-Service
-FQDN, self included (see REPLICATION-CONTRACT.md D4).
-
-CONTRACT (D7, orchestrator-verified): the image indexes into this list by
-LDAP_SERVER_ID - 1 (LDAP_SERVER_ID = pod ordinal + 1) to find and exclude
-itself. The list is therefore not just "the set of peers" — its ORDER is
-part of the env var contract. It must be pod-ordinal ascending (0, 1, 2, ...,
-replicaCount-1), dense (no gaps, no dropped/reordered entries). `until`
-below walks $i ascending by construction — do not replace this with
-anything that sorts, dedupes, or reorders the result (e.g. alphabetically,
-or by `sortAlpha`), and do not exclude "self" here — the image does that
-itself via the index, not by pattern-matching the URL.
+Comma-separated replication peer URLs in ordinal order. When replication TLS
+is enabled, use LDAPS so syncrepl cannot silently fall back to plaintext.
 */}}
 {{- define "ldapium.replicationPeers" -}}
 {{- $fullname := include "ldapium.fullname" . -}}
@@ -185,26 +139,20 @@ itself via the index, not by pattern-matching the URL.
 {{- $ns := .Release.Namespace -}}
 {{- $domain := .Values.replication.clusterDomain -}}
 {{- $count := int .Values.replicaCount -}}
+{{- $scheme := "ldap" -}}
+{{- $port := 389 -}}
+{{- if .Values.replication.tls.enabled -}}
+{{- $scheme = "ldaps" -}}
+{{- $port = 636 -}}
+{{- end -}}
 {{- $peers := list -}}
 {{- range $i := until $count -}}
-{{- $peers = append $peers (printf "ldap://%s-%d.%s.%s.svc.%s:389" $fullname $i $headless $ns $domain) -}}
+{{- $peers = append $peers (printf "%s://%s-%d.%s.%s.svc.%s:%d" $scheme $fullname $i $headless $ns $domain $port) -}}
 {{- end -}}
 {{- join "," $peers -}}
 {{- end -}}
 
-{{/*
-The data volume's size in bytes, for LDAP_DB_MAX_SIZE (mdb's olcDbMaxSize).
-
-Sizing the map to the volume is the point: mdb reserves the map up front and,
-under cgroup v2, the pages it dirties count against the container's memory
-limit. A default 10 GiB map on a 2 Gi volume measured 690Mi RSS on a directory
-holding five entries — most of a 1Gi limit, spent on space the filesystem
-could never provide anyway.
-
-Accepts Ki/Mi/Gi/Ti (and the k8s-legal bare-byte form). Anything else is a
-hard error rather than a silent fallback, since a wrong map size surfaces much
-later as an OOMKill.
-*/}}
+{{/* Data volume size in bytes for LDAP_DB_MAX_SIZE. */}}
 {{- define "ldapium.dataVolumeBytes" -}}
 {{- $s := .Values.persistence.data.size | toString -}}
 {{- if regexMatch "^[0-9]+Ti$" $s -}}
