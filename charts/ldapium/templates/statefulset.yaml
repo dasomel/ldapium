@@ -8,10 +8,6 @@ metadata:
 spec:
   serviceName: {{ include "ldapium.headlessName" . }}
   replicas: {{ .Values.replicaCount }}
-  # Default (OrderedReady) podManagementPolicy is kept deliberately: it
-  # serializes pod creation, which reduces (does not eliminate) the window
-  # where two brand-new pods could both decide no peer holds the base DIT
-  # yet and both run slapadd -n 1 (see REPLICATION-CONTRACT.md D5).
   selector:
     matchLabels:
       {{- include "ldapium.selectorLabels" . | nindent 6 }}
@@ -38,10 +34,6 @@ spec:
       topologySpreadConstraints:
         {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
       {{- else if gt (int .Values.replicaCount) 1 }}
-      # HA is the point of running >1 replica — spread pods across nodes by
-      # default so it isn't defeated by the scheduler happening to pack them
-      # onto one. ScheduleAnyway (not hard-required) so a small/single-node
-      # cluster still schedules the chart at all.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -101,9 +93,6 @@ spec:
               value: {{ .Values.ldap.uniqueAttributes | quote }}
             - name: LDAP_PASSWORD_POLICY_ENABLED
               value: {{ .Values.ldap.passwordPolicyEnabled | quote }}
-            # mdb's memory map. Sized from the data volume by default, because
-            # a map larger than its filesystem buys nothing and costs real
-            # memory — see resources.limits.memory in values.yaml.
             - name: LDAP_MAX_OPEN_FILES
               value: {{ .Values.ldap.maxOpenFiles | quote }}
             - name: LDAP_DB_MAX_SIZE
@@ -127,10 +116,6 @@ spec:
             {{- if eq (include "ldapium.replicationEnabled" .) "true" }}
             - name: LDAP_REPLICATION_ENABLED
               value: "true"
-            # Ordinal-ascending, dense, self included — the image indexes
-            # this list by LDAP_SERVER_ID-1 to find itself. See the
-            # ldapium.replicationPeers comment in _helpers.tpl before
-            # touching this.
             - name: LDAP_REPLICATION_PEERS
               value: {{ include "ldapium.replicationPeers" . | quote }}
             {{- if .Values.replication.bindDN }}
@@ -188,14 +173,8 @@ spec:
               mountPath: /etc/openldap/slapd.d
             - name: data
               mountPath: /var/lib/openldap/data
-            # Not a PVC — pidfile/argsfile/ldapi socket, ephemeral by nature
-            # and re-created by entrypoint.sh (mkdir -p) on every start. Also
-            # what makes readOnlyRootFilesystem viable (see values.yaml).
             - name: run
               mountPath: /var/lib/openldap/run
-            # entrypoint.sh mktemp's here both at bootstrap and at every
-            # replication reconcile (see REPLICATION-CONTRACT.md) — needs to
-            # be writable under readOnlyRootFilesystem.
             - name: tmp
               mountPath: /tmp
             {{- if .Values.tls.enabled }}
@@ -208,6 +187,62 @@ spec:
               mountPath: /opt/ldifs
               readOnly: true
             {{- end }}
+
+        {{- if and .Values.metrics .Values.metrics.enabled }}
+        - name: metrics
+          image: {{ include "ldapium.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: 9330
+              protocol: TCP
+          env:
+            - name: LDAP_ADDR
+              value: ldap://127.0.0.1:389
+            - name: LDAP_USER
+              value: cn=monitoring,cn=Monitor
+            - name: LDAP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ldapium.adminSecretName" . }}
+                  key: {{ .Values.auth.existingSecretKey }}
+            - name: LDAP_ROOT_DN
+              value: {{ .Values.ldap.rootDN | quote }}
+            {{- if eq (include "ldapium.replicationEnabled" .) "true" }}
+            - name: LDAP_REPLICATION_ENABLED
+              value: "true"
+            - name: LDAP_REPLICATION_PEERS
+              value: {{ include "ldapium.replicationPeers" . | quote }}
+            {{- else }}
+            - name: LDAP_REPLICATION_ENABLED
+              value: "false"
+            {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              args="--prom-addr=:9330 --ldap-addr=${LDAP_ADDR} --ldap-user=${LDAP_USER} --replication-object=${LDAP_ROOT_DN}"
+              if [ "${LDAP_REPLICATION_ENABLED}" = "true" ]; then
+                ordinal="${HOSTNAME##*-}"
+                server_id=$((ordinal + 1))
+                args="$args --server-id=$server_id"
+                i=0
+                oldifs=$IFS
+                IFS=','
+                for peer in $LDAP_REPLICATION_PEERS; do
+                  i=$((i + 1))
+                  if [ "$i" -ne "$server_id" ]; then
+                    args="$args --replication-server=$peer"
+                  fi
+                done
+                IFS=$oldifs
+              fi
+              exec /usr/local/bin/openldap_exporter $args
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+        {{- end }}
       volumes:
         - name: run
           emptyDir: {}
