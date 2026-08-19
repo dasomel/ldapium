@@ -19,23 +19,21 @@ jobs:
   evidence:
     name: Verify release supply chain
     if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
-      }}
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.workflow_run.head_branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
 
       - name: Determine release identity
         id: identity
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.release_tag }}
-          WORKFLOW_TAG: ${{ github.event.workflow_run.head_branch }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -43,29 +41,32 @@ jobs:
             tag="$INPUT_TAG"
             sha="$(git rev-list -n1 "$tag")"
           else
-            tag="$WORKFLOW_TAG"
             sha="$WORKFLOW_SHA"
+            tag="$(git tag --points-at "$sha" 'v*' | head -n1 || true)"
+            if [ -z "$tag" ]; then
+              echo "No release tag points at $sha; skipping evidence generation for non-tag Release runs."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           version="${tag#v}"
+          printf 'skip=false\n' >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Helm
+        if: steps.identity.outputs.skip != 'true'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Log in to GHCR
+        if: steps.identity.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Install inspection tools
-        run: |
-          set -euo pipefail
-          docker version
-          docker buildx version
-
       - name: Verify image manifests and digests
+        if: steps.identity.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.identity.outputs.version }}
         run: |
@@ -74,12 +75,12 @@ jobs:
           for image in ldapium ldapium-ui; do
             ref="ghcr.io/${{ github.repository_owner }}/${image}:${VERSION}"
             docker buildx imagetools inspect "$ref" | tee "/tmp/evidence/${image}-manifest.txt"
-            docker buildx imagetools inspect "$ref" --format '{{json .}}' > "/tmp/evidence/${image}-manifest.json"
             grep -q 'linux/amd64' "/tmp/evidence/${image}-manifest.txt"
             grep -q 'linux/arm64' "/tmp/evidence/${image}-manifest.txt"
           done
 
       - name: Verify Helm OCI chart
+        if: steps.identity.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.identity.outputs.version }}
         run: |
@@ -87,20 +88,21 @@ jobs:
           helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/ldapium" --version "$VERSION" \
             > /tmp/evidence/chart.yaml
           grep -q "^version: $VERSION$" /tmp/evidence/chart.yaml
-          helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/ldapium" --version "$VERSION" --output json \
-            > /tmp/evidence/chart.json
 
       - name: Verify dependency/license gate
+        if: steps.identity.outputs.skip != 'true'
         run: ./scripts/licenses.sh --check
 
       - name: Verify chart rendering and version contract
+        if: steps.identity.outputs.skip != 'true'
         run: |
           set -euo pipefail
           ./scripts/check-versions.sh
           helm lint charts/ldapium
-          helm template evidence charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret >/tmp/evidence/chart-render.yaml
+          helm template evidence charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret > /tmp/evidence/chart-render.yaml
 
       - name: Generate evidence manifest
+        if: steps.identity.outputs.skip != 'true'
         env:
           TAG: ${{ steps.identity.outputs.tag }}
           VERSION: ${{ steps.identity.outputs.version }}
@@ -120,15 +122,15 @@ jobs:
 
           manifest = {
               'schemaVersion': 'ldapium.supply-chain/v1',
-              'repository': os.environ.get('GITHUB_REPOSITORY'),
+              'repository': os.environ['GITHUB_REPOSITORY'],
               'releaseTag': os.environ['TAG'],
               'version': os.environ['VERSION'],
               'sourceCommit': os.environ['SHA'],
               'verificationWorkflowRun': os.environ['RUN_ID'],
               'artifacts': {
-                  'serverImage': f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/ldapium:{os.environ['VERSION']}",
-                  'uiImage': f"ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/ldapium-ui:{os.environ['VERSION']}",
-                  'helmChart': f"oci://ghcr.io/{os.environ.get('GITHUB_REPOSITORY_OWNER')}/charts/ldapium:{os.environ['VERSION']}",
+                  'serverImage': f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/ldapium:{os.environ['VERSION']}",
+                  'uiImage': f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/ldapium-ui:{os.environ['VERSION']}",
+                  'helmChart': f"oci://ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/charts/ldapium:{os.environ['VERSION']}",
               },
               'evidenceFilesSha256': files,
           }
@@ -140,6 +142,7 @@ jobs:
           PY
 
       - name: Upload evidence bundle
+        if: steps.identity.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: supply-chain-evidence-${{ steps.identity.outputs.tag }}
