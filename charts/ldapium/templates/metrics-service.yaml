@@ -1,0 +1,18 @@
+{{- if and .Values.metrics .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ldapium.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ldapium.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 9330
+      targetPort: metrics
+      protocol: TCP
+{{- end }}
