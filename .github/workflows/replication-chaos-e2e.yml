@@ -1,0 +1,115 @@
+name: Replication Chaos E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - ".github/workflows/replication-chaos-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  replication-chaos:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t ldapium:chaos image
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: chaos
+
+      - name: Load image
+        run: kind load docker-image ldapium:chaos --name chaos
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install 3-node LDAPium
+        run: |
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set replicaCount=3 \
+            --set image.repository=ldapium \
+            --set image.tag=chaos \
+            --set image.pullPolicy=Never \
+            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set auth.adminPassword='chaos-e2e-password' \
+            --set ui.enabled=false \
+            --wait --timeout 10m
+
+      - name: Seed baseline data
+        run: |
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+            sh -ec '
+              ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
+              dn: ou=chaos,dc=example,dc=org
+              objectClass: organizationalUnit
+              ou: chaos
+
+              dn: uid=baseline,ou=chaos,dc=example,dc=org
+              objectClass: inetOrgPerson
+              uid: baseline
+              cn: Baseline
+              sn: Test
+              EOF
+            '
+
+      - name: Delete one provider
+        run: |
+          kubectl -n directory delete pod directory-ldapium-1 --wait=true
+          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-0 --timeout=180s
+          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-2 --timeout=180s
+
+      - name: Continue writes while one provider is down
+        run: |
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+            sh -ec '
+              for i in 1 2 3 4 5; do
+                ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
+              dn: uid=chaos-${i},ou=chaos,dc=example,dc=org
+              objectClass: inetOrgPerson
+              uid: chaos-${i}
+              cn: Chaos ${i}
+              sn: Test
+              EOF
+              done
+            '
+
+      - name: Wait for failed provider to rejoin
+        run: kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-1 --timeout=300s
+
+      - name: Verify convergence on all three providers
+        run: |
+          set -euo pipefail
+          for pod in directory-ldapium-0 directory-ldapium-1 directory-ldapium-2; do
+            kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+              sh -ec "ldapsearch -x -H ldap://${pod}:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=chaos-*)' uid | grep -c '^uid: chaos-' | grep -q 5"
+          done
+
+      - name: Verify replication metadata
+        run: |
+          set -euo pipefail
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
+            sh -ec 'ldapsearch -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password -b dc=example,dc=org -s base contextCSN | grep -q contextCSN'
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide || true
+          kubectl -n directory describe pods || true
+          kubectl -n directory logs statefulset/directory-ldapium --tail=300 || true
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -100 || true
+
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
