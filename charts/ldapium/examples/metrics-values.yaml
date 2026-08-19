@@ -18,9 +18,23 @@ metrics:
     enabled: true
     replicationLagThreshold: 30
     replicationLagFor: 5m
+    connectionSaturationPercent: 80
+    backupMaxAgeSeconds: 93600
+    backupFailureFor: 5m
+    # Optional cert-manager metric selector. Leave empty when another
+    # certificate controller is used; then provide the equivalent PromQL
+    # selector in this field.
+    tlsCertificateExpirationExpr: ""
+    tlsExpiryWarningSeconds: 2592000
   grafanaDashboard:
     enabled: true
 
 # For multi-provider deployments the exporter also reports contextCSN-based
 # replication deltas between the local provider and its peers.
 replicaCount: 3
+
+# Enable the scheduled backup so backup-freshness alerts have a source.
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 7
