@@ -19,7 +19,7 @@ There is **no default admin password** — the chart refuses to render
 `auth.adminPassword` or `auth.existingSecret` is set. This mirrors
 `image/entrypoint.sh`, which refuses to start for the same reason.
 
-### Two `helm` footguns, hit for real while operating this chart
+### Three `helm` footguns, hit for real while operating this chart
 
 - **`helm upgrade --reuse-values` does not pick up new chart defaults.**
   Upgrading to a chart version that adds a key (e.g. `backup.recordToDirectory`)
@@ -38,6 +38,13 @@ There is **no default admin password** — the chart refuses to render
   (`--set ldap.rootDN=dc=example\,dc=org`) or, better, put DN-shaped values
   in a `-f values.yaml` file instead of `--set` — this was hit for real and
   put a bad value into a release.
+- **`helm install --wait` hangs on a healthy release when `backup.enabled`
+  is on.** `--wait` waits for PersistentVolumeClaims to reach `Bound`, and the
+  backup PVC has no consumer until the CronJob first fires. On a storage class
+  with `volumeBindingMode: WaitForFirstConsumer` — kind's default and most
+  cloud defaults — that claim stays `Pending` by design, so `--wait` sits there
+  until it times out while every pod is already running and ready. Wait on the
+  workload instead: `kubectl -n <ns> rollout status statefulset/<fullname>`.
 
 ## HA / replication
 
@@ -334,6 +341,33 @@ server's own PVCs and does not need to — that's deliberate:
 Replication is **not** a substitute for this. Multi-provider syncrepl
 propagates a bad delete to every replica within seconds; there is no "the
 other node still has it" safety net for that.
+
+### RPO and RTO
+
+**RPO is the backup interval, and nothing shortens it but a shorter interval.**
+The CronJob takes a point-in-time dump; everything written since the last
+successful run is gone after a restore. At the default
+`backup.schedule: "0 2 * * *"` that is up to 24 hours. Replication does not
+help here — it copies the mistake, it does not keep an older copy.
+
+The actual exposure is observable rather than assumed: every successful run
+stamps `lastSuccessAt` on `cn=backup,ou=operations,<rootDN>` (below), and with
+`metrics.prometheusRule` enabled, `LDAPiumBackupStale` fires once the newest
+completed backup Job is older than
+`metrics.prometheusRule.backupMaxAgeSeconds`, `LDAPiumBackupFailed` on a run
+that failed outright.
+
+**RTO is dominated by `slapadd`, not by Kubernetes.** The recovery sequence —
+scale to 0, wipe the other ordinals, restore into `-0`, scale back up — is
+timed end to end by the `3-node backup → bad delete → restore → resync` job in
+`.github/workflows/backup-restore.yml`, which publishes `rto.txt` in its
+`dr-3node-evidence` artifact. On a kind cluster holding a handful of entries it
+measures **46 seconds**, all three replicas serving the restored entry again.
+
+Read that as a floor, not a promise. It leaves out the time to notice and
+decide, image pull on a cold node, and the term that actually grows: `slapadd`
+of a real directory, which scales with entry and index count. Measure it
+against your own data before writing a number into an SLA.
 
 ### Status recorded in the directory
 
