@@ -1,6 +1,7 @@
 name: Air-gap bundle
 
 on:
+  pull_request:
   push:
     tags:
       - "v*"
@@ -19,6 +20,10 @@ jobs:
   bundle:
     name: Build offline bundle
     runs-on: ubuntu-24.04
+    # Needs published images and a chart in GHCR, so it cannot run on a pull
+    # request. The offline-e2e job below is the part that can, and it exercises
+    # the same script through --from-local-images.
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,3 +87,151 @@ jobs:
           path: /tmp/ldapium-offline-bundle
           if-no-files-found: error
           retention-days: 30
+
+  offline-e2e:
+    name: Install from a bundle with no registry
+    runs-on: ubuntu-24.04
+    env:
+      BUNDLE_VERSION: 0.0.0-e2e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Build the images under their release names
+        run: |
+          set -euo pipefail
+          # Same names a release would carry, so the bundle and everything that
+          # consumes it — including the chart's own image.repository default —
+          # behave exactly as they would for a real release.
+          docker build -t "ghcr.io/${{ github.repository_owner }}/ldapium:${BUNDLE_VERSION}" image
+          docker build -t "ghcr.io/${{ github.repository_owner }}/ldapium-ui:${BUNDLE_VERSION}" ui
+      - name: Assemble the bundle
+        run: scripts/offline-bundle.sh "$BUNDLE_VERSION" /tmp/bundle --from-local-images
+      - name: Verify the bundle
+        run: |
+          set -euo pipefail
+          scripts/offline-install.sh --bundle /tmp/bundle --verify-only | tee /tmp/offline-evidence-verify.txt
+      - name: Refuse a bundle that is missing artifacts
+        run: |
+          set -euo pipefail
+          # Checksums alone would not catch this: a bundler that skipped SBOMs
+          # produces a bundle whose SHA256SUMS is perfectly self-consistent.
+          cp -R /tmp/bundle /tmp/bundle-incomplete
+          rm -f /tmp/bundle-incomplete/sbom/*.spdx.json
+          (
+            cd /tmp/bundle-incomplete
+            rm -f SHA256SUMS
+            find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+          if scripts/offline-install.sh --bundle /tmp/bundle-incomplete --verify-only \
+            > /tmp/offline-evidence-incomplete.txt 2>&1; then
+            echo "::error::an incomplete bundle was accepted"
+            cat /tmp/offline-evidence-incomplete.txt
+            exit 1
+          fi
+          tail -1 /tmp/offline-evidence-incomplete.txt
+          grep -q 'bundle contains no SBOM' /tmp/offline-evidence-incomplete.txt
+          echo "PASS: incomplete bundle refused before anything was installed"
+      - name: Refuse a bundle whose payload was altered
+        run: |
+          set -euo pipefail
+          cp -R /tmp/bundle /tmp/bundle-tampered
+          archive=$(find /tmp/bundle-tampered/images -name '*.tar.gz' -type f | sort | head -1)
+          printf 'x' >> "$archive"
+          if scripts/offline-install.sh --bundle /tmp/bundle-tampered --verify-only \
+            > /tmp/offline-evidence-tampered.txt 2>&1; then
+            echo "::error::a tampered bundle was accepted"
+            exit 1
+          fi
+          grep -q 'FAILED' /tmp/offline-evidence-tampered.txt
+          echo "PASS: tampered bundle refused"
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: offline
+      - name: Make the bundle the only source of the images
+        run: |
+          set -euo pipefail
+          # Without this the install could succeed on images that happen to be
+          # sitting in the daemon from the build step, which proves nothing
+          # about a machine that only ever received the bundle.
+          docker rmi "ghcr.io/${{ github.repository_owner }}/ldapium:${BUNDLE_VERSION}" \
+                     "ghcr.io/${{ github.repository_owner }}/ldapium-ui:${BUNDLE_VERSION}"
+          ! docker image inspect "ghcr.io/${{ github.repository_owner }}/ldapium:${BUNDLE_VERSION}" >/dev/null 2>&1
+      - name: Install from the bundle
+        run: |
+          set -euo pipefail
+          scripts/offline-install.sh \
+            --bundle /tmp/bundle \
+            --release directory \
+            --namespace directory \
+            --kind-cluster offline \
+            --set replicaCount=1 \
+            --set ui.enabled=true \
+            --set auth.adminPassword=offline-e2e-password
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          kubectl -n directory rollout status deployment/directory-ldapium-ui --timeout=10m
+      - name: Prove nothing was pulled
+        run: |
+          set -euo pipefail
+          kubectl -n directory get events -o json \
+            | jq -r '.items[] | select(.reason=="Pulling" or .reason=="Failed") | "\(.reason) \(.message)"' \
+            > /tmp/offline-evidence-pulls.txt
+          cat /tmp/offline-evidence-pulls.txt
+          # imagePullPolicy=Never means a missing image is a hard failure rather
+          # than a quiet download, so a running pod is itself the evidence — but
+          # an explicit check says so out loud.
+          if grep -q '^Pulling' /tmp/offline-evidence-pulls.txt; then
+            echo "::error::the install pulled an image from a registry"
+            exit 1
+          fi
+          kubectl -n directory get pods -o wide | tee /tmp/offline-evidence-pods.txt
+          echo "PASS: every image came from the bundle"
+      - name: Check the directory actually works
+        run: helm test directory --namespace directory --logs
+      - name: Upgrade and roll back, still offline
+        run: |
+          set -euo pipefail
+          scripts/offline-install.sh \
+            --bundle /tmp/bundle \
+            --release directory \
+            --namespace directory \
+            --upgrade \
+            --set replicaCount=1 \
+            --set ui.enabled=true \
+            --set auth.adminPassword=offline-e2e-password \
+            --set ldap.logLevel=sync
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          helm rollback directory --namespace directory --timeout 10m
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          helm history directory --namespace directory | tee /tmp/offline-evidence-history.txt
+          helm test directory --namespace directory --logs
+      - name: Collect offline evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/offline-evidence
+          date -u +%FT%TZ > /tmp/offline-evidence/collected-at.txt
+          cp /tmp/offline-evidence-*.txt /tmp/offline-evidence/ 2>/dev/null || true
+          cp /tmp/bundle/metadata/bundle-manifest.json /tmp/offline-evidence/ 2>/dev/null || true
+          cp /tmp/bundle/SHA256SUMS /tmp/offline-evidence/ 2>/dev/null || true
+      - name: Upload offline evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: offline-e2e-evidence
+          path: /tmp/offline-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide || true
+          kubectl -n directory describe pods || true
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -60 || true
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
