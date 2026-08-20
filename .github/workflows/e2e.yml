@@ -5,12 +5,14 @@ name: E2E (kind)
 # that syncrepl is configured over ldaps:// with strict CA verification.
 
 on:
+  # No paths filter, deliberately. `install + helm test (standalone)` and
+  # `install + helm test (replicated)` are required status checks on main, and a
+  # required check that is path-filtered does not merely skip on a PR that
+  # touches nothing it watches — it never reports, so the PR can never satisfy
+  # the branch policy and can never merge. That is not hypothetical: it blocked
+  # a PR that changed only another workflow file. Either these run on every PR,
+  # as ci.yml's required checks already do, or they stop being required.
   pull_request:
-    paths:
-      - "image/**"
-      - "charts/**"
-      - "ui/**"
-      - ".github/workflows/e2e.yml"
   push:
     branches: [main]
   workflow_dispatch: {}
