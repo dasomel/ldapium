@@ -111,7 +111,7 @@ spec:
                   # ldapadd first and inspecting its exit code — that way
                   # "Already exists" (68) is never hit in the first place.
                   # $1 = data entry count, $2 = data file name, $3 = config
-                  # file name.
+                  # file name, $4 = manifest file name.
                   record_backup_status() {
                     ops_dn="ou=operations,${LDAP_ROOT_DN}"
                     backup_dn="cn=backup,${ops_dn}"
@@ -135,6 +135,7 @@ spec:
                         printf 'description: dataEntries=%s\n' "$1"
                         printf 'description: dataFile=%s\n' "$2"
                         printf 'description: configFile=%s\n' "$3"
+                        printf 'description: manifestFile=%s\n' "$4"
                       } > "$record_ldif"
                       ldapmodify -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" -f "$record_ldif" || return 1
                     else
@@ -146,6 +147,7 @@ spec:
                         printf 'description: dataEntries=%s\n' "$1"
                         printf 'description: dataFile=%s\n' "$2"
                         printf 'description: configFile=%s\n' "$3"
+                        printf 'description: manifestFile=%s\n' "$4"
                       } > "$record_ldif"
                       ldapadd -x -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -y "$pwfile" -f "$record_ldif" || return 1
                     fi
@@ -161,8 +163,27 @@ spec:
                   dump "cn=admin,cn=config" "cn=config" config
                   config_file="config-${ts}.ldif.gz"
 
+                  # The same SHA-256 manifest scripts/backup.sh writes, and for
+                  # the same reason: scripts/restore.sh will not restore a
+                  # bundle it cannot verify, so a scheduled backup without a
+                  # manifest is a backup nobody can use. Written to a dotfile
+                  # and moved into place like the dumps themselves, so a run
+                  # that dies here leaves no half-written manifest behind.
+                  manifest_file="manifest-${ts}.sha256"
+                  (
+                    cd "$backup_dir"
+                    sha256sum "$data_file" "$config_file"
+                  ) > "${backup_dir}/.tmp-${manifest_file}"
+                  mv "${backup_dir}/.tmp-${manifest_file}" "${backup_dir}/${manifest_file}"
+                  (
+                    cd "$backup_dir"
+                    sha256sum -c "$manifest_file"
+                  )
+                  log "wrote ${manifest_file} and verified both dumps against it"
+
                   log "pruning backups older than ${RETENTION_DAYS} day(s)"
                   find "$backup_dir" -maxdepth 1 -name '*.ldif.gz' -mtime "+${RETENTION_DAYS}" -print -delete
+                  find "$backup_dir" -maxdepth 1 -name 'manifest-*.sha256' -mtime "+${RETENTION_DAYS}" -print -delete
 
                   # Recording is best-effort and runs LAST, after both dumps
                   # and pruning have already succeeded: a failure here must
@@ -172,7 +193,7 @@ spec:
                   # for this call; its exit status is checked explicitly.
                   if [ "$RECORD_TO_DIRECTORY" = "true" ]; then
                     set +e
-                    record_backup_status "$data_entries" "$data_file" "$config_file"
+                    record_backup_status "$data_entries" "$data_file" "$config_file" "$manifest_file"
                     record_rc=$?
                     set -e
                     if [ "$record_rc" -ne 0 ]; then
