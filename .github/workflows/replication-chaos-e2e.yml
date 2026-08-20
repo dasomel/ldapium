@@ -99,7 +99,7 @@ jobs:
           start=$(date +%s)
           for pod in directory-ldapium-0 directory-ldapium-1 directory-ldapium-2; do
             kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
-              sh -ec "ldapsearch -x -H ldap://${pod}:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=chaos-*)' uid | grep -c '^uid: chaos-' | grep -q 5"
+              sh -ec "ldapsearch -x -H ldap://${pod}.directory-ldapium-headless.directory.svc.cluster.local:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=chaos-*)' uid | grep -c '^uid: chaos-' | grep -q 5"
           done
           elapsed=$(( $(date +%s) - start ))
           echo "single-provider convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
@@ -131,7 +131,7 @@ jobs:
           kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-2 --timeout=300s
           for pod in directory-ldapium-0 directory-ldapium-1 directory-ldapium-2; do
             kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
-              sh -ec "ldapsearch -x -H ldap://${pod}:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=sequential-*)' uid | grep -c '^uid: sequential-' | grep -q 3"
+              sh -ec "ldapsearch -x -H ldap://${pod}.directory-ldapium-headless.directory.svc.cluster.local:389 -b ou=chaos,dc=example,dc=org -LLL '(uid=sequential-*)' uid | grep -c '^uid: sequential-' | grep -q 3"
           done
           elapsed=$(( $(date +%s) - start ))
           echo "two-node-sequential recovery+convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
