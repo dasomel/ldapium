@@ -23,6 +23,17 @@ MARKER="${CONFIG_DIR}/.bootstrapped"
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
 die() { printf '[entrypoint] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# A command given after the image name is a one-off maintenance task
+# (scripts/backup.sh, scripts/restore.sh, a shell) and must not boot the
+# directory, so run it before the env contract below is enforced — verify-backup.sh
+# for instance needs no LDAP_* variables at all. Without this the arguments are
+# discarded in silence and `docker run ldapium /bin/bash /scripts/backup.sh`
+# starts a second slapd that never exits. The chart and docker-compose.yml pass
+# no arguments, so the server path is unchanged.
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Validate the env contract. Fail fast and loudly — never fall back to a
 #    default admin password.

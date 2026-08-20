@@ -57,6 +57,16 @@ docker run -d --name ldap \
   ldapium:dev
 ```
 
+Passing a command after the image name runs that command instead of booting the
+directory — the entrypoint hands off with `exec "$@"` before it validates the
+environment contract or touches a volume. That is how the maintenance scripts
+are meant to be run against an image that already has the OpenLDAP tools:
+
+```bash
+docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
+  ldapium:dev /bin/bash /scripts/verify-backup.sh /backup/manifest-....sha256
+```
+
 ## Environment variables
 
 | Variable | Required | Default | Notes |
