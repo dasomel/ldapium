@@ -7,6 +7,7 @@ on:
       - "scripts/backup.sh"
       - "scripts/verify-backup.sh"
       - "scripts/restore.sh"
+      - "charts/ldapium/**"
       - ".github/workflows/backup-restore.yml"
   push:
     branches: [main]
@@ -121,7 +122,10 @@ jobs:
           # Mount the targets where the backup's cn=config expects them: slapadd
           # puts the database at the olcDbDirectory recorded in the dump, and the
           # restored directory is started from these same two volumes below.
-          docker run --rm --user 0 \
+          # --network none is the point of the step, not a detail: "offline
+          # restore" is a claim about what restore.sh needs, and the only way to
+          # keep it true is to take the network away and see it still work.
+          docker run --rm --user 0 --network none \
             -v /tmp/ldap-backup:/backup:ro \
             -v /tmp/restore-config:/etc/openldap/slapd.d \
             -v /tmp/restore-data:/var/lib/openldap/data \
@@ -188,7 +192,7 @@ jobs:
 
       - name: Upload backup evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: backup-evidence-${{ github.run_id }}
           path: /tmp/backup-evidence
@@ -199,3 +203,235 @@ jobs:
         run: |
           docker rm -f ldapium-source ldapium-restored 2>/dev/null || true
           docker network rm ldapium-e2e 2>/dev/null || true
+
+  dr-3node:
+    name: 3-node backup → bad delete → restore → resync
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: dr
+      - name: Load image into the cluster
+        run: kind load docker-image ldapium:e2e --name dr
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Install a 3-node directory with backups enabled
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/dr-evidence
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set auth.adminPassword='dr-e2e-password' \
+            --set ui.enabled=false \
+            --set replicaCount=3 \
+            --set backup.enabled=true \
+            --timeout 10m
+          # Deliberately no --wait: it also waits for PVCs to reach Bound, and
+          # the backup PVC has no consumer until the CronJob first runs. On any
+          # storage class with volumeBindingMode WaitForFirstConsumer — kind's
+          # default, and most cloud defaults — that is a guaranteed timeout on a
+          # release that is otherwise perfectly healthy.
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+      - name: Seed data and wait for it to converge
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapadd -x -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" <<EOF
+          dn: ou=dr-test,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: dr-test
+
+          dn: uid=dr-e2e,ou=dr-test,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: dr-e2e
+          cn: dr e2e
+          sn: e2e
+          mail: dr-e2e@example.org
+          EOF'
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'i=0; until ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=dr-e2e,ou=dr-test,dc=example,dc=org" -s base dn >/dev/null 2>&1; do i=$((i+1)); [ "$i" -lt 30 ] || exit 1; sleep 2; done'
+            echo "PASS: seeded entry present on ordinal ${ordinal}"
+          done
+      - name: Run the scheduled backup now
+        run: |
+          set -euo pipefail
+          # `create job --from=cronjob` runs the chart's own CronJob spec rather
+          # than a copy of it, so what is being tested is the backup people
+          # actually get, not a re-implementation of it in this workflow.
+          kubectl -n directory create job --from=cronjob/directory-ldapium-backup dr-backup
+          kubectl -n directory wait --for=condition=complete job/dr-backup --timeout=10m
+          kubectl -n directory logs job/dr-backup | tee /tmp/dr-evidence/backup-job.log
+          grep -q 'verified both dumps against it' /tmp/dr-evidence/backup-job.log
+          echo "PASS: the scheduled backup wrote a manifest and verified the dumps against it"
+      - name: Delete the seeded entry, and let the deletion replicate
+        run: |
+          set -euo pipefail
+          # The disaster this runbook exists for. A bad delete is not contained
+          # to the node it was issued on: by the time anyone reaches for a
+          # backup it is already on every replica, which is why restoring
+          # ordinal 0 alone is not enough.
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapdelete -x -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" "uid=dr-e2e,ou=dr-test,dc=example,dc=org"'
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'i=0; while ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=dr-e2e,ou=dr-test,dc=example,dc=org" -s base dn >/dev/null 2>&1; do i=$((i+1)); [ "$i" -lt 30 ] || exit 1; sleep 2; done'
+            echo "confirmed: entry is gone on ordinal ${ordinal}"
+          done
+      - name: Scale down and wipe the replicas that are not being restored
+        run: |
+          set -euo pipefail
+          # The recovery clock starts here — the first action an operator takes
+          # after deciding to restore — and stops when all three replicas are
+          # serving the restored entry again.
+          date -u +%s > /tmp/dr-evidence/recovery-start-epoch.txt
+          date -u +%FT%TZ > /tmp/dr-evidence/recovery-start.txt
+          kubectl -n directory scale statefulset directory-ldapium --replicas=0
+          for ordinal in 0 1 2; do
+            kubectl -n directory wait --for=delete "pod/directory-ldapium-${ordinal}" --timeout=5m
+          done
+          # charts/ldapium/README.md, "Restoring a replicated deployment": the
+          # other ordinals have to come back empty. Left intact they would
+          # replicate their post-delete state onto the restored -0 and undo it,
+          # since multi-provider replication resolves by CSN and has no notion
+          # of one replica being the authority.
+          kubectl -n directory delete pvc \
+            config-directory-ldapium-1 data-directory-ldapium-1 \
+            config-directory-ldapium-2 data-directory-ldapium-2
+      - name: Restore ordinal 0 from the backup PVC
+        run: |
+          set -euo pipefail
+          kubectl -n directory create configmap dr-restore-scripts \
+            --from-file=restore.sh=scripts/restore.sh \
+            --from-file=verify-backup.sh=scripts/verify-backup.sh
+          kubectl -n directory apply -f - <<'EOF'
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: dr-restore
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 0
+                containers:
+                  - name: restore
+                    image: ldapium:e2e
+                    imagePullPolicy: Never
+                    command:
+                      - /bin/bash
+                      - /scripts/restore.sh
+                      - --backup-dir
+                      - /backup
+                      - --target-config
+                      - /etc/openldap/slapd.d
+                      - --target-data
+                      - /var/lib/openldap/data
+                      - --confirm-offline
+                      - --force-empty
+                    volumeMounts:
+                      - name: scripts
+                        mountPath: /scripts
+                      - name: config
+                        mountPath: /etc/openldap/slapd.d
+                      - name: data
+                        mountPath: /var/lib/openldap/data
+                      - name: backup
+                        mountPath: /backup
+                        readOnly: true
+                volumes:
+                  - name: scripts
+                    configMap:
+                      name: dr-restore-scripts
+                      defaultMode: 0755
+                  - name: config
+                    persistentVolumeClaim:
+                      claimName: config-directory-ldapium-0
+                  - name: data
+                    persistentVolumeClaim:
+                      claimName: data-directory-ldapium-0
+                  - name: backup
+                    persistentVolumeClaim:
+                      claimName: directory-ldapium-backup
+          EOF
+          kubectl -n directory wait --for=condition=complete job/dr-restore --timeout=10m
+          kubectl -n directory logs job/dr-restore | tee /tmp/dr-evidence/restore-job.log
+          grep -q 'backup integrity verified' /tmp/dr-evidence/restore-job.log
+          echo "PASS: the manifest was verified before anything was written"
+      - name: Bring ordinal 0 back and check the data is there
+        run: |
+          set -euo pipefail
+          kubectl -n directory scale statefulset directory-ldapium --replicas=1
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=dr-e2e,ou=dr-test,dc=example,dc=org" -s base uid mail' \
+            | tee /tmp/dr-evidence/data-after-restore.txt
+          grep -q '^uid: dr-e2e$' /tmp/dr-evidence/data-after-restore.txt
+          grep -q '^mail: dr-e2e@example.org$' /tmp/dr-evidence/data-after-restore.txt
+      - name: Scale back to three and check the restore survived the resync
+        run: |
+          set -euo pipefail
+          kubectl -n directory scale statefulset directory-ldapium --replicas=3
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          for ordinal in 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'i=0; until ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=dr-e2e,ou=dr-test,dc=example,dc=org" -s base dn >/dev/null 2>&1; do i=$((i+1)); [ "$i" -lt 60 ] || exit 1; sleep 2; done'
+            echo "PASS: restored entry reached ordinal ${ordinal} by full refresh"
+          done
+          # The failure mode being ruled out is the opposite one: an empty
+          # replica winning and taking the entry away again.
+          sleep 15
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=dr-e2e,ou=dr-test,dc=example,dc=org" -s base uid' \
+            | tee /tmp/dr-evidence/data-after-resync.txt
+          grep -q '^uid: dr-e2e$' /tmp/dr-evidence/data-after-resync.txt
+          date -u +%FT%TZ > /tmp/dr-evidence/recovery-complete.txt
+          rto=$(( $(date -u +%s) - $(cat /tmp/dr-evidence/recovery-start-epoch.txt) ))
+          printf 'rto_seconds=%s\n' "$rto" | tee /tmp/dr-evidence/rto.txt
+      - name: Collect DR evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/dr-evidence
+          date -u +%FT%TZ > /tmp/dr-evidence/collected-at.txt
+          kubectl -n directory get pods,pvc -o wide > /tmp/dr-evidence/resources.txt 2>&1 || true
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "dc=example,dc=org" -s base contextCSN' \
+              > "/tmp/dr-evidence/contextcsn-${ordinal}.txt" 2>&1 || true
+          done
+      - name: Upload DR evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dr-3node-evidence
+          path: /tmp/dr-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods,pvc,jobs -o wide || true
+          kubectl -n directory describe pods || true
+          for pod in $(kubectl -n directory get pods -o name 2>/dev/null); do
+            echo "::group::logs $pod"
+            kubectl -n directory logs "$pod" --all-containers --tail=300 || true
+            kubectl -n directory logs "$pod" --all-containers --previous --tail=300 || true
+            echo "::endgroup::"
+          done
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -80 || true
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
