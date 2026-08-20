@@ -52,16 +52,16 @@ jobs:
           kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
             sh -ec '
               ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
-              dn: ou=chaos,dc=example,dc=org
-              objectClass: organizationalUnit
-              ou: chaos
+          dn: ou=chaos,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: chaos
 
-              dn: uid=baseline,ou=chaos,dc=example,dc=org
-              objectClass: inetOrgPerson
-              uid: baseline
-              cn: Baseline
-              sn: Test
-              EOF
+          dn: uid=baseline,ou=chaos,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: baseline
+          cn: Baseline
+          sn: Test
+          EOF
             '
 
       - name: Delete one provider
@@ -76,12 +76,12 @@ jobs:
             sh -ec '
               for i in 1 2 3 4 5; do
                 ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
-              dn: uid=chaos-${i},ou=chaos,dc=example,dc=org
-              objectClass: inetOrgPerson
-              uid: chaos-${i}
-              cn: Chaos ${i}
-              sn: Test
-              EOF
+          dn: uid=chaos-${i},ou=chaos,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: chaos-${i}
+          cn: Chaos ${i}
+          sn: Test
+          EOF
               done
             '
 
@@ -116,12 +116,12 @@ jobs:
             sh -ec '
               for i in 6 7 8; do
                 ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
-              dn: uid=sequential-${i},ou=chaos,dc=example,dc=org
-              objectClass: inetOrgPerson
-              uid: sequential-${i}
-              cn: Sequential ${i}
-              sn: Test
-              EOF
+          dn: uid=sequential-${i},ou=chaos,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: sequential-${i}
+          cn: Sequential ${i}
+          sn: Test
+          EOF
               done
             '
 

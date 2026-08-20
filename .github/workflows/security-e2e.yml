@@ -51,17 +51,17 @@ jobs:
           kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
             sh -ec '
               ldapadd -x -H ldap://directory-ldapium:389 -D cn=admin,dc=example,dc=org -w security-e2e-password <<EOF
-              dn: ou=people,dc=example,dc=org
-              objectClass: organizationalUnit
-              ou: people
+          dn: ou=people,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: people
 
-              dn: uid=alice,ou=people,dc=example,dc=org
-              objectClass: inetOrgPerson
-              uid: alice
-              cn: Alice
-              sn: Tester
-              userPassword: AlicePassword1!
-              EOF
+          dn: uid=alice,ou=people,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: alice
+          cn: Alice
+          sn: Tester
+          userPassword: AlicePassword1!
+          EOF
             '
 
       - name: Verify anonymous password redaction

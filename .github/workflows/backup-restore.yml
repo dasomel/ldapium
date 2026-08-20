@@ -68,7 +68,13 @@ jobs:
       - name: Create backup
         run: |
           mkdir -p /tmp/ldap-backup
+          # The image runs as uid 999, which does not own the runner-created
+          # bind mount, so the dump lands on "Permission denied". Run as the
+          # runner instead: backup.sh needs no local privilege (it reads the
+          # directory over the network) and the later steps have to be able to
+          # rewrite the files it produces, which umask 077 leaves at mode 600.
           docker run --rm --network ldapium-e2e \
+            --user "$(id -u):$(id -g)" \
             -e LDAP_URL='ldap://ldapium-source:389' \
             -e LDAP_ROOT_DN='dc=example,dc=org' \
             -e LDAP_ADMIN_PASSWORD='restore-e2e-password' \
@@ -81,7 +87,8 @@ jobs:
         run: |
           manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
           test -n "$manifest"
-          docker run --rm -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
             ldapium:e2e /bin/bash /scripts/verify-backup.sh "/backup/$(basename "$manifest")"
 
       - name: Prove corrupt backup fails closed
@@ -91,7 +98,8 @@ jobs:
           cp "/tmp/ldap-backup/$data_file" /tmp/corrupt.ldif.gz
           printf 'corruption' >> /tmp/corrupt.ldif.gz
           cp /tmp/corrupt.ldif.gz "/tmp/ldap-backup/$data_file"
-          if docker run --rm -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
+          if docker run --rm --user "$(id -u):$(id -g)" \
+            -v /tmp/ldap-backup:/backup -v "$PWD/scripts:/scripts:ro" \
             ldapium:e2e /bin/bash /scripts/verify-backup.sh "/backup/$(basename "$manifest")"; then
             echo '::error::corrupted backup was accepted'
             exit 1
