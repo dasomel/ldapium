@@ -34,8 +34,14 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$confirm_offline" = 1 ] || { echo "refusing restore: --confirm-offline is required" >&2; exit 2; }
-[ -n "$backup_dir" ] && [ -d "$backup_dir" ] || { echo "backup directory is required" >&2; exit 2; }
-[ -n "$target_config" ] && [ -n "$target_data" ] || { echo "target config/data directories are required" >&2; exit 2; }
+if [ -z "$backup_dir" ] || [ ! -d "$backup_dir" ]; then
+  echo "backup directory is required" >&2
+  exit 2
+fi
+if [ -z "$target_config" ] || [ -z "$target_data" ]; then
+  echo "target config/data directories are required" >&2
+  exit 2
+fi
 command -v slapadd >/dev/null 2>&1 || { echo "slapadd is required" >&2; exit 1; }
 command -v gzip >/dev/null 2>&1 || { echo "gzip is required" >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required" >&2; exit 1; }
@@ -43,7 +49,10 @@ command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required" >&2; exit
 if [ -z "$manifest" ]; then
   manifest=$(find "$backup_dir" -maxdepth 1 -type f -name 'manifest-*.sha256' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2- || true)
 fi
-[ -n "$manifest" ] && [ -f "$manifest" ] || { echo "backup manifest not found" >&2; exit 1; }
+if [ -z "$manifest" ] || [ ! -f "$manifest" ]; then
+  echo "backup manifest not found" >&2
+  exit 1
+fi
 
 "$(dirname "$0")/verify-backup.sh" "$manifest"
 
