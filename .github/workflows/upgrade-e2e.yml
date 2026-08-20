@@ -17,6 +17,12 @@ jobs:
   upgrade:
     name: rolling upgrade + rollback (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
+    env:
+      # The release immediately before image/Dockerfile's OPENLDAP_VERSION.
+      # Bump both together; scripts/check-versions.sh does not police this one
+      # because it is deliberately one behind.
+      PREVIOUS_OPENLDAP_VERSION: "2.6.13"
+      PREVIOUS_OPENLDAP_SHA256: "d693b49517a42efb85a1a364a310aed16a53d428d1b46c0d31ef3fba78fcb656"
     strategy:
       fail-fast: false
       matrix:
@@ -32,13 +38,28 @@ jobs:
       - name: Build server image
         run: docker build -t ldapium:e2e image
 
+      # The upgrade under test used to be image tag -> same image tag, which
+      # exercises the rollout mechanics and nothing about compatibility. This
+      # builds the previous OpenLDAP release from the same Dockerfile so the
+      # upgrade actually crosses a version boundary: the baseline release
+      # writes its mdb and cn=config with 2.6.13, and 2.6.14 has to come up on
+      # them without a dump-and-reload.
+      - name: Build the previous release's server image
+        run: |
+          docker build -t ldapium:prev \
+            --build-arg OPENLDAP_VERSION="$PREVIOUS_OPENLDAP_VERSION" \
+            --build-arg OPENLDAP_SHA256="$PREVIOUS_OPENLDAP_SHA256" \
+            image
+
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: e2e
 
-      - name: Load image
-        run: kind load docker-image ldapium:e2e --name e2e
+      - name: Load images
+        run: |
+          kind load docker-image ldapium:prev --name e2e
+          kind load docker-image ldapium:e2e --name e2e
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -49,14 +70,20 @@ jobs:
           helm install directory charts/ldapium \
             --namespace directory --create-namespace \
             --set image.repository=ldapium \
-            --set image.tag=e2e \
+            --set image.tag=prev \
             --set image.pullPolicy=Never \
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='upgrade-e2e-password' \
             --set ui.enabled=false \
             --set replicaCount=${{ matrix.replicas }} \
-            --wait --timeout 5m
+            --set backup.enabled=true \
+            --timeout 5m
+          # No --wait: it also waits for the backup PVC to reach Bound, and that
+          # claim has no consumer until the CronJob first fires. See the chart
+          # README's helm footguns.
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
           helm test directory --namespace directory --logs
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- slapd -VV 2>&1 | head -1
 
       - name: Seed upgrade canary data
         run: |
@@ -82,19 +109,165 @@ jobs:
           mkdir -p /tmp/upgrade-evidence
           date -u +%FT%TZ > /tmp/upgrade-evidence/start.txt
           helm history directory -n directory > /tmp/upgrade-evidence/helm-history-before.txt
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- slapd -VV 2>&1 \
+            | head -1 > /tmp/upgrade-evidence/slapd-version-before.txt
+          cat /tmp/upgrade-evidence/slapd-version-before.txt
+          grep -q "slapd $PREVIOUS_OPENLDAP_VERSION " /tmp/upgrade-evidence/slapd-version-before.txt
+
+      - name: Take the pre-upgrade backup
+        run: |
+          set -euo pipefail
+          # The preflight gate, run as a gate rather than described as one: no
+          # upgrade proceeds in this workflow until a backup exists and has been
+          # verified against its own manifest. It is also what the rollback path
+          # further down would restore from if a rollback were not enough.
+          kubectl -n directory create job --from=cronjob/directory-ldapium-backup upgrade-preflight-backup
+          kubectl -n directory wait --for=condition=complete job/upgrade-preflight-backup --timeout=10m
+          kubectl -n directory logs job/upgrade-preflight-backup \
+            | tee /tmp/upgrade-evidence/preflight-backup.log
+          grep -q 'verified both dumps against it' /tmp/upgrade-evidence/preflight-backup.log
+          echo "PASS: a verified backup exists before the upgrade starts"
+
+      - name: Check the release is compatible with the new chart
+        run: |
+          set -euo pipefail
+          # `helm upgrade --reuse-values` does not pick up chart defaults added
+          # since the installed revision, which is how a value silently arrives
+          # empty (see the chart README's helm footguns). Rendering the upgrade
+          # first is the cheap version of noticing.
+          helm upgrade directory charts/ldapium \
+            --namespace directory \
+            --reuse-values \
+            --set image.tag=e2e \
+            --dry-run=client > /tmp/upgrade-evidence/rendered-upgrade.yaml
+          grep -q 'image: ldapium:e2e' /tmp/upgrade-evidence/rendered-upgrade.yaml
+          scripts/check-versions.sh | tee /tmp/upgrade-evidence/version-consistency.txt
+
+      - name: Start the write probe
+        if: matrix.scenario == 'replicated'
+        run: |
+          set -euo pipefail
+          # Reads staying up during a rolling restart is the easy half. What an
+          # upgrade actually has to preserve is the ability to *write*, so the
+          # probe adds and deletes an entry in a loop, from outside the
+          # StatefulSet so it survives every pod being replaced.
+          kubectl -n directory apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: upgrade-write-probe
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: probe
+                image: ldapium:e2e
+                imagePullPolicy: Never
+                command:
+                  - sh
+                  - -c
+                  - |
+                    n=0
+                    while [ ! -f /tmp/stop ]; do
+                      n=$((n+1))
+                      dn="uid=probe-$n,dc=example,dc=org"
+                      if printf 'dn: %s\nobjectClass: inetOrgPerson\nuid: probe-%s\ncn: probe %s\nsn: probe\n' "$dn" "$n" "$n" \
+                        | ldapadd -x -o nettimeout=2 -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" >/dev/null 2>&1; then
+                        echo OK
+                        ldapdelete -x -o nettimeout=2 -H "$LDAP_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" "$dn" >/dev/null 2>&1 || true
+                      else
+                        echo FAIL
+                      fi
+                      sleep 1
+                    done
+                env:
+                  - name: LDAP_URL
+                    value: ldap://directory-ldapium.directory.svc.cluster.local:389
+                  - name: LDAP_ADMIN_DN
+                    value: cn=admin,dc=example,dc=org
+                  - name: LDAP_ADMIN_PASSWORD
+                    value: upgrade-e2e-password
+          EOF
+          kubectl -n directory wait --for=condition=Ready pod/upgrade-write-probe --timeout=3m
 
       - name: Rolling upgrade
         run: |
           set -euo pipefail
-          stamp=$(date -u +%Y%m%dT%H%M%SZ)
           helm upgrade directory charts/ldapium \
             --namespace directory \
             --reuse-values \
-            --set-string podAnnotations.upgrade-test="$stamp" \
-            --wait --timeout 5m
+            --set image.tag=e2e \
+            --wait --timeout 10m
           date -u +%FT%TZ > /tmp/upgrade-evidence/rolling-upgrade-complete.txt
-          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
           kubectl -n directory get pods -o wide > /tmp/upgrade-evidence/pods-after-upgrade.txt
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- slapd -VV 2>&1 \
+            | head -1 > /tmp/upgrade-evidence/slapd-version-after.txt
+          cat /tmp/upgrade-evidence/slapd-version-after.txt
+          # The upgrade has to have actually happened, or everything below is
+          # asserting that nothing broke when nothing changed.
+          if diff -q /tmp/upgrade-evidence/slapd-version-before.txt \
+                     /tmp/upgrade-evidence/slapd-version-after.txt >/dev/null; then
+            echo "::error::slapd is still on the pre-upgrade version"
+            exit 1
+          fi
+
+      - name: Measure the write interruption
+        if: matrix.scenario == 'replicated'
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec upgrade-write-probe -- touch /tmp/stop
+          kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/upgrade-write-probe --timeout=2m
+          kubectl -n directory logs upgrade-write-probe > /tmp/upgrade-evidence/write-availability.txt
+          total=$(grep -c . /tmp/upgrade-evidence/write-availability.txt || true)
+          ok=$(grep -c '^OK$' /tmp/upgrade-evidence/write-availability.txt || true)
+          # As with any rolling operation, the number that means something is
+          # not how many writes failed but whether they failed consecutively: a
+          # single write landing on a pod that is on its way out is expected,
+          # a run of them means no pod was accepting writes.
+          streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' \
+            /tmp/upgrade-evidence/write-availability.txt)
+          echo "writes during the upgrade: $ok/$total, longest consecutive failure run: $streak"
+          printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$total" "$ok" "$streak" \
+            | tee /tmp/upgrade-evidence/write-availability-summary.txt
+          if [ "$total" -lt 20 ]; then
+            echo "::error::upgrade finished too quickly to measure write availability ($total samples)"
+            exit 1
+          fi
+          if [ "$streak" -gt 5 ]; then
+            echo "::error::writes were refused for $streak consecutive probes during the upgrade"
+            exit 1
+          fi
+          if [ $((ok * 100 / total)) -lt 80 ]; then
+            echo "::error::write availability dropped to $ok/$total during the upgrade"
+            exit 1
+          fi
+          kubectl -n directory delete pod upgrade-write-probe --ignore-not-found
+
+      - name: Verify replication converged after the upgrade
+        if: matrix.scenario == 'replicated'
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapadd -x -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "upgrade-e2e-password" <<EOF
+          dn: uid=post-upgrade,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: post-upgrade
+          cn: post upgrade
+          sn: upgrade
+          EOF'
+          for ordinal in 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'i=0; until ldapsearch -x -LLL -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "upgrade-e2e-password" -b "uid=post-upgrade,dc=example,dc=org" -s base dn >/dev/null 2>&1; do i=$((i+1)); [ "$i" -lt 30 ] || exit 1; sleep 2; done'
+            echo "PASS: a write on the upgraded provider reached ordinal ${ordinal}"
+          done
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "upgrade-e2e-password" -b "dc=example,dc=org" -s base contextCSN' \
+              | grep '^contextCSN:' | sort > "/tmp/upgrade-evidence/contextcsn-${ordinal}.txt"
+          done
+          diff /tmp/upgrade-evidence/contextcsn-0.txt /tmp/upgrade-evidence/contextcsn-1.txt
+          diff /tmp/upgrade-evidence/contextcsn-0.txt /tmp/upgrade-evidence/contextcsn-2.txt
+          echo "PASS: all three replicas report the same contextCSN set"
 
       - name: Verify data survived upgrade
         run: |
@@ -140,7 +313,12 @@ jobs:
           # times out here. Roll back without waiting, delete the pods still carrying
           # the bad image, and let the controller recreate them from the reverted
           # template.
-          helm rollback directory 1 -n directory --timeout 5m
+          # No revision argument: roll back to the one before the failed
+          # upgrade, which is the last revision that was actually deployed.
+          # Naming a number here was fine while every revision ran the same
+          # image, but the baseline is now the previous OpenLDAP release and
+          # "1" would silently turn this into a version downgrade test.
+          helm rollback directory -n directory --timeout 5m
           for pod in $(kubectl -n directory get pods \
               -l app.kubernetes.io/name=ldapium,app.kubernetes.io/component=server \
               -o name); do
@@ -154,6 +332,11 @@ jobs:
           done
           kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
           helm history directory -n directory > /tmp/upgrade-evidence/helm-history-after-rollback.txt
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- slapd -VV 2>&1 \
+            | head -1 > /tmp/upgrade-evidence/slapd-version-after-rollback.txt
+          cat /tmp/upgrade-evidence/slapd-version-after-rollback.txt
+          diff /tmp/upgrade-evidence/slapd-version-after.txt \
+               /tmp/upgrade-evidence/slapd-version-after-rollback.txt
 
       - name: Verify rollback restored service and data
         run: |
