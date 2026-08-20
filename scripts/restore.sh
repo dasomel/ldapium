@@ -80,7 +80,31 @@ work_dir=$(mktemp -d)
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
-gzip -dc "$config_file" > "$work_dir/config.ldif"
+gzip -dc "$config_file" > "$work_dir/config.ldif.raw"
+
+# slapd builds cn=schema,cn=config from its own compiled-in schema before it
+# reads a line of the dump, so the copy slapcat wrote is a second set of the
+# same definitions. slapadd merges the two, normalisation collapses the
+# duplicates, and the value count no longer matches the normalised count:
+#   slapadd: attr.c:243: attr_dup2: Assertion `j == i' failed.
+# Drop those definitions on the way in. Only the parent entry carries the
+# built-in schema — user schema lives in the cn={N}name,cn=schema,cn=config
+# children, which are kept untouched.
+awk '
+  /^dn: / { dn = tolower(substr($0, 5)); drop = 0 }
+  {
+    if (substr($0, 1, 1) == " ") {
+      if (drop) next
+    } else if ($0 == "") {
+      drop = 0
+    } else {
+      drop = 0
+      low = tolower($0)
+      if (dn == "cn=schema,cn=config" && low ~ /^(olcattributetypes|olcobjectclasses|olcldapsyntaxes|olcobjectidentifier|olcmatchingrules|olcmatchingruleuse|olcditcontentrules)[;:]/) drop = 1
+    }
+    if (!drop) print
+  }
+' "$work_dir/config.ldif.raw" > "$work_dir/config.ldif"
 gzip -dc "$data_file" > "$work_dir/data.ldif"
 
 rm -rf "${target_config:?}"/* "${target_config:?}"/.[!.]* "${target_config:?}"/..?* 2>/dev/null || true
