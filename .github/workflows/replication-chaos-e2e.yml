@@ -137,6 +137,144 @@ jobs:
           echo "two-node-sequential recovery+convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
           test "$elapsed" -le 300
 
+      - name: Partition one provider and write on both sides of the split
+        run: |
+          set -euo pipefail
+          # A partition is not a pod deletion. Both halves stay up and both keep
+          # accepting writes, which is the case multi-provider replication has to
+          # merge afterwards and the one a delete-the-pod test never produces.
+          # kind puts every pod on the one node, so pod-to-pod traffic crosses
+          # that node's FORWARD chain and can be dropped there.
+          ip=$(kubectl -n directory get pod directory-ldapium-2 -o jsonpath='{.status.podIP}')
+          echo "$ip" > /tmp/partitioned-ip
+          docker exec chaos-control-plane iptables -I FORWARD 1 -s "$ip" -j DROP
+          docker exec chaos-control-plane iptables -I FORWARD 1 -d "$ip" -j DROP
+          echo "partitioned directory-ldapium-2 (${ip})" | tee -a /tmp/chaos-evidence.txt
+          write() {
+            kubectl -n directory exec "directory-ldapium-$1" -c openldap -- sh -c \
+              "ldapadd -x -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' <<EOF
+          dn: uid=$2,ou=chaos,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: $2
+          cn: $2
+          sn: Test
+          EOF"
+          }
+          has() {
+            kubectl -n directory exec "directory-ldapium-$1" -c openldap -- \
+              ldapsearch -x -LLL -H ldap://localhost:389 \
+              -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+              -b "uid=$2,ou=chaos,dc=example,dc=org" -s base dn >/dev/null 2>&1
+          }
+          write 0 partition-majority
+          write 2 partition-minority
+          i=0
+          until has 1 partition-majority; do
+            i=$((i+1)); [ "$i" -lt 30 ] || { echo "::error::the majority side did not converge"; exit 1; }
+            sleep 2
+          done
+          echo "PASS: the majority side converged while the third provider was cut off"
+          # If this ever succeeds the partition was never real and everything
+          # below is asserting nothing.
+          if has 2 partition-majority; then
+            echo "::error::the partitioned provider still received the majority write"
+            exit 1
+          fi
+          echo "PASS: the partitioned provider is genuinely isolated"
+
+      - name: Heal the partition and require both sides to survive it
+        run: |
+          set -euo pipefail
+          ip=$(cat /tmp/partitioned-ip)
+          docker exec chaos-control-plane iptables -D FORWARD -s "$ip" -j DROP
+          docker exec chaos-control-plane iptables -D FORWARD -d "$ip" -j DROP
+          rm -f /tmp/partitioned-ip
+          start=$(date +%s)
+          for ordinal in 0 1 2; do
+            for uid in partition-majority partition-minority; do
+              kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+                "i=0; until ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' -b 'uid=${uid},ou=chaos,dc=example,dc=org' -s base dn >/dev/null 2>&1; do i=\$((i+1)); [ \"\$i\" -lt 60 ] || exit 1; sleep 2; done"
+            done
+            echo "PASS: provider ${ordinal} carries both sides of the partition"
+          done
+          elapsed=$(( $(date +%s) - start ))
+          echo "partition rejoin convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
+          test "$elapsed" -le 300
+          # Neither side may be silently dropped, and the providers must agree on
+          # what they hold rather than merely each holding something.
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "chaos-e2e-password" -b "dc=example,dc=org" -s base contextCSN' \
+              | grep '^contextCSN:' | sort > "/tmp/contextcsn-${ordinal}.txt"
+          done
+          diff /tmp/contextcsn-0.txt /tmp/contextcsn-1.txt
+          diff /tmp/contextcsn-0.txt /tmp/contextcsn-2.txt
+          echo "PASS: all three providers report the same contextCSN set" | tee -a /tmp/chaos-evidence.txt
+
+      - name: Remove any partition left behind
+        if: always()
+        run: |
+          ip=$(cat /tmp/partitioned-ip 2>/dev/null || true)
+          [ -n "$ip" ] || exit 0
+          docker exec chaos-control-plane iptables -D FORWARD -s "$ip" -j DROP || true
+          docker exec chaos-control-plane iptables -D FORWARD -d "$ip" -j DROP || true
+
+      - name: Restart a provider during the cold-start election
+        run: |
+          set -euo pipefail
+          # The election is ordinal-based precisely because a probe-based one
+          # raced: a 3-node cold start once left node 1 on one entryUUID and
+          # nodes 2 and 3 on another (see entrypoint.sh, D5a). Killing ordinal 0
+          # while it is still bootstrapping is the case that would resurrect that
+          # bug — the invariant is that the cluster ends up with exactly one base
+          # DIT, not merely three that answer.
+          helm uninstall directory --namespace directory
+          kubectl -n directory delete pvc --all --wait=true
+          helm install directory charts/ldapium \
+            --namespace directory \
+            --set replicaCount=3 \
+            --set image.repository=ldapium \
+            --set image.tag=chaos \
+            --set image.pullPolicy=Never \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
+            --set auth.adminPassword='chaos-e2e-password' \
+            --set ui.enabled=false \
+            --timeout 10m &
+          install_pid=$!
+          # Running but not Ready is exactly the bootstrap window: the entrypoint
+          # seeds through a temporary local slapd before the real one starts
+          # answering probes.
+          killed=0
+          for _ in $(seq 1 180); do
+            phase=$(kubectl -n directory get pod directory-ldapium-0 -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            ready=$(kubectl -n directory get pod directory-ldapium-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)
+            if [ "$phase" = "Running" ] && [ "$ready" != "true" ]; then
+              kubectl -n directory delete pod directory-ldapium-0 --wait=false
+              killed=1
+              break
+            fi
+            sleep 1
+          done
+          wait "$install_pid"
+          if [ "$killed" -ne 1 ]; then
+            echo "::error::never caught ordinal 0 mid-bootstrap, so nothing was tested"
+            exit 1
+          fi
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          for ordinal in 0 1 2; do
+            kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -c \
+              'ldapsearch -x -LLL -H ldap://localhost:389 -D "cn=admin,dc=example,dc=org" -w "chaos-e2e-password" -b "dc=example,dc=org" -s base entryUUID' \
+              | grep '^entryUUID:' > "/tmp/base-uuid-${ordinal}.txt"
+            cat "/tmp/base-uuid-${ordinal}.txt"
+          done
+          diff /tmp/base-uuid-0.txt /tmp/base-uuid-1.txt
+          diff /tmp/base-uuid-0.txt /tmp/base-uuid-2.txt
+          {
+            echo "bootstrap-election restart: single base DIT confirmed"
+            cat /tmp/base-uuid-0.txt
+          } | tee -a /tmp/chaos-evidence.txt
+          echo "PASS: one base DIT across all three providers after killing the creator mid-bootstrap"
+
       - name: Verify replication metadata
         run: |
           set -euo pipefail
