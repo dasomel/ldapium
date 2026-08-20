@@ -366,9 +366,11 @@ in this order. Do the same:
 so the Service keeps a writable endpoint throughout. The upgrade job measures
 this rather than asserting it: a probe pod outside the StatefulSet adds and
 deletes an entry once a second for the whole rollout, and the run fails if
-writes are ever refused for more than five probes in a row. Most recent local
-run: 52 of 52 writes accepted with a longest consecutive failure run of 0, across a
-2.6.13 → 2.6.14 rolling upgrade of three replicas on kind.
+writes are ever refused for more than five probes in a row — an isolated
+rejection as an endpoint drains is expected, a run of them means no pod was
+accepting writes. Across a 2.6.13 → 2.6.14 upgrade of three replicas the most
+recent CI run accepted 36 of 38 writes with a longest failure run of 1; the
+same test locally accepted 52 of 52 with a longest failure run of 0.
 
 A single-replica install has no second endpoint, so it is unavailable for the
 length of one pod restart. There is no rolling anything with one pod — schedule
