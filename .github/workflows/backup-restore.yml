@@ -95,7 +95,10 @@ jobs:
         run: |
           manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
           data_file=$(awk '/data-.*\.ldif\.gz/{print $2; exit}' "$manifest")
-          cp "/tmp/ldap-backup/$data_file" /tmp/corrupt.ldif.gz
+          # Keep the intact dump aside: this step damages the only backup in the
+          # bundle, and every step below restores from it.
+          cp "/tmp/ldap-backup/$data_file" /tmp/pristine.ldif.gz
+          cp /tmp/pristine.ldif.gz /tmp/corrupt.ldif.gz
           printf 'corruption' >> /tmp/corrupt.ldif.gz
           cp /tmp/corrupt.ldif.gz "/tmp/ldap-backup/$data_file"
           if docker run --rm --user "$(id -u):$(id -g)" \
@@ -105,6 +108,7 @@ jobs:
             exit 1
           fi
           echo 'PASS: corrupt backup rejected'
+          cp /tmp/pristine.ldif.gz "/tmp/ldap-backup/$data_file"
 
       - name: Recreate clean restore targets
         run: |
