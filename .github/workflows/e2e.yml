@@ -78,6 +78,7 @@ jobs:
           for pod in $(kubectl -n directory get pods -o name); do
             echo "::group::logs $pod"
             kubectl -n directory logs "$pod" --all-containers --tail=200 || true
+            kubectl -n directory logs "$pod" --all-containers --previous --tail=200 || true
             echo "::endgroup::"
           done
           kubectl -n directory get events --sort-by=.lastTimestamp | tail -40
@@ -226,6 +227,7 @@ jobs:
           for pod in $(kubectl -n directory get pods -o name); do
             echo "::group::logs $pod"
             kubectl -n directory logs "$pod" --all-containers --tail=300 || true
+            kubectl -n directory logs "$pod" --all-containers --previous --tail=300 || true
             echo "::endgroup::"
           done
           kubectl -n directory get events --sort-by=.lastTimestamp | tail -60

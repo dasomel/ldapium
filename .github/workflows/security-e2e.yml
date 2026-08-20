@@ -114,6 +114,9 @@ jobs:
           kubectl -n directory get pods -o wide || true
           kubectl -n directory describe pods || true
           kubectl -n directory logs statefulset/directory-ldapium --tail=300 || true
+          # On a CrashLoopBackOff the current log only shows the restart, not the
+          # first-boot failure that poisoned the volume — dump the previous one too.
+          kubectl -n directory logs statefulset/directory-ldapium --previous --tail=300 || true
 
       - name: Uninstall
         if: always()
