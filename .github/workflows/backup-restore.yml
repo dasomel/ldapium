@@ -118,17 +118,20 @@ jobs:
       - name: Restore into clean offline instance
         run: |
           manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          # Mount the targets where the backup's cn=config expects them: slapadd
+          # puts the database at the olcDbDirectory recorded in the dump, and the
+          # restored directory is started from these same two volumes below.
           docker run --rm --user 0 \
             -v /tmp/ldap-backup:/backup:ro \
-            -v /tmp/restore-config:/restore/config \
-            -v /tmp/restore-data:/restore/data \
+            -v /tmp/restore-config:/etc/openldap/slapd.d \
+            -v /tmp/restore-data:/var/lib/openldap/data \
             -v "$PWD/scripts:/scripts:ro" \
             ldapium:e2e \
             /bin/bash /scripts/restore.sh \
               --backup-dir /backup \
               --manifest "/backup/$(basename "$manifest")" \
-              --target-config /restore/config \
-              --target-data /restore/data \
+              --target-config /etc/openldap/slapd.d \
+              --target-data /var/lib/openldap/data \
               --confirm-offline
 
       - name: Start restored directory
