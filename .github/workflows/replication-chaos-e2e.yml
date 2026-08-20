@@ -42,7 +42,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=chaos \
             --set image.pullPolicy=Never \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='chaos-e2e-password' \
             --set ui.enabled=false \
             --wait --timeout 10m

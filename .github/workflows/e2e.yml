@@ -60,7 +60,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
             --set ui.enabled=true \
             --set ui.image.repository=ldapium-ui \
@@ -153,7 +153,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
             --set ui.enabled=false \
             --set replicaCount=${{ matrix.replicas }} \

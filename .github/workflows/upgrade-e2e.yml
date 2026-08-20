@@ -51,7 +51,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='upgrade-e2e-password' \
             --set ui.enabled=false \
             --set replicaCount=${{ matrix.replicas }} \

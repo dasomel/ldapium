@@ -41,7 +41,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=security \
             --set image.pullPolicy=Never \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='security-e2e-password' \
             --set ui.enabled=false \
             --wait --timeout 5m
@@ -101,7 +101,7 @@ jobs:
       - name: Verify chart security context
         run: |
           helm template directory charts/ldapium \
-            --set ldap.adminDN=cn=admin,dc=example,dc=org \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='security-e2e-password' > /tmp/security.yaml
           grep -q 'runAsNonRoot: true' /tmp/security.yaml
           grep -q 'runAsUser: 999' /tmp/security.yaml
