@@ -25,15 +25,32 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src
-# openldap.org is the single host this whole image depends on, and a stalled
-# connect to it fails the build ~2 minutes in. Cap the connect attempt and retry
-# rather than letting one unreachable moment take out every job.
-RUN curl -fsSL --connect-timeout 15 --retry 5 --retry-delay 10 --retry-all-errors \
-        -o openldap.tgz \
+# openldap.org was the single host this whole image depended on, and retries
+# alone did not save it: an outage lasting longer than the retry window takes
+# out every job in the repo at once, which has now happened twice. So the
+# fetch falls through to an official mirror.
+#
+# A second host does not weaken anything here, because the host was never what
+# made the tarball trustworthy — OPENLDAP_SHA256 is, and it is checked after
+# the download regardless of where the bytes came from. A mirror serving
+# something else fails the build exactly as a corrupted primary would. Both
+# hosts were confirmed to serve byte-identical 2.6.13 and 2.6.14 tarballs.
+RUN set -eu; \
+    for url in \
         "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz" \
-    && printf '%s  openldap.tgz\n' "${OPENLDAP_SHA256}" | sha256sum -c - \
-    && tar xzf openldap.tgz \
-    && rm openldap.tgz
+        "https://mirror.eu.oneandone.net/software/openldap/openldap-release/openldap-${OPENLDAP_VERSION}.tgz" \
+    ; do \
+        echo "fetching ${url}"; \
+        if curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 5 --retry-all-errors \
+                -o openldap.tgz "${url}"; then \
+            break; \
+        fi; \
+        echo "source unreachable: ${url}" >&2; \
+    done; \
+    [ -s openldap.tgz ] || { echo "every OpenLDAP source was unreachable" >&2; exit 1; }; \
+    printf '%s  openldap.tgz\n' "${OPENLDAP_SHA256}" | sha256sum -c -; \
+    tar xzf openldap.tgz; \
+    rm openldap.tgz
 
 WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
 RUN ./configure \
