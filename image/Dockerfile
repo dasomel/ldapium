@@ -63,6 +63,11 @@ RUN ./configure \
 # application build cache is not invalidated when exporter code changes.
 # v2.9.14 declares toolchain go1.26.5, so pin the builder to that exact
 # toolchain instead of relying on Go's automatic toolchain download.
+#
+# The upstream go.mod carries a `replace` directive, which `go install pkg@version`
+# refuses outright ("the go.mod file ... contains one or more replace directives").
+# So materialise the module from the checksum-verified module cache and build it
+# as the main module, where replace directives are honoured.
 FROM golang:1.26.5-bookworm AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
 ARG TARGETARCH
@@ -75,9 +80,15 @@ RUN set -eux; \
     esac; \
     go version; \
     go env GOOS GOARCH; \
-    go mod download github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION}; \
-    go install github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION}; \
-    test -x "$(go env GOPATH)/bin/openldap_exporter" || test -x "$(go env GOPATH)/bin/openldap-exporter"
+    mod="github.com/hm-edu/openldap-exporter/v2@${OPENLDAP_EXPORTER_VERSION}"; \
+    go mod download "${mod}"; \
+    cp -r "$(go env GOMODCACHE)/${mod}" /src; \
+    chmod -R u+w /src; \
+    cd /src; \
+    go build -trimpath \
+        -ldflags "-s -w -X main.tag=${OPENLDAP_EXPORTER_VERSION}" \
+        -o /out/openldap_exporter main.go; \
+    test -x /out/openldap_exporter
 
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
@@ -100,7 +111,7 @@ COPY --from=builder /usr/sbin/slap* /usr/sbin/
 COPY --from=builder /usr/bin/ldap* /usr/bin/
 COPY --from=builder /etc/openldap/schema/ /etc/openldap/schema/
 COPY --from=builder /etc/openldap/ldap.conf /etc/openldap/ldap.conf
-COPY --from=exporter-builder /go/bin/openldap_exporter /usr/local/bin/openldap_exporter
+COPY --from=exporter-builder /out/openldap_exporter /usr/local/bin/openldap_exporter
 
 RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
     && ldconfig
