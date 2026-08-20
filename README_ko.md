@@ -55,6 +55,16 @@ helm install directory oci://ghcr.io/dasomel/charts/ldapium \
 helm test directory --namespace directory --logs
 ```
 
+### TLS
+
+`--set tls.enabled=true`와 `tls.crt`/`tls.key`/`ca.crt`를 담은 Secret을 지정하면 636 포트에
+LDAPS 리스너가 열리고, 복제도 `ldaps://`로 전환됩니다. 인증서 검증은 엄격하게 동작하므로
+알 수 없는 CA나 인증서에 없는 이름으로 접속하면 평문으로 낮아지지 않고 연결이 실패합니다.
+
+`slapd`는 기동 시점에만 키 자료를 읽습니다. 따라서 인증서 갱신은 Secret 갱신 후 Pod 재시작까지가
+한 절차이며, `replicaCount > 1`이면 rolling restart로 무중단 처리됩니다. CA 자체를 교체하는
+2단계 절차를 포함한 런북은 `charts/ldapium/README.md#tls`에 있습니다.
+
 ### 이미지
 
 - `ghcr.io/dasomel/ldapium:0.1.0` — OpenLDAP 서버
