@@ -40,9 +40,20 @@ olcModuleload: otp.la
 dn: cn=schema,cn=config
 objectClass: olcSchemaConfig
 cn: schema
+
+# `include:` is a slapd config *directive*, not an attribute of the entry
+# above, so each one has to stand alone as its own LDIF record. Folded into
+# the cn=schema entry they are parsed as attributes instead, and slapadd -n 0
+# aborts with `str2ad(include): attribute type undefined`. The blank lines
+# below are load-bearing for the same reason — LDIF separates records by
+# blank lines, so two adjacent include lines are one record, not two. This
+# mirrors servers/slapd/slapd.ldif in the OpenLDAP source.
 include: file:///etc/openldap/schema/core.ldif
+
 include: file:///etc/openldap/schema/cosine.ldif
+
 include: file:///etc/openldap/schema/inetorgperson.ldif
+
 include: file:///etc/openldap/schema/nis.ldif
 
 dn: olcDatabase=frontend,cn=config
