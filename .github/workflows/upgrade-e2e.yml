@@ -218,7 +218,10 @@ jobs:
           kubectl -n directory exec upgrade-write-probe -- touch /tmp/stop
           kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/upgrade-write-probe --timeout=2m
           kubectl -n directory logs upgrade-write-probe > /tmp/upgrade-evidence/write-availability.txt
-          total=$(grep -c . /tmp/upgrade-evidence/write-availability.txt || true)
+          # Counting every line would fold anything the probe's shell wrote on
+          # its way in or out into the availability figure. Only the verdicts
+          # count.
+          total=$(grep -cE '^(OK|FAIL)$' /tmp/upgrade-evidence/write-availability.txt || true)
           ok=$(grep -c '^OK$' /tmp/upgrade-evidence/write-availability.txt || true)
           # As with any rolling operation, the number that means something is
           # not how many writes failed but whether they failed consecutively: a

@@ -367,7 +367,10 @@ jobs:
           kubectl -n directory exec tls-rotation-probe -- touch /tmp/stop
           kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/tls-rotation-probe --timeout=2m
           kubectl -n directory logs tls-rotation-probe > /tmp/tls-evidence/rotation-availability.txt
-          total=$(grep -c . /tmp/tls-evidence/rotation-availability.txt || true)
+          # Counting every line would fold anything the probe's shell wrote on
+          # its way in or out into the availability figure. Only the verdicts
+          # count.
+          total=$(grep -cE '^(OK|FAIL)$' /tmp/tls-evidence/rotation-availability.txt || true)
           ok=$(grep -c '^OK$' /tmp/tls-evidence/rotation-availability.txt || true)
           # The interesting number is not how many binds failed but whether they
           # ever failed consecutively: a rolling restart drains one pod at a time,
