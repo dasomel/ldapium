@@ -25,7 +25,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src
-RUN curl -fsSL -o openldap.tgz \
+# openldap.org is the single host this whole image depends on, and a stalled
+# connect to it fails the build ~2 minutes in. Cap the connect attempt and retry
+# rather than letting one unreachable moment take out every job.
+RUN curl -fsSL --connect-timeout 15 --retry 5 --retry-delay 10 --retry-all-errors \
+        -o openldap.tgz \
         "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz" \
     && printf '%s  openldap.tgz\n' "${OPENLDAP_SHA256}" | sha256sum -c - \
     && tar xzf openldap.tgz \
