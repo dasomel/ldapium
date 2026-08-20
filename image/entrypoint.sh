@@ -341,6 +341,23 @@ if [ ! -f "$MARKER" ]; then
     die "${CONFIG_DIR} is non-empty but unmarked — refusing to bootstrap over unknown state"
   fi
 
+  # A bootstrap that dies halfway leaves CONFIG_DIR non-empty and unmarked, so
+  # the guard above then refuses on every restart: the volume is wedged, and the
+  # error that actually caused it scrolls out of the container log long before
+  # anyone looks — all that is left is the refusal. Roll the partial state back
+  # instead, so the next boot retries a real bootstrap and reports the real
+  # failure. This only ever runs on a path where this process found CONFIG_DIR
+  # empty, so it cannot delete a directory it did not create itself.
+  rollback_bootstrap() {
+    if [ -f "$MARKER" ]; then
+      return 0
+    fi
+    log "bootstrap did not complete — discarding partial state so the next boot can retry"
+    find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    rm -rf "$MDB_DIR"
+  }
+  trap 'rollback_bootstrap' EXIT
+
   # The mdb files live in a subdirectory that THIS process creates, never
   # directly on the volume's mount point. That is what makes `chmod 700`
   # reliable: a mount point belongs to root (with the pod's fsGroup as its
@@ -366,7 +383,7 @@ if [ ! -f "$MARKER" ]; then
   ADMIN_PW_HASH=$(slappasswd -o module-path=/usr/lib/openldap -o module-load=argon2 -h "$LDAP_PASSWORD_HASH" -s "$LDAP_ADMIN_PASSWORD")
 
   work=$(mktemp -d)
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "$work"; rollback_bootstrap' EXIT
 
   cn_config="${work}/01-cn-config.ldif"
   cp "${BOOTSTRAP_DIR}/01-cn-config.ldif" "$cn_config"
@@ -594,9 +611,10 @@ d}" "$base_structure"
   fi
 
   rm -rf "$work"
-  trap - EXIT
+  trap 'rollback_bootstrap' EXIT
 
   date -u +%FT%TZ > "$MARKER"
+  trap - EXIT
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
