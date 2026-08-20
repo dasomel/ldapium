@@ -119,7 +119,11 @@ EOF
 
 (
   cd "$OUTPUT_DIR"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  rm -f SHA256SUMS
+  sums=$(mktemp)
+  find . -type f -print0 | sort -z | xargs -0 sha256sum > "$sums"
+  mv "$sums" SHA256SUMS
+  chmod 644 SHA256SUMS
 )
 
 cat <<EOF
