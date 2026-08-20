@@ -104,7 +104,8 @@ also waits for the entry to reach every pod. A directory server starts happily
 with an overlay missing, so this is the only check that notices.
 
 `charts/ldapium/README.md` documents every value, the replication design, the
-backup/restore procedure, and the optional Keycloak SSO setup.
+backup/restore procedure and its RPO/RTO, what is known to upgrade in place and
+the preflight that goes with it, and the optional Keycloak SSO setup.
 
 ### TLS
 

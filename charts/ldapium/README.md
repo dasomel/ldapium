@@ -317,6 +317,63 @@ read-only checks.
 A failed test pod is deliberately **not** deleted — its log is the entire
 report. `helm test` again removes it before creating the next one.
 
+## Upgrades
+
+### Which number is which
+
+A git tag `vX.Y.Z` publishes the chart and both images together, so the chart
+version and the image tag are always the same number. `appVersion` is a
+different fact — the OpenLDAP release compiled into the server image — and
+`scripts/check-versions.sh` fails when those drift apart, because a released
+chart once reported OpenLDAP "0.1.0".
+
+### What is known to upgrade in place
+
+| Upgrade | Verdict | On what basis |
+|---|---|---|
+| OpenLDAP patch release inside 2.6.x | in place | tested on every run: the upgrade job installs the **previous** release, writes data with it, upgrades the image, and asserts the running version changed, the data survived, writes kept working and every replica converged |
+| Chart version forward, same OpenLDAP | in place | same job |
+| 2.5.x → 2.6.x, or any earlier major | **not tested here** | treat it as a restore, not an upgrade: dump with the old binary, load with the new one |
+| Downgrading the server image | **not tested, do not assume** | a database written by a newer `slapd` is not guaranteed readable by an older one. Roll back by restoring a backup, not by pointing the tag backwards |
+| Dropping an overlay or module that the live `cn=config` still references | **breaks** | `slapd` refuses to start when `cn=config` names a module the image does not contain, so the pod never becomes ready and the rollout stalls on it |
+
+The chart itself uses only stable APIs — `apps/v1`, `batch/v1`, `policy/v1`,
+`networking.k8s.io/v1`, plus `monitoring.coreos.com/v1` when the optional
+ServiceMonitor/PrometheusRule are enabled — so there is no Kubernetes version
+floor beyond what those require.
+
+### Preflight
+
+`.github/workflows/upgrade-e2e.yml` runs these as gates rather than as advice,
+in this order. Do the same:
+
+1. **Take a backup and verify it.** The job triggers the chart's own backup
+   CronJob and refuses to continue unless the run reports that it checked both
+   dumps against their manifest. This is the only step that helps if the
+   rollback below is not enough.
+2. **Render the upgrade before applying it** (`helm upgrade --dry-run=client`)
+   and confirm the image you expect is in the output. `--reuse-values` does not
+   pick up chart defaults added since the installed revision — see the helm
+   footguns above.
+3. **Check version consistency** (`scripts/check-versions.sh`).
+4. **Know which revision you are rolling back to.** `helm rollback <release>`
+   with no revision goes to the previous one, which is what you want after a
+   failed upgrade. Naming a number gets stale.
+
+### What a rolling upgrade costs
+
+`replicaCount > 1` upgrades one pod at a time behind the PodDisruptionBudget,
+so the Service keeps a writable endpoint throughout. The upgrade job measures
+this rather than asserting it: a probe pod outside the StatefulSet adds and
+deletes an entry once a second for the whole rollout, and the run fails if
+writes are ever refused for more than five probes in a row. Most recent local
+run: 52 of 52 writes accepted with a longest consecutive failure run of 0, across a
+2.6.13 → 2.6.14 rolling upgrade of three replicas on kind.
+
+A single-replica install has no second endpoint, so it is unavailable for the
+length of one pod restart. There is no rolling anything with one pod — schedule
+the window.
+
 ## Backup / Restore
 
 `backup.enabled=true` renders a CronJob that dumps the directory over the
