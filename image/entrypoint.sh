@@ -49,6 +49,21 @@ LDAP_ROOT_DC=$(printf '%s' "$LDAP_ROOT_DN" | sed -E 's/^dc=([^,]+),.*/\1/')
 LDAP_ORG_NAME="${LDAP_ORG_NAME:-$LDAP_ROOT_DC}"
 LDAP_ADMIN_DN="${LDAP_ADMIN_DN:-cn=admin,${LDAP_ROOT_DN}}"
 
+# slapd refuses olcRootPW unless olcRootDN sits under the database suffix, and
+# it only says so from inside slapadd, mid-bootstrap: "<olcRootPW> can only be
+# set when rootdn is under suffix" — with no hint that LDAP_ADMIN_DN is the
+# variable at fault. `helm --set ldap.adminDN=cn=admin,dc=example,dc=org` walks
+# straight into it, because helm splits --set on unescaped commas and only
+# `cn=admin` survives. Compared case- and space-insensitively, since a DN is
+# equal under both.
+_admin_dn_cmp=$(printf '%s' "$LDAP_ADMIN_DN" | sed 's/, */,/g' | tr '[:upper:]' '[:lower:]')
+_root_dn_cmp=$(printf '%s' "$LDAP_ROOT_DN" | sed 's/, */,/g' | tr '[:upper:]' '[:lower:]')
+case "$_admin_dn_cmp" in
+  "$_root_dn_cmp"|*",${_root_dn_cmp}") ;;
+  *) die "LDAP_ADMIN_DN must sit under LDAP_ROOT_DN (got: ${LDAP_ADMIN_DN}, root: ${LDAP_ROOT_DN}) — if this came from 'helm --set', escape the commas: ldap.adminDN=cn=admin\\,${LDAP_ROOT_DN}" ;;
+esac
+unset _admin_dn_cmp _root_dn_cmp
+
 case "$LDAP_ADMIN_DN" in
   cn=*) ;;
   *) die "LDAP_ADMIN_DN must use 'cn=' as its RDN attribute (got: ${LDAP_ADMIN_DN})" ;;
