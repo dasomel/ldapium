@@ -211,6 +211,15 @@ Run it from cron or a systemd timer on the host; `./scripts/backup.sh --help`
 covers every option (custom LDAP URL/port, retention, skipping the
 `cn=config` dump or the directory record).
 
+## Air-gapped install
+
+Images, chart, SBOMs and checksums travel as one directory built by
+`scripts/offline-bundle.sh`, verified and installed by
+`scripts/offline-install.sh` with `imagePullPolicy=Never` so a missing archive
+fails the install instead of quietly pulling. `docs/air-gap.md` has the
+procedure, what the verification refuses and why, and how to keep vulnerability
+data current on a disconnected machine.
+
 ## Supply chain
 
 Every released image is designed to carry, in the registry alongside it, a **build
