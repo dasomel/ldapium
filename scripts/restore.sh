@@ -80,35 +80,67 @@ work_dir=$(mktemp -d)
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
-gzip -dc "$config_file" > "$work_dir/config.ldif.raw"
-
-# slapd builds cn=schema,cn=config from its own compiled-in schema before it
-# reads a line of the dump, so the copy slapcat wrote is a second set of the
-# same definitions. slapadd merges the two, normalisation collapses the
-# duplicates, and the value count no longer matches the normalised count:
+# backup.sh dumps with `ldapsearch ... '*' '+'`, which returns operational
+# attributes slapd generates rather than stores. slapadd takes them at face value
+# and aborts on the inconsistency that follows:
 #   slapadd: attr.c:243: attr_dup2: Assertion `j == i' failed.
-# Drop those definitions on the way in. Only the parent entry carries the
-# built-in schema — user schema lives in the cn={N}name,cn=schema,cn=config
-# children, which are kept untouched.
-awk '
-  /^dn: / { dn = tolower(substr($0, 5)); drop = 0 }
-  {
-    if (substr($0, 1, 1) == " ") {
-      if (drop) next
-    } else if ($0 == "") {
+# Reproduced on the very first entry, cn=config, with entryDN and
+# subschemaSubentry — both have to go, removing either alone still aborts. The
+# rest of the operational set (entryUUID, entryCSN, the creator and modifier
+# stamps) is genuinely stored state and is kept, so a restored directory keeps
+# its original timestamps and replication CSNs.
+#
+# On cn=schema,cn=config the built-in schema definitions go too: slapd assembles
+# that entry from its compiled-in schema before it reads a line of the dump, so
+# reloading the dumped copy adds a second set of the same definitions. User
+# schema lives in the cn={N}name,cn=schema,cn=config children and is untouched.
+sanitize_dump() {
+  awk '
+    {
+      line = $0
+      if (line == "") { dn = ""; drop = 0; print; next }
+      if (substr(line, 1, 1) == " ") { if (!drop) print; next }
       drop = 0
-    } else {
-      drop = 0
-      low = tolower($0)
-      if (dn == "cn=schema,cn=config" && low ~ /^(olcattributetypes|olcobjectclasses|olcldapsyntaxes|olcobjectidentifier|olcmatchingrules|olcmatchingruleuse|olcditcontentrules)[;:]/) drop = 1
+      if (substr(line, 1, 1) == "#") { drop = 1; next }
+      if (substr(line, 1, 4) == "dn: ") { dn = tolower(substr(line, 5)); print; next }
+      # ldapsearch closes with `search:`/`result:` lines that belong to no entry;
+      # slapadd reads them as an entry and stops on "entry -1 has no dn".
+      if (dn == "") { drop = 1; next }
+      low = tolower(line)
+      if (low ~ /^(entrydn|subschemasubentry|hassubordinates|numsubordinates)[;:]/) {
+        drop = 1
+      } else if (dn == "cn=schema,cn=config" && low ~ /^(olcattributetypes|olcobjectclasses|olcldapsyntaxes|olcobjectidentifier|olcmatchingrules|olcmatchingruleuse|olcditcontentrules)[;:]/) {
+        drop = 1
+      }
+      if (!drop) print
     }
-    if (!drop) print
-  }
-' "$work_dir/config.ldif.raw" > "$work_dir/config.ldif"
-gzip -dc "$data_file" > "$work_dir/data.ldif"
+  '
+}
+
+gzip -dc "$config_file" | sanitize_dump > "$work_dir/config.ldif"
+gzip -dc "$data_file" | sanitize_dump > "$work_dir/data.ldif"
 
 rm -rf "${target_config:?}"/* "${target_config:?}"/.[!.]* "${target_config:?}"/..?* 2>/dev/null || true
 rm -rf "${target_data:?}"/* "${target_data:?}"/.[!.]* "${target_data:?}"/..?* 2>/dev/null || true
+
+# slapadd writes the database wherever the restored cn=config says, not where
+# --target-data points, and it refuses to start if that path does not exist.
+# Create it, and refuse the restore outright if it falls outside the target
+# rather than quietly scattering the mdb files somewhere the caller never named.
+db_dir=$(awk '$1 == "olcDbDirectory:" { print $2; exit }' "$work_dir/config.ldif")
+if [ -z "$db_dir" ]; then
+  echo "config dump has no olcDbDirectory" >&2
+  exit 1
+fi
+case "$db_dir" in
+  "$target_data"/*) ;;
+  *)
+    echo "refusing restore: the backup's database directory is ${db_dir}, which is not under --target-data ${target_data}" >&2
+    echo "mount the restore volume at ${db_dir%/*} and pass that as --target-data" >&2
+    exit 1
+    ;;
+esac
+mkdir -p "$db_dir"
 
 slapadd -n 0 -F "$target_config" -l "$work_dir/config.ldif"
 slapadd -n 1 -F "$target_config" -l "$work_dir/data.ldif"
