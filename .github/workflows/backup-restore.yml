@@ -171,6 +171,25 @@ jobs:
           docker logs ldapium-source || true
           docker logs ldapium-restored || true
           find /tmp/ldap-backup -maxdepth 1 -type f -ls || true
+          # The dumps are what a restore failure is actually about, and they are
+          # gone with the runner otherwise.
+          mkdir -p /tmp/backup-evidence
+          for f in /tmp/ldap-backup/config-*.ldif.gz /tmp/ldap-backup/data-*.ldif.gz; do
+            [ -f "$f" ] || continue
+            gzip -dc "$f" > "/tmp/backup-evidence/$(basename "${f%.gz}")" || true
+          done
+          cp /tmp/ldap-backup/manifest-*.sha256 /tmp/backup-evidence/ 2>/dev/null || true
+          echo '--- cn=config entries ---'
+          grep -c '^dn: ' /tmp/backup-evidence/config-*.ldif || true
+          grep '^dn: ' /tmp/backup-evidence/config-*.ldif || true
+
+      - name: Upload backup evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-evidence-${{ github.run_id }}
+          path: /tmp/backup-evidence
+          if-no-files-found: ignore
 
       - name: Cleanup
         if: always()
