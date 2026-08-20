@@ -204,12 +204,12 @@ jobs:
             echo "Creating a test entry through LDAPS on provider 0..."
             kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
               'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapadd -x -H "ldaps://directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" <<EOF
-            dn: uid=tls-e2e,dc=example,dc=org
-            objectClass: inetOrgPerson
-            uid: tls-e2e
-            cn: tls e2e
-            sn: e2e
-            EOF'
+          dn: uid=tls-e2e,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: tls-e2e
+          cn: tls e2e
+          sn: e2e
+          EOF'
             for ordinal in 1 2; do
               echo "Checking replicated entry on provider $ordinal over LDAPS..."
               kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
