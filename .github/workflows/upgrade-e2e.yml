@@ -131,7 +131,27 @@ jobs:
 
       - name: Roll back to known-good revision
         run: |
-          helm rollback directory 1 -n directory --wait --timeout 5m
+          set -euo pipefail
+          # StatefulSet "forced rollback": with the default OrderedReady pod
+          # management, reverting the template is not enough once a pod has already
+          # tried the broken one. The controller keeps waiting for that pod to go
+          # Ready — which it never will, since the image does not exist — and never
+          # gets around to replacing it. `helm rollback --wait` therefore always
+          # times out here. Roll back without waiting, delete the pods still carrying
+          # the bad image, and let the controller recreate them from the reverted
+          # template.
+          helm rollback directory 1 -n directory --timeout 5m
+          for pod in $(kubectl -n directory get pods \
+              -l app.kubernetes.io/name=ldapium,app.kubernetes.io/component=server \
+              -o name); do
+            image=$(kubectl -n directory get "$pod" -o jsonpath='{.spec.containers[0].image}')
+            case "$image" in
+              *this-image-must-not-exist*)
+                echo "deleting $pod, still on the failed revision ($image)"
+                kubectl -n directory delete "$pod" --wait=false
+                ;;
+            esac
+          done
           kubectl -n directory rollout status statefulset/directory-ldapium --timeout=5m
           helm history directory -n directory > /tmp/upgrade-evidence/helm-history-after-rollback.txt
 
