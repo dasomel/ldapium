@@ -50,6 +50,71 @@ Service, and passed into the image; the image never has to guess K8s
 topology. `PodDisruptionBudget` and `topologySpreadConstraints` are also only
 rendered when `replicaCount > 1`.
 
+## TLS
+
+`tls.enabled=true` mounts `tls.existingSecret` at `/etc/openldap/tls`, adds an
+LDAPS listener on 636, and — on a replicated install — points every
+`olcSyncrepl` provider at `ldaps://` instead of `ldap://`. The image sets
+`LDAPTLS_REQCERT=demand` (OpenLDAP's own client default), so a certificate that
+does not verify against the configured CA fails the connection rather than
+quietly falling back to plaintext.
+
+The Secret is the standard Kubernetes TLS shape plus the CA:
+
+| Key | Required | Used as |
+|---|---|---|
+| `tls.crt` | yes | `olcTLSCertificateFile` |
+| `tls.key` | yes | `olcTLSCertificateKeyFile` |
+| `ca.crt` | when `tls.caFile` is set | `olcTLSCACertificateFile` — also what clients and syncrepl verify peers against |
+
+The certificate has to cover both names a peer may connect to: the Service,
+`<release>-ldapium.<ns>.svc.<clusterDomain>`, and the per-pod headless name,
+`*.<release>-ldapium-headless.<ns>.svc.<clusterDomain>`, which is the one
+syncrepl uses.
+
+### Renewing a certificate
+
+`slapd` reads its key material once, at startup. Updating the Secret replaces
+the files under `/etc/openldap/tls` but not what is being served, so a renewal
+is two steps — update, then restart:
+
+```bash
+kubectl -n <ns> create secret generic <tls-secret> \
+  --from-file=tls.crt=new.crt \
+  --from-file=tls.key=new.key \
+  --from-file=ca.crt=ca.crt \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n <ns> rollout restart statefulset/<fullname>
+kubectl -n <ns> rollout status statefulset/<fullname>
+```
+
+With `replicaCount > 1` that is a rolling restart behind the
+`PodDisruptionBudget`: pods leave the Service's endpoints one at a time, so
+LDAPS keeps answering throughout. A single-replica install has no second node
+to answer, so it is unavailable for the length of one pod restart — schedule it
+rather than discovering it.
+
+Replacing the **CA** is two rotations, not one. Publish a `ca.crt` holding both
+the old and the new CA and restart, so every pod trusts both; then issue leaf
+certificates from the new CA and restart again; then drop the old CA. Done in a
+single step it breaks replication, because a pod that has already restarted
+presents a certificate the pods that have not restarted do not yet trust.
+
+### What CI verifies
+
+The `tls` job in `.github/workflows/e2e.yml` runs against a standalone and a
+3-node install and uploads a `tls-evidence-<scenario>` artifact holding the
+served certificate, the `cn=config` TLS attributes, and the rotation samples:
+
+- authenticated LDAPS bind with strict verification
+- an unknown CA, a name the certificate does not cover, and an expired
+  certificate are each rejected
+- `olcSyncrepl` uses `ldaps://` and never plaintext `ldap://`
+- a write over LDAPS converges on every replica
+- a certificate rotation, with LDAPS availability sampled every second from a
+  pod outside the StatefulSet for the whole rolling restart, and the served
+  serial asserted to have actually changed
+
 ## Values
 
 | Key | Default | Description |
@@ -71,7 +136,7 @@ rendered when `replicaCount > 1`.
 | `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required unless `existingSecret` is set. |
 | `auth.existingSecret` | `""` | Pre-existing Secret name to source the admin password from. |
 | `auth.existingSecretKey` | `admin-password` | Key within the Secret. |
-| `tls.enabled` | `false` | **Unverified path** — not exercised end-to-end. |
+| `tls.enabled` | `false` | Serves LDAPS on 636 and moves replication to `ldaps://`. See [TLS](#tls). |
 | `tls.existingSecret` | `""` | Secret (standard `tls.crt`/`tls.key`, optional `ca.crt`) mounted at `/etc/openldap/tls`. |
 | `tls.certFile` / `tls.keyFile` / `tls.caFile` | see values.yaml | → `LDAP_TLS_CERT_FILE` / `LDAP_TLS_KEY_FILE` / `LDAP_TLS_CA_FILE`. |
 | `replication.enabled` | unset (auto: `replicaCount > 1`) | Force replication on/off. |
@@ -420,8 +485,6 @@ would mint its own view of "current" and they would conflict permanently.
 
 ## Known gaps
 
-- TLS (`tls.enabled`) has not been exercised end-to-end — validate before
-  relying on it.
 - No `kubeconform`/schema-validation run was part of this chart's own
   verification (tool unavailable in the authoring environment); `kubectl
   apply --dry-run=client` was used instead.

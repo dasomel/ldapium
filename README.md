@@ -15,9 +15,8 @@ being viable.
 > **Status: prototype.** Published early on purpose — the packaging is the
 > point of the project and it is easier to judge in the open. Every claim in
 > this README was checked against something actually running, but nothing here
-> has been run by anyone other than its author, and the TLS path has never
-> been exercised end to end. `helm test` (below) is there so you can check an
-> install rather than take this paragraph's word for it. See
+> has been run by anyone other than its author. `helm test` (below) is there so
+> you can check an install rather than take this paragraph's word for it. See
 > [CHANGELOG.md](CHANGELOG.md) for the known gaps.
 
 > **Registry note:** the repository contains the GHCR release workflow, but
@@ -106,6 +105,18 @@ with an overlay missing, so this is the only check that notices.
 
 `charts/ldapium/README.md` documents every value, the replication design, the
 backup/restore procedure, and the optional Keycloak SSO setup.
+
+### TLS
+
+`--set tls.enabled=true` with a Secret holding `tls.crt`, `tls.key` and
+`ca.crt` adds an LDAPS listener on 636 and moves replication onto `ldaps://`.
+Certificates are verified strictly, so an unknown CA or a name the certificate
+does not cover fails the connection instead of downgrading it.
+
+`slapd` reads its key material at startup only: renewing a certificate means
+updating the Secret and then restarting the pods, which is a rolling,
+no-downtime operation once `replicaCount > 1`. `charts/ldapium/README.md#tls`
+has the runbook, including the two-step procedure for changing the CA itself.
 
 ### Images
 

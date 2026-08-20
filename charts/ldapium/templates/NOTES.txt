@@ -28,8 +28,10 @@ REPLICATION-CONTRACT.md in the repo for the design). Check convergence with:
 
 {{- if .Values.tls.enabled }}
 
-TLS is enabled. This path is UNVERIFIED end-to-end as of this chart's
-handoff — validate it in your environment before relying on it.
+TLS is enabled: LDAPS is served on 636{{ if eq (include "ldapium.replicationEnabled" .) "true" }} and replication runs over ldaps://{{ end }}.
+  Certificate material comes from Secret {{ .Values.tls.existingSecret | quote }}.
+  slapd reads it only at startup, so a renewal takes effect on the next pod
+  restart — charts/ldapium/README.md's TLS section has the runbook.
 {{- end }}
 
 {{- if .Values.backup.enabled }}
