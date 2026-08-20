@@ -138,13 +138,55 @@ jobs:
           openssl genrsa -out /tmp/ldapium-tls/tls.key 2048
           openssl req -new -key /tmp/ldapium-tls/tls.key -out /tmp/ldapium-tls/server.csr -config /tmp/ldapium-tls/server.cnf
           openssl x509 -req -in /tmp/ldapium-tls/server.csr -CA /tmp/ldapium-tls/ca.crt -CAkey /tmp/ldapium-tls/ca.key -CAcreateserial -out /tmp/ldapium-tls/tls.crt -days 1 -sha256 -extensions req_ext -extfile /tmp/ldapium-tls/server.cnf
+      - name: Generate rotation and expiry test certificates
+        run: |
+          set -euo pipefail
+          dir=/tmp/ldapium-tls
+          mkdir -p /tmp/tls-evidence
+          # A renewal: same CA and same names, new key and new serial.
+          openssl genrsa -out "$dir/rotated.key" 2048
+          openssl req -new -key "$dir/rotated.key" -out "$dir/rotated.csr" -config "$dir/server.cnf"
+          openssl x509 -req -in "$dir/rotated.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
+            -CAcreateserial -out "$dir/rotated.crt" -days 1 -sha256 \
+            -extensions req_ext -extfile "$dir/server.cnf"
+          # An already-expired certificate. `openssl x509 -req` cannot backdate on
+          # the runner's OpenSSL 3.0, so this one is signed through `openssl ca`,
+          # which does take explicit start and end dates.
+          mkdir -p "$dir/ca-db/newcerts"
+          : >"$dir/ca-db/index.txt"
+          echo 1000 >"$dir/ca-db/serial"
+          cat >"$dir/ca-db/ca.cnf" <<EOF
+          [ca]
+          default_ca = CA_default
+          [CA_default]
+          dir = $dir/ca-db
+          database = \$dir/index.txt
+          serial = \$dir/serial
+          new_certs_dir = \$dir/newcerts
+          default_md = sha256
+          policy = policy_any
+          email_in_dn = no
+          unique_subject = no
+          [policy_any]
+          commonName = supplied
+          EOF
+          openssl genrsa -out "$dir/expired.key" 2048
+          openssl req -new -key "$dir/expired.key" -out "$dir/expired.csr" -config "$dir/server.cnf"
+          openssl ca -batch -config "$dir/ca-db/ca.cnf" -cert "$dir/ca.crt" -keyfile "$dir/ca.key" \
+            -in "$dir/expired.csr" -out "$dir/expired.crt" -notext \
+            -startdate 20240101000000Z -enddate 20240102000000Z \
+            -extensions req_ext -extfile "$dir/server.cnf"
+          openssl x509 -in "$dir/expired.crt" -noout -subject -dates | tee /tmp/tls-evidence/expired-certificate.txt
       - name: Set up TLS Secret
         run: |
           kubectl create namespace directory
+          # Piped through `apply` so the rotation test, which also applies, is
+          # not a mixed create/apply on the same object.
           kubectl -n directory create secret generic ldapium-tls \
             --from-file=tls.crt=/tmp/ldapium-tls/tls.crt \
             --from-file=tls.key=/tmp/ldapium-tls/tls.key \
-            --from-file=ca.crt=/tmp/ldapium-tls/ca.crt
+            --from-file=ca.crt=/tmp/ldapium-tls/ca.crt \
+            --dry-run=client -o yaml | kubectl apply -f -
       - name: Install TLS chart
         run: |
           set -euo pipefail
@@ -217,6 +259,182 @@ jobs:
               echo "PASS: provider $ordinal converged over LDAPS"
             done
           fi
+      - name: Verify an expired server certificate fails closed
+        if: matrix.scenario == 'standalone'
+        run: |
+          set -euo pipefail
+          bind_cmd='LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD"'
+          swap_certificate() {
+            kubectl -n directory create secret generic ldapium-tls \
+              --from-file=tls.crt="$1" \
+              --from-file=tls.key="$2" \
+              --from-file=ca.crt=/tmp/ldapium-tls/ca.crt \
+              --dry-run=client -o yaml | kubectl apply -f -
+            # slapd reads its key material once, at startup. Replacing the pod is
+            # both what makes the new certificate take effect and what avoids
+            # waiting on the kubelet's own secret refresh interval.
+            kubectl -n directory delete pod directory-ldapium-0
+            # `rollout status` would not help here: deleting a pod leaves the
+            # StatefulSet's generation untouched, so it can report success against
+            # the status from before the delete. Wait on the replacement pod.
+            for _ in $(seq 1 60); do
+              kubectl -n directory get pod directory-ldapium-0 >/dev/null 2>&1 && break
+              sleep 2
+            done
+            kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-0 --timeout=5m
+          }
+          swap_certificate /tmp/ldapium-tls/expired.crt /tmp/ldapium-tls/expired.key
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c "$bind_cmd" \
+            >/tmp/tls-evidence/expired-bind.txt 2>&1; then
+            echo "::error::LDAP bind unexpectedly succeeded against an expired server certificate"
+            cat /tmp/tls-evidence/expired-bind.txt
+            exit 1
+          fi
+          cat /tmp/tls-evidence/expired-bind.txt
+          grep -q 'certificate has expired' /tmp/tls-evidence/expired-bind.txt
+          echo "PASS: expired server certificate rejected"
+          swap_certificate /tmp/ldapium-tls/tls.crt /tmp/ldapium-tls/tls.key
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c "$bind_cmd" \
+            | tee /tmp/tls-evidence/recovered-bind.txt
+          echo "PASS: LDAPS recovered once a valid certificate was restored"
+      - name: Rotate the server certificate without downtime
+        if: matrix.scenario == 'replicated'
+        run: |
+          set -euo pipefail
+          admin_dn="cn=admin,dc=example,dc=org"
+          ldap_base="dc=example,dc=org"
+          password=$(kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' | base64 -d)
+          served_serial() {
+            kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+              'openssl s_client -connect directory-ldapium.directory.svc.cluster.local:636 -CAfile /etc/openldap/tls/ca.crt </dev/null 2>/dev/null | openssl x509 -noout -serial' \
+              | tr -d '\015'
+          }
+          before=$(served_serial)
+          echo "$before" | tee /tmp/tls-evidence/serial-before-rotation.txt
+          # The availability sample runs from a pod outside the StatefulSet, so it
+          # survives every directory pod being replaced in turn.
+          kubectl -n directory apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: tls-rotation-probe
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: probe
+                image: ldapium:e2e
+                imagePullPolicy: Never
+                command:
+                  - sh
+                  - -c
+                  - |
+                    while [ ! -f /tmp/stop ]; do
+                      if LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
+                        ldapwhoami -x -o nettimeout=2 \
+                        -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
+                        -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" >/dev/null 2>&1; then
+                        echo OK
+                      else
+                        echo FAIL
+                      fi
+                      sleep 1
+                    done
+                env:
+                  - name: LDAP_ADMIN_DN
+                    value: cn=admin,dc=example,dc=org
+                  - name: LDAP_ADMIN_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: directory-ldapium-admin
+                        key: admin-password
+                volumeMounts:
+                  - name: tls
+                    mountPath: /etc/openldap/tls
+                    readOnly: true
+            volumes:
+              - name: tls
+                secret:
+                  secretName: ldapium-tls
+          EOF
+          kubectl -n directory wait --for=condition=Ready pod/tls-rotation-probe --timeout=3m
+          kubectl -n directory create secret generic ldapium-tls \
+            --from-file=tls.crt=/tmp/ldapium-tls/rotated.crt \
+            --from-file=tls.key=/tmp/ldapium-tls/rotated.key \
+            --from-file=ca.crt=/tmp/ldapium-tls/ca.crt \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n directory rollout restart statefulset/directory-ldapium
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          kubectl -n directory exec tls-rotation-probe -- touch /tmp/stop
+          kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/tls-rotation-probe --timeout=2m
+          kubectl -n directory logs tls-rotation-probe > /tmp/tls-evidence/rotation-availability.txt
+          total=$(grep -c . /tmp/tls-evidence/rotation-availability.txt || true)
+          ok=$(grep -c '^OK$' /tmp/tls-evidence/rotation-availability.txt || true)
+          # The interesting number is not how many binds failed but whether they
+          # ever failed consecutively: a rolling restart drains one pod at a time,
+          # so a single bind landing on an endpoint already on its way out is
+          # expected. A *run* of failures means no pod was answering.
+          streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' \
+            /tmp/tls-evidence/rotation-availability.txt)
+          echo "LDAPS binds during rotation: $ok/$total, longest consecutive failure run: $streak"
+          printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$total" "$ok" "$streak" \
+            > /tmp/tls-evidence/rotation-availability-summary.txt
+          if [ "$total" -lt 20 ]; then
+            echo "::error::rotation completed too quickly to measure availability ($total samples)"
+            exit 1
+          fi
+          if [ "$streak" -gt 5 ]; then
+            echo "::error::LDAPS was unanswerable for $streak consecutive probes during rotation"
+            exit 1
+          fi
+          if [ $((ok * 100 / total)) -lt 80 ]; then
+            echo "::error::LDAPS availability dropped to $ok/$total during certificate rotation"
+            exit 1
+          fi
+          after=$(served_serial)
+          echo "$after" | tee /tmp/tls-evidence/serial-after-rotation.txt
+          expected=$(openssl x509 -in /tmp/ldapium-tls/rotated.crt -noout -serial)
+          if [ "$before" = "$after" ]; then
+            echo "::error::the directory is still serving the pre-rotation certificate"
+            exit 1
+          fi
+          test "$after" = "$expected"
+          echo "PASS: rotated certificate is being served"
+          echo "Checking replication still converges after rotation..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapadd -x -H "ldaps://directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:636" -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" <<EOF
+          dn: uid=tls-rotated,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: tls-rotated
+          cn: tls rotated
+          sn: rotated
+          EOF'
+          for ordinal in 1 2; do
+            kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+              "i=0; until LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapsearch -x -LLL -H \"ldaps://directory-ldapium-${ordinal}.directory-ldapium-headless.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\" -b \"uid=tls-rotated,$ldap_base\" -s base dn >/dev/null 2>&1; do i=\$((i+1)); [ \"\$i\" -lt 30 ] || exit 1; sleep 2; done"
+            echo "PASS: provider $ordinal converged over LDAPS after rotation"
+          done
+          kubectl -n directory delete pod tls-rotation-probe --ignore-not-found
+      - name: Collect TLS evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/tls-evidence
+          date -u +%FT%TZ > /tmp/tls-evidence/collected-at.txt
+          kubectl -n directory get pods -o wide > /tmp/tls-evidence/pods.txt 2>&1 || true
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "cn=config" -s base olcTLSCertificateFile olcTLSCertificateKeyFile olcTLSCACertificateFile' \
+            > /tmp/tls-evidence/tls-config.txt 2>&1 || true
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'openssl s_client -connect directory-ldapium.directory.svc.cluster.local:636 -CAfile /etc/openldap/tls/ca.crt </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName' \
+            > /tmp/tls-evidence/served-certificate.txt 2>&1 || true
+      - name: Upload TLS evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tls-evidence-${{ matrix.scenario }}
+          path: /tmp/tls-evidence/*
+          if-no-files-found: error
+          retention-days: 14
       - name: Run helm test
         run: helm test directory --namespace directory --logs
       - name: Diagnostics
