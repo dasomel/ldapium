@@ -140,6 +140,12 @@ jobs:
       - name: Check version consistency
         run: ./scripts/check-versions.sh
 
+      # The UI reports which modules the server has by reading an env var the
+      # chart hardcodes. Nothing derived it from the server, so it stays true
+      # only for as long as three files keep agreeing.
+      - name: Check module inventory consistency
+        run: ./scripts/check-modules.sh
+
       - name: Reject rendering with no admin password
         run: |
           if helm template t charts/ldapium >/dev/null 2>&1; then
