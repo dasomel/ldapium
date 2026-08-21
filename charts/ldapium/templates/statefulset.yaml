@@ -97,6 +97,12 @@ spec:
               value: {{ .Values.ldap.maxOpenFiles | quote }}
             - name: LDAP_DB_MAX_SIZE
               value: {{ (default (include "ldapium.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
+            - name: LDAP_AUDIT_ENABLED
+              value: {{ .Values.audit.enabled | quote }}
+            {{- if .Values.audit.enabled }}
+            - name: LDAP_AUDIT_FILE
+              value: {{ .Values.audit.file | quote }}
+            {{- end }}
             - name: LDAP_TLS_ENABLED
               value: {{ .Values.tls.enabled | quote }}
             {{- if .Values.tls.enabled }}
