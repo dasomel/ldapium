@@ -104,8 +104,11 @@ jobs:
 
               ldapwhoami -x -H "$url" -D "$bob" -w BobPassword1! | grep -q "dn:uid=bob"
 
+              # Refused *by the ACL*, not merely refused. Without checking for
+              # result 50 these would also pass on a typo in the DN, a wrong
+              # password, or an unreachable server.
               echo "modify another user: must be refused"
-              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! <<EOF
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/modify.out 2>&1 <<EOF
           dn: $alice
           changetype: modify
           replace: sn
@@ -115,12 +118,16 @@ jobs:
                 echo "a bound user modified another user entry" >&2
                 exit 1
               fi
+              cat /tmp/modify.out
+              grep -q "Insufficient access (50)" /tmp/modify.out
 
               echo "delete another user: must be refused"
-              if ldapdelete -x -H "$url" -D "$bob" -w BobPassword1! "$alice"; then
+              if ldapdelete -x -H "$url" -D "$bob" -w BobPassword1! "$alice" >/tmp/delete.out 2>&1; then
                 echo "a bound user deleted another user entry" >&2
                 exit 1
               fi
+              cat /tmp/delete.out
+              grep -q "Insufficient access (50)" /tmp/delete.out
 
               echo "read another user password: must be refused"
               out=$(ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$alice" -s base userPassword)
