@@ -84,7 +84,11 @@ jobs:
       # that fixed it.
       - name: govulncheck
         working-directory: ui/backend
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        # Pinned, not @latest. `go run tool@latest` downloads and executes the
+        # newest published version at scan time, which makes the scanner itself
+        # a build-time execution path — the class of attack this scan exists to
+        # find. Bumped by hand, deliberately.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   images:
     name: Published images
