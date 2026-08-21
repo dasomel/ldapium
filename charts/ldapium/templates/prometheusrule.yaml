@@ -29,10 +29,13 @@ spec:
             description: "At least one replication peer is more than the configured threshold behind the local provider."
 
         - alert: LDAPiumConnectionSaturation
+          # `ignoring(dn)` is load-bearing. Both sides are the same metric
+          # distinguished only by dn, so a plain division finds no matching
+          # series and returns nothing at all — the alert could never fire.
           expr: |
             100 *
             openldap_monitor_counter_object{dn="cn=Current,cn=Connections,cn=Monitor"}
-            /
+            / ignoring(dn)
             openldap_monitor_counter_object{dn="cn=Max File Descriptors,cn=Connections,cn=Monitor"}
             > {{ .Values.metrics.prometheusRule.connectionSaturationPercent }}
           for: 10m
