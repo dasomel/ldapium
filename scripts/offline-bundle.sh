@@ -54,6 +54,13 @@ else
   CHART="oci://${REGISTRY}/charts/ldapium"
 fi
 
+# Pinned by digest, not by tag. This container is handed the docker socket, so
+# whoever controls the tag it resolves to controls the machine assembling the
+# release — the exact build-time execution path this pinning exists to close.
+# Bump deliberately: `docker buildx imagetools inspect anchore/syft:vX.Y.Z
+# --format '{{json .Manifest.Digest}}'`.
+SYFT_IMAGE="${SYFT_IMAGE:-anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0}"
+
 for bin in docker helm jq sha256sum; do
   command -v "$bin" >/dev/null 2>&1 || { echo "required command not found: $bin" >&2; exit 1; }
 done
@@ -147,7 +154,7 @@ for image_spec in \
   docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$(cd "$OUTPUT_DIR/sbom" && pwd):/sbom" \
-    anchore/syft:latest "docker:${image}" -o "spdx-json=/sbom/${name}-${VERSION}.spdx.json"
+    "$SYFT_IMAGE" "docker:${image}" -o "spdx-json=/sbom/${name}-${VERSION}.spdx.json"
 done
 
 # Machine-readable provenance/evidence record. This is bundle provenance,
