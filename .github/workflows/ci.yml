@@ -64,8 +64,12 @@ jobs:
           GOFLAGS: -mod=readonly
         run: |
           set -euo pipefail
-          go mod verify
+          # Download first. `go mod verify` re-hashes what is *in the module
+          # cache*, so running it against a cold cache verifies nothing at all
+          # and passes — setup-go usually restores one, but a cache miss must
+          # not turn this step into a no-op.
           go mod download
+          go mod verify
           # A build that needed to touch either file did so because something
           # in the graph was not what go.sum said it was.
           git diff --exit-code go.mod go.sum
@@ -91,6 +95,10 @@ jobs:
           cp go.mod go.sum "$work/"
           trap 'cp "$work/go.mod" "$work/go.sum" . ; rm -rf "$work"' EXIT
           victim=$(awk '$1 != "" && $2 ~ /^v/ { print $1; exit }' go.sum)
+          if [ -z "$victim" ]; then
+            echo "::error::found no module to substitute; the go.sum parsing is wrong"
+            exit 1
+          fi
           echo "substituting the recorded hash for $victim"
           awk -v m="$victim" '$1 == m { $3 = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } { print }' go.sum > go.sum.tampered
           mv go.sum.tampered go.sum

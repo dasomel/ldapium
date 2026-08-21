@@ -57,9 +57,11 @@ fi
 # Pinned by digest, not by tag. This container is handed the docker socket, so
 # whoever controls the tag it resolves to controls the machine assembling the
 # release — the exact build-time execution path this pinning exists to close.
-# Bump deliberately: `docker buildx imagetools inspect anchore/syft:vX.Y.Z
+# Not overridable from the environment: an escape hatch that lets a caller
+# name a different image is not a pin. Bump by editing this line —
+# `docker buildx imagetools inspect anchore/syft:vX.Y.Z
 # --format '{{json .Manifest.Digest}}'`.
-SYFT_IMAGE="${SYFT_IMAGE:-anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0}"
+SYFT_IMAGE="anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0"
 
 for bin in docker helm jq sha256sum; do
   command -v "$bin" >/dev/null 2>&1 || { echo "required command not found: $bin" >&2; exit 1; }
