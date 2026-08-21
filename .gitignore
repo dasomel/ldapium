@@ -25,3 +25,6 @@ vendor/
 
 # generated SBOMs (make sbom)
 sbom/
+
+# Rendered from the chart by scripts/render-alert-rules.sh for promtool.
+tests/prometheus/rules.yaml

@@ -1,0 +1,164 @@
+# Fault injection for the chart's alert rules.
+#
+# Each case feeds the series a real failure would produce and asserts the alert
+# that is supposed to notice it fires — and, just as importantly, that a healthy
+# series does not set it off. An alert nobody has ever seen fire is a guess, and
+# one that fires on healthy input gets silenced within a week.
+#
+# The rules under test are rendered from the chart by
+# scripts/render-alert-rules.sh, so these cases run against what the chart
+# ships rather than a copy of it.
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: the metrics endpoint stops answering
+    input_series:
+      - series: 'up{service="alerts-ldapium-metrics"}'
+        values: "1+0x5 0+0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LDAPiumExporterDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LDAPiumExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: alerts-ldapium-metrics
+            exp_annotations:
+              summary: "LDAPium metrics endpoint is down"
+              description: "Prometheus cannot scrape the LDAPium metrics endpoint for 5 minutes."
+
+  - interval: 1m
+    name: a replica falls behind
+    input_series:
+      - series: 'openldap_replication_delta{replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+      - series: 'openldap_replication_delta{replica="ldapium-2"}'
+        values: "0+0x30"
+    alert_rule_test:
+      # The threshold is crossed at 5m but the rule waits 5m more, so nothing
+      # fires on a single scrape of a lagging replica.
+      - eval_time: 8m
+        alertname: LDAPiumReplicationLag
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LDAPiumReplicationLag
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              replica: ldapium-1
+            exp_annotations:
+              summary: "LDAPium replication lag is high"
+              description: "At least one replication peer is more than the configured threshold behind the local provider."
+
+  - interval: 1m
+    name: a replica that stays caught up never alerts
+    input_series:
+      - series: 'openldap_replication_delta{replica="ldapium-1"}'
+        values: "0 5 12 3 0 8 0+0x30"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: LDAPiumReplicationLag
+        exp_alerts: []
+
+  - interval: 1m
+    name: connections approach the file-descriptor ceiling
+    input_series:
+      - series: 'openldap_monitor_counter_object{dn="cn=Current,cn=Connections,cn=Monitor"}'
+        values: "100+0x5 900+0x20"
+      - series: 'openldap_monitor_counter_object{dn="cn=Max File Descriptors,cn=Connections,cn=Monitor"}'
+        values: "1024+0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LDAPiumConnectionSaturation
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LDAPiumConnectionSaturation
+        exp_alerts:
+          # `ignoring(dn)` drops dn from the result. In a real deployment the
+          # scrape's own instance/pod labels are what identify the server.
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "LDAPium connection/file-descriptor pressure is high"
+              description: "Current LDAP connections exceeded the configured percentage of the monitor-reported maximum file descriptors."
+
+  - interval: 1m
+    name: a backup Job fails
+    input_series:
+      - series: 'kube_job_status_failed{namespace="directory",job_name="alerts-ldapium-backup-29000000"}'
+        values: "0+0x5 1+0x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: LDAPiumBackupFailed
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LDAPiumBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+            exp_annotations:
+              summary: "LDAPium backup job failed"
+              description: "A recent LDAPium backup Job is reporting failure."
+
+  - interval: 1m
+    name: no backup completes for longer than the configured maximum age
+    input_series:
+      # One successful backup at t=0 and nothing after it. backupMaxAgeSeconds
+      # is 93600 — a day plus the margin a 02:00 schedule needs to not alert on
+      # a run that is merely a little late.
+      # Sampled every minute for 28h: with hour-spaced samples the series goes
+      # stale between evaluations and the rule's `for` can never be satisfied.
+      - series: 'kube_job_status_completion_time{namespace="directory",job_name="alerts-ldapium-backup-29000000"}'
+        values: "0+0x1700"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: LDAPiumBackupStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: LDAPiumBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+            exp_annotations:
+              summary: "LDAPium backup is stale"
+              description: "The last successful LDAPium backup is older than the configured maximum backup age."
+
+  - interval: 1m
+    name: the MDB fills up
+    input_series:
+      - series: "openldap_pages_used"
+        values: "100+0x5 900+0x20"
+      - series: "openldap_pages_max"
+        values: "1000+0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LDAPiumMDBUsageHigh
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LDAPiumMDBUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "LDAPium MDB usage is high"
+              description: "The LDAPium MDB database is using more than 80% of its configured maximum pages."
+
+  - interval: 1m
+    name: an MDB with room to spare never alerts
+    input_series:
+      - series: "openldap_pages_used"
+        values: "700+0x40"
+      - series: "openldap_pages_max"
+        values: "1000+0x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: LDAPiumMDBUsageHigh
+        exp_alerts: []
