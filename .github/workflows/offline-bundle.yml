@@ -148,6 +148,23 @@ jobs:
           fi
           grep -q 'FAILED' /tmp/offline-evidence-tampered.txt
           echo "PASS: tampered bundle refused"
+      - name: Refuse a bundle whose checksum list was thinned out
+        run: |
+          set -euo pipefail
+          # `sha256sum -c` on a list with the incriminating line removed reports
+          # zero mismatches, because it was given nothing to check about that
+          # file. Deleting one line is therefore the cheapest way past a naive
+          # checksum gate, and this is the case that proves it is not one.
+          cp -R /tmp/bundle /tmp/bundle-thinned
+          grep -v 'chart/ldapium' /tmp/bundle/SHA256SUMS > /tmp/bundle-thinned/SHA256SUMS
+          printf 'tampered' >> /tmp/bundle-thinned/chart/ldapium-"${BUNDLE_VERSION}".tgz
+          if scripts/offline-install.sh --bundle /tmp/bundle-thinned --verify-only \
+            > /tmp/offline-evidence-thinned.txt 2>&1; then
+            echo "::error::a bundle with an incomplete checksum list was accepted"
+            exit 1
+          fi
+          grep -q 'SHA256SUMS covers' /tmp/offline-evidence-thinned.txt
+          echo "PASS: bundle refused because its checksum list did not cover every file"
       - name: Create cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
