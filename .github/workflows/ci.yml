@@ -54,9 +54,58 @@ jobs:
             exit 1
           fi
 
+      # go.sum is the dependency graph's integrity statement, so it has to be
+      # checked rather than trusted, and the build must not be allowed to
+      # rewrite it on the way past. -mod=readonly makes a missing or changed
+      # requirement a failure instead of a silent edit; `go mod verify` then
+      # re-hashes everything in the module cache against go.sum.
+      - name: Verify module integrity
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod download
+          # A build that needed to touch either file did so because something
+          # in the graph was not what go.sum said it was.
+          git diff --exit-code go.mod go.sum
+
       - run: go vet ./...
+        env:
+          GOFLAGS: -mod=readonly
       - run: go test ./...
+        env:
+          GOFLAGS: -mod=readonly
       - run: go build ./...
+        env:
+          GOFLAGS: -mod=readonly
+
+      # A dependency substituted for something else has to fail the build, not
+      # produce a warning nobody reads. Tampering with one recorded hash is the
+      # cheapest faithful stand-in for that, and it runs on a copy so the real
+      # go.sum is never touched.
+      - name: Prove a substituted dependency fails the build
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          cp go.mod go.sum "$work/"
+          trap 'cp "$work/go.mod" "$work/go.sum" . ; rm -rf "$work"' EXIT
+          victim=$(awk '$1 != "" && $2 ~ /^v/ { print $1; exit }' go.sum)
+          echo "substituting the recorded hash for $victim"
+          awk -v m="$victim" '$1 == m { $3 = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } { print }' go.sum > go.sum.tampered
+          mv go.sum.tampered go.sum
+          # `go mod download` rather than `go build`: it fails on the checksum
+          # before anything is compiled, so the failure cannot be confused with
+          # a compile error, and GOPROXY=off keeps it comparing the tampered
+          # go.sum against the module cache rather than re-fetching.
+          if GOFLAGS=-mod=readonly GOPROXY=off go mod download 2>/tmp/substitution.log; then
+            echo "::error::a download succeeded against a go.sum that no longer matches the module"
+            exit 1
+          fi
+          tail -8 /tmp/substitution.log
+          # Fail for the right reason: any command can exit non-zero.
+          grep -qE 'checksum mismatch|SECURITY ERROR' /tmp/substitution.log
+          echo "PASS: substituted dependency rejected"
 
   frontend:
     name: UI frontend (npm)
