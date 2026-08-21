@@ -253,7 +253,7 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 | Target | anonymous | authenticated user | the entry itself | `cn=admin,<rootDN>` |
 |---|---|---|---|---|
 | `userPassword`, `shadowLastChange` | bind only, never read | none | write | write |
-| `entry`, `uid`, `objectClass` | read | read | write | write |
+| `entry`, `uid`, `objectClass` | read | read | read (see below) | write |
 | every other attribute | none | read | write | write |
 | another user's entry (write or delete) | none | **none** | n/a | write |
 | `cn=config` | none | none | n/a | no — it is a separate database with its own admin identity, `cn=admin,cn=config` |
@@ -262,6 +262,16 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 The admin column is the rootdn, which bypasses ACLs by definition — the useful
 statement is not that it can do everything but that **nothing else in the first
 three columns can write anything outside its own entry**.
+
+Rule 2's `by self write` never applies. `by` clauses are evaluated in order and
+the first match wins, and `self` is also a `user`, so an entry reaching for its
+own `uid` or `objectClass` matches the earlier `by users read` and stops there.
+The clause is dead as written — the effective policy for those three attributes
+is read-for-everyone-authenticated, and self-service writes work through rule 3
+(`to *`), where `by self write` comes first. If the intent was for a user to
+rename their own `uid`, the fix is to move `by self write` ahead of
+`by users read` in rule 2, which is a policy change rather than a typo, so it is
+left alone here.
 
 Two things the table is easy to misread. `cn=admin,dc=...` cannot administer
 `cn=config`: that database answers to `cn=admin,cn=config`, a different
