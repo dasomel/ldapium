@@ -248,6 +248,37 @@ The `mdb` database ships with a default-deny-to-anonymous ACL (`olcAccess` on
 Without this, slapd's built-in default (`to * by * read`) lets anyone who can
 reach port 389 dump the whole tree, `userPassword` included.
 
+As a matrix — rows are what is being reached for, columns are who is reaching:
+
+| Target | anonymous | authenticated user | the entry itself | `cn=admin,<rootDN>` |
+|---|---|---|---|---|
+| `userPassword`, `shadowLastChange` | bind only, never read | none | write | write |
+| `entry`, `uid`, `objectClass` | read | read | write | write |
+| every other attribute | none | read | write | write |
+| another user's entry (write or delete) | none | **none** | n/a | write |
+| `cn=config` | none | none | n/a | no — it is a separate database with its own admin identity, `cn=admin,cn=config` |
+| `cn=Monitor` | none | none | n/a | `cn=monitoring,cn=Monitor` reads; everyone else nothing |
+
+The admin column is the rootdn, which bypasses ACLs by definition — the useful
+statement is not that it can do everything but that **nothing else in the first
+three columns can write anything outside its own entry**.
+
+Two things the table is easy to misread. `cn=admin,dc=...` cannot administer
+`cn=config`: that database answers to `cn=admin,cn=config`, a different
+identity. But the two are given the **same password** (`LDAP_ADMIN_PASSWORD`),
+so the separation is one of identity and ACL, not of secret — whoever holds the
+directory admin password can also bind to `cn=config` on any listener slapd is
+serving. Treat that password as configuration-level access, not directory-level
+access, and put the LDAP service behind something that does not expose it to
+untrusted networks.
+
+`.github/workflows/security-e2e.yml` enforces the interesting cells rather than
+leaving them as intent: an anonymous read of `userPassword`, an authenticated
+user modifying, deleting and reading the password of *another* user, and
+`cn=config` over the LDAP service all have to be refused — and, because a
+deny-everything ACL would satisfy all of that, a user writing their own entry
+has to still succeed.
+
 This is one ordered multi-valued attribute, not hardcoded logic — replace it
 wholesale for a different policy via `ldapmodify` as `cn=admin,cn=config`
 (see below), same as any other `cn=config` change.
