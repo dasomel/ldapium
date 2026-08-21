@@ -122,9 +122,17 @@ jobs:
           cp -R /tmp/bundle /tmp/bundle-incomplete
           rm -f /tmp/bundle-incomplete/sbom/*.spdx.json
           (
+            # Regenerated the way offline-bundle.sh does it — into a temp file
+            # and then moved — so the fixture is a bundle a real bundler could
+            # have produced. Redirecting straight into SHA256SUMS creates it
+            # before `find` runs, and the list ends up covering itself, which
+            # no real bundle does.
             cd /tmp/bundle-incomplete
             rm -f SHA256SUMS
-            find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sums=$(mktemp)
+            find . -type f -print0 | sort -z | xargs -0 sha256sum > "$sums"
+            mv "$sums" SHA256SUMS
+            chmod 644 SHA256SUMS
           )
           if scripts/offline-install.sh --bundle /tmp/bundle-incomplete --verify-only \
             > /tmp/offline-evidence-incomplete.txt 2>&1; then
