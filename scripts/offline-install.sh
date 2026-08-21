@@ -44,7 +44,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$bundle" ] && [ -d "$bundle" ] || { echo "bundle directory is required" >&2; exit 2; }
+if [ -z "$bundle" ] || [ ! -d "$bundle" ]; then
+  echo "bundle directory is required" >&2
+  exit 2
+fi
 bundle=$(cd "$bundle" && pwd)
 
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required" >&2; exit 1; }
@@ -85,7 +88,10 @@ EOF
 
 [ "$verify_only" -eq 0 ] || exit 0
 
-[ -n "$release" ] && [ -n "$namespace" ] || { echo "--release and --namespace are required unless --verify-only" >&2; exit 2; }
+if [ -z "$release" ] || [ -z "$namespace" ]; then
+  echo "--release and --namespace are required unless --verify-only" >&2
+  exit 2
+fi
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 command -v helm >/dev/null 2>&1 || { echo "helm is required" >&2; exit 1; }
 
