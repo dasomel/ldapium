@@ -401,10 +401,16 @@ cluster without kube-state-metrics.
 
 ### Alerts, and what to do when one fires
 
-Every rule below is exercised by `tests/prometheus/alerts_test.yaml`, which
-feeds it the series a real failure would produce and asserts it fires — and
-feeds it a healthy series and asserts it does not. The rules under test are
-rendered from this chart, so the tests cannot drift away from what ships.
+Every rule the chart renders by default is exercised by
+`tests/prometheus/alerts_test.yaml`, which feeds it the series a real failure
+would produce and asserts it fires — and, for several, feeds it a healthy
+series and asserts it does not. The rules under test are rendered from this
+chart, so the tests cannot drift away from what ships.
+
+The one exception is `LDAPiumTLSCertificateExpiringSoon`, which is not rendered
+unless `tlsCertificateExpirationExpr` is set and so cannot be tested from the
+default profile. If you set that expression, you are supplying the rule's input
+and nothing here has verified it — check it against your own metric.
 
 | Alert | Fires when | First thing to check |
 |---|---|---|
@@ -412,7 +418,7 @@ rendered from this chart, so the tests cannot drift away from what ships.
 | `LDAPiumReplicationLag` | a peer is more than `replicationLagThreshold` seconds behind for `replicationLagFor` | Compare `contextCSN` on each provider (`ldapsearch -b <rootDN> -s base contextCSN`). A peer that is behind and catching up is different from one that has stopped: check its syncrepl errors in the log. |
 | `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
 | `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
-| `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds` | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
+| `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds`, for 10m | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
 | `LDAPiumTLSCertificateExpiringSoon` | the expiry metric is inside `tlsExpiryWarningSeconds` | Renew and restart — see the TLS section. **Only rendered when `tlsCertificateExpirationExpr` is set**; there is no built-in certificate metric, so leaving it empty means no expiry alerting at all. |
 | `LDAPiumMDBUsageHigh` | mdb pages exceed 80% of the map for 15m | `ldap.dbMaxSize` is the map size, and it cannot be grown while slapd is running. Plan the restart before the directory hits the ceiling, because hitting it fails writes outright. |
 
