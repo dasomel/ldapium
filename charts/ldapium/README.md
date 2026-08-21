@@ -376,6 +376,55 @@ A single-replica install has no second endpoint, so it is unavailable for the
 length of one pod restart. There is no rolling anything with one pod — schedule
 the window.
 
+## Observability
+
+`metrics.enabled=true` adds an exporter sidecar on port 9330. With Prometheus
+Operator installed, `metrics.serviceMonitor.enabled` creates the ServiceMonitor,
+`metrics.prometheusRule.enabled` the alert rules, and
+`metrics.grafanaDashboard.enabled` a dashboard ConfigMap.
+`charts/ldapium/examples/metrics-values.yaml` is a working profile.
+
+### What is exposed
+
+| Metric | Meaning |
+|---|---|
+| `up{service=<fullname>-metrics}` | the exporter answered a scrape |
+| `openldap_monitor_counter_object{dn="cn=Current,cn=Connections,cn=Monitor"}` | connections open right now |
+| `openldap_monitor_counter_object{dn="cn=Max File Descriptors,cn=Connections,cn=Monitor"}` | the ceiling those connections run into |
+| `openldap_replication_delta{replica=...}` | contextCSN distance from this provider to that peer, in seconds |
+| `openldap_pages_used` / `openldap_pages_max` | mdb pages consumed against the map size |
+| `kube_job_status_failed` / `kube_job_status_completion_time` | backup Job outcome and age — from kube-state-metrics, not from this chart |
+
+The last row matters when reading the backup alerts: they are the only rules
+here whose input comes from somewhere else, so they silently never fire in a
+cluster without kube-state-metrics.
+
+### Alerts, and what to do when one fires
+
+Every rule below is exercised by `tests/prometheus/alerts_test.yaml`, which
+feeds it the series a real failure would produce and asserts it fires — and
+feeds it a healthy series and asserts it does not. The rules under test are
+rendered from this chart, so the tests cannot drift away from what ships.
+
+| Alert | Fires when | First thing to check |
+|---|---|---|
+| `LDAPiumExporterDown` | no scrape for 5m | Is the pod up at all? The exporter shares the pod, so this is often "the server is gone", not "metrics are gone". `kubectl get pods`, then the container's logs. |
+| `LDAPiumReplicationLag` | a peer is more than `replicationLagThreshold` seconds behind for `replicationLagFor` | Compare `contextCSN` on each provider (`ldapsearch -b <rootDN> -s base contextCSN`). A peer that is behind and catching up is different from one that has stopped: check its syncrepl errors in the log. |
+| `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
+| `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
+| `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds` | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
+| `LDAPiumTLSCertificateExpiringSoon` | the expiry metric is inside `tlsExpiryWarningSeconds` | Renew and restart — see the TLS section. **Only rendered when `tlsCertificateExpirationExpr` is set**; there is no built-in certificate metric, so leaving it empty means no expiry alerting at all. |
+| `LDAPiumMDBUsageHigh` | mdb pages exceed 80% of the map for 15m | `ldap.dbMaxSize` is the map size, and it cannot be grown while slapd is running. Plan the restart before the directory hits the ceiling, because hitting it fails writes outright. |
+
+### Offline use
+
+Everything here travels as files in the repository: the rules come from the
+chart, the dashboard from `metrics.grafanaDashboard.enabled` as a ConfigMap,
+and this table is the runbook. Nothing needs to be fetched from a hosted
+dashboard library at install time. `docs/air-gap.md` covers keeping
+vulnerability data current, which is the one part of observability that does
+not travel as a file.
+
 ## Backup / Restore
 
 `backup.enabled=true` renders a CronJob that dumps the directory over the
