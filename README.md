@@ -235,6 +235,15 @@ SPDX and CycloneDX SBOMs for both images are also attached to each GitHub
 Release, so you can read one without a registry client. `syft` against the
 published tag should agree with them — that is the point of publishing them.
 
+Dependencies and build tooling are pinned, and the pins are enforced: Go
+modules verify against `go.sum` under `-mod=readonly` with a substitution test
+that proves the check rejects a tampered hash, actions are pinned by commit SHA,
+and the two tools that were floating on `latest` — `syft` in the air-gap
+bundler, `govulncheck` in the scanner — are pinned by digest and version.
+[docs/dependency-policy.md](docs/dependency-policy.md) covers what is pinned by
+what, the review and cooling window for new releases, the rollback procedure for
+a dependency that turns out to be compromised, and what is still not covered.
+
 Dependency licences are permissive-only and enforced, not merely observed:
 `./scripts/licenses.sh --check` runs in CI and fails on a licence outside the
 allow-list or a stale [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
