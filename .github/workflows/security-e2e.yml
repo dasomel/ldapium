@@ -44,6 +44,7 @@ jobs:
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='security-e2e-password' \
             --set ui.enabled=false \
+            --set audit.enabled=true \
             --wait --timeout 5m
 
       - name: Seed test identities
@@ -173,6 +174,33 @@ jobs:
             sh -ec '
               ! ldapsearch -x -H ldap://directory-ldapium:389 -b dc=example,dc=org "(|(uid=*)(uid=*)" >/dev/null 2>&1
             '
+
+      - name: Verify privileged changes are audited
+        run: |
+          set -euo pipefail
+          # The audit record has to name who did it, not merely that something
+          # happened — an audit log that cannot attribute a change is a change
+          # log. The overlay writes to /dev/stdout, so the record lands in the
+          # container log with whatever already collects those.
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapmodify -x -H "ldap://localhost:389" -D "cn=admin,dc=example,dc=org" -w "security-e2e-password" <<EOF
+          dn: uid=alice,ou=people,dc=example,dc=org
+          changetype: modify
+          replace: sn
+          sn: Audited
+          EOF'
+          for _ in $(seq 1 15); do
+            kubectl -n directory logs directory-ldapium-0 -c openldap --tail=400 > /tmp/audit.log
+            grep -q '^# modify ' /tmp/audit.log && break
+            sleep 2
+          done
+          echo "::group::audit record"
+          grep -A6 '^# modify ' /tmp/audit.log | tail -20
+          echo "::endgroup::"
+          grep -q '^# modify .* cn=admin,dc=example,dc=org ' /tmp/audit.log
+          grep -q '^changetype: modify$' /tmp/audit.log
+          grep -q '^sn: Audited$' /tmp/audit.log
+          echo "PASS: the change is attributed to the identity that made it"
 
       - name: Verify chart security context
         run: |
