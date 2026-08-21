@@ -61,6 +61,13 @@ jobs:
           cn: Alice
           sn: Tester
           userPassword: AlicePassword1!
+
+          dn: uid=bob,ou=people,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: bob
+          cn: Bob
+          sn: Tester
+          userPassword: BobPassword1!
           EOF
             '
 
@@ -80,6 +87,68 @@ jobs:
               out=$(ldapsearch -x -H ldap://directory-ldapium:389 -b uid=alice,ou=people,dc=example,dc=org -s base "(objectClass=*)" uid objectClass)
               echo "$out" | grep -q "uid: alice"
               ! echo "$out" | grep -q "userPassword:"
+            '
+
+      - name: Verify an authenticated user cannot write another user's entry
+        run: |
+          set -euo pipefail
+          # The anonymous checks above say nothing about the case that actually
+          # matters: a real, successfully bound directory user reaching for
+          # someone else's entry. `by users read` is not `by users write`, and
+          # this is what proves the difference is enforced rather than intended.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              alice="uid=alice,ou=people,dc=example,dc=org"
+              url="ldap://directory-ldapium:389"
+
+              ldapwhoami -x -H "$url" -D "$bob" -w BobPassword1! | grep -q "dn:uid=bob"
+
+              echo "modify another user: must be refused"
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! <<EOF
+          dn: $alice
+          changetype: modify
+          replace: sn
+          sn: Rewritten
+          EOF
+              then
+                echo "a bound user modified another user entry" >&2
+                exit 1
+              fi
+
+              echo "delete another user: must be refused"
+              if ldapdelete -x -H "$url" -D "$bob" -w BobPassword1! "$alice"; then
+                echo "a bound user deleted another user entry" >&2
+                exit 1
+              fi
+
+              echo "read another user password: must be refused"
+              out=$(ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$alice" -s base userPassword)
+              if echo "$out" | grep -q "AlicePassword1!"; then
+                echo "a bound user read another user password" >&2
+                exit 1
+              fi
+
+              echo "the entry itself is still readable, and still intact"
+              ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$alice" -s base sn | grep -q "sn: Tester"
+            '
+
+      - name: Verify a user can still write their own entry
+        run: |
+          set -euo pipefail
+          # A deny-everything ACL would pass every check above. This is the one
+          # that fails if the rules are too tight rather than too loose.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              url="ldap://directory-ldapium:389"
+              ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! <<EOF
+          dn: $bob
+          changetype: modify
+          replace: sn
+          sn: SelfService
+          EOF
+              ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base sn | grep -q "sn: SelfService"
             '
 
       - name: Verify cn=config is not exposed on LDAP service
