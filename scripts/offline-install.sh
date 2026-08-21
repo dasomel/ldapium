@@ -60,9 +60,26 @@ manifest="$bundle/metadata/bundle-manifest.json"
 echo "[offline-install] verifying checksums"
 (
   cd "$bundle"
-  # SHA256SUMS lists itself as well, and sha256sum -c cannot check a file
-  # against a digest taken before that digest was written into it.
-  grep -v ' \./SHA256SUMS$' SHA256SUMS | sha256sum -c -
+  # `sha256sum -c` on an empty or thinned list succeeds: it reports zero
+  # mismatches because it was given nothing to check. Emptying SHA256SUMS, or
+  # deleting the one line covering a file you just swapped, would otherwise be
+  # a clean way past this. So the list has to account for every file in the
+  # bundle before any of it is checked.
+  listed=$(grep -cE '^[0-9a-fA-F]{64} ' SHA256SUMS || true)
+  if [ "$listed" -eq 0 ]; then
+    echo "SHA256SUMS lists no files" >&2
+    exit 1
+  fi
+  present=$(find . -type f ! -name SHA256SUMS | wc -l | tr -d ' ')
+  if [ "$listed" -ne "$present" ]; then
+    echo "SHA256SUMS covers ${listed} file(s) but the bundle holds ${present}" >&2
+    awk '{ print $2 }' SHA256SUMS | sort > /tmp/.offline-listed.$$
+    find . -type f ! -name SHA256SUMS | sort > /tmp/.offline-present.$$
+    diff /tmp/.offline-listed.$$ /tmp/.offline-present.$$ >&2 || true
+    rm -f /tmp/.offline-listed.$$ /tmp/.offline-present.$$
+    exit 1
+  fi
+  sha256sum -c SHA256SUMS
 )
 
 echo "[offline-install] verifying the bundle is complete"
