@@ -87,10 +87,16 @@ olcAccess: {0}to attrs=userPassword,shadowLastChange
   by self write
   by anonymous auth
   by * none
+# No `by self write` here, deliberately. It would be dead — `by` clauses match
+# in order and `self` is also a `user`, so an entry reaching for its own uid
+# matches `by users read` first and stops. It would also be wrong if it did
+# apply: letting an entry rewrite its own uid breaks the relationship between
+# the DN and its naming attribute, and letting it rewrite objectClass lets a
+# user grant themselves attributes the schema would otherwise deny. Self-service
+# writes belong to rule {2}, where `by self write` comes first and applies.
 olcAccess: {1}to attrs=entry,uid,objectClass
   by anonymous read
   by users read
-  by self write
 olcAccess: {2}to *
   by self write
   by users read
@@ -119,6 +125,11 @@ olcPPolicyHashCleartext: TRUE
 #__PPOLICY_DEFAULT__
 
 #__UNIQUE_OVERLAY__
+
+# Rendered by entrypoint.sh when LDAP_AUDIT_ENABLED is true; the marker is
+# deleted outright otherwise. Whole-entry conditional, same r/d technique as
+# #__UNIQUE_OVERLAY__ above.
+#__AUDITLOG_OVERLAY__
 
 # OpenLDAP monitor backend. The exporter binds as this root DN and is only
 # reachable through the internal metrics Service.

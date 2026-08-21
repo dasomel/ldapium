@@ -263,15 +263,15 @@ The admin column is the rootdn, which bypasses ACLs by definition — the useful
 statement is not that it can do everything but that **nothing else in the first
 three columns can write anything outside its own entry**.
 
-Rule 2's `by self write` never applies. `by` clauses are evaluated in order and
-the first match wins, and `self` is also a `user`, so an entry reaching for its
-own `uid` or `objectClass` matches the earlier `by users read` and stops there.
-The clause is dead as written — the effective policy for those three attributes
-is read-for-everyone-authenticated, and self-service writes work through rule 3
-(`to *`), where `by self write` comes first. If the intent was for a user to
-rename their own `uid`, the fix is to move `by self write` ahead of
-`by users read` in rule 2, which is a policy change rather than a typo, so it is
-left alone here.
+Rule 2 has no `by self write`, and the omission is deliberate rather than an
+oversight. It would be dead anyway — `by` clauses match in order and `self` is
+also a `user`, so an entry reaching for its own `uid` matches `by users read`
+first and stops. More to the point it would be wrong if it did apply: rewriting
+your own `uid` breaks the relationship between the DN and its naming attribute,
+and rewriting your own `objectClass` is how a user grants themselves attributes
+the schema would otherwise deny. Self-service writes belong to rule 3 (`to *`),
+where `by self write` comes first and does apply — which is why a user can
+change their own `sn` and not their own `uid`.
 
 Two things the table is easy to misread. `cn=admin,dc=...` cannot administer
 `cn=config`: that database answers to `cn=admin,cn=config`, a different
