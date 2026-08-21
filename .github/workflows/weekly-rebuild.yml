@@ -1,8 +1,15 @@
 name: Build and publish images
 
-# Publishes both images when main changes, rebuilds weekly for base-image
-# security updates, and supports manual runs for on-demand rebuilds.
-# Shares the multi-arch build logic with build-multiarch.yml.
+# Publishes both images when main changes, rebuilds weekly, and supports manual
+# runs for on-demand rebuilds. Shares the multi-arch build logic with
+# build-multiarch.yml.
+#
+# The weekly run no longer picks up base-image security updates on its own:
+# every FROM is pinned by digest, so a base update arrives as a Dependabot PR
+# instead (see docs/dependency-policy.md). What the rebuild still does is
+# rescan the published images against current vulnerability data — and because
+# the inputs are fixed now, a new finding on an unchanged digest means the data
+# moved rather than the image, which is the more useful signal.
 
 on:
   push:

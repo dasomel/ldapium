@@ -6,7 +6,7 @@
 ARG OPENLDAP_VERSION=2.6.14
 ARG OPENLDAP_SHA256=806dcd21d366428187fba3278da773d5930f774852c9e92517f950d585f19107
 
-FROM debian:trixie-slim AS builder
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS builder
 ARG OPENLDAP_VERSION
 ARG OPENLDAP_SHA256
 ENV DEBIAN_FRONTEND=noninteractive
@@ -89,7 +89,7 @@ RUN ./configure \
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
-FROM golang:1.26.5-bookworm AS exporter-builder
+FROM golang:1.26.5-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
@@ -111,7 +111,7 @@ RUN set -eux; \
         -o /out/openldap_exporter main.go; \
     test -x /out/openldap_exporter
 
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

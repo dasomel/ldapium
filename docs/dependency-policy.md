@@ -14,7 +14,7 @@ build-time tooling is the execution path.
 | Go modules | `go.mod` + `go.sum` | Dependabot, weekly, grouped |
 | npm packages | `package-lock.json` | Dependabot, weekly, grouped |
 | GitHub Actions | commit SHA, with the version in a trailing comment | Dependabot, weekly |
-| Base images | tag in each Dockerfile | Dependabot, weekly |
+| Base images | tag **and digest** in each Dockerfile | Dependabot, weekly |
 | OpenLDAP source | version **and** sha256 in `image/Dockerfile` | by hand — Dependabot cannot see a tarball URL |
 | `syft`, used to build air-gap SBOMs | **image digest** in `scripts/offline-bundle.sh` | by hand |
 | `govulncheck` | version in `.github/workflows/security-scan.yml` | by hand |
@@ -61,6 +61,27 @@ is almost never urgent. The exception is a fix for a vulnerability that this
 project is actually reachable from — `govulncheck` reports reachability, so that
 is a decision with evidence behind it rather than a CVE score.
 
+## Base images, and what pinning them by digest changed
+
+Base images are pinned as `name:tag@sha256:...`. The tag stays for readability;
+the digest is what actually resolves, so the same commit builds the same bytes.
+
+This is a deliberate trade, and the cost is real: `weekly-rebuild.yml` used to
+absorb base-image security updates silently, because `debian:trixie-slim` moved
+underneath it. It no longer does — a base update now arrives as a Dependabot PR
+that bumps the digest, which is the point. Patches become visible and
+attributable instead of automatic and invisible.
+
+Two consequences worth knowing:
+
+- **Base patch latency is now Dependabot's cadence**, up to a week for routine
+  updates. Dependabot opens security updates separately and immediately, and
+  those are the ones worth merging on sight.
+- **The weekly rebuild still earns its place.** It rebuilds and rescans the
+  published images, and because the inputs are now fixed, a new Trivy finding on
+  an unchanged digest means the vulnerability data moved, not the image — which
+  is a far more useful signal than "something somewhere changed".
+
 ## When a dependency turns out to be compromised
 
 The state to get back to is a known-good `go.sum`, not a known-good version
@@ -99,9 +120,5 @@ dependency state.
   it. Restricting it means an egress-filtering action or a self-hosted runner,
   which is a decision about CI architecture rather than a change to this
   repository.
-- **Base images are pinned by tag, not digest.** Digest pinning would make
-  builds reproducible, but the weekly rebuild exists precisely to absorb base
-  image security updates without a PR; pinning by digest moves that to
-  Dependabot's cadence. That trade-off has not been decided.
 - **No offline module proxy.** Reproducing a build without network access needs
   a seeded module cache or a vendored tree; neither is set up.
