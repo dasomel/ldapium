@@ -4,12 +4,15 @@ name: Build and publish images
 # runs for on-demand rebuilds. Shares the multi-arch build logic with
 # build-multiarch.yml.
 #
-# The weekly run no longer picks up base-image security updates on its own:
-# every FROM is pinned by digest, so a base update arrives as a Dependabot PR
-# instead (see docs/dependency-policy.md). What the rebuild still does is
-# rescan the published images against current vulnerability data — and because
-# the inputs are fixed now, a new finding on an unchanged digest means the data
-# moved rather than the image, which is the more useful signal.
+# What the weekly run picks up changed when every FROM was pinned by digest.
+# The base *layer* is now fixed, so a new debian:trixie-slim arrives as a
+# Dependabot PR rather than silently (see docs/dependency-policy.md). The
+# packages installed on top of it are not fixed: `apt-get install` still
+# resolves against Debian's current archive on every build, so a rebuild is
+# still how a libssl or libsasl patch reaches the :main tag.
+#
+# This workflow only builds and publishes. Scanning the published images is
+# security-scan.yml's `images` job on its own schedule.
 
 on:
   push:

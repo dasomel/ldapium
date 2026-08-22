@@ -89,10 +89,13 @@ Two consequences worth knowing:
 - **Base patch latency is now Dependabot's cadence**, up to a week for routine
   updates. Dependabot opens security updates separately and immediately, and
   those are the ones worth merging on sight.
-- **The weekly rebuild still earns its place.** It rebuilds and rescans the
-  published images, and because the inputs are now fixed, a new Trivy finding on
-  an unchanged digest means the vulnerability data moved, not the image — which
-  is a far more useful signal than "something somewhere changed".
+- **The weekly rebuild still earns its place**, for a narrower reason than
+  before. Pinning froze the base *layer*, not what is installed on top of it:
+  `apt-get install` resolves against Debian's current archive on every build, so
+  a rebuild is still how a libssl or libsasl patch reaches `:main`. Scanning the
+  result is a separate schedule — `security-scan.yml`'s `images` job — and now
+  that the inputs are fixed, a new finding against an unchanged digest means the
+  vulnerability data moved rather than the image.
 
 ## When a dependency turns out to be compromised
 
