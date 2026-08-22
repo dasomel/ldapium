@@ -251,6 +251,21 @@ pdb:
   enabled: true
   minAvailable: 1
 
+audit:
+  # -- Instantiate the `auditlog` overlay, which writes an LDIF record for
+  #    every write naming the bound identity, the source address and the
+  #    connection. Off by default: it is a real change in log volume, and a
+  #    directory that nobody audits should not pay for it.
+  enabled: false
+  # -- Where the overlay writes. /dev/stdout by default, so the records land in
+  #    the container log and retention, rotation and shipping belong to whatever
+  #    already collects those. The overlay can only write to a file, and every
+  #    on-disk destination in a StatefulSet is worse: the data PVC is RWO so
+  #    nothing else can read it, an emptyDir dies with the pod, and either grows
+  #    until it fills the volume and takes the directory down. Override only if
+  #    you have somewhere better and have thought about rotation.
+  file: /dev/stdout
+
 backup:
   # -- Replication is NOT backup. A bad delete (or a bad ACL, or an attacker)
   #    propagates to every replica within seconds via multi-provider

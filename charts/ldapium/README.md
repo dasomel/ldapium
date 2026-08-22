@@ -376,6 +376,102 @@ A single-replica install has no second endpoint, so it is unavailable for the
 length of one pod restart. There is no rolling anything with one pod — schedule
 the window.
 
+## Audit
+
+`audit.enabled=true` instantiates the `auditlog` overlay, which writes an LDIF
+record for every write — add, modify, modrdn, delete — naming the bound
+identity, the source address and the connection:
+
+```
+# modify 1787326667 dc=example,dc=org cn=admin,dc=example,dc=org IP=10.244.0.7:51220 conn=1001
+dn: uid=alice,ou=people,dc=example,dc=org
+changetype: modify
+replace: sn
+sn: Audited
+```
+
+The attribution is the point. A record that says a change happened without
+saying who made it is a change log, not an audit log, and
+`.github/workflows/security-e2e.yml` asserts the identity is in the record
+rather than trusting that it is.
+
+Off by default: every write costs a record, and a directory nobody audits
+should not pay for it.
+
+### Where the records go, and why
+
+`olcAuditlogFile` defaults to `/dev/stdout`, so the records land in the
+container log.
+
+The overlay can only write to a file, and every on-disk destination available to
+a StatefulSet pod is worse than that:
+
+- the **data PVC** is `ReadWriteOnce`, so nothing else can attach to read the
+  file while slapd holds it — the log is only reachable by exec'ing into the pod
+  that produced it
+- an **emptyDir** disappears with the pod, which is the wrong property for an
+  audit trail
+- **either one grows without bound**. There is no rotation in the overlay, so
+  the log fills the volume and takes the directory down with it — an audit
+  feature that eventually causes the outage it was meant to explain.
+
+Sending it to stdout hands retention, rotation and shipping to whatever already
+collects container logs, which is where those problems are solved properly.
+`audit.file` overrides the destination if you have somewhere better and have
+thought about rotation.
+
+### Retention and export
+
+Retention is your log stack's, and the number to configure is there rather than
+here. What this chart guarantees is that the records reach it.
+
+Extracting them:
+
+```bash
+# everything currently in the pod's buffer
+kubectl -n <ns> logs <fullname>-0 -c openldap | \
+  awk '/^# (add|modify|modrdn|delete) /,/^# end /'
+
+# from a log store, filter on the same markers — the records are LDIF between
+# a "# <op> <time> <suffix> <bound-dn> IP=<addr> conn=<n>" line and "# end <op>"
+```
+
+On a replicated install each provider audits the writes **it** received, so a
+complete picture means collecting from every pod — replication carries the data,
+not the audit records. That is also why the bound identity in the record is the
+one that connected to *that* provider.
+
+Three limits worth stating plainly:
+
+- **Reads are not audited.** `auditlog` is a write overlay. If you need to know
+  who read what, that is the `accesslog` overlay against a second database, and
+  this chart does not set that up.
+- **Password changes put the stored password value in the log.** The overlay
+  writes the whole modification as LDIF and has no notion of a sensitive
+  attribute, so a `userPassword` change is recorded like any other:
+
+  ```
+  # modify 1787421351 dc=example,dc=org cn=admin,dc=example,dc=org IP=[::1]:45580 conn=1017
+  dn: uid=alice,ou=people,dc=example,dc=org
+  changetype: modify
+  replace: userPassword
+  userPassword:: e0FSR09OMn0kYXJnb24yaWQkdj0xOSRtPTcxNjgsdD01LHA9MSRWUHZ...
+  ```
+
+  It is the argon2 hash as stored, not the cleartext, and it arrives base64
+  encoded (`::`) because that hash ends in a NUL byte. Adds carry it too, so
+  creating a user writes that user's password hash into the log as well.
+
+  Turning audit on therefore moves password hashes into your log pipeline, where
+  they are readable by everyone with access to it and are no longer covered by
+  the directory's own ACLs. Treat the audit stream at the same classification as
+  the directory itself. `.github/workflows/security-e2e.yml` performs a password
+  change and asserts the value is in the record, so this stays a checked
+  statement rather than a remembered one.
+- **The log is only as trustworthy as the pod.** Anyone who can exec into the
+  container or edit `cn=config` can turn the overlay off. Ship the records off
+  the node promptly if that matters.
+
 ## Observability
 
 `metrics.enabled=true` adds an exporter sidecar on port 9330. With Prometheus

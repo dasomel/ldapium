@@ -144,6 +144,11 @@ esac
 # slaptest/slapadd will reject on its own with a clearer error than
 # anything this script could produce.
 LDAP_UNIQUE_ATTRIBUTES="${LDAP_UNIQUE_ATTRIBUTES-uid,mail}"
+# Off by default: every write gets an LDIF record, which is a real change in
+# log volume and is not always wanted. /dev/stdout rather than a path on a
+# volume — see where the overlay is rendered for why.
+LDAP_AUDIT_ENABLED="${LDAP_AUDIT_ENABLED:-false}"
+LDAP_AUDIT_FILE="${LDAP_AUDIT_FILE:-/dev/stdout}"
 
 # Password policy (see image/ldifs/03-base-structure.ldif and
 # image/README.md, "Password policy"). On by default: without a pwdPolicy
@@ -467,6 +472,32 @@ d}" "$cn_config"
   else
     log "LDAP_UNIQUE_ATTRIBUTES is empty — unique overlay not created"
     sed -i '/^#__UNIQUE_OVERLAY__$/d' "$cn_config"
+  fi
+
+  # auditlog overlay: writes an LDIF record for every write, naming the bound
+  # identity, the source address and the connection. Same r/d technique again.
+  #
+  # olcAuditlogFile is /dev/stdout deliberately. The overlay can only write to
+  # a file, and every on-disk destination here is wrong: the data PVC is
+  # ReadWriteOnce so nothing else can read the file while slapd holds it, an
+  # emptyDir dies with the pod, and either way the log grows until it fills the
+  # volume and takes the directory down with it. Sending it to stdout hands
+  # retention, rotation and shipping to whatever already collects container
+  # logs — which is where those problems are actually solved.
+  if [ "$LDAP_AUDIT_ENABLED" = "true" ] || [ "$LDAP_AUDIT_ENABLED" = "1" ]; then
+    auditlog_overlay="${work}/auditlog-overlay.ldif"
+    {
+      printf 'dn: olcOverlay=auditlog,olcDatabase={1}mdb,cn=config\n'
+      printf 'objectClass: olcOverlayConfig\n'
+      printf 'objectClass: olcAuditlogConfig\n'
+      printf 'olcOverlay: auditlog\n'
+      printf 'olcAuditlogFile: %s\n' "$LDAP_AUDIT_FILE"
+    } > "$auditlog_overlay"
+    log "enabling auditlog overlay (destination: ${LDAP_AUDIT_FILE})"
+    sed -i "/^#__AUDITLOG_OVERLAY__$/{r ${auditlog_overlay}
+d}" "$cn_config"
+  else
+    sed -i '/^#__AUDITLOG_OVERLAY__$/d' "$cn_config"
   fi
 
   # olcPPolicyDefault: single-line conditional, same anchored r/d technique
