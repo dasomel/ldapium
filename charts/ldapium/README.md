@@ -448,8 +448,19 @@ Three limits worth stating plainly:
   this chart does not set that up.
 - **Password changes put the stored password value in the log.** The overlay
   writes the whole modification as LDIF and has no notion of a sensitive
-  attribute, so a `userPassword` change is recorded like any other, carrying the
-  hash exactly as stored.
+  attribute, so a `userPassword` change is recorded like any other:
+
+  ```
+  # modify 1787421351 dc=example,dc=org cn=admin,dc=example,dc=org IP=[::1]:45580 conn=1017
+  dn: uid=alice,ou=people,dc=example,dc=org
+  changetype: modify
+  replace: userPassword
+  userPassword:: e0FSR09OMn0kYXJnb24yaWQkdj0xOSRtPTcxNjgsdD01LHA9MSRWUHZ...
+  ```
+
+  It is the argon2 hash as stored, not the cleartext, and it arrives base64
+  encoded (`::`) because that hash ends in a NUL byte. Adds carry it too, so
+  creating a user writes that user's password hash into the log as well.
 
   Turning audit on therefore moves password hashes into your log pipeline, where
   they are readable by everyone with access to it and are no longer covered by
