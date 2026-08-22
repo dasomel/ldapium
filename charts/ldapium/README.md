@@ -441,11 +441,22 @@ complete picture means collecting from every pod — replication carries the dat
 not the audit records. That is also why the bound identity in the record is the
 one that connected to *that* provider.
 
-Two limits worth stating plainly:
+Three limits worth stating plainly:
 
 - **Reads are not audited.** `auditlog` is a write overlay. If you need to know
   who read what, that is the `accesslog` overlay against a second database, and
   this chart does not set that up.
+- **Password changes put the stored password value in the log.** The overlay
+  writes the whole modification as LDIF and has no notion of a sensitive
+  attribute, so a `userPassword` change is recorded like any other, carrying the
+  hash exactly as stored.
+
+  Turning audit on therefore moves password hashes into your log pipeline, where
+  they are readable by everyone with access to it and are no longer covered by
+  the directory's own ACLs. Treat the audit stream at the same classification as
+  the directory itself. `.github/workflows/security-e2e.yml` performs a password
+  change and asserts the value is in the record, so this stays a checked
+  statement rather than a remembered one.
 - **The log is only as trustworthy as the pod.** Anyone who can exec into the
   container or edit `cn=config` can turn the overlay off. Ship the records off
   the node promptly if that matters.

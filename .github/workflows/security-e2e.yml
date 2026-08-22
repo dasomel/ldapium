@@ -202,6 +202,35 @@ jobs:
           grep -q '^sn: Audited$' /tmp/audit.log
           echo "PASS: the change is attributed to the identity that made it"
 
+      - name: Show what a password change leaves in the audit log
+        run: |
+          set -euo pipefail
+          # The overlay writes the whole modification as LDIF and has no notion
+          # of a sensitive attribute, so a password change puts the stored
+          # userPassword value into the log. That is a real exposure and it is
+          # documented as one; this step exists so the documentation is checked
+          # against the server rather than against an assumption about it.
+          #
+          # The value printed below is a hash of a throwaway password in a kind
+          # cluster that is deleted with the job.
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldappasswd -x -H "ldap://localhost:389" \
+              -D "cn=admin,dc=example,dc=org" -w "security-e2e-password" \
+              -s "RotatedPassword1!" "uid=alice,ou=people,dc=example,dc=org"
+          for _ in $(seq 1 15); do
+            kubectl -n directory logs directory-ldapium-0 -c openldap --tail=400 > /tmp/audit-pw.log
+            grep -q '^userPassword' /tmp/audit-pw.log && break
+            sleep 2
+          done
+          echo "::group::audit record for the password change"
+          grep -B4 -A2 '^userPassword' /tmp/audit-pw.log | tail -20
+          echo "::endgroup::"
+          # Either encoding is possible depending on the hash bytes; both are
+          # the secret. Asserting on presence keeps the doc honest without
+          # pinning the test to one of them.
+          grep -qE '^userPassword::? ' /tmp/audit-pw.log
+          echo "PASS: the audit record carries the stored password value, as documented"
+
       - name: Verify chart security context
         run: |
           helm template directory charts/ldapium \
