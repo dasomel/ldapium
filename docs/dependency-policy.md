@@ -36,6 +36,9 @@ most recently at the moment the scan runs. Neither is allowed to float.
 - `scripts/licenses.sh --check` fails on a licence outside the allow-list or a
   stale `THIRD-PARTY-LICENSES.md`, which also catches a dependency that changed
   identity underneath its version.
+- `scripts/check-base-images.sh` requires every `FROM` to carry a digest, and
+  every digest to resolve to a manifest list covering the architectures the
+  release publishes. See below for why the second half is not redundant.
 
 ## Reviewing a dependency change
 
@@ -71,6 +74,15 @@ absorb base-image security updates silently, because `debian:trixie-slim` moved
 underneath it. It no longer does — a base update now arrives as a Dependabot PR
 that bumps the digest, which is the point. Patches become visible and
 attributable instead of automatic and invisible.
+
+One thing a floating tag gave us for free and a digest does not: a tag always
+resolves to a manifest list, but a digest can just as easily name a single
+architecture inside that list. Pin the inner one and the amd64 build keeps
+working while arm64 stops — and it stops in `build-multiarch.yml`, which runs on
+push and release rather than on pull requests, so the PR that introduced it goes
+green and the breakage surfaces after merge. `scripts/check-base-images.sh` asks
+the registry that question at PR time instead, which is also the check a
+Dependabot digest bump has to pass.
 
 Two consequences worth knowing:
 
