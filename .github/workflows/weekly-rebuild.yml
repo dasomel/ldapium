@@ -1,8 +1,18 @@
 name: Build and publish images
 
-# Publishes both images when main changes, rebuilds weekly for base-image
-# security updates, and supports manual runs for on-demand rebuilds.
-# Shares the multi-arch build logic with build-multiarch.yml.
+# Publishes both images when main changes, rebuilds weekly, and supports manual
+# runs for on-demand rebuilds. Shares the multi-arch build logic with
+# build-multiarch.yml.
+#
+# What the weekly run picks up changed when every FROM was pinned by digest.
+# The base *layer* is now fixed, so a new debian:trixie-slim arrives as a
+# Dependabot PR rather than silently (see docs/dependency-policy.md). The
+# packages installed on top of it are not fixed: `apt-get install` still
+# resolves against Debian's current archive on every build, so a rebuild is
+# still how a libssl or libsasl patch reaches the :main tag.
+#
+# This workflow only builds and publishes. Scanning the published images is
+# security-scan.yml's `images` job on its own schedule.
 
 on:
   push:

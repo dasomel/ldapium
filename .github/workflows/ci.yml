@@ -275,9 +275,10 @@ jobs:
           dockerfile: image/Dockerfile
           no-fail: true
           # DL3008: apt-get install without pinned package versions. Intentional
-          # here — the OpenLDAP source tarball is pinned by sha256 in the
-          # Dockerfile itself, but base-OS packages deliberately float with
-          # debian:trixie-slim so weekly-rebuild.yml picks up security patches.
+          # here — the base image and the OpenLDAP source tarball are both
+          # pinned by digest/sha256, and the apt packages on top are the one
+          # layer left deliberately floating, so weekly-rebuild.yml still
+          # delivers Debian security patches without a commit.
           ignore: DL3008
 
       - name: Lint UI Dockerfile
@@ -286,3 +287,15 @@ jobs:
           dockerfile: ui/Dockerfile
           no-fail: true
           ignore: DL3008
+
+  base-images:
+    name: Base image pins cover every published arch
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The multi-arch build only runs on push and release, so an arm64-broken
+      # pin would otherwise sail through the PR that introduced it and fail
+      # after merge. This asks the registry the same question here.
+      - run: ./scripts/check-base-images.sh

@@ -14,7 +14,7 @@ build-time tooling is the execution path.
 | Go modules | `go.mod` + `go.sum` | Dependabot, weekly, grouped |
 | npm packages | `package-lock.json` | Dependabot, weekly, grouped |
 | GitHub Actions | commit SHA, with the version in a trailing comment | Dependabot, weekly |
-| Base images | tag in each Dockerfile | Dependabot, weekly |
+| Base images | tag **and digest** in each Dockerfile | Dependabot, weekly |
 | OpenLDAP source | version **and** sha256 in `image/Dockerfile` | by hand — Dependabot cannot see a tarball URL |
 | `syft`, used to build air-gap SBOMs | **image digest** in `scripts/offline-bundle.sh` | by hand |
 | `govulncheck` | version in `.github/workflows/security-scan.yml` | by hand |
@@ -36,6 +36,9 @@ most recently at the moment the scan runs. Neither is allowed to float.
 - `scripts/licenses.sh --check` fails on a licence outside the allow-list or a
   stale `THIRD-PARTY-LICENSES.md`, which also catches a dependency that changed
   identity underneath its version.
+- `scripts/check-base-images.sh` requires every `FROM` to carry a digest, and
+  every digest to resolve to a manifest list covering the architectures the
+  release publishes. See below for why the second half is not redundant.
 
 ## Reviewing a dependency change
 
@@ -60,6 +63,39 @@ yanked inside a week; the cost of waiting is a week of not having a patch that
 is almost never urgent. The exception is a fix for a vulnerability that this
 project is actually reachable from — `govulncheck` reports reachability, so that
 is a decision with evidence behind it rather than a CVE score.
+
+## Base images, and what pinning them by digest changed
+
+Base images are pinned as `name:tag@sha256:...`. The tag stays for readability;
+the digest is what actually resolves, so the same commit builds the same bytes.
+
+This is a deliberate trade, and the cost is real: `weekly-rebuild.yml` used to
+absorb base-image security updates silently, because `debian:trixie-slim` moved
+underneath it. It no longer does — a base update now arrives as a Dependabot PR
+that bumps the digest, which is the point. Patches become visible and
+attributable instead of automatic and invisible.
+
+One thing a floating tag gave us for free and a digest does not: a tag always
+resolves to a manifest list, but a digest can just as easily name a single
+architecture inside that list. Pin the inner one and the amd64 build keeps
+working while arm64 stops — and it stops in `build-multiarch.yml`, which runs on
+push and release rather than on pull requests, so the PR that introduced it goes
+green and the breakage surfaces after merge. `scripts/check-base-images.sh` asks
+the registry that question at PR time instead, which is also the check a
+Dependabot digest bump has to pass.
+
+Two consequences worth knowing:
+
+- **Base patch latency is now Dependabot's cadence**, up to a week for routine
+  updates. Dependabot opens security updates separately and immediately, and
+  those are the ones worth merging on sight.
+- **The weekly rebuild still earns its place**, for a narrower reason than
+  before. Pinning froze the base *layer*, not what is installed on top of it:
+  `apt-get install` resolves against Debian's current archive on every build, so
+  a rebuild is still how a libssl or libsasl patch reaches `:main`. Scanning the
+  result is a separate schedule — `security-scan.yml`'s `images` job — and now
+  that the inputs are fixed, a new finding against an unchanged digest means the
+  vulnerability data moved rather than the image.
 
 ## When a dependency turns out to be compromised
 
@@ -99,9 +135,5 @@ dependency state.
   it. Restricting it means an egress-filtering action or a self-hosted runner,
   which is a decision about CI architecture rather than a change to this
   repository.
-- **Base images are pinned by tag, not digest.** Digest pinning would make
-  builds reproducible, but the weekly rebuild exists precisely to absorb base
-  image security updates without a PR; pinning by digest moves that to
-  Dependabot's cadence. That trade-off has not been decided.
 - **No offline module proxy.** Reproducing a build without network access needs
   a seeded module cache or a vendored tree; neither is set up.

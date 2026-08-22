@@ -31,8 +31,11 @@ Only the latest release. This project is at 0.x: there are no backports, and a
 fix ships in the next release rather than as a patch to an older one.
 
 Both images are also rebuilt weekly (`.github/workflows/weekly-rebuild.yml`)
-so base-image security updates reach the `:main` tag without waiting for a
-release. Released tags are immutable and are not rebuilt in place.
+so Debian package security updates reach the `:main` tag without waiting for a
+release. The base image itself is pinned by digest, so an update to
+`debian:trixie-slim` arrives as a Dependabot pull request instead of through the
+rebuild — see `docs/dependency-policy.md`. Released tags are immutable and are
+not rebuilt in place.
 
 ## What this project already assumes about deployment
 

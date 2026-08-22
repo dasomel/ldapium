@@ -8,7 +8,7 @@
 # and without it the image also builds on an air-gapped host.
 
 # --- frontend build -----------------------------------------------------
-FROM node:26-alpine AS frontend
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -18,7 +18,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- backend build --------------------------------------------------------
-FROM golang:1.26-alpine AS backend
+FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS backend
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -29,7 +29,7 @@ COPY --from=frontend /src/backend/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 # --- final image ------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot AS final
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS final
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}
 COPY --from=backend /out/server /server
