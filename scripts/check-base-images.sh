@@ -4,18 +4,21 @@
 # Pinning by digest trades away one thing that floating tags gave us for free:
 # a tag like `debian:trixie-slim` always resolves to a manifest list, but a
 # digest can name either the list or a single-architecture image inside it.
-# Pin the inner one and the amd64 build keeps working while the arm64 build
-# fails — and it fails in build-multiarch.yml, which only runs on push and
-# release, long after the PR that introduced it went green.
+# `docker inspect` on a pulled image hands you the latter, so that mistake is
+# one copy-paste away. Pin the inner one and the amd64 build keeps working while
+# the arm64 build fails — in build-multiarch.yml, which runs on push and release
+# rather than on pull requests, so the PR that introduced it goes green.
 #
 # So: every FROM must carry a digest, and every digest must resolve to a
-# manifest list covering the platforms release.yml publishes. This is the check
-# a Dependabot digest bump has to pass, not just the one a human bump does.
+# manifest list covering the platforms we publish. This is the check a
+# Dependabot digest bump has to pass, not just the one a human bump does.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-# Kept in step with the `platforms:` line in build-multiarch.yml.
+# Kept in step with the `platforms:` line in build-multiarch.yml. Compared
+# against os/architecture only: registries record arm64 as arm64/v8, and the
+# variant is not something we have an opinion about.
 required_platforms="linux/amd64 linux/arm64"
 
 fail=0
@@ -44,16 +47,31 @@ for ref in $pins; do
 		;;
 	esac
 
-	printf 'checking %s\n' "$ref"
-	if ! inspect=$(docker buildx imagetools inspect "$ref" 2>&1); then
-		note "$ref could not be inspected: $(printf '%s' "$inspect" | head -1)"
+	# --raw returns the manifest itself. The rendered output is for reading and
+	# has shifted between buildx releases; this has not.
+	if ! raw=$(docker buildx imagetools inspect --raw "$ref" 2>&1); then
+		note "$ref could not be inspected: $(printf '%s' "$raw" | head -1)"
 		continue
 	fi
 
+	# Attestation manifests ride along as unknown/unknown; ignore them.
+	available=$(printf '%s' "$raw" | jq -r '
+		[.manifests // [] | .[] | .platform
+		 | select(.os != "unknown")
+		 | "\(.os)/\(.architecture)"] | unique | join(" ")')
+
+	if [ -z "$available" ]; then
+		note "$ref is a single-architecture image, not a manifest list"
+		continue
+	fi
+
+	printf '%s\n  %s\n' "$ref" "$available"
+
 	for platform in $required_platforms; do
-		if ! printf '%s' "$inspect" | grep -q "Platform: *$platform\$"; then
-			note "$ref does not provide $platform"
-		fi
+		case " $available " in
+		*" $platform "*) ;;
+		*) note "$ref does not provide $platform" ;;
+		esac
 	done
 done
 
