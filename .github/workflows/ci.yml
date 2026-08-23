@@ -28,8 +28,11 @@ jobs:
       #
       # The allowed-endpoints list below is the union of what audit mode
       # actually observed across backend/frontend/licenses in this PR's own
-      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
-      # enumerated from documentation or memory.
+      # first CI run (https://github.com/dasomel/ldapium/pull/59), plus what
+      # actions/setup-go and actions/setup-node's own source contact on a
+      # runner tool-cache miss (raw.githubusercontent.com, go.dev, nodejs.org)
+      # — a path this run's warm ubuntu-24.04 runner never took, so audit mode
+      # alone would have missed it.
       #
       # It deliberately does NOT list the per-run Actions results storage
       # host (observed as productionresultssa7/17.blob.core.windows.net):
@@ -47,12 +50,16 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
             registry.npmjs.org:443
             proxy.golang.org:443
             sum.golang.org:443
             golang.org:443
+            go.dev:443
+            nodejs.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,8 +171,11 @@ jobs:
       #
       # The allowed-endpoints list below is the union of what audit mode
       # actually observed across backend/frontend/licenses in this PR's own
-      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
-      # enumerated from documentation or memory.
+      # first CI run (https://github.com/dasomel/ldapium/pull/59), plus what
+      # actions/setup-go and actions/setup-node's own source contact on a
+      # runner tool-cache miss (raw.githubusercontent.com, go.dev, nodejs.org)
+      # — a path this run's warm ubuntu-24.04 runner never took, so audit mode
+      # alone would have missed it.
       #
       # It deliberately does NOT list the per-run Actions results storage
       # host (observed as productionresultssa7/17.blob.core.windows.net):
@@ -183,12 +193,16 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
             registry.npmjs.org:443
             proxy.golang.org:443
             sum.golang.org:443
             golang.org:443
+            go.dev:443
+            nodejs.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -296,8 +310,11 @@ jobs:
       #
       # The allowed-endpoints list below is the union of what audit mode
       # actually observed across backend/frontend/licenses in this PR's own
-      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
-      # enumerated from documentation or memory.
+      # first CI run (https://github.com/dasomel/ldapium/pull/59), plus what
+      # actions/setup-go and actions/setup-node's own source contact on a
+      # runner tool-cache miss (raw.githubusercontent.com, go.dev, nodejs.org)
+      # — a path this run's warm ubuntu-24.04 runner never took, so audit mode
+      # alone would have missed it.
       #
       # It deliberately does NOT list the per-run Actions results storage
       # host (observed as productionresultssa7/17.blob.core.windows.net):
@@ -315,12 +332,16 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
             registry.npmjs.org:443
             proxy.golang.org:443
             sum.golang.org:443
             golang.org:443
+            go.dev:443
+            nodejs.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
