@@ -70,8 +70,14 @@ jobs:
             --set ui.image.pullPolicy=Never \
             --set replicaCount=${{ matrix.replicas }} \
             --wait --timeout 5m
+      # --logs is the whole point: without it a failure reports only that the
+      # test pod exited non-zero. Requiring the report to actually appear keeps
+      # a silent regression in log retrieval from reading as a passing test.
       - name: Run helm test
-        run: helm test directory --namespace directory --logs
+        run: |
+          set -euo pipefail
+          helm test directory --namespace directory --logs 2>&1 | tee /tmp/helm-test.log
+          grep -q 'PASS' /tmp/helm-test.log
       - name: Diagnostics
         if: failure()
         run: |
@@ -440,8 +446,14 @@ jobs:
           path: /tmp/tls-evidence/*
           if-no-files-found: error
           retention-days: 14
+      # --logs is the whole point: without it a failure reports only that the
+      # test pod exited non-zero. Requiring the report to actually appear keeps
+      # a silent regression in log retrieval from reading as a passing test.
       - name: Run helm test
-        run: helm test directory --namespace directory --logs
+        run: |
+          set -euo pipefail
+          helm test directory --namespace directory --logs 2>&1 | tee /tmp/helm-test.log
+          grep -q 'PASS' /tmp/helm-test.log
       - name: Diagnostics
         if: failure()
         run: |
