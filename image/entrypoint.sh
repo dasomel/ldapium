@@ -545,6 +545,13 @@ d}" "$cn_config"
       # actually filters an export on.
       printf 'olcDbIndex: default eq\n'
       printf 'olcDbIndex: entryCSN,objectClass,reqEnd,reqResult,reqStart eq\n'
+      # A database with no olcAccess of its own falls through to slapd's
+      # global default, "to * by * read" — anonymous included. The monitor
+      # database above already knows this and locks itself down the same
+      # way; this one needs the identical treatment; every search's actor,
+      # target and filter is exactly what an audit trail should not hand to
+      # anyone who can reach the LDAP port.
+      printf 'olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by * none\n'
     } > "$accesslog_db"
     sed -i "/^#__ACCESSLOG_DB__$/{r ${accesslog_db}
 d}" "$cn_config"
