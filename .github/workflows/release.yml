@@ -23,9 +23,11 @@ jobs:
   # runs on workflow_run after Release completes, which makes it a record of what
   # was published rather than a condition for publishing it.
   #
-  # This asks the two questions that turn a tag into a promotion rather than an
-  # upload: did this commit go through main, and did its checks pass. It
-  # deliberately does not re-run the suite — re-testing here would prove the code
+  # This asks the three questions that turn a tag into a promotion rather than
+  # an upload: did this commit go through main, did its checks pass, and were
+  # the checks main requires actually among them. The third is not implied by
+  # the second — a commit whose e2e never started has no failures to find. It
+  # deliberately does not re-run the suite: re-testing here would prove the code
   # works while still proving nothing about what was reviewed.
   preflight:
     name: Verify the tagged commit was tested
@@ -33,6 +35,10 @@ jobs:
     permissions:
       contents: read
       checks: read
+      # Branch protection names the checks a merge had to pass. Reading it here
+      # is what keeps this job from carrying its own copy of that list, which
+      # would drift the moment someone changed the real one.
+      administration: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,7 +88,34 @@ jobs:
             exit 1
           fi
 
-          echo "every check run on $SHA passed"
+          # Nothing failing is not the same as the important things having run.
+          # A commit whose e2e never started has no failures to find, so ask
+          # branch protection which checks a merge had to pass and require each
+          # of them by name.
+          if ! gh api "repos/$REPO/branches/main/protection/required_status_checks" \
+            --jq '.checks[].context' > /tmp/required.txt 2>/tmp/protection-error.txt; then
+            echo "::error::could not read branch protection for main, so the required checks are unknown"
+            cat /tmp/protection-error.txt
+            exit 1
+          fi
+
+          if [ ! -s /tmp/required.txt ]; then
+            echo "::error::main declares no required status checks - there is nothing for a tag to have passed"
+            exit 1
+          fi
+
+          missing=0
+          while IFS= read -r context; do
+            [ -z "$context" ] && continue
+            if ! grep -qxF "success $context" /tmp/checks.txt; then
+              echo "::error::required check \"$context\" did not succeed on $SHA"
+              missing=1
+            fi
+          done < /tmp/required.txt
+
+          [ "$missing" -eq 0 ] || exit 1
+
+          echo "every check run on $SHA passed, and every check main requires was among them"
 
   build-server:
     name: Build server image
