@@ -293,6 +293,10 @@ This is one ordered multi-valued attribute, not hardcoded logic — replace it
 wholesale for a different policy via `ldapmodify` as `cn=admin,cn=config`
 (see below), same as any other `cn=config` change.
 
+Which non-LDAP-CLI clients can actually use this — SSSD/PAM, SASL mechanisms,
+Windows, Kubernetes RBAC via OIDC groups — is a separate question from what the
+ACL permits; see [docs/client-compatibility.md](../docs/client-compatibility.md).
+
 ## Password hashing
 
 The `ppolicy` overlay is enabled on the `mdb` database with
