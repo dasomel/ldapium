@@ -20,6 +20,16 @@
 #   ./scripts/export-audit-log.sh -n ldapium -r prod
 #   ./scripts/export-audit-log.sh --writes-only       # skip the accesslog reads
 #   ./scripts/export-audit-log.sh --reads-only        # skip the container-log writes
+#
+# Known limitation: cn=accesslog's bind credential (like cn=Monitor's and
+# {1}mdb's own rootdn) is rendered once, at bootstrap, from the admin
+# password the release started with — the same way this whole chart's
+# cn=config only ever gets rendered on first launch. If the admin password
+# has since been rotated by binding as the directory entry and changing it
+# there (the normal LDAP way, not by editing the Secret and hoping), the
+# password get-credentials.sh now returns will no longer match, and the
+# accesslog half of this script fails per-pod with a clear warning rather
+# than a wrong result — it does not fail the whole run.
 set -euo pipefail
 
 ns=""
@@ -153,9 +163,46 @@ if [ "$want_reads" = 1 ]; then
         /^dn: reqStart=/ { if (t != "") print_record(); t=""; actor=""; dn=""; filt="" }
         /^reqStart: / { t=substr($0,11) }
         /^reqAuthzID: / { actor=substr($0,13) }
+        /^reqAuthzID:: / { actor=b64dec(substr($0,14)) }
         /^reqDN: / { dn=substr($0,8) }
+        /^reqDN:: / { dn=b64dec(substr($0,9)) }
         /^reqFilter: / { filt=substr($0,12) }
-        function esc(s) { gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return s }
+        /^reqFilter:: / { filt=b64dec(substr($0,13)) }
+        # LDIF uses "attr:: <base64>" instead of "attr: <value>" whenever the
+        # value itself would be unsafe as plain text — a leading space or
+        # colon, a trailing space, or a non-UTF8 byte. A DN or filter with
+        # such a character is unusual but not impossible, and an audit
+        # export silently dropping a field on exactly the kind of value
+        # someone might be trying to hide is the wrong failure mode.
+        # Known residual limit: `cmd | getline` reads exactly one line, so a
+        # decoded value containing an embedded newline of its own only
+        # yields that value up to its first line — the rest is discarded
+        # when the pipe is closed below. Covers the realistic case (a DN or
+        # filter needing base64 for a stray byte, not for holding multiple
+        # lines of content) without the complexity of a full multi-line read
+        # for a shape reqDN/reqFilter are not expected to take.
+        function b64dec(enc,    cmd, decoded) {
+          cmd = "printf %s '\''" enc "'\'' | base64 -d 2>/dev/null"
+          decoded = ""
+          cmd | getline decoded
+          close(cmd)
+          return decoded
+        }
+        # Order matters: backslash first, or the backslashes this function
+        # itself inserts for \n/\t below would get escaped a second time.
+        # \n/\t/\r matter specifically because a base64-decoded value (the
+        # one case a raw control character can actually reach this function)
+        # can legitimately contain one — that is the reason LDIF encoded it
+        # in the first place, and an un-escaped one here would split a
+        # single JSON record across two lines of output.
+        function esc(s) {
+          gsub(/\\/,"\\\\",s)
+          gsub(/"/,"\\\"",s)
+          gsub(/\r/,"\\r",s)
+          gsub(/\n/,"\\n",s)
+          gsub(/\t/,"\\t",s)
+          return s
+        }
         function print_record() {
           printf "{\"pod\":\"%s\",\"source\":\"accesslog\",\"time\":\"%s\",\"actor\":\"%s\",\"op\":\"search\",\"target\":\"%s\",\"filter\":\"%s\"}\n", \
             pod, esc(t), esc(actor), esc(dn), esc(filt)
