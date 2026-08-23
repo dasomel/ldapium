@@ -131,6 +131,16 @@ olcPPolicyHashCleartext: TRUE
 # #__UNIQUE_OVERLAY__ above.
 #__AUDITLOG_OVERLAY__
 
+# Rendered by entrypoint.sh when LDAP_ACCESSLOG_ENABLED is true: a second mdb
+# database, its own suffix and files, for the accesslog overlay below to
+# write into. auditlog only sees writes — this is what closes the read side.
+#__ACCESSLOG_DB__
+
+# The overlay itself, on the main database, pointing at the log database
+# above. Same conditional technique; both markers are rendered together or
+# both deleted together.
+#__ACCESSLOG_OVERLAY__
+
 # OpenLDAP monitor backend. The exporter binds as this root DN and is only
 # reachable through the internal metrics Service.
 dn: olcDatabase=monitor,cn=config

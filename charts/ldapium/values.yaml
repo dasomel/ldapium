@@ -265,6 +265,18 @@ audit:
   #    until it fills the volume and takes the directory down. Override only if
   #    you have somewhere better and have thought about rotation.
   file: /dev/stdout
+  accessLog:
+    # -- Instantiate the `accesslog` overlay: a second mdb database that
+    #    records reads (searches and binds), which auditlog cannot see at
+    #    all — auditlog is a write-only overlay by design. This is the
+    #    counterpart that closes that gap, not a duplicate of it. Off by
+    #    default for the same reason auditlog is: it is a real change in log
+    #    volume and disk use, and a directory nobody audits should not pay
+    #    for it.
+    enabled: false
+    # -- Purge age: records older than this are removed by the overlay's own
+    #    background task, not left to grow the data PVC without bound. Days.
+    purgeDays: 30
 
 backup:
   # -- Replication is NOT backup. A bad delete (or a bad ACL, or an attacker)

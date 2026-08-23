@@ -441,11 +441,8 @@ complete picture means collecting from every pod — replication carries the dat
 not the audit records. That is also why the bound identity in the record is the
 one that connected to *that* provider.
 
-Three limits worth stating plainly:
+Two limits worth stating plainly:
 
-- **Reads are not audited.** `auditlog` is a write overlay. If you need to know
-  who read what, that is the `accesslog` overlay against a second database, and
-  this chart does not set that up.
 - **Password changes put the stored password value in the log.** The overlay
   writes the whole modification as LDIF and has no notion of a sensitive
   attribute, so a `userPassword` change is recorded like any other:
@@ -471,6 +468,64 @@ Three limits worth stating plainly:
 - **The log is only as trustworthy as the pod.** Anyone who can exec into the
   container or edit `cn=config` can turn the overlay off. Ship the records off
   the node promptly if that matters.
+
+### Reads (`accesslog`)
+
+`auditlog` above is a write-only overlay by design — it has nothing to say
+about who read what. `audit.accessLog.enabled=true` instantiates the
+counterpart: a second `mdb` database (`cn=accesslog`, its own files on the
+`data` PVC, its own `olcRootDN` reusing the directory admin's password the
+same way `cn=Monitor` already does) with the `accesslog` overlay on the main
+database writing every search and bind into it. Off by default, same
+reasoning as `auditlog`: real disk and log volume, and a directory nobody
+reads the trail of should not pay for it.
+
+Configured for reads only (`olcAccessLogOps: reads`) — a write already lands
+in `auditlog`, and duplicating it into a second, externally-bindable database
+would just be a second unaudited copy of whatever that write contained,
+`userPassword` hashes included. `.github/workflows/security-e2e.yml` asserts
+both halves of that: a search shows up with its binder attributed, and a
+write does **not** show up a second time.
+
+```
+$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+    "(objectClass=auditSearch)" reqStart reqAuthzID reqDN reqFilter
+dn: reqStart=20260823155413.000004Z,cn=accesslog
+reqStart: 20260823155413.000004Z
+reqAuthzID: cn=admin,dc=example,dc=org
+reqDN: dc=example,dc=org
+reqFilter: (objectClass=*)
+```
+
+Records purge themselves — `audit.accessLog.purgeDays` (default 30) —
+because unlike `auditlog`'s stdout there is no external log pipeline doing
+that for you here; this database lives on the same PVC as the directory
+itself and would otherwise grow without bound the same way an unrotated
+`auditlog` file would.
+
+### Exporting both, unified
+
+`scripts/export-audit-log.sh` reads `auditlog` (container logs, every pod)
+and `accesslog` (an LDAP bind, every pod, skipped with a warning on any pod
+where it is not enabled) and prints one JSON object per line — one feed for
+a SIEM instead of two separate manual procedures:
+
+```bash
+./scripts/export-audit-log.sh -n <namespace> -r <fullname>
+{"pod":"...","source":"auditlog","time":"1787500678","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org"}
+{"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)"}
+```
+
+`time` is not the same format between the two sources — `auditlog` is a raw
+Unix epoch, `accesslog` is LDAP `GeneralizedTime` — stated rather than
+reformatted, since reformatting one to match the other in POSIX shell means
+date arithmetic that behaves differently under GNU vs. BSD `date`. A SIEM's
+own ingest normalizes this with a real date library; guessing at it here
+risked silently producing a wrong time instead.
+
+On a replicated install this iterates every pod for the same reason the
+extraction procedure above does: each provider only has the events it
+personally handled.
 
 ## Observability
 

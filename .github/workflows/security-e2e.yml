@@ -45,6 +45,7 @@ jobs:
             --set auth.adminPassword='security-e2e-password' \
             --set ui.enabled=false \
             --set audit.enabled=true \
+            --set audit.accessLog.enabled=true \
             --wait --timeout 5m
 
       - name: Seed test identities
@@ -230,6 +231,69 @@ jobs:
           # pinning the test to one of them.
           grep -qE '^userPassword::? ' /tmp/audit-pw.log
           echo "PASS: the audit record carries the stored password value, as documented"
+
+      - name: Verify reads are audited (accesslog) and stay off writes
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -H "ldap://localhost:389" \
+              -D "cn=admin,dc=example,dc=org" -w "security-e2e-password" \
+              -b "dc=example,dc=org" "(uid=alice)" >/dev/null
+          for _ in $(seq 1 15); do
+            kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+              ldapsearch -x -H "ldap://localhost:389" -o ldif-wrap=no \
+                -D "cn=admin,cn=accesslog" -w "security-e2e-password" \
+                -b cn=accesslog -LLL "(objectClass=auditSearch)" \
+                reqStart reqAuthzID reqDN reqFilter > /tmp/accesslog.ldif 2>/dev/null
+            grep -q '^reqFilter: (uid=alice)$' /tmp/accesslog.ldif && break
+            sleep 2
+          done
+          echo "::group::accesslog record for the search"
+          grep -B4 '^reqFilter: (uid=alice)$' /tmp/accesslog.ldif
+          echo "::endgroup::"
+          # Attribution is the whole point here too — same standard as auditlog.
+          grep -q '^reqAuthzID: cn=admin,dc=example,dc=org$' /tmp/accesslog.ldif
+          echo "PASS: the read is attributed to the identity that made it"
+
+          # olcAccessLogOps: reads means writes must NOT show up a second time
+          # in cn=accesslog — auditlog already covers them, and a duplicate
+          # would be a second, unaudited copy of userPassword sitting in a
+          # database whose read access is restricted to cn=admin,cn=accesslog
+          # alone (see the olcAccess this database renders with).
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -H "ldap://localhost:389" \
+              -D "cn=admin,cn=accesslog" -w "security-e2e-password" \
+              -b cn=accesslog "(objectClass=auditModify)" > /tmp/accesslog-writes.ldif
+          # A zero-match search prints no "# numEntries:" line at all — only
+          # "# numResponses:" for the bare search-result response — so the
+          # thing to assert is the absence of a result entry, not a specific
+          # count line ldapsearch never actually prints.
+          #
+          # `! grep -q ...` does NOT trip set -e — a command list led by `!`
+          # is a documented, deliberate exception to errexit, so a genuine
+          # leak here would have printed PASS anyway. Verified this the hard
+          # way rather than assumed it: a bare `! grep -q "x" <<<"xyz"` under
+          # set -e keeps running past the match. Explicit if/exit instead.
+          if grep -q '^dn: reqStart=' /tmp/accesslog-writes.ldif; then
+            echo "::error::a write appeared in cn=accesslog despite olcAccessLogOps: reads"
+            exit 1
+          fi
+          echo "PASS: accesslog does not duplicate auditlog's write records"
+
+      - name: Verify the audit export script
+        run: |
+          set -euo pipefail
+          out=$(./scripts/export-audit-log.sh -n directory -r directory-ldapium)
+          echo "::group::export-audit-log.sh output"
+          echo "$out"
+          echo "::endgroup::"
+          echo "$out" | grep -q '"source":"auditlog"'
+          echo "$out" | grep -q '"source":"accesslog"'
+          # Every line has to be valid JSON, not just look like it.
+          echo "$out" | while IFS= read -r line; do
+            python3 -c "import json,sys; json.loads(sys.argv[1])" "$line"
+          done
+          echo "PASS: export-audit-log.sh produced valid NDJSON with both sources"
 
       - name: Verify chart security context
         run: |

@@ -103,6 +103,12 @@ spec:
             - name: LDAP_AUDIT_FILE
               value: {{ .Values.audit.file | quote }}
             {{- end }}
+            - name: LDAP_ACCESSLOG_ENABLED
+              value: {{ .Values.audit.accessLog.enabled | quote }}
+            {{- if .Values.audit.accessLog.enabled }}
+            - name: LDAP_ACCESSLOG_PURGE_DAYS
+              value: {{ .Values.audit.accessLog.purgeDays | quote }}
+            {{- end }}
             - name: LDAP_TLS_ENABLED
               value: {{ .Values.tls.enabled | quote }}
             {{- if .Values.tls.enabled }}
