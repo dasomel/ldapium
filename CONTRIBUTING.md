@@ -45,8 +45,13 @@ directory.
 
 ## Before opening a pull request
 
-`make check` runs everything CI runs, in the same order, which is faster than
-a round trip. Individually:
+`make check` runs what CI runs, in the same order, which is faster than a round
+trip. `scripts/check-make-parity.sh` runs in both places — inside `make check`
+and as a step in CI — and fails when the two drift apart, so the sentence above
+stays true rather than staying written. The one deliberate exception is
+`scripts/check-base-images.sh`, which queries a registry for each pinned base
+image digest and so needs network that an air-gapped checkout will not have; it
+is listed as such in the parity script. Individually:
 
 ```sh
 # Frontend first — ui/backend/web embeds the built SPA, so the Go module does
@@ -56,7 +61,9 @@ cd ui/backend  && gofmt -l . && go vet ./... && go test ./...
 helm lint charts/ldapium
 shellcheck -s sh image/entrypoint.sh && shellcheck scripts/*.sh
 ./scripts/check-versions.sh
+./scripts/check-modules.sh
 ./scripts/licenses.sh --check
+./scripts/check-make-parity.sh
 ```
 
 Changes to `image/` need an actual container build and boot, not just a

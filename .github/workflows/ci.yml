@@ -203,6 +203,11 @@ jobs:
       - name: Check module inventory consistency
         run: ./scripts/check-modules.sh
 
+      # `make check` promises to run what CI runs. Nothing was stopping that
+      # promise from decaying as steps were added here, and it already had.
+      - name: Check make/CI parity
+        run: ./scripts/check-make-parity.sh
+
       - name: Reject rendering with no admin password
         run: |
           if helm template t charts/ldapium >/dev/null 2>&1; then

@@ -52,7 +52,7 @@ k8s-ui-forward: ## Forward the deployed UI to http://127.0.0.1:8080 for Vite
 	echo "Forwarding svc/$$svc in namespace $$ns to http://127.0.0.1:8080"; \
 	kubectl -n "$$ns" port-forward "svc/$$svc" 8080:8080
 
-check: ## Run everything CI runs, in the same order
+check: ## Run what CI runs, in the same order (minus the registry checks)
 	@# Frontend first: ui/backend/web embeds the built SPA, so the Go module
 	@# does not compile until ui/frontend has been built at least once.
 	@cd ui/frontend && npm run lint && npm run build
@@ -60,10 +60,12 @@ check: ## Run everything CI runs, in the same order
 	@cd ui/backend && go vet ./... && go test ./... && go build ./...
 	@helm lint charts/ldapium
 	@./scripts/check-versions.sh
+	@./scripts/check-modules.sh
 	@shellcheck -s sh image/entrypoint.sh
 	@shellcheck scripts/*.sh
 	@shellcheck charts/ldapium/files/tests/*.sh
 	@./scripts/licenses.sh --check
+	@./scripts/check-make-parity.sh
 	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
