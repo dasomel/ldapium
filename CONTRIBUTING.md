@@ -46,9 +46,9 @@ directory.
 ## Before opening a pull request
 
 `make check` runs what CI runs, in the same order, which is faster than a round
-trip. `scripts/check-make-parity.sh` — part of `make check`, and a CI job of its
-own — fails when those two drift apart, so the sentence above stays true rather
-than staying written. The one deliberate exception is
+trip. `scripts/check-make-parity.sh` runs in both places — inside `make check`
+and as a step in CI — and fails when the two drift apart, so the sentence above
+stays true rather than staying written. The one deliberate exception is
 `scripts/check-base-images.sh`, which queries a registry for each pinned base
 image digest and so needs network that an air-gapped checkout will not have; it
 is listed as such in the parity script. Individually:
