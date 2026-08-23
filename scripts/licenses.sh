@@ -46,7 +46,7 @@ go_licenses() {
 # the repo root, above the Go module), so they are excluded rather than
 # silencing Unknown in general — an actually unknown dependency must still fail.
 go_csv=$(cd ui/backend && go_licenses csv ./... 2>/dev/null | grep -v '^github.com/dasomel/ldapium' | sort)
-npm_csv=$(cd ui/frontend && npx --yes license-checker-rseidelsohn \
+npm_csv=$(cd ui/frontend && npx --yes license-checker-rseidelsohn@5.0.1 \
 	--production --excludePrivatePackages --csv --nopeer 2>/dev/null | tail -n +2 | sort)
 
 {
@@ -112,7 +112,7 @@ if [ "$check" -eq 1 ]; then
 		--ignore github.com/dasomel/ldapium)
 
 	echo "checking npm dependency licences against: $NPM_ALLOWED"
-	(cd ui/frontend && npx --yes license-checker-rseidelsohn \
+	(cd ui/frontend && npx --yes license-checker-rseidelsohn@5.0.1 \
 		--production --excludePrivatePackages --onlyAllow "$NPM_ALLOWED" --summary)
 
 	if ! diff -u "$OUTPUT" "${OUTPUT}.new"; then
