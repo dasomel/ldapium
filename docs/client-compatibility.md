@@ -53,10 +53,13 @@ The bootstrap schema (`image/ldifs/01-cn-config.ldif`) loads `core`,
 `homeDirectory` / `loginShell` attributes. The schema supports POSIX identity
 resolution; whether any given entry actually carries `posixAccount` and those
 attributes is a seeding decision (`LDAP_SEED_DIR` — see `image/README.md`),
-not something this chart supplies by default. A fresh install's `admin` and
-any UI-created users are `inetOrgPerson`, not `posixAccount` — `id <user>` on
-an SSSD-joined host will not resolve them until they (or equivalents) exist
-with POSIX attributes.
+not something this chart supplies by default. Nothing this chart creates by
+default carries `posixAccount`: the bootstrap admin entry
+(`image/ldifs/03-base-structure.ldif`) is `organizationalRole` +
+`simpleSecurityObject`, and every user the management UI creates
+(`ui/backend/internal/ldapclient/users.go`) is `inetOrgPerson`. `id <user>`
+on an SSSD-joined host will not resolve either until an entry — or an
+equivalent one — exists with POSIX attributes.
 
 The bind-then-search pattern SSSD needs is already what this directory's ACL
 is shaped for (`image/README.md`, "Access control (ACL)"): anonymous or an
