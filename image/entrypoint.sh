@@ -150,6 +150,14 @@ LDAP_UNIQUE_ATTRIBUTES="${LDAP_UNIQUE_ATTRIBUTES-uid,mail}"
 LDAP_AUDIT_ENABLED="${LDAP_AUDIT_ENABLED:-false}"
 LDAP_AUDIT_FILE="${LDAP_AUDIT_FILE:-/dev/stdout}"
 
+# accesslog: the read-side counterpart to auditlog above. Its own mdb
+# database, so — unlike auditlog's /dev/stdout — it needs its own directory
+# on the same volume auditlog's sibling MDB_DIR lives on. See where it is
+# created, below, for why a subdirectory rather than the mount point itself.
+LDAP_ACCESSLOG_ENABLED="${LDAP_ACCESSLOG_ENABLED:-false}"
+LDAP_ACCESSLOG_PURGE_DAYS="${LDAP_ACCESSLOG_PURGE_DAYS:-30}"
+ACCESSLOG_DIR="${DATA_DIR}/accesslog"
+
 # Password policy (see image/ldifs/03-base-structure.ldif and
 # image/README.md, "Password policy"). On by default: without a pwdPolicy
 # entry for the ppolicy overlay to apply, lockout/expiry/reuse/complexity
@@ -374,7 +382,7 @@ if [ ! -f "$MARKER" ]; then
     fi
     log "bootstrap did not complete — discarding partial state so the next boot can retry"
     find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-    rm -rf "$MDB_DIR"
+    rm -rf "$MDB_DIR" "$ACCESSLOG_DIR"
   }
   trap 'rollback_bootstrap' EXIT
 
@@ -498,6 +506,71 @@ d}" "$cn_config"
 d}" "$cn_config"
   else
     sed -i '/^#__AUDITLOG_OVERLAY__$/d' "$cn_config"
+  fi
+
+  # accesslog overlay: a second mdb database, its own suffix and files, plus
+  # the overlay entry on the main database that writes into it. auditlog
+  # above is write-only by design; olcAccessLogOps: reads is what makes this
+  # the counterpart that covers what auditlog cannot see, rather than a
+  # second copy of what it already does. Same r/d technique, two markers
+  # rendered (or both deleted) together since one is meaningless without the
+  # other.
+  #
+  # olcRootDN/olcRootPW here follow the same pattern the monitor database
+  # above already uses: its own bind identity, reusing the directory admin's
+  # password hash rather than minting a second secret to manage. slapd
+  # requires olcRootDN to sit under the database's own olcSuffix before it
+  # will accept an olcRootPW at all — cn=admin,cn=accesslog under
+  # cn=accesslog satisfies that the same way cn=monitoring,cn=Monitor does
+  # for cn=Monitor.
+  if [ "$LDAP_ACCESSLOG_ENABLED" = "true" ] || [ "$LDAP_ACCESSLOG_ENABLED" = "1" ]; then
+    # Own subdirectory, not the data volume's mount point — same reasoning
+    # as MDB_DIR above: only a directory this process creates itself can be
+    # reliably chmod 700'd regardless of what the provisioner handed us.
+    mkdir -p "$ACCESSLOG_DIR"
+    chmod 700 "$ACCESSLOG_DIR"
+
+    accesslog_db="${work}/accesslog-db.ldif"
+    {
+      printf 'dn: olcDatabase={2}mdb,cn=config\n'
+      printf 'objectClass: olcDatabaseConfig\n'
+      printf 'objectClass: olcMdbConfig\n'
+      printf 'olcDatabase: mdb\n'
+      printf 'olcSuffix: cn=accesslog\n'
+      printf 'olcRootDN: cn=admin,cn=accesslog\n'
+      printf 'olcRootPW: %s\n' "$ADMIN_PW_HASH"
+      printf 'olcDbDirectory: %s\n' "$ACCESSLOG_DIR"
+      # Indices slapo-accesslog(5) itself recommends: reqStart/reqEnd bound
+      # the purge task's own age-based sweep, the rest are what a consumer
+      # actually filters an export on.
+      printf 'olcDbIndex: default eq\n'
+      printf 'olcDbIndex: entryCSN,objectClass,reqEnd,reqResult,reqStart eq\n'
+    } > "$accesslog_db"
+    sed -i "/^#__ACCESSLOG_DB__$/{r ${accesslog_db}
+d}" "$cn_config"
+
+    accesslog_overlay="${work}/accesslog-overlay.ldif"
+    {
+      printf 'dn: olcOverlay=accesslog,olcDatabase={1}mdb,cn=config\n'
+      printf 'objectClass: olcOverlayConfig\n'
+      printf 'objectClass: olcAccessLogConfig\n'
+      printf 'olcOverlay: accesslog\n'
+      printf 'olcAccessLogDB: cn=accesslog\n'
+      printf 'olcAccessLogOps: reads\n'
+      printf 'olcAccessLogSuccess: TRUE\n'
+      # <age>+<hh>:<mm>:<ss> <cycle>+<hh>:<mm>:<ss> — confirmed against
+      # slapo-accesslog's own log_age_parse(), not guessed: a bare "N" before
+      # the '+' is N days. Cycle is fixed at one hour; only the age is
+      # operator-configurable, because how often the sweep runs is an
+      # implementation detail and how long records survive is the actual
+      # retention decision.
+      printf 'olcAccessLogPurge: %s+00:00:00 0+01:00:00\n' "$LDAP_ACCESSLOG_PURGE_DAYS"
+    } > "$accesslog_overlay"
+    log "enabling accesslog overlay (reads, purge after ${LDAP_ACCESSLOG_PURGE_DAYS}d)"
+    sed -i "/^#__ACCESSLOG_OVERLAY__$/{r ${accesslog_overlay}
+d}" "$cn_config"
+  else
+    sed -i -e '/^#__ACCESSLOG_DB__$/d' -e '/^#__ACCESSLOG_OVERLAY__$/d' "$cn_config"
   fi
 
   # olcPPolicyDefault: single-line conditional, same anchored r/d technique

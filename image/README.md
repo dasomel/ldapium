@@ -441,12 +441,15 @@ topology no image can guess; it's either enabled by hand against
 The following are loaded as modules (`olcModuleload`) but deliberately
 **not** instantiated as overlays — each needs a deployment-specific
 decision the image can't make for you, and turning one on is the same
-`ldapmodify` against `cn=admin,cn=config` as any other:
+`ldapmodify` against `cn=admin,cn=config` as any other. `accesslog` and
+`auditlog` are also loaded but are *not* in this table: both graduated to
+chart values (`audit.enabled`, `audit.accessLog.enabled`) — see
+`charts/ldapium/README.md`, "Audit" — precisely because retention and a
+storage decision were the blockers here, and the chart now makes both for
+you rather than leaving them for a manual `ldapmodify`.
 
 | Module | What it's for | Why it isn't on by default |
 |---|---|---|
-| `accesslog` | Audit trail; also the delta-syncrepl prerequisite. | Needs a dedicated database of its own — enabling it blind would grow an unbounded log with no retention policy chosen. |
-| `auditlog` | Flat-file change log. | Needs a writable log path picked by the operator. |
 | `constraint` | Per-attribute value constraints (regex, size, count, ...). | The constraints themselves are entirely deployment-specific. |
 | `deref` | Resolves a grouping attribute (e.g. `member`) in the same round-trip as the search that returns it, instead of one lookup per member. | Only worth enabling once member-list sizes make N+1 lookups actually hurt — no downside to leaving it off otherwise. |
 | `dynlist` | Dynamic groups (`memberURL`-based). | Needs a group schema decision (which objectClass carries `memberURL`). |
