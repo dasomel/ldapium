@@ -579,6 +579,19 @@ decide, image pull on a cold node, and the term that actually grows: `slapadd`
 of a real directory, which scales with entry and index count. Measure it
 against your own data before writing a number into an SLA.
 
+### Encryption at rest
+
+The backup `CronJob` now connects over `ldaps://` whenever `tls.enabled` is
+set — previously it connected over plain `ldap://` regardless, sending the
+admin bind and every entry (`userPassword` hashes included) unencrypted even
+when TLS was on for every other client. Both the data/config PVCs and the
+backup PVC delegate encryption at rest to their `StorageClass`; there is no
+chart-level encryption of the volumes or the `.ldif.gz` archives themselves.
+See [docs/encryption-at-rest.md](../../docs/encryption-at-rest.md) for the
+full boundary — what this chart does and does not do, how to verify a
+`StorageClass` actually encrypts, and what the built TLS/password-hashing
+crypto does and does not certify against.
+
 ### Status recorded in the directory
 
 `backup.recordToDirectory=true` (the default) writes each successful backup's

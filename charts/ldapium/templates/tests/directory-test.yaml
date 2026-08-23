@@ -70,8 +70,16 @@ spec:
         {{- toYaml .Values.tests.securityContext | nindent 8 }}
       command: ["/bin/sh", "/etc/openldap-test/directory-test.sh"]
       env:
+        # Same rule as the backup CronJob and the UI backend: ldaps:// on the
+        # TLS port when tls.enabled. The admin bind and every value this test
+        # writes and reads go out unencrypted otherwise, even when TLS is on
+        # for every other client.
         - name: LDAP_URL
+          {{- if .Values.tls.enabled }}
+          value: {{ printf "ldaps://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapsPort) | quote }}
+          {{- else }}
           value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
+          {{- end }}
         - name: LDAP_ROOT_DN
           value: {{ .Values.ldap.rootDN | quote }}
         - name: LDAP_ADMIN_DN
@@ -89,7 +97,11 @@ spec:
         # converges would go unnoticed.
         {{- $peers := list }}
         {{- range $i := until (int .Values.replicaCount) }}
+        {{- if $.Values.tls.enabled }}
+        {{- $peers = append $peers (printf "ldaps://%s-%d.%s.%s.svc.%s:%d" (include "ldapium.fullname" $) $i (include "ldapium.headlessName" $) $.Release.Namespace $.Values.replication.clusterDomain (int $.Values.service.ldapsPort)) }}
+        {{- else }}
         {{- $peers = append $peers (printf "ldap://%s-%d.%s.%s.svc.%s:%d" (include "ldapium.fullname" $) $i (include "ldapium.headlessName" $) $.Release.Namespace $.Values.replication.clusterDomain (int $.Values.service.ldapPort)) }}
+        {{- end }}
         {{- end }}
         - name: REPLICA_URLS
           value: {{ join " " $peers | quote }}
@@ -105,6 +117,11 @@ spec:
           readOnly: true
         - name: tmp
           mountPath: /tmp
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          mountPath: /etc/openldap/tls
+          readOnly: true
+        {{- end }}
       resources:
         {{- toYaml .Values.tests.resources | nindent 8 }}
   volumes:
@@ -125,4 +142,9 @@ spec:
     # here-document the test script feeds to ldapadd.
     - name: tmp
       emptyDir: {}
+    {{- if .Values.tls.enabled }}
+    - name: tls
+      secret:
+        secretName: {{ .Values.tls.existingSecret }}
+    {{- end }}
 {{- end }}

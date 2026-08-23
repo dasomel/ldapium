@@ -203,8 +203,19 @@ spec:
 
                   log "backup complete"
               env:
+                # Same rule the UI backend and every other in-cluster client
+                # of this chart follows (ui-deployment.yaml): ldaps:// on the
+                # TLS port when tls.enabled, plain ldap:// otherwise. Backups
+                # read every entry in the directory, userPassword hashes
+                # included, and until this the CronJob sent all of it — plus
+                # the admin bind — over an unencrypted connection regardless
+                # of whether TLS was turned on for every other client.
                 - name: LDAP_URL
+                  {{- if .Values.tls.enabled }}
+                  value: {{ printf "ldaps://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapsPort) | quote }}
+                  {{- else }}
                   value: {{ printf "ldap://%s.%s.svc.%s:%d" (include "ldapium.fullname" .) .Release.Namespace .Values.replication.clusterDomain (int .Values.service.ldapPort) | quote }}
+                  {{- end }}
                 - name: LDAP_ROOT_DN
                   value: {{ .Values.ldap.rootDN | quote }}
                 - name: LDAP_ADMIN_DN
@@ -221,6 +232,11 @@ spec:
                   mountPath: /backup
                 - name: tmp
                   mountPath: /tmp
+                {{- if .Values.tls.enabled }}
+                - name: tls
+                  mountPath: /etc/openldap/tls
+                  readOnly: true
+                {{- end }}
               resources:
                 {{- toYaml .Values.backup.resources | nindent 16 }}
           volumes:
@@ -248,4 +264,9 @@ spec:
             # intermediate plaintext LDIF (see dump() above).
             - name: tmp
               emptyDir: {}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              secret:
+                secretName: {{ .Values.tls.existingSecret }}
+            {{- end }}
 {{- end }}
