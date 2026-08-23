@@ -6,13 +6,28 @@
   be shellcheck'd in CI and run by hand against any LDAP server — which is
   how it was developed and how its failure modes were verified.
 
-  Two hooks, ordered by weight: the ConfigMap carrying the script has to
-  exist before the Pod that mounts it.
+  Only the Pod is annotated as a test. The ConfigMap carrying the script is an
+  ordinary chart resource, installed with everything else, because `helm test
+  --logs` fetches pod logs for every resource it considers a test — and this
+  ConfigMap shares the Pod's name. When it was a test hook too, helm asked for
+  the logs of a pod by that name twice, and the second lookup could arrive
+  after the Pod was gone:
 
-  hook-delete-policy keeps a FAILED pod around (only before-hook-creation and
-  hook-succeeded are listed), because the pod's log is the entire test report.
-  Deleting it on failure would leave the operator with "test failed" and
-  nothing else.
+      Error: unable to get pod logs for directory-ldapium-test:
+      pods "directory-ldapium-test" not found
+
+  which failed the release while every test in it had passed.
+
+  hook-delete-policy is before-hook-creation and nothing else, so the Pod
+  survives the run that produced it. Its log is the entire test report, for a
+  pass as much as for a failure, and hook-succeeded deletes it in a race with
+  the command reading it. The next `helm test` removes the previous pod before
+  creating its own.
+
+  The cost, stated rather than discovered: a completed test pod outlives
+  `helm uninstall`. Deleting the namespace takes it, and so does the next
+  `helm test` — but a release uninstalled from a namespace you keep leaves one
+  Completed pod behind. That is the price of the log being readable.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -21,10 +36,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ldapium.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: test
-    helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 data:
   directory-test.sh: |
 {{ .Files.Get "files/tests/directory-test.sh" | indent 4 }}
@@ -38,8 +49,7 @@ metadata:
     {{- include "ldapium.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-weight: "0"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   serviceAccountName: {{ include "ldapium.serviceAccountName" . }}
