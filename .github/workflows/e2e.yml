@@ -77,7 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           helm test directory --namespace directory --logs 2>&1 | tee /tmp/helm-test.log
-          grep -q 'PASS' /tmp/helm-test.log
+          # The script's own final line, printed only after every check passed.
+          # Matching a per-check PASS instead would be satisfied by the first
+          # one, which is not the question being asked here.
+          grep -q 'all checks passed' /tmp/helm-test.log
       - name: Diagnostics
         if: failure()
         run: |
@@ -453,7 +456,10 @@ jobs:
         run: |
           set -euo pipefail
           helm test directory --namespace directory --logs 2>&1 | tee /tmp/helm-test.log
-          grep -q 'PASS' /tmp/helm-test.log
+          # The script's own final line, printed only after every check passed.
+          # Matching a per-check PASS instead would be satisfied by the first
+          # one, which is not the question being asked here.
+          grep -q 'all checks passed' /tmp/helm-test.log
       - name: Diagnostics
         if: failure()
         run: |
