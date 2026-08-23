@@ -22,6 +22,9 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' ||
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,6 +80,11 @@ jobs:
             docker buildx imagetools inspect "$ref" | tee "/tmp/evidence/${image}-manifest.txt"
             grep -q 'linux/amd64' "/tmp/evidence/${image}-manifest.txt"
             grep -q 'linux/arm64' "/tmp/evidence/${image}-manifest.txt"
+            # The tag above is what the release asked for; the digest is what a
+            # consumer can actually pin to. Recorded independently of whatever
+            # build-multiarch.yml believed it pushed, by asking the registry.
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            echo "$digest" > "/tmp/evidence/${image}.digest"
           done
 
       - name: Verify Helm OCI chart
@@ -88,6 +96,11 @@ jobs:
           helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/ldapium" --version "$VERSION" \
             > /tmp/evidence/chart.yaml
           grep -q "^version: $VERSION$" /tmp/evidence/chart.yaml
+          # A pushed OCI chart is a manifest like any other image; the same
+          # tool resolves its digest.
+          docker buildx imagetools inspect \
+            "ghcr.io/${{ github.repository_owner }}/charts/ldapium:${VERSION}" \
+            --format '{{.Manifest.Digest}}' > /tmp/evidence/chart.digest
 
       - name: Verify dependency/license gate
         if: steps.identity.outputs.skip != 'true'
@@ -114,29 +127,40 @@ jobs:
           import hashlib, json, os, pathlib
 
           root = pathlib.Path('/tmp/evidence')
+
+          # Independently re-resolved by this job against the registry, not
+          # copied from what build-multiarch.yml believed it pushed. A digest
+          # file that fails to read is a hard failure below rather than a
+          # blank field: a manifest with a missing artifact identity is worse
+          # than no manifest.
+          def digest(name):
+              return (root / name).read_text(encoding='utf-8').strip()
+
+          owner = os.environ['GITHUB_REPOSITORY_OWNER']
+          version = os.environ['VERSION']
+
           files = {}
           for path in sorted(root.rglob('*')):
-              if path.is_file():
-                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                  files[str(path.relative_to(root))] = digest
+              if path.is_file() and path.suffix != '.digest':
+                  files[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
 
           manifest = {
               'schemaVersion': 'ldapium.supply-chain/v1',
               'repository': os.environ['GITHUB_REPOSITORY'],
               'releaseTag': os.environ['TAG'],
-              'version': os.environ['VERSION'],
+              'version': version,
               'sourceCommit': os.environ['SHA'],
               'verificationWorkflowRun': os.environ['RUN_ID'],
               'artifacts': {
-                  'serverImage': f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/ldapium:{os.environ['VERSION']}",
-                  'uiImage': f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/ldapium-ui:{os.environ['VERSION']}",
-                  'helmChart': f"oci://ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/charts/ldapium:{os.environ['VERSION']}",
+                  'serverImage': f"ghcr.io/{owner}/ldapium:{version}@{digest('ldapium.digest')}",
+                  'uiImage': f"ghcr.io/{owner}/ldapium-ui:{version}@{digest('ldapium-ui.digest')}",
+                  'helmChart': f"oci://ghcr.io/{owner}/charts/ldapium:{version}@{digest('chart.digest')}",
               },
               'evidenceFilesSha256': files,
           }
           (root / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
           (root / 'SHA256SUMS').write_text(
-              ''.join(f"{digest}  {name}\n" for name, digest in sorted(files.items())),
+              ''.join(f"{checksum}  {name}\n" for name, checksum in sorted(files.items())),
               encoding='utf-8',
           )
           PY
@@ -148,3 +172,22 @@ jobs:
           name: supply-chain-evidence-${{ steps.identity.outputs.tag }}
           path: /tmp/evidence/
           if-no-files-found: error
+
+      # Everything above is also a workflow-run artifact, which expires and is
+      # only reachable by someone with Actions access to this repo. The two
+      # files a consumer actually needs to pin or verify a release belong on
+      # the release itself. workflow_dispatch runs (release_tag pointing at a
+      # tag with no corresponding Release object, e.g. a re-run for
+      # inspection only) skip this and leave the CI artifact as the record.
+      - name: Attach digests and checksums to the GitHub release
+        if: steps.identity.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" /tmp/evidence/manifest.json /tmp/evidence/SHA256SUMS --clobber
+          else
+            echo "no GitHub release named $TAG (this run was likely a manual inspection); nothing to attach to"
+          fi

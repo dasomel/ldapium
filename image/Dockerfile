@@ -112,6 +112,16 @@ RUN set -eux; \
     test -x /out/openldap_exporter
 
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
+ARG OPENLDAP_VERSION
+
+# docker/metadata-action's labels (applied at build time in build-multiarch.yml)
+# document this project's own image: its version, revision, source repo. They
+# say nothing about the software vendored inside it. These two do — the
+# version actually compiled in this image, and where its source came from —
+# so `docker inspect` answers "what OpenLDAP is this" without needing this
+# Dockerfile.
+LABEL io.ldapium.openldap.version="${OPENLDAP_VERSION}"       io.ldapium.openldap.source="https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz"       io.ldapium.openldap.license="OLDAP-2.8"
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -133,6 +143,10 @@ COPY --from=builder /usr/bin/ldap* /usr/bin/
 COPY --from=builder /etc/openldap/schema/ /etc/openldap/schema/
 COPY --from=builder /etc/openldap/ldap.conf /etc/openldap/ldap.conf
 COPY --from=exporter-builder /out/openldap_exporter /usr/local/bin/openldap_exporter
+
+# The upstream license, verbatim from the source tarball rather than retyped,
+# so a copy travels with every image and not only with this repo's docs/.
+COPY --from=builder /usr/src/openldap-${OPENLDAP_VERSION}/LICENSE /usr/share/doc/openldap/LICENSE
 
 RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
     && ldconfig
