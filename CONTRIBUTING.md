@@ -93,6 +93,30 @@ LDAP_ADMIN_DN=cn=admin,dc=example,dc=org PASSWORD_FILE=/tmp/pw \
   sh charts/ldapium/files/tests/directory-test.sh
 ```
 
+## What runs where
+
+`make check` and CI overlap by design (`scripts/check-make-parity.sh` keeps them
+honest about it), but most of `make`'s targets have no CI equivalent and most
+of CI has no local equivalent — this is that map, so you don't have to
+reconstruct it from two sets of files.
+
+| Local | Purpose | CI equivalent |
+|---|---|---|
+| `make check` | lint, unit tests, build, `check-versions.sh`, `check-modules.sh`, `licenses.sh --check` | `ci.yml`: `backend`, `frontend`, `helm`, `licenses`, `shellcheck` — same commands, same order |
+| `make licenses` | regenerate `THIRD-PARTY-LICENSES.md` | `ci.yml`'s `licenses` job runs the check form (`--check`), not the regenerating one — CI verifies the file, it never writes it |
+| `make sbom` | SBOM for the images this build produced, written to `./sbom` | `build-multiarch.yml`'s SBOM step — same tool (syft), against the image the workflow just built rather than one you built locally |
+| `make local-init` / `local-up` / `local-down` / `local-logs` / `local-credentials` / `frontend-dev` / `k8s-credentials` / `k8s-ui-forward` | local dev loop | none — these exist because CI cannot give you a directory to click through |
+
+The other direction — CI stages nothing in `make` reaches:
+
+| CI stage | Workflow(s) | Why there is no local target |
+|---|---|---|
+| e2e (install, TLS, upgrade, backup/restore, replication chaos, metrics, security) | `e2e.yml`, `upgrade-e2e.yml`, `backup-restore.yml`, `replication-chaos-e2e.yml`, `metrics-e2e.yml`, `security-e2e.yml` | each needs a kind cluster and takes minutes, not seconds — see the kind snippet above for running one by hand instead of packaging it as a target that would just wrap the same three commands |
+| `base-images` (`scripts/check-base-images.sh`) | `ci.yml` | queries a container registry for each pinned digest; needs network `make check` deliberately does not require |
+| `hadolint`, CodeQL, Scorecard, Trivy (`images` job) | `ci.yml`, `codeql.yml`, `scorecard.yml`, `security-scan.yml` | hosted analysis tools without a meaningful local equivalent |
+| `Published images` / `Build offline bundle` | `security-scan.yml`, `offline-bundle.yml` | operate on already-published GHCR images, which a local checkout does not have |
+| release, build-multiarch, supply-chain evidence | `release.yml`, `build-multiarch.yml`, `supply-chain.yml` | push to GHCR and create a GitHub release; not something to reproduce by hand |
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), e.g.
