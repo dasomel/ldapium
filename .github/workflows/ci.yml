@@ -20,6 +20,25 @@ jobs:
       run:
         working-directory: ui/backend
     steps:
+      # Phase 1 of #49's "unexpected network access from build/test is
+      # blocked": visibility before enforcement. This job resolves
+      # dependencies from a package registry as part of a normal run — the
+      # exact class of attack surface #49 exists to close, per the incident it
+      # cites (a malicious release executing during build/test, not the
+      # published package itself being suspicious).
+      #
+      # egress-policy: audit does not block anything; it records every
+      # destination this job actually contacts. That list — read from this
+      # job's own step summary once it has run for real — is what an
+      # allowed-endpoints list has to be built from. A guessed list on a job
+      # that gates every merge to main (this one is a required status check)
+      # fails closed for the whole repo the first time the guess is wrong.
+      - name: Harden Runner (audit egress)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+          disable-sudo: true
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -122,6 +141,25 @@ jobs:
       run:
         working-directory: ui/frontend
     steps:
+      # Phase 1 of #49's "unexpected network access from build/test is
+      # blocked": visibility before enforcement. This job resolves
+      # dependencies from a package registry as part of a normal run — the
+      # exact class of attack surface #49 exists to close, per the incident it
+      # cites (a malicious release executing during build/test, not the
+      # published package itself being suspicious).
+      #
+      # egress-policy: audit does not block anything; it records every
+      # destination this job actually contacts. That list — read from this
+      # job's own step summary once it has run for real — is what an
+      # allowed-endpoints list has to be built from. A guessed list on a job
+      # that gates every merge to main (this one is a required status check)
+      # fails closed for the whole repo the first time the guess is wrong.
+      - name: Harden Runner (audit egress)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+          disable-sudo: true
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -220,6 +258,25 @@ jobs:
     name: Third-party licenses
     runs-on: ubuntu-24.04
     steps:
+      # Phase 1 of #49's "unexpected network access from build/test is
+      # blocked": visibility before enforcement. This job resolves
+      # dependencies from a package registry as part of a normal run — the
+      # exact class of attack surface #49 exists to close, per the incident it
+      # cites (a malicious release executing during build/test, not the
+      # published package itself being suspicious).
+      #
+      # egress-policy: audit does not block anything; it records every
+      # destination this job actually contacts. That list — read from this
+      # job's own step summary once it has run for real — is what an
+      # allowed-endpoints list has to be built from. A guessed list on a job
+      # that gates every merge to main (this one is a required status check)
+      # fails closed for the whole repo the first time the guess is wrong.
+      - name: Harden Runner (audit egress)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+          disable-sudo: true
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
