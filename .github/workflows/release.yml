@@ -16,8 +16,77 @@ permissions:
   contents: read
 
 jobs:
+  # Nothing used to stand between `git push --tags` and a published image.
+  # ci.yml runs on pull requests and on pushes to main, never on tags, and no
+  # publishing job depended on it — so a tag placed on any commit, including one
+  # that was never on main and never tested, produced a release. supply-chain.yml
+  # runs on workflow_run after Release completes, which makes it a record of what
+  # was published rather than a condition for publishing it.
+  #
+  # This asks the two questions that turn a tag into a promotion rather than an
+  # upload: did this commit go through main, and did its checks pass. It
+  # deliberately does not re-run the suite — re-testing here would prove the code
+  # works while still proving nothing about what was reviewed.
+  preflight:
+    name: Verify the tagged commit was tested
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The ancestry test needs main, which a tag checkout does not carry.
+          fetch-depth: 0
+
+      - name: Require the commit to be on main
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$SHA is not an ancestor of main - a release must come from a reviewed commit"
+            exit 1
+          fi
+          echo "$SHA is on main"
+
+      # Being on main means branch protection saw the pull request. It does not
+      # mean the run after the merge stayed green, so ask.
+      - name: Require its checks to have passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+            --jq '.check_runs[] | "\(.conclusion // "pending") \(.name)"' \
+            | sort -u > /tmp/checks.txt
+          echo "::group::check runs on $SHA"
+          cat /tmp/checks.txt
+          echo "::endgroup::"
+
+          if [ ! -s /tmp/checks.txt ]; then
+            echo "::error::no check runs recorded for $SHA - nothing tested this commit"
+            exit 1
+          fi
+
+          # skipped is normal: path filters and matrix conditions produce it on
+          # every healthy run. Anything else that is not success is not.
+          if grep -vE '^(success|skipped|neutral) ' /tmp/checks.txt > /tmp/bad.txt; then
+            echo "::error::checks on $SHA did not pass:"
+            cat /tmp/bad.txt
+            exit 1
+          fi
+
+          echo "every check run on $SHA passed"
+
   build-server:
     name: Build server image
+    needs: [preflight]
     uses: ./.github/workflows/build-multiarch.yml
     permissions:
       contents: read
@@ -40,6 +109,7 @@ jobs:
 
   build-ui:
     name: Build UI image
+    needs: [preflight]
     uses: ./.github/workflows/build-multiarch.yml
     permissions:
       contents: read
