@@ -62,18 +62,21 @@ that PVC — to object storage, to another cluster, to a laptop — that copy st
 is outside this chart's control, and encrypting the copy (or the destination)
 is the operator's decision at that point, not a default this chart can supply.
 
-**A related, separate finding, fixed alongside this document:** the backup
-`CronJob` connected over plain `ldap://` regardless of whether `tls.enabled`
-was set, unlike every other client this chart configures. That is a
-data-in-transit gap, not a data-at-rest one, but it was found while writing
-this document and is fixed in the same change — the `CronJob` now follows the
-same `ldaps://` rule the UI backend already does
-(`charts/ldapium/templates/ui-deployment.yaml`), mounting the same TLS secret
-the server itself uses. Verified on a kind cluster: a triggered backup Job
-against a TLS-enabled release logs `dumping data (...) from
-ldaps://<fullname>.<ns>.svc.<domain>:636` and completes; the same trigger
+**Related, separate findings, fixed alongside this document:** two of this
+chart's own in-cluster clients connected over plain `ldap://` regardless of
+whether `tls.enabled` was set — the backup `CronJob` and the `helm test` Pod
+(`charts/ldapium/templates/tests/directory-test.yaml`), including that Pod's
+per-replica peer checks. Both are data-in-transit gaps, not data-at-rest ones,
+but they were found while writing this document and are fixed in the same
+change: both now follow the `ldaps://`-when-`tls.enabled` rule the UI backend
+already applied (`charts/ldapium/templates/ui-deployment.yaml`), mounting the
+same TLS secret the server itself uses. Verified on a kind cluster: a
+triggered backup Job against a TLS-enabled release logs `dumping data (...)
+from ldaps://<fullname>.<ns>.svc.<domain>:636` and completes; the same trigger
 against a non-TLS release logs the `ldap://` form and also completes — so
 enabling TLS does not regress backups that were relying on the plain form.
+`helm template` confirms the same pattern for the test Pod, including the
+per-replica `REPLICA_URLS` list in a replicated release.
 
 ## Public-sector crypto module review
 
