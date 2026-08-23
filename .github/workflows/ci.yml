@@ -20,24 +20,39 @@ jobs:
       run:
         working-directory: ui/backend
     steps:
-      # Phase 1 of #49's "unexpected network access from build/test is
-      # blocked": visibility before enforcement. This job resolves
-      # dependencies from a package registry as part of a normal run — the
-      # exact class of attack surface #49 exists to close, per the incident it
-      # cites (a malicious release executing during build/test, not the
-      # published package itself being suspicious).
+      # #49: "unexpected network access from build/test is blocked". This
+      # job resolves dependencies from a package registry as part of a
+      # normal run — the exact class of attack surface #49 exists to close,
+      # per the incident it cites (a malicious release executing during
+      # build/test, not the published package itself looking suspicious).
       #
-      # egress-policy: audit does not block anything; it records every
-      # destination this job actually contacts. That list — read from this
-      # job's own step summary once it has run for real — is what an
-      # allowed-endpoints list has to be built from. A guessed list on a job
-      # that gates every merge to main (this one is a required status check)
-      # fails closed for the whole repo the first time the guess is wrong.
-      - name: Harden Runner (audit egress)
+      # The allowed-endpoints list below is the union of what audit mode
+      # actually observed across backend/frontend/licenses in this PR's own
+      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
+      # enumerated from documentation or memory.
+      #
+      # It deliberately does NOT list the per-run Actions results storage
+      # host (observed as productionresultssa7/17.blob.core.windows.net):
+      # step-security/harden-runner auto-detects that endpoint per run
+      # (https://github.com/step-security/harden-runner/issues/83) precisely
+      # because its hostname is not stable across runs — the maintainer's own
+      # guidance there is that hardcoding it, wildcarded or not, is the wrong
+      # fix. If a future run needs an endpoint this list does not cover, the
+      # block happens here and names exactly what was denied.
+      - name: Harden Runner (block egress)
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
           disable-sudo: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            registry.npmjs.org:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            golang.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,24 +156,39 @@ jobs:
       run:
         working-directory: ui/frontend
     steps:
-      # Phase 1 of #49's "unexpected network access from build/test is
-      # blocked": visibility before enforcement. This job resolves
-      # dependencies from a package registry as part of a normal run — the
-      # exact class of attack surface #49 exists to close, per the incident it
-      # cites (a malicious release executing during build/test, not the
-      # published package itself being suspicious).
+      # #49: "unexpected network access from build/test is blocked". This
+      # job resolves dependencies from a package registry as part of a
+      # normal run — the exact class of attack surface #49 exists to close,
+      # per the incident it cites (a malicious release executing during
+      # build/test, not the published package itself looking suspicious).
       #
-      # egress-policy: audit does not block anything; it records every
-      # destination this job actually contacts. That list — read from this
-      # job's own step summary once it has run for real — is what an
-      # allowed-endpoints list has to be built from. A guessed list on a job
-      # that gates every merge to main (this one is a required status check)
-      # fails closed for the whole repo the first time the guess is wrong.
-      - name: Harden Runner (audit egress)
+      # The allowed-endpoints list below is the union of what audit mode
+      # actually observed across backend/frontend/licenses in this PR's own
+      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
+      # enumerated from documentation or memory.
+      #
+      # It deliberately does NOT list the per-run Actions results storage
+      # host (observed as productionresultssa7/17.blob.core.windows.net):
+      # step-security/harden-runner auto-detects that endpoint per run
+      # (https://github.com/step-security/harden-runner/issues/83) precisely
+      # because its hostname is not stable across runs — the maintainer's own
+      # guidance there is that hardcoding it, wildcarded or not, is the wrong
+      # fix. If a future run needs an endpoint this list does not cover, the
+      # block happens here and names exactly what was denied.
+      - name: Harden Runner (block egress)
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
           disable-sudo: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            registry.npmjs.org:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            golang.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -258,24 +288,39 @@ jobs:
     name: Third-party licenses
     runs-on: ubuntu-24.04
     steps:
-      # Phase 1 of #49's "unexpected network access from build/test is
-      # blocked": visibility before enforcement. This job resolves
-      # dependencies from a package registry as part of a normal run — the
-      # exact class of attack surface #49 exists to close, per the incident it
-      # cites (a malicious release executing during build/test, not the
-      # published package itself being suspicious).
+      # #49: "unexpected network access from build/test is blocked". This
+      # job resolves dependencies from a package registry as part of a
+      # normal run — the exact class of attack surface #49 exists to close,
+      # per the incident it cites (a malicious release executing during
+      # build/test, not the published package itself looking suspicious).
       #
-      # egress-policy: audit does not block anything; it records every
-      # destination this job actually contacts. That list — read from this
-      # job's own step summary once it has run for real — is what an
-      # allowed-endpoints list has to be built from. A guessed list on a job
-      # that gates every merge to main (this one is a required status check)
-      # fails closed for the whole repo the first time the guess is wrong.
-      - name: Harden Runner (audit egress)
+      # The allowed-endpoints list below is the union of what audit mode
+      # actually observed across backend/frontend/licenses in this PR's own
+      # first CI run (https://github.com/dasomel/ldapium/pull/59) — not
+      # enumerated from documentation or memory.
+      #
+      # It deliberately does NOT list the per-run Actions results storage
+      # host (observed as productionresultssa7/17.blob.core.windows.net):
+      # step-security/harden-runner auto-detects that endpoint per run
+      # (https://github.com/step-security/harden-runner/issues/83) precisely
+      # because its hostname is not stable across runs — the maintainer's own
+      # guidance there is that hardcoding it, wildcarded or not, is the wrong
+      # fix. If a future run needs an endpoint this list does not cover, the
+      # block happens here and names exactly what was denied.
+      - name: Harden Runner (block egress)
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
           disable-sudo: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            registry.npmjs.org:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            golang.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
