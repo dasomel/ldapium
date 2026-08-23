@@ -66,7 +66,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@shellcheck charts/ldapium/files/tests/*.sh
 	@./scripts/licenses.sh --check
 	@./scripts/check-make-parity.sh
-	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
 	@./scripts/licenses.sh
