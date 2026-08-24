@@ -57,6 +57,17 @@ Service, and passed into the image; the image never has to guess K8s
 topology. `PodDisruptionBudget` and `topologySpreadConstraints` are also only
 rendered when `replicaCount > 1`.
 
+## Scale / Performance
+
+"This holds up to N entries" is a claim; [docs/scale-benchmarks.md](../../docs/scale-benchmarks.md)
+is the reproducible measurement behind it — offline `slapadd` load throughput,
+search throughput/latency (with the p50/p95/p99 SLO thresholds to judge them
+against), and write + multi-provider replication convergence, plus the local
+reproduction scripts (`scripts/bench-*.sh`) to re-run all three against your
+own hardware. `olcDbMaxSize` (`ldap.dbMaxSize` above) must be sized for your
+target entry count before a load benchmark means anything — see that
+document for why.
+
 ## TLS
 
 `tls.enabled=true` mounts `tls.existingSecret` at `/etc/openldap/tls`, adds an
