@@ -80,8 +80,6 @@ const ko: Record<DictKey, string> = {
   'health.connectionsTotal': '시작 이후 누적',
   'health.connectionsMaxFds': '파일 디스크립터 상한',
   'health.operations': '연산',
-  'health.operationName': '연산',
-  'health.operationInitiated': '시작됨',
   'health.operationCompleted': '완료됨',
   'health.traffic': '트래픽',
   'health.bytesSent': '전송 바이트',

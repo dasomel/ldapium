@@ -84,8 +84,6 @@ const en = {
   'health.connectionsTotal': 'Total since start',
   'health.connectionsMaxFds': 'File descriptor ceiling',
   'health.operations': 'Operations',
-  'health.operationName': 'Operation',
-  'health.operationInitiated': 'Initiated',
   'health.operationCompleted': 'Completed',
   'health.traffic': 'Traffic',
   'health.bytesSent': 'Bytes sent',

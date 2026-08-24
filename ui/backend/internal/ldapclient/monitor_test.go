@@ -135,3 +135,31 @@ func TestParseMonitorStatsEmptyInput(t *testing.T) {
 		t.Errorf("ConnectionsCurrent = %d, want 0", stats.ConnectionsCurrent)
 	}
 }
+
+func TestIsDirectDatabaseChild(t *testing.T) {
+	tests := []struct {
+		dn   string
+		want bool
+	}{
+		{"cn=Database 1,cn=Databases,cn=Monitor", true},
+		{"cn=Database 10,cn=Databases,cn=Monitor", true},
+		{"cn=Overlay 0,cn=Database 1,cn=Databases,cn=Monitor", false},
+		{"cn=Databases,cn=Monitor", false},
+		{"cn=Monitor", false},
+		// A literal escaped comma inside an RDN value is part of that
+		// value, not a delimiter — a string.Contains(prefix, ",") check
+		// (an earlier version of this function) gets this wrong. Not
+		// reachable from back_monitor's own fixed generated names today,
+		// but this function's contract is "is this DN structurally one
+		// RDN below cn=Databases,cn=Monitor", and it should hold
+		// regardless of what's in that RDN's value.
+		{`cn=foo\, bar,cn=Databases,cn=Monitor`, true},
+		{"cn=x,cn=Overlay 0,cn=Database 1,cn=Databases,cn=Monitor", false},
+		{"not a dn", false},
+	}
+	for _, tt := range tests {
+		if got := isDirectDatabaseChild(tt.dn); got != tt.want {
+			t.Errorf("isDirectDatabaseChild(%q) = %v, want %v", tt.dn, got, tt.want)
+		}
+	}
+}

@@ -139,7 +139,7 @@ func parseMonitorStats(entries []*ldap.Entry, baseDN string) domain.MonitorStats
 		// from the actual database entry. Requiring the DN to be exactly
 		// one RDN below cn=Databases,cn=Monitor — no comma left after
 		// stripping that suffix — excludes them.
-		case isDirectDatabaseChild(dn) && e.GetAttributeValue("namingContexts") == baseDN:
+		case isDirectDatabaseChild(e.DN) && e.GetAttributeValue("namingContexts") == baseDN:
 			stats.DatabasePagesUsed = atoi64OrZero(e.GetAttributeValue("olmMDBPagesUsed"))
 			stats.DatabasePagesMax = atoi64OrZero(e.GetAttributeValue("olmMDBPagesMax"))
 			stats.DatabasePagesFree = atoi64OrZero(e.GetAttributeValue("olmMDBPagesFree"))
@@ -150,17 +150,38 @@ func parseMonitorStats(entries []*ldap.Entry, baseDN string) domain.MonitorStats
 	return stats
 }
 
-// isDirectDatabaseChild reports whether lowerDN is exactly one RDN below
-// cn=Databases,cn=Monitor (e.g. "cn=database 1,cn=databases,cn=monitor"),
+// isDirectDatabaseChild reports whether dn is exactly one RDN below
+// cn=Databases,cn=Monitor (e.g. "cn=Database 1,cn=Databases,cn=Monitor"),
 // as opposed to a nested entry further down (e.g. an overlay entry under a
-// database). lowerDN must already be lowercased.
-func isDirectDatabaseChild(lowerDN string) bool {
-	const suffix = ",cn=databases,cn=monitor"
-	if !strings.HasSuffix(lowerDN, suffix) {
+// database).
+//
+// A plain string-suffix check on a lowercased DN was the first attempt, and
+// adversarial testing against it (not the schema — back_monitor's own
+// generated names never contain one, so this was never live-reachable, but
+// the codebase's own rdnOf in tree.go already sets the precedent that DN
+// structure gets parsed, not string-matched) found it also mishandles a
+// literal escaped comma inside an RDN value (\, is part of the value, not a
+// delimiter — a naive strings.Contains(prefix, ",") cannot tell the
+// difference). ldap.ParseDN understands DN escaping properly; matching this
+// entry to its parent's RDNs is what actually answers "how many levels
+// below cn=Databases,cn=Monitor" correctly.
+func isDirectDatabaseChild(dn string) bool {
+	parsed, err := ldap.ParseDN(dn)
+	if err != nil || len(parsed.RDNs) != 3 {
 		return false
 	}
-	prefix := strings.TrimSuffix(lowerDN, suffix)
-	return prefix != "" && !strings.Contains(prefix, ",")
+	return rdnHasAttr(parsed.RDNs[1], "cn", "Databases") && rdnHasAttr(parsed.RDNs[2], "cn", "Monitor")
+}
+
+// rdnHasAttr reports whether rdn has an attribute of attrType whose value
+// case-insensitively equals attrValue.
+func rdnHasAttr(rdn *ldap.RelativeDN, attrType, attrValue string) bool {
+	for _, a := range rdn.Attributes {
+		if strings.EqualFold(a.Type, attrType) && strings.EqualFold(a.Value, attrValue) {
+			return true
+		}
+	}
+	return false
 }
 
 func atoiOrZero(s string) int {
