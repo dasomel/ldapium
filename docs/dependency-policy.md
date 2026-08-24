@@ -146,7 +146,10 @@ built it. `scripts/bundle-go-modules.sh` downloads exactly what
 
 On the disconnected machine, extract it and point the toolchain at it with
 `GOPROXY=off` — verified end to end (extract, `go mod verify`, `go build
-./...`, zero network) before this was written down:
+./...`, zero network) against the go.sum current when this was written;
+re-run `bundle-go-modules.sh` whenever go.mod/go.sum change, since the
+tarball is a snapshot of that file, not something that stays valid on its
+own:
 
 ```bash
 tar xzf go-modules.tar.gz -C /some/cache/dir

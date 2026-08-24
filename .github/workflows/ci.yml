@@ -385,8 +385,14 @@ jobs:
         with:
           egress-policy: block
           disable-sudo: true
-          # Only what checkout itself needs. example.com below is
-          # deliberately absent so this job has something to fail against.
+          # Only what checkout itself needs — confirmed sufficient by this
+          # job's own first CI run rather than assumed; if a future GitHub
+          # infra change makes checkout need another endpoint, the Checkout
+          # step below fails, not the "Prove..." step after it. That
+          # distinction matters: a Checkout failure here means the allow-list
+          # needs an endpoint added, not that egress blocking stopped
+          # working. example.com below is deliberately absent so the "Prove
+          # ..." step has something to fail against.
           allowed-endpoints: >
             github.com:443
             api.github.com:443

@@ -59,6 +59,23 @@ trap cleanup EXIT
 echo "downloading modules for ${module_dir}/go.sum into a scratch cache..." >&2
 (
   cd "$module_dir"
+  # With no package arguments, on a go.mod at 1.17+ (this one is), `go mod
+  # download` fetches every module needed to build and test the packages in
+  # the main module (`go help mod download`) — the same set go.sum records.
+  # The one thing that would NOT be covered is a `tool` directive (Go
+  # 1.24+), which needs `go mod download tool` separately; this module has
+  # none today (no tools.go pattern either), but a future one would need
+  # this script updated to match, since it would keep bundling successfully
+  # while silently leaving that gap.
+  #
+  # Deliberately not a `go build ./...` dry-run here: this module's web/
+  # package go:embeds the built frontend SPA (web/embed.go), which does not
+  # exist until `npm run build` has run in ui/frontend — unrelated to
+  # whether the Go module set is complete, and would fail this script on a
+  # perfectly good bundle whenever the frontend hasn't been built yet
+  # (confirmed by testing: removing web/dist and re-running `go build ./...`
+  # fails with "pattern all:dist: no matching files found", nothing to do
+  # with modules).
   GOFLAGS=-mod=readonly GOMODCACHE="$scratch_cache" go mod download
   echo "verifying against go.sum before bundling..." >&2
   GOFLAGS=-mod=readonly GOMODCACHE="$scratch_cache" go mod verify
