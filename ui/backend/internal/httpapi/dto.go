@@ -100,6 +100,10 @@ type unlockRequest struct {
 	DN string `json:"dn"`
 }
 
+type lockRequest struct {
+	DN string `json:"dn"`
+}
+
 type memberRequest struct {
 	GroupDN  string `json:"groupDn"`
 	MemberDN string `json:"memberDn"`

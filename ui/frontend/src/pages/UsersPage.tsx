@@ -113,6 +113,19 @@ export function UsersPage() {
     }
   }
 
+  // Same one-click treatment as Unlock, not the retype-to-confirm
+  // ConfirmDialog flow reserved for Delete: disabling doesn't lose data
+  // and is immediately reversible with a single Unlock click.
+  async function handleLock(u: User) {
+    try {
+      await api.lockUser(u.dn)
+      notify('success', t('users.lockedToast', { uid: u.uid }))
+      load()
+    } catch (err) {
+      notify('error', err instanceof ApiError ? err.message : t('users.lockFailedToast', { uid: u.uid }))
+    }
+  }
+
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -256,7 +269,7 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">
-                        {u.locked && (
+                        {u.locked ? (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -264,6 +277,10 @@ export function UsersPage() {
                             onClick={() => handleUnlock(u)}
                           >
                             <Unlock className="size-3.5" />
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="icon" title={t('users.lockTitle')} onClick={() => handleLock(u)}>
+                            <Lock className="size-3.5" />
                           </Button>
                         )}
                         <Button

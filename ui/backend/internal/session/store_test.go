@@ -40,6 +40,7 @@ func (f *fakeClient) SetPassword(context.Context, string, string, string) (strin
 	return "", nil
 }
 func (f *fakeClient) Unlock(context.Context, string) error { return nil }
+func (f *fakeClient) Lock(context.Context, string) error   { return nil }
 func (f *fakeClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
 	return nil, false, nil
 }

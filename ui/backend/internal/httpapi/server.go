@@ -92,6 +92,7 @@ func (s *Server) routes(spa fs.FS) {
 	authed.DELETE("/users", s.handleDeleteUser)
 	authed.POST("/users/password", s.handleSetPassword)
 	authed.POST("/users/unlock", s.handleUnlockUser)
+	authed.POST("/users/lock", s.handleLockUser)
 
 	authed.GET("/groups", s.handleListGroups)
 	authed.POST("/groups", s.handleCreateGroup)
