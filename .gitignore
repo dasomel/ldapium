@@ -28,3 +28,7 @@ sbom/
 
 # Rendered from the chart by scripts/render-alert-rules.sh for promtool.
 tests/prometheus/rules.yaml
+
+# scratch output from scripts/bench-*.sh (LDIF, JSON evidence records)
+.bench-scratch/
+__pycache__/
