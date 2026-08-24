@@ -563,8 +563,18 @@ d}" "$cn_config"
       printf 'objectClass: olcAccessLogConfig\n'
       printf 'olcOverlay: accesslog\n'
       printf 'olcAccessLogDB: cn=accesslog\n'
-      printf 'olcAccessLogOps: reads\n'
-      printf 'olcAccessLogSuccess: TRUE\n'
+      # bind, not just reads: rootdn/privileged-account bind usage is
+      # itself an audit requirement (a privileged bind with no matching
+      # write is otherwise invisible to both overlays — auditlog only
+      # sees writes), and a failed bind is exactly the "authentication
+      # failure" evidence a SIEM feed needs.
+      printf 'olcAccessLogOps: reads bind\n'
+      # FALSE (log every request, not only successful ones): with TRUE, a
+      # rejected search or a failed bind — the two events most worth
+      # auditing — would never reach cn=accesslog at all. reqResult is
+      # already indexed above for exactly this: distinguishing success
+      # from failure downstream, not filtering failures out upstream.
+      printf 'olcAccessLogSuccess: FALSE\n'
       # <age>+<hh>:<mm>:<ss> <cycle>+<hh>:<mm>:<ss> — confirmed against
       # slapo-accesslog's own log_age_parse(), not guessed: a bare "N" before
       # the '+' is N days. Cycle is fixed at one hour; only the age is

@@ -255,7 +255,7 @@ jobs:
           grep -q '^reqAuthzID: cn=admin,dc=example,dc=org$' /tmp/accesslog.ldif
           echo "PASS: the read is attributed to the identity that made it"
 
-          # olcAccessLogOps: reads means writes must NOT show up a second time
+          # olcAccessLogOps: reads bind means writes must still NOT show up
           # in cn=accesslog — auditlog already covers them, and a duplicate
           # would be a second, unaudited copy of userPassword sitting in a
           # database whose read access is restricted to cn=admin,cn=accesslog
@@ -275,10 +275,40 @@ jobs:
           # way rather than assumed it: a bare `! grep -q "x" <<<"xyz"` under
           # set -e keeps running past the match. Explicit if/exit instead.
           if grep -q '^dn: reqStart=' /tmp/accesslog-writes.ldif; then
-            echo "::error::a write appeared in cn=accesslog despite olcAccessLogOps: reads"
+            echo "::error::a write appeared in cn=accesslog despite olcAccessLogOps: reads bind"
             exit 1
           fi
           echo "PASS: accesslog does not duplicate auditlog's write records"
+
+      - name: Verify binds — including failed ones — are audited (accesslog)
+        run: |
+          set -euo pipefail
+          # A privileged bind (or an attacker's failed attempt at one) is the
+          # one event auditlog cannot see (it is not a write) and the old
+          # `olcAccessLogOps: reads` / `olcAccessLogSuccess: TRUE` config
+          # could not see either (bind was never in scope, and a failure
+          # would have been dropped even if it had been). Prove both: a
+          # rejected bind actually lands, and it lands with the result code
+          # that says it failed rather than one that says it succeeded.
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            sh -c 'ldapwhoami -x -H ldap://localhost:389 -D cn=admin,dc=example,dc=org -w wrong-password' \
+            > /tmp/bad-bind.out 2>&1 || true
+          grep -q "Invalid credentials" /tmp/bad-bind.out
+
+          for _ in $(seq 1 15); do
+            kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+              ldapsearch -x -H "ldap://localhost:389" -o ldif-wrap=no \
+                -D "cn=admin,cn=accesslog" -w "security-e2e-password" \
+                -b cn=accesslog -LLL "(objectClass=auditBind)" \
+                reqStart reqDN reqResult > /tmp/accesslog-binds.ldif 2>/dev/null
+            grep -B2 '^reqResult: 49$' /tmp/accesslog-binds.ldif | grep -q '^reqDN: cn=admin,dc=example,dc=org$' && break
+            sleep 2
+          done
+          echo "::group::accesslog record for the failed bind"
+          grep -B2 '^reqResult: 49$' /tmp/accesslog-binds.ldif
+          echo "::endgroup::"
+          grep -B2 '^reqResult: 49$' /tmp/accesslog-binds.ldif | grep -q '^reqDN: cn=admin,dc=example,dc=org$'
+          echo "PASS: a failed privileged bind is captured, attributed, and marked as a failure"
 
       - name: Verify the audit export script
         run: |

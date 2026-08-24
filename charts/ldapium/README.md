@@ -480,32 +480,45 @@ Two limits worth stating plainly:
   container or edit `cn=config` can turn the overlay off. Ship the records off
   the node promptly if that matters.
 
-### Reads (`accesslog`)
+### Reads and binds (`accesslog`)
 
 `auditlog` above is a write-only overlay by design — it has nothing to say
-about who read what. `audit.accessLog.enabled=true` instantiates the
-counterpart: a second `mdb` database (`cn=accesslog`, its own files on the
-`data` PVC, its own `olcRootDN` reusing the directory admin's password the
-same way `cn=Monitor` already does) with the `accesslog` overlay on the main
+about who read what, or who tried (and failed) to authenticate. `audit.
+accessLog.enabled=true` instantiates the counterpart: a second `mdb`
+database (`cn=accesslog`, its own files on the `data` PVC, its own
+`olcRootDN` reusing the directory admin's password the same way
+`cn=Monitor` already does) with the `accesslog` overlay on the main
 database writing every search and bind into it. Off by default, same
 reasoning as `auditlog`: real disk and log volume, and a directory nobody
 reads the trail of should not pay for it.
 
-Configured for reads only (`olcAccessLogOps: reads`) — a write already lands
-in `auditlog`, and duplicating it into a second, externally-bindable database
-would just be a second unaudited copy of whatever that write contained,
-`userPassword` hashes included. `.github/workflows/security-e2e.yml` asserts
-both halves of that: a search shows up with its binder attributed, and a
-write does **not** show up a second time.
+Configured for reads and binds (`olcAccessLogOps: reads bind`) — a write
+already lands in `auditlog`, and duplicating it into a second, externally-
+bindable database would just be a second unaudited copy of whatever that
+write contained, `userPassword` hashes included. Binds are logged
+regardless of outcome (`olcAccessLogSuccess: FALSE`) — a rejected bind
+attempt against a privileged DN is exactly the evidence this exists to
+capture, and would be invisible if only successes were kept.
+`.github/workflows/security-e2e.yml` asserts all of that: a search shows up
+with its binder attributed, a failed bind shows up with `reqResult: 49`
+(not silently dropped), and a write does **not** show up a second time.
 
 ```
 $ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
-    "(objectClass=auditSearch)" reqStart reqAuthzID reqDN reqFilter
+    "(objectClass=auditSearch)" reqStart reqAuthzID reqDN reqFilter reqResult
 dn: reqStart=20260823155413.000004Z,cn=accesslog
 reqStart: 20260823155413.000004Z
 reqAuthzID: cn=admin,dc=example,dc=org
 reqDN: dc=example,dc=org
 reqFilter: (objectClass=*)
+reqResult: 0
+
+$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+    "(objectClass=auditBind)" reqStart reqDN reqResult
+dn: reqStart=20260823155732.000004Z,cn=accesslog
+reqStart: 20260823155732.000004Z
+reqDN: cn=admin,dc=example,dc=org
+reqResult: 49
 ```
 
 Records purge themselves — `audit.accessLog.purgeDays` (default 30) —
@@ -524,7 +537,8 @@ a SIEM instead of two separate manual procedures:
 ```bash
 ./scripts/export-audit-log.sh -n <namespace> -r <fullname>
 {"pod":"...","source":"auditlog","time":"1787500678","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org"}
-{"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)"}
+{"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0"}
+{"pod":"...","source":"accesslog","time":"20260823155733.000004Z","actor":"cn=admin,dc=example,dc=org","op":"bind","target":"cn=admin,dc=example,dc=org","filter":"","result":"49"}
 ```
 
 `time` is not the same format between the two sources — `auditlog` is a raw
