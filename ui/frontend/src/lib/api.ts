@@ -7,6 +7,7 @@ import type {
   ListResult,
   LogoutResponse,
   Me,
+  MonitorStats,
   PasswordPolicy,
   ServerSettings,
   TreeNode,
@@ -64,6 +65,7 @@ export const api = {
   logout: () => request<LogoutResponse>('/logout', { method: 'POST' }),
   me: () => request<Me>('/me'),
   serverSettings: () => request<ServerSettings>('/server-settings'),
+  monitorStats: () => request<MonitorStats>('/monitor'),
 
   tree: (dn?: string) => request<TreeNode[]>(`/tree${qs({ dn })}`),
   entry: (dn: string) => request<Entry>(`/entry${qs({ dn })}`),

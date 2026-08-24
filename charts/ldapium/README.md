@@ -593,6 +593,65 @@ dashboard library at install time. `docs/air-gap.md` covers keeping
 vulnerability data current, which is the one part of observability that does
 not travel as a file.
 
+### Web console health view
+
+The admin UI's "Health" page reads the same `cn=Monitor` subtree the metrics
+exporter above does — connection counts, per-operation-type counters, thread
+pool status, and the primary database's LMDB page usage. That is the entire
+scope: **the UI backend talks to the directory only over LDAP, with no
+Kubernetes ServiceAccount**, so pod resource usage (CPU/memory) and the
+server's actual log stream are not reachable from it at all — those need
+`kubectl top`/`kubectl logs` directly, the same as any other pod. This page
+does not attempt to substitute for them; it exists for what LDAP itself can
+answer.
+
+**cn=Monitor grants nothing by default — not even to the directory admin.**
+Its ACL (`image/ldifs/01-cn-config.ldif`) is `to * by
+dn.exact="cn=monitoring,cn=Monitor" read by * none`: only the metrics
+exporter's own dedicated bind identity can read it out of the box.
+Confirmed against a running container: binding as `cn=admin,<rootDN>` itself
+and searching `cn=Monitor` returns `32 No such object`, not "insufficient
+access" — an ACL with no disclose right hides the entry's existence rather
+than admitting it exists and denying the read, which is standard LDAP
+behavior (RFC 4511), not a bug. The health page treats that response as "not
+available to this account" rather than a real 404, but the practical effect
+is the same: **the page shows nothing until an operator explicitly grants
+read access.**
+
+To grant it to your own admin DN (LDAP-password mode) or the SSO service
+account (the DN in `ui.ldapServiceAccount`'s secret — see "Keycloak SSO"
+above), add a
+`by dn.exact=...read` clause to the monitor database's ACL, online, via
+`ldapmodify`:
+
+```bash
+cat <<'EOF' | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+dn: olcDatabase={2}monitor,cn=config
+changetype: modify
+replace: olcAccess
+olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="<your DN>" read by * none
+EOF
+```
+
+The monitor database's numeric index (`{2}` above) is whatever this
+deployment actually assigned it — confirm with `ldapsearch -x -D
+"cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b cn=config
+"(olcDatabase=monitor)" dn` before modifying, rather than assuming `{2}`.
+Widening this ACL to `by users read` instead of naming a specific DN would
+let every authenticated directory user see connection and replication
+internals — a real security-scope decision, not something this chart makes
+for you by default.
+
+**Logs**, in the sense of an audit trail, are reachable a different way:
+`cn=accesslog` (when `audit.accessLog.enabled` is set — see "Audit" above)
+records reads and binds as ordinary LDAP entries under its own suffix, with
+the identical "own dedicated bind identity, `by * none`" ACL shape as
+`cn=Monitor`. `scripts/export-audit-log.sh` already reads it this way for
+export. slapd's actual write/error log stream, by contrast, goes to
+**container stdout only** — `kubectl logs` is the only way to reach that,
+today and for the foreseeable future given the no-ServiceAccount design; the
+web console does not and will not show it.
+
 ## Backup / Restore
 
 `backup.enabled=true` renders a CronJob that dumps the directory over the

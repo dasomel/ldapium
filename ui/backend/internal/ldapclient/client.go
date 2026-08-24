@@ -44,6 +44,13 @@ type Client interface {
 	// GetEntry returns the full attribute set of dn.
 	GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 
+	// MonitorStats reads slapd's cn=Monitor subtree for the admin UI's
+	// health view. cn=Monitor's own ACL restricts it to a dedicated bind
+	// identity this app never holds (see the doc comment in monitor.go),
+	// so callers should expect domain.ErrPermissionDenied for most bound
+	// users and treat it as "unavailable, and why" — not a server failure.
+	MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
+
 	// ListPasswordPolicies returns every pwdPolicy entry under base. See
 	// the method doc comment in policy.go for why an empty result is
 	// normal and must not be treated as an error.

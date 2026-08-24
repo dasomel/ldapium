@@ -37,6 +37,28 @@ export interface OSSVersion {
   version: string
 }
 
+export interface OperationCounter {
+  name: string
+  initiated: number
+  completed: number
+}
+
+export interface MonitorStats {
+  connectionsCurrent: number
+  connectionsTotal: number
+  connectionsMaxFds: number
+  operations: OperationCounter[]
+  bytesSent: number
+  entriesSent: number
+  threadsMax: number
+  threadsMaxPending: number
+  threadsActive: number
+  databasePagesUsed: number
+  databasePagesMax: number
+  databasePagesFree: number
+  databaseEntries: number
+}
+
 export interface TreeNode {
   dn: string
   rdn: string
