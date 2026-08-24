@@ -39,6 +39,12 @@ most recently at the moment the scan runs. Neither is allowed to float.
 - `scripts/check-base-images.sh` requires every `FROM` to carry a digest, and
   every digest to resolve to a manifest list covering the architectures the
   release publishes. See below for why the second half is not redundant.
+- `step-security/harden-runner` blocks build/test jobs (`backend`, `frontend`,
+  `licenses` in `ci.yml`) to an explicit endpoint allow-list, closing off the
+  arbitrary outbound access a compromised build-time dependency would need to
+  exfiltrate anything. A separate `egress-negative-test` job proves the block
+  is real rather than trusted on faith: it deliberately connects to a host
+  outside its own allow-list and fails if that connection succeeds.
 
 ## Reviewing a dependency change
 
@@ -101,22 +107,20 @@ Two consequences worth knowing:
 
 The state to get back to is a known-good `go.sum`, not a known-good version
 number: the point of the attack is that the version number stayed the same.
+`scripts/rollback-dependency.sh` runs the procedure below as one command
+instead of hand-typed steps under pressure — the moment a typo is most
+likely:
 
 ```bash
-# 1. Find the last commit whose dependency state you trust.
-git log --oneline -- ui/backend/go.mod ui/backend/go.sum
-
-# 2. Restore both files together. Restoring only go.mod re-resolves and can
-#    pull the same thing back in.
-git checkout <good-commit> -- ui/backend/go.mod ui/backend/go.sum
-
-# 3. Purge the module cache, or the compromised bits stay on the machine and
-#    keep verifying against themselves.
-go clean -modcache
-
-# 4. Re-verify from scratch, then rebuild.
-cd ui/backend && go mod download && go mod verify
+# Find the last commit whose dependency state you trust, then:
+./scripts/rollback-dependency.sh --to <good-commit>
 ```
+
+That restores `go.mod`/`go.sum` from `<good-commit>`, purges the local module
+cache (or the compromised bits stay on the machine and keep verifying
+against themselves), and re-downloads + re-verifies from scratch. It leaves
+the restored files as an uncommitted change — reviewing and committing them
+is a decision the script deliberately leaves to you.
 
 For a container-shaped dependency — a base image, or syft — the equivalent is
 reverting the digest or tag in the file that pins it and rebuilding; there is no
@@ -128,12 +132,41 @@ is the reason images carry provenance attestations: they are what lets you tell
 which artifacts were built by which workflow run, from which commit, with which
 dependency state.
 
+## Offline module cache
+
+A disconnected build needs the module cache itself, not just the pinned
+runtime image `scripts/offline-bundle.sh` already ships for an air-gapped
+*install* — that script covers the built product, not the toolchain that
+built it. `scripts/bundle-go-modules.sh` downloads exactly what
+`ui/backend/go.sum` records into a scratch cache, verifies it, and tars it:
+
+```bash
+./scripts/bundle-go-modules.sh -o go-modules.tar.gz
+```
+
+On the disconnected machine, extract it and point the toolchain at it with
+`GOPROXY=off` — verified end to end (extract, `go mod verify`, `go build
+./...`, zero network) against the go.sum current when this was written;
+re-run `bundle-go-modules.sh` whenever go.mod/go.sum change, since the
+tarball is a snapshot of that file, not something that stays valid on its
+own:
+
+```bash
+tar xzf go-modules.tar.gz -C /some/cache/dir
+cd ui/backend
+GOPROXY=off GOFLAGS=-mod=readonly GOMODCACHE=/some/cache/dir go mod verify
+GOPROXY=off GOFLAGS=-mod=readonly GOMODCACHE=/some/cache/dir go build ./...
+```
+
 ## Known gaps
 
-- **Build-time network egress is not restricted.** Nothing today stops a
-  compromised build step from reaching an arbitrary host, and nothing alerts on
-  it. Restricting it means an egress-filtering action or a self-hosted runner,
-  which is a decision about CI architecture rather than a change to this
-  repository.
-- **No offline module proxy.** Reproducing a build without network access needs
-  a seeded module cache or a vendored tree; neither is set up.
+- **The cooling window is process, not tooling.** Nothing checks that a PR
+  actually waited the seven days "Reviewing a dependency change" above
+  describes before merging a new module/tool release — it depends on the
+  reviewer following the doc.
+- **SBOM/provenance covers the shipped artifact's dependency tree, not a
+  separate build-toolchain inventory.** `go version`, `govulncheck`'s pinned
+  version, and the other build-time tool pins are recorded in the workflow
+  files themselves (see "What is pinned, and how" above) but are not
+  consolidated into the SBOM/provenance output alongside the image's own
+  dependency tree.
