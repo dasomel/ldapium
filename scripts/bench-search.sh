@@ -62,6 +62,10 @@ for req in image vol_config vol_data; do
   [ -n "${!req}" ] || { echo "--${req//_/-} is required" >&2; usage >&2; exit 2; }
 done
 [ "$entry_count" -gt 0 ] 2>/dev/null || { echo "--entry-count must be a positive integer" >&2; exit 2; }
+# BSD date on macOS before Sequoia (15, 2024) doesn't support %N and emits it
+# literally, silently turning every sub-second timing below into 0 rather
+# than failing loudly.
+[ "$(date +%N)" != "N" ] || { echo "date +%N unsupported — need macOS 15+ or GNU coreutils date" >&2; exit 1; }
 
 run_id="ldapium-bench-search-$$"
 results_dir=$(mktemp -d "${TMPDIR:-/tmp}/${run_id}-XXXXXX")
@@ -92,13 +96,19 @@ worker() {
   out="${results_dir}/${wid}.tsv"
   : > "$out"
   for i in $(seq 1 "$queries_per_worker"); do
-    n=$(( (RANDOM * RANDOM + i + wid) % entry_count ))
+    # RANDOM alone is 0-32767; combined with two other RANDOM draws via
+    # addition (not multiplication, which skews quadratically toward zero)
+    # for a wider, still-uniform-enough spread across entry_count.
+    n=$(( (RANDOM + RANDOM * 32768 + i + wid) % entry_count ))
     uid=$(printf 'bench%09d' "$n")
     t0=$(date +%s.%N)
+    # `set -e` would otherwise abort this worker's subshell (and, via
+    # `wait`, the whole script) on the first failed query, before rc=$? ever
+    # runs — defeating the failure counting this benchmark exists to do.
+    rc=0
     docker exec "${run_id}-server" \
       ldapsearch -x -D "cn=admin,${base}" -w bench-not-a-real-secret \
-        -b "ou=people,${base}" -LLL "(uid=${uid})" >/dev/null 2>&1
-    rc=$?
+        -b "ou=people,${base}" -LLL "(uid=${uid})" >/dev/null 2>&1 || rc=$?
     t1=$(date +%s.%N)
     ms=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", (b-a)*1000}')
     printf '%s\t%s\n' "$ms" "$rc" >> "$out"
@@ -129,7 +139,7 @@ awk -F'\t' '{print $1}' "${results_dir}/all.tsv" | sort -n > "$sorted"
 percentile() {
   p="$1"
   n=$(wc -l < "$sorted" | tr -d ' ')
-  idx=$(awk -v n="$n" -v p="$p" 'BEGIN{i=int((p/100)*n); if (i<1) i=1; if (i>n) i=n; print i}')
+  idx=$(awk -v n="$n" -v p="$p" 'BEGIN{x=(p/100)*n; i=int(x); if (x>i) i++; if (i<1) i=1; if (i>n) i=n; print i}')
   sed -n "${idx}p" "$sorted"
 }
 p50=$(percentile 50)

@@ -64,6 +64,10 @@ done
 [ "$count" -gt 0 ] 2>/dev/null || { echo "--count must be a positive integer" >&2; exit 2; }
 
 command -v docker >/dev/null 2>&1 || { echo "docker not found on PATH" >&2; exit 1; }
+# BSD date on macOS before Sequoia (15, 2024) doesn't support %N and emits it
+# literally, silently turning every sub-second timing below into 0 rather
+# than failing loudly.
+[ "$(date +%N)" != "N" ] || { echo "date +%N unsupported — need macOS 15+ or GNU coreutils date" >&2; exit 1; }
 
 # Named after the entry count, not the PID: these two volumes are this
 # script's actual deliverable, meant to outlive it — bench-search.sh runs
@@ -125,6 +129,17 @@ echo "loading ${count} entries with offline slapadd..." >&2
 # docker cp's ownership behavior, and is still safe here: this is a
 # throwaway container against scratch volumes, not the product's own
 # runtime, which stays non-root everywhere else in this chart.
+#
+# This depends on the bootstrap step above having already run first: it
+# creates the actual mdb/data.mdb and mdb/lock.mdb files as uid 999 (the
+# image's normal user), so slapadd-as-root here only ever writes into
+# already-uid-999-owned files rather than creating new root-owned ones —
+# root doesn't rewrite a file's ownership just by writing to it. Verified
+# by testing: bench-search.sh's later non-root slapd, and this script's own
+# non-root slapcat verify step below, both need those files to stay
+# uid-999-owned, and they do. Loading straight into fresh, bootstrap-less
+# volumes would leave slapadd creating the files itself — as root — and
+# break both of those.
 docker create --name "${run_id}-loader" \
   --user root \
   --entrypoint slapadd \
@@ -158,9 +173,14 @@ echo "$record"
 [ -z "$out_json" ] || echo "$record" > "$out_json"
 
 echo >&2
-echo "for the search benchmark:" >&2
-echo "  ./scripts/bench-search.sh --image ${image} --config-volume ${vol_config} --data-volume ${vol_data} --entry-count ${count}" >&2
-echo "when done with both:" >&2
-echo "  docker volume rm ${vol_config} ${vol_data}" >&2
+if [ "$status" = "ok" ]; then
+  echo "for the search benchmark:" >&2
+  echo "  ./scripts/bench-search.sh --image ${image} --config-volume ${vol_config} --data-volume ${vol_data} --entry-count ${count}" >&2
+  echo "when done with both:" >&2
+  echo "  docker volume rm ${vol_config} ${vol_data}" >&2
+else
+  echo "loaded count doesn't match requested count — the volumes likely already held entries before this run started (see the reuse warning above). Delete them and re-run for a clean load before trusting a search benchmark against them:" >&2
+  echo "  docker volume rm ${vol_config} ${vol_data}" >&2
+fi
 
 [ "$status" = "ok" ]

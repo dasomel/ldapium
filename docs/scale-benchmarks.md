@@ -105,10 +105,17 @@ numbers that mean something for a real capacity decision; what these numbers
 are good for is proving the tooling and the product behave correctly at
 scale, and giving a relative baseline.
 
-| Scale | Load time | Load rate | Search QPS | p50 | p95 | p99 |
-|---|---|---|---|---|---|---|
-| 20,000 entries | 114.4s | 174.8 entries/s | 85.0 | 104ms | 143ms | 157ms |
-| 1,000,000 entries | 9,072.8s (151.2min) | 110.2 entries/s | 89.5 | 207ms | 295ms | 338ms |
+| Scale | Load time | Load rate | Search concurrency | Search QPS | p50 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| 20,000 entries | 114.4s | 174.8 entries/s | 10 × 30 | 85.0 | 104ms | 143ms | 157ms |
+| 1,000,000 entries | 9,072.8s (151.2min) | 110.2 entries/s | 20 × 100 | 89.5 | 207ms | 295ms | 338ms |
+
+Search concurrency differs between the two runs (10 workers × 30 queries at
+20K vs. 20 × 100 at 1M), so the QPS/latency columns are not a pure
+apples-to-apples scale comparison — higher concurrency alone would be
+expected to raise both QPS and per-query latency somewhat independent of
+data volume. Re-run with matched `--concurrency`/`--queries-per-worker` if
+you need an isolated scale effect.
 
 Raw evidence records (machine-readable, one JSON object per run):
 
