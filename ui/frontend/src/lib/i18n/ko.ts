@@ -9,6 +9,7 @@ const ko: Record<DictKey, string> = {
   'nav.tree': 'DIT 트리',
   'nav.users': '사용자',
   'nav.groups': '그룹',
+  'nav.health': '상태',
   'nav.serverSettings': '서버 설정',
 
   'common.boundAs': '바인딩 계정',
@@ -66,6 +67,34 @@ const ko: Record<DictKey, string> = {
   'settings.disabled': '비활성화됨',
   'settings.securityNote':
     '연결 주소, 인증서 경로, 비밀값은 표시하지 않습니다. OpenLDAP 값은 읽기 전용 배포 메타데이터이며 서버 배포 및 초기화 과정에서 변경합니다.',
+
+  'health.title': '상태',
+  'health.subtitle': '디렉터리 자체의 cn=Monitor 서브트리에서 가져온 실시간 상태입니다.',
+  'health.loading': '상태 불러오는 중…',
+  'health.loadFailed': '상태 정보를 불러오지 못했습니다',
+  'health.permissionDeniedTitle': '현재 계정은 cn=Monitor를 읽을 수 없습니다',
+  'health.permissionDeniedBody':
+    'cn=Monitor는 자체 ACL로 잠겨 있어 디렉터리 관리자 계정을 포함해 기본적으로 아무 바인드도 읽기 권한이 없습니다. 운영자가 명시적으로 권한을 부여해야 합니다 — 정확한 ACL 예시는 차트 README의 "Web console health view" 절을 참고하세요. (이 차트는 cn=Monitor를 기본적으로 활성화하므로, 대부분의 경우 원인은 cn=Monitor 비활성화가 아니라 ACL 권한 미부여입니다.)',
+  'health.connections': '연결',
+  'health.connectionsCurrent': '현재',
+  'health.connectionsTotal': '시작 이후 누적',
+  'health.connectionsMaxFds': '파일 디스크립터 상한',
+  'health.operations': '연산',
+  'health.operationCompleted': '완료됨',
+  'health.traffic': '트래픽',
+  'health.bytesSent': '전송 바이트',
+  'health.entriesSent': '전송 엔트리',
+  'health.threads': '스레드',
+  'health.threadsMax': '최대',
+  'health.threadsMaxPending': '최대 대기',
+  'health.threadsActive': '현재 활성',
+  'health.database': '데이터베이스',
+  'health.databaseEntries': '엔트리 수',
+  'health.databasePagesUsed': '사용 중인 맵 페이지',
+  'health.databasePagesFree': '남은 맵 페이지',
+  'health.databasePagesMax': '맵 페이지 상한',
+  'health.scopeNote':
+    '이 화면은 cn=Monitor가 LDAP으로 노출하는 연결·연산·저장소 카운터만 보여줍니다. Pod 자원 사용량과 서버 로그 스트림은 이 UI가 갖고 있지 않은 Kubernetes API 직접 접근이 필요합니다 — 그 경계와 다른 접근 경로는 차트 README의 "Web console health view" 절을 참고하세요.',
 
   'changePassword.title': '비밀번호 변경',
   'changePassword.currentPasswordLabel': '현재 비밀번호',

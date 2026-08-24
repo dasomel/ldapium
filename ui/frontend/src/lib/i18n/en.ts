@@ -13,6 +13,7 @@ const en = {
   'nav.tree': 'DIT Tree',
   'nav.users': 'Users',
   'nav.groups': 'Groups',
+  'nav.health': 'Health',
   'nav.serverSettings': 'Server settings',
 
   'common.boundAs': 'Bound as',
@@ -70,6 +71,34 @@ const en = {
   'settings.disabled': 'Disabled',
   'settings.securityNote':
     'Connection addresses, certificate paths, and secrets are intentionally not displayed. These OpenLDAP values are read-only deployment metadata; change them through the server deployment and bootstrap process.',
+
+  'health.title': 'Health',
+  'health.subtitle': "Live status from the directory's own cn=Monitor subtree.",
+  'health.loading': 'Loading health…',
+  'health.loadFailed': 'Failed to load health data',
+  'health.permissionDeniedTitle': "Your account can't read cn=Monitor",
+  'health.permissionDeniedBody':
+    'cn=Monitor is restricted by its own ACL — no bind gets read access by default, not even the directory admin. An operator grants it explicitly; see "Web console health view" in the chart README for the exact ACL to add for this account. (This chart enables cn=Monitor by default, so a missing ACL grant is almost always the cause — not cn=Monitor being disabled.)',
+  'health.connections': 'Connections',
+  'health.connectionsCurrent': 'Current',
+  'health.connectionsTotal': 'Total since start',
+  'health.connectionsMaxFds': 'File descriptor ceiling',
+  'health.operations': 'Operations',
+  'health.operationCompleted': 'Completed',
+  'health.traffic': 'Traffic',
+  'health.bytesSent': 'Bytes sent',
+  'health.entriesSent': 'Entries sent',
+  'health.threads': 'Threads',
+  'health.threadsMax': 'Maximum',
+  'health.threadsMaxPending': 'Maximum pending',
+  'health.threadsActive': 'Active now',
+  'health.database': 'Database',
+  'health.databaseEntries': 'Entries',
+  'health.databasePagesUsed': 'Map pages used',
+  'health.databasePagesFree': 'Map pages free',
+  'health.databasePagesMax': 'Map pages ceiling',
+  'health.scopeNote':
+    'This reads only what cn=Monitor exposes over LDAP — connection, operation, and storage counters. Pod resource usage and the server log stream need direct Kubernetes API access this UI does not have; see "Web console health view" in the chart README for that boundary and how to reach them another way.',
 
   'changePassword.title': 'Change password',
   'changePassword.currentPasswordLabel': 'Current password',

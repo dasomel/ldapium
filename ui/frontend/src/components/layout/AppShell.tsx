@@ -1,5 +1,17 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { FolderTree, KeyRound, Languages, LogOut, Moon, Server, Sun, TerminalSquare, UserRound, Users2 } from 'lucide-react'
+import {
+  Activity,
+  FolderTree,
+  KeyRound,
+  Languages,
+  LogOut,
+  Moon,
+  Server,
+  Sun,
+  TerminalSquare,
+  UserRound,
+  Users2,
+} from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useTheme } from '@/context/ThemeContext'
 import { useToast } from '@/context/ToastContext'
@@ -11,6 +23,7 @@ const nav: { to: string; labelKey: DictKey; icon: typeof FolderTree }[] = [
   { to: '/tree', labelKey: 'nav.tree', icon: FolderTree },
   { to: '/users', labelKey: 'nav.users', icon: UserRound },
   { to: '/groups', labelKey: 'nav.groups', icon: Users2 },
+  { to: '/health', labelKey: 'nav.health', icon: Activity },
   { to: '/server-settings', labelKey: 'nav.serverSettings', icon: Server },
 ]
 
