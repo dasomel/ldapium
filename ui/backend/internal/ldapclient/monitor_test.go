@@ -163,3 +163,43 @@ func TestIsDirectDatabaseChild(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMonitorStatsBaseDNCaseAndSpacingInsensitive(t *testing.T) {
+	// An operator's configured LDAP_BASE_DN and what slapd actually reports
+	// in namingContexts are two independently-typed strings — a bare ==
+	// (an earlier version of this) would silently zero the database stats
+	// over nothing more than casing or spacing that means the same DN.
+	entries := realMonitorEntries("dc=example,dc=org")
+	stats := parseMonitorStats(entries, "DC=Example, DC=Org")
+
+	if stats.DatabaseEntries != 4 {
+		t.Errorf("DatabaseEntries = %d, want 4 (baseDN differs only in case/spacing from namingContexts)", stats.DatabaseEntries)
+	}
+}
+
+func TestParseMonitorStatsMultiValuedNamingContexts(t *testing.T) {
+	// RFC 4512 allows a database to serve more than one namingContexts;
+	// GetAttributeValue (singular) only ever sees the first, which would
+	// miss a match sitting in the second value.
+	entries := []*ldap.Entry{
+		ldap.NewEntry("cn=Database 1,cn=Databases,cn=Monitor", map[string][]string{
+			"cn":              {"Database 1"},
+			"namingContexts":  {"o=other", "dc=example,dc=org"},
+			"olmMDBEntries":   {"4"},
+			"olmMDBPagesUsed": {"28"},
+		}),
+	}
+	stats := parseMonitorStats(entries, "dc=example,dc=org")
+	if stats.DatabaseEntries != 4 {
+		t.Errorf("DatabaseEntries = %d, want 4 (baseDN matches the second namingContexts value)", stats.DatabaseEntries)
+	}
+}
+
+func TestParseMonitorStatsOperationsSortedByName(t *testing.T) {
+	stats := parseMonitorStats(realMonitorEntries("dc=example,dc=org"), "dc=example,dc=org")
+	for i := 1; i < len(stats.Operations); i++ {
+		if stats.Operations[i-1].Name > stats.Operations[i].Name {
+			t.Fatalf("Operations not sorted: %q came before %q", stats.Operations[i-1].Name, stats.Operations[i].Name)
+		}
+	}
+}

@@ -74,7 +74,7 @@ const ko: Record<DictKey, string> = {
   'health.loadFailed': '상태 정보를 불러오지 못했습니다',
   'health.permissionDeniedTitle': '현재 계정은 cn=Monitor를 읽을 수 없습니다',
   'health.permissionDeniedBody':
-    'cn=Monitor는 자체 ACL로 잠겨 있어 디렉터리 관리자 계정을 포함해 기본적으로 아무 바인드도 읽기 권한이 없습니다. 운영자가 명시적으로 권한을 부여해야 합니다 — 정확한 ACL 예시는 차트 README의 "Web console health view" 절을 참고하세요.',
+    'cn=Monitor는 자체 ACL로 잠겨 있어 디렉터리 관리자 계정을 포함해 기본적으로 아무 바인드도 읽기 권한이 없습니다. 운영자가 명시적으로 권한을 부여해야 합니다 — 정확한 ACL 예시는 차트 README의 "Web console health view" 절을 참고하세요. (이 차트는 cn=Monitor를 기본적으로 활성화하므로, 대부분의 경우 원인은 cn=Monitor 비활성화가 아니라 ACL 권한 미부여입니다.)',
   'health.connections': '연결',
   'health.connectionsCurrent': '현재',
   'health.connectionsTotal': '시작 이후 누적',

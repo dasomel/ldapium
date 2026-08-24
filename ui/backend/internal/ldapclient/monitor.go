@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -87,6 +88,17 @@ func (c *client) MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
 func parseMonitorStats(entries []*ldap.Entry, baseDN string) domain.MonitorStats {
 	var stats domain.MonitorStats
 
+	// Parsed once, not per-entry, and used with EqualFold rather than a
+	// bare string == against namingContexts: an operator's configured
+	// LDAP_BASE_DN and what slapd actually reports for a database's
+	// namingContexts are two independently-typed strings, and DN
+	// comparison is never safe as plain text (differing whitespace after
+	// a comma, or attribute-type casing, are the same DN). If baseDN
+	// itself fails to parse, parsedBaseDN stays nil and every comparison
+	// below is skipped rather than panicking or falling back to a
+	// definitely-wrong string match.
+	parsedBaseDN, _ := ldap.ParseDN(baseDN)
+
 	for _, e := range entries {
 		dn := strings.ToLower(e.DN)
 		cn := e.GetAttributeValue("cn")
@@ -136,16 +148,25 @@ func parseMonitorStats(entries []*ldap.Entry, baseDN string) domain.MonitorStats
 		// and since they carry no olmMDBPages* attributes of their own,
 		// whichever overlay entry the search happened to return last
 		// silently zeroed out the real page counts that had just been set
-		// from the actual database entry. Requiring the DN to be exactly
-		// one RDN below cn=Databases,cn=Monitor — no comma left after
-		// stripping that suffix — excludes them.
-		case isDirectDatabaseChild(e.DN) && e.GetAttributeValue("namingContexts") == baseDN:
+		// from the actual database entry. isDirectDatabaseChild's DN-depth
+		// check excludes them; namingContextsMatch below picks the one
+		// direct child that is actually this deployment's data database
+		// (as opposed to cn=config's or cn=Monitor's own).
+		case isDirectDatabaseChild(e.DN) && namingContextsMatch(e.GetAttributeValues("namingContexts"), parsedBaseDN):
 			stats.DatabasePagesUsed = atoi64OrZero(e.GetAttributeValue("olmMDBPagesUsed"))
 			stats.DatabasePagesMax = atoi64OrZero(e.GetAttributeValue("olmMDBPagesMax"))
 			stats.DatabasePagesFree = atoi64OrZero(e.GetAttributeValue("olmMDBPagesFree"))
 			stats.DatabaseEntries = atoi64OrZero(e.GetAttributeValue("olmMDBEntries"))
 		}
 	}
+
+	// slapd returns cn=Operations,cn=Monitor's children in whatever order
+	// its own internal tree walk visits them, which is not guaranteed
+	// stable across servers or restarts — sorted here so the health page
+	// doesn't reorder itself between loads for no reason a viewer can see.
+	sort.Slice(stats.Operations, func(i, j int) bool {
+		return stats.Operations[i].Name < stats.Operations[j].Name
+	})
 
 	return stats
 }
@@ -178,6 +199,25 @@ func isDirectDatabaseChild(dn string) bool {
 func rdnHasAttr(rdn *ldap.RelativeDN, attrType, attrValue string) bool {
 	for _, a := range rdn.Attributes {
 		if strings.EqualFold(a.Type, attrType) && strings.EqualFold(a.Value, attrValue) {
+			return true
+		}
+	}
+	return false
+}
+
+// namingContextsMatch reports whether any of values — a database entry's
+// (possibly multi-valued, per RFC 4512, though back_monitor entries in
+// practice carry exactly one) namingContexts — is the same DN as baseDN.
+// baseDN may be nil (parseMonitorStats' own baseDN failed to parse), in
+// which case nothing matches rather than falling back to a definitely-wrong
+// string comparison.
+func namingContextsMatch(values []string, baseDN *ldap.DN) bool {
+	if baseDN == nil {
+		return false
+	}
+	for _, v := range values {
+		parsed, err := ldap.ParseDN(v)
+		if err == nil && parsed.EqualFold(baseDN) {
 			return true
 		}
 	}

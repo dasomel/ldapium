@@ -78,7 +78,7 @@ const en = {
   'health.loadFailed': 'Failed to load health data',
   'health.permissionDeniedTitle': "Your account can't read cn=Monitor",
   'health.permissionDeniedBody':
-    'cn=Monitor is restricted by its own ACL — no bind gets read access by default, not even the directory admin. An operator grants it explicitly; see "Web console health view" in the chart README for the exact ACL to add for this account.',
+    'cn=Monitor is restricted by its own ACL — no bind gets read access by default, not even the directory admin. An operator grants it explicitly; see "Web console health view" in the chart README for the exact ACL to add for this account. (This chart enables cn=Monitor by default, so a missing ACL grant is almost always the cause — not cn=Monitor being disabled.)',
   'health.connections': 'Connections',
   'health.connectionsCurrent': 'Current',
   'health.connectionsTotal': 'Total since start',
