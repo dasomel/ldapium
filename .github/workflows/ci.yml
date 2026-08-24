@@ -368,6 +368,41 @@ jobs:
       # the dependency tree.
       - run: ./scripts/licenses.sh --check
 
+  egress-negative-test:
+    name: unexpected egress is actually blocked (#49)
+    runs-on: ubuntu-24.04
+    steps:
+      # #49 asks that "unexpected network access from build/test is blocked",
+      # and the backend/frontend/licenses jobs above all rely on
+      # step-security/harden-runner's egress-policy: block to provide that.
+      # Trusting a block nobody has watched reject something is a guess — the
+      # same reasoning the go.sum substitution test above applies to
+      # dependency integrity applies here to egress: deliberately connect to
+      # a host that is NOT on the allow-list, and fail the job if that
+      # connection unexpectedly succeeds.
+      - name: Harden Runner (block egress, deliberately minimal allow-list)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          disable-sudo: true
+          # Only what checkout itself needs. example.com below is
+          # deliberately absent so this job has something to fail against.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prove a host outside the allow-list is actually unreachable
+        run: |
+          set -euo pipefail
+          if curl --max-time 10 -sS -o /dev/null https://example.com; then
+            echo "::error::egress to a host NOT on the allow-list succeeded — harden-runner is not actually blocking build/test network access, and the other jobs' allow-lists are not enforcing anything"
+            exit 1
+          fi
+          echo "PASS: egress to an unlisted host was blocked, as #49 requires"
+
   shellcheck:
     name: shellcheck (shell scripts)
     runs-on: ubuntu-24.04
