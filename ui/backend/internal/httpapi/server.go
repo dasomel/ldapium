@@ -52,10 +52,15 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	s.echo.HidePort = true
 
 	s.echo.Use(middleware.Recover())
+	// RequestID before the logger: the logger's ${id} reads whatever this
+	// middleware set (an inbound X-Request-Id if present, else a fresh
+	// one), and respondErr reuses the same ID to correlate a redacted
+	// client-facing 500 with the unredacted error this logs server-side.
+	s.echo.Use(middleware.RequestID())
 	// Do not log RequestURI: the OIDC callback carries authorization code
 	// and state in its query string. `${path}` excludes the query entirely.
 	s.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: `{"time":"${time_rfc3339}","method":"${method}","path":"${path}","status":${status},"latency":${latency},"bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
+		Format: `{"time":"${time_rfc3339}","id":"${id}","method":"${method}","path":"${path}","status":${status},"latency":${latency},"bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 	}))
 	s.echo.Use(middleware.Secure())
 
