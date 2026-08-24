@@ -111,7 +111,7 @@ The other direction — CI stages nothing in `make` reaches:
 
 | CI stage | Workflow(s) | Why there is no local target |
 |---|---|---|
-| e2e (install, TLS, upgrade, backup/restore, replication chaos, metrics, security) | `e2e.yml`, `upgrade-e2e.yml`, `backup-restore.yml`, `replication-chaos-e2e.yml`, `metrics-e2e.yml`, `security-e2e.yml` | each needs a kind cluster and takes minutes, not seconds — see the kind snippet above for running one by hand instead of packaging it as a target that would just wrap the same three commands |
+| e2e (install, TLS, upgrade, backup/restore, replication chaos, metrics, security, UI browser) | `e2e.yml`, `upgrade-e2e.yml`, `backup-restore.yml`, `replication-chaos-e2e.yml`, `metrics-e2e.yml`, `security-e2e.yml`, `ui-e2e.yml` | each needs a kind cluster and takes minutes, not seconds — see the kind snippet above for running one by hand instead of packaging it as a target that would just wrap the same three commands. `ui-e2e.yml` additionally needs Playwright's browser binaries (`npx playwright install --with-deps chromium` in `ui/frontend`) and something to point `E2E_BASE_URL`/`E2E_ADMIN_DN`/`E2E_ADMIN_PASSWORD` at — `npx playwright test` in `ui/frontend` once you have those. |
 | `base-images` (`scripts/check-base-images.sh`) | `ci.yml` | queries a container registry for each pinned digest; needs network `make check` deliberately does not require |
 | `hadolint`, CodeQL, Scorecard, Trivy (`images` job) | `ci.yml`, `codeql.yml`, `scorecard.yml`, `security-scan.yml` | hosted analysis tools without a meaningful local equivalent |
 | `Published images` / `Build offline bundle` | `security-scan.yml`, `offline-bundle.yml` | operate on already-published GHCR images, which a local checkout does not have |

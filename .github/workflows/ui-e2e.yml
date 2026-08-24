@@ -1,0 +1,145 @@
+name: UI E2E (browser)
+
+# This repo's first browser-driven test (#45) — installs the real chart with
+# the UI enabled into a kind cluster, port-forwards the UI Service to the
+# runner, and drives an actual Chromium browser through login → tree browse
+# → health view → logout. Not a mocked backend: a pass here means the real
+# login → HTTP API → LDAP round trip works end to end.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: UI browser regression E2E
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ui/frontend
+        run: npm ci
+
+      # Chromium + its OS-level deps only — no other browser engine runs in
+      # this suite, and installing all of them would just be wasted time on
+      # every run.
+      - name: Install Playwright's Chromium
+        working-directory: ui/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+      - name: Build UI image
+        run: docker build -t ldapium-ui:e2e ui
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: ui-e2e
+      - name: Load images into the cluster
+        run: |
+          kind load docker-image ldapium:e2e --name ui-e2e
+          kind load docker-image ldapium-ui:e2e --name ui-e2e
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Install chart
+        env:
+          ADMIN_PASSWORD_FOR_TEST: ${{ github.run_id }}-e2e-not-a-real-secret
+        run: |
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
+            --set auth.adminPassword="$ADMIN_PASSWORD_FOR_TEST" \
+            --set ui.enabled=true \
+            --set ui.image.repository=ldapium-ui \
+            --set ui.image.tag=e2e \
+            --set ui.image.pullPolicy=Never \
+            --wait --timeout 5m
+
+      # cn=Monitor denies read to every bind except its own dedicated
+      # identity by default (see charts/ldapium/README.md's "Web console
+      # health view") — the health page's live-data assertions need the
+      # admin DN granted explicitly, the same ldapmodify an operator runs.
+      - name: Grant the admin DN read access to cn=Monitor
+        run: |
+          set -euo pipefail
+          cat <<'EOF' > /tmp/grant-monitor.ldif
+          dn: olcDatabase={2}monitor,cn=config
+          changetype: modify
+          replace: olcAccess
+          olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="cn=admin,dc=example,dc=org" read by * none
+          EOF
+          kubectl -n directory cp /tmp/grant-monitor.ldif directory-ldapium-0:/tmp/grant-monitor.ldif -c openldap
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -f /tmp/grant-monitor.ldif'
+
+      - name: Port-forward the UI service
+        run: |
+          kubectl -n directory port-forward svc/directory-ldapium-ui 8080:8080 > /tmp/port-forward.log 2>&1 &
+          echo $! > /tmp/port-forward.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1 && break
+            [ "$i" -lt 30 ] || { echo "::error::UI never became reachable through the port-forward"; cat /tmp/port-forward.log; exit 1; }
+            sleep 1
+          done
+
+      - name: Run browser E2E
+        working-directory: ui/frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:8080
+          E2E_ADMIN_DN: cn=admin,dc=example,dc=org
+          E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
+          CI: "true"
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: ui/frontend/playwright-report/*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          cat /tmp/port-forward.log 2>/dev/null || true
+          kubectl -n directory get pods -o wide
+          kubectl -n directory describe pods
+          for pod in $(kubectl -n directory get pods -o name); do
+            echo "::group::logs $pod"
+            kubectl -n directory logs "$pod" --all-containers --tail=200 || true
+            echo "::endgroup::"
+          done
+
+      - name: Stop port-forward
+        if: always()
+        run: kill "$(cat /tmp/port-forward.pid)" 2>/dev/null || true
+      - name: Uninstall
+        if: always()
+        run: helm uninstall directory --namespace directory || true
