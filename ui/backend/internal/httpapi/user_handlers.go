@@ -35,12 +35,15 @@ func (s *Server) handleCreateUser(c echo.Context) error {
 	}
 
 	dn, err := currentSession(c).Bound.CreateUser(c.Request().Context(), s.cfg.UserCreateBase, domain.UserInput{
-		UID:       req.UID,
-		CN:        req.CN,
-		SN:        req.SN,
-		GivenName: req.GivenName,
-		Mail:      req.Mail,
-		Password:  req.Password,
+		UID:                req.UID,
+		CN:                 req.CN,
+		SN:                 req.SN,
+		GivenName:          req.GivenName,
+		Mail:               req.Mail,
+		Password:           req.Password,
+		Department:         req.Department,
+		Organization:       req.Organization,
+		OrganizationalUnit: req.OrganizationalUnit,
 	})
 	if err != nil {
 		return respondErr(c, err)
@@ -61,10 +64,13 @@ func (s *Server) handleUpdateUser(c echo.Context) error {
 	}
 
 	err := currentSession(c).Bound.UpdateUser(c.Request().Context(), req.DN, domain.UserInput{
-		CN:        req.CN,
-		SN:        req.SN,
-		GivenName: req.GivenName,
-		Mail:      req.Mail,
+		CN:                 req.CN,
+		SN:                 req.SN,
+		GivenName:          req.GivenName,
+		Mail:               req.Mail,
+		Department:         req.Department,
+		Organization:       req.Organization,
+		OrganizationalUnit: req.OrganizationalUnit,
 	})
 	if err != nil {
 		return respondErr(c, err)

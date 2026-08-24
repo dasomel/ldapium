@@ -44,6 +44,44 @@ func TestEntryToUser_NoMemberOf(t *testing.T) {
 	}
 }
 
+func TestEntryToUser_MapsOrganizationalMetadata(t *testing.T) {
+	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{
+		"uid":              {"jdoe"},
+		"cn":               {"Jane Doe"},
+		"sn":               {"Doe"},
+		"departmentNumber": {"4021"},
+		"o":                {"Example Corp"},
+		"ou":               {"Engineering"},
+	})
+
+	u := entryToUser(e)
+
+	if u.Department != "4021" {
+		t.Errorf("Department = %q, want %q", u.Department, "4021")
+	}
+	if u.Organization != "Example Corp" {
+		t.Errorf("Organization = %q, want %q", u.Organization, "Example Corp")
+	}
+	if u.OrganizationalUnit != "Engineering" {
+		t.Errorf("OrganizationalUnit = %q, want %q", u.OrganizationalUnit, "Engineering")
+	}
+}
+
+func TestEntryToUser_NoOrganizationalMetadata(t *testing.T) {
+	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{
+		"uid": {"jdoe"},
+		"cn":  {"Jane Doe"},
+		"sn":  {"Doe"},
+	})
+
+	u := entryToUser(e)
+
+	if u.Department != "" || u.Organization != "" || u.OrganizationalUnit != "" {
+		t.Errorf("expected empty organizational fields, got Department=%q Organization=%q OrganizationalUnit=%q",
+			u.Department, u.Organization, u.OrganizationalUnit)
+	}
+}
+
 func TestUserAttrs_RequestsMemberOfExplicitly(t *testing.T) {
 	// memberOf is an operational attribute computed by the memberof
 	// overlay; it is never returned by a "*" wildcard and must be listed

@@ -223,6 +223,9 @@ const en = {
   'userForm.editTitle': 'Edit user',
   'userForm.newTitle': 'New user',
   'userForm.givenNameLabel': 'Given name',
+  'userForm.organizationalUnitLabel': 'Department (ou)',
+  'userForm.departmentLabel': 'Department number',
+  'userForm.organizationLabel': 'Organization (o)',
   'userForm.initialPasswordLabel': 'Initial password (optional)',
   'userForm.initialPasswordHint':
     'Set via the LDAP Password Modify operation (RFC 3062). Leave blank to set it later.',
