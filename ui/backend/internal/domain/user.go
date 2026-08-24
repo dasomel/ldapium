@@ -12,6 +12,15 @@ type User struct {
 	GivenName   string `json:"givenName,omitempty"`
 	Mail        string `json:"mail,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
+	// Department (departmentNumber, cosine schema), Organization (o) and
+	// OrganizationalUnit (ou) are organizational metadata — a text label
+	// distinct from where the entry actually lives in the DIT. Both
+	// attributes are already MAY attributes on inetOrgPerson's own
+	// ancestry (organizationalPerson SUP person); no schema change was
+	// needed to add them here.
+	Department         string `json:"department,omitempty"`
+	Organization       string `json:"organization,omitempty"`
+	OrganizationalUnit string `json:"organizationalUnit,omitempty"`
 	// MemberOf lists the DNs of groups this user belongs to, as computed
 	// by the server's memberof overlay. It is read-only here; group
 	// membership is changed via AddMember/RemoveMember on the group side.
@@ -32,10 +41,13 @@ type User struct {
 // UserInput is the payload for creating or updating a user. Password is only
 // set on creation; use SetPassword (RFC 3062) for changes.
 type UserInput struct {
-	UID       string `json:"uid"`
-	CN        string `json:"cn"`
-	SN        string `json:"sn"`
-	GivenName string `json:"givenName,omitempty"`
-	Mail      string `json:"mail,omitempty"`
-	Password  string `json:"password,omitempty"`
+	UID                string `json:"uid"`
+	CN                 string `json:"cn"`
+	SN                 string `json:"sn"`
+	GivenName          string `json:"givenName,omitempty"`
+	Mail               string `json:"mail,omitempty"`
+	Password           string `json:"password,omitempty"`
+	Department         string `json:"department,omitempty"`
+	Organization       string `json:"organization,omitempty"`
+	OrganizationalUnit string `json:"organizationalUnit,omitempty"`
 }

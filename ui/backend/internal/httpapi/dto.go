@@ -67,13 +67,16 @@ type logoutResponse struct {
 }
 
 type userRequest struct {
-	DN        string `json:"dn,omitempty"`
-	UID       string `json:"uid,omitempty"`
-	CN        string `json:"cn"`
-	SN        string `json:"sn"`
-	GivenName string `json:"givenName,omitempty"`
-	Mail      string `json:"mail,omitempty"`
-	Password  string `json:"password,omitempty"`
+	DN                 string `json:"dn,omitempty"`
+	UID                string `json:"uid,omitempty"`
+	CN                 string `json:"cn"`
+	SN                 string `json:"sn"`
+	GivenName          string `json:"givenName,omitempty"`
+	Mail               string `json:"mail,omitempty"`
+	Password           string `json:"password,omitempty"`
+	Department         string `json:"department,omitempty"`
+	Organization       string `json:"organization,omitempty"`
+	OrganizationalUnit string `json:"organizationalUnit,omitempty"`
 }
 
 type groupRequest struct {

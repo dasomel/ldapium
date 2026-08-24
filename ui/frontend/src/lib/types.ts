@@ -87,6 +87,14 @@ export interface User {
    * both when the account isn't locked and when it's locked indefinitely
    * (no meaningful timestamp) — check `locked`, not this field. */
   lockedAt?: string
+  /** departmentNumber — an organizational label, independent of where the
+   * entry actually lives in the DIT. */
+  department?: string
+  /** o (organizationName). */
+  organization?: string
+  /** ou, as a plain attribute on the entry — a department/unit label, not
+   * the entry's actual DIT location. */
+  organizationalUnit?: string
 }
 
 export interface UserFormInput {
@@ -97,6 +105,9 @@ export interface UserFormInput {
   givenName?: string
   mail?: string
   password?: string
+  department?: string
+  organization?: string
+  organizationalUnit?: string
 }
 
 export interface Group {

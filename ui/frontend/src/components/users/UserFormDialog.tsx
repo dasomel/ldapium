@@ -14,7 +14,17 @@ interface UserFormDialogProps {
   onSubmit: (input: UserFormInput) => Promise<void>
 }
 
-const emptyForm: UserFormInput = { uid: '', cn: '', sn: '', givenName: '', mail: '', password: '' }
+const emptyForm: UserFormInput = {
+  uid: '',
+  cn: '',
+  sn: '',
+  givenName: '',
+  mail: '',
+  password: '',
+  department: '',
+  organization: '',
+  organizationalUnit: '',
+}
 
 export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormDialogProps) {
   const t = useT()
@@ -28,7 +38,21 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
     setError(null)
     setForm(
       user
-        ? { dn: user.dn, uid: user.uid, cn: user.cn, sn: user.sn, givenName: user.givenName, mail: user.mail }
+        ? {
+            dn: user.dn,
+            uid: user.uid,
+            cn: user.cn,
+            sn: user.sn,
+            // ?? '': an absent optional field (omitempty in the API
+            // response) would otherwise seed the input as undefined,
+            // making it start uncontrolled and then flip to controlled
+            // the moment it's typed into — React warns on that switch.
+            givenName: user.givenName ?? '',
+            mail: user.mail ?? '',
+            department: user.department ?? '',
+            organization: user.organization ?? '',
+            organizationalUnit: user.organizationalUnit ?? '',
+          }
         : emptyForm,
     )
   }, [open, user])
@@ -106,6 +130,32 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
                 Common name (<GlossaryTerm term="cn">cn</GlossaryTerm>)
               </Label>
               <Input id="cn" required value={form.cn} onChange={(e) => setForm((f) => ({ ...f, cn: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="organizationalUnit">{t('userForm.organizationalUnitLabel')}</Label>
+                <Input
+                  id="organizationalUnit"
+                  value={form.organizationalUnit}
+                  onChange={(e) => setForm((f) => ({ ...f, organizationalUnit: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="department">{t('userForm.departmentLabel')}</Label>
+                <Input
+                  id="department"
+                  value={form.department}
+                  onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="organization">{t('userForm.organizationLabel')}</Label>
+              <Input
+                id="organization"
+                value={form.organization}
+                onChange={(e) => setForm((f) => ({ ...f, organization: e.target.value }))}
+              />
             </div>
             {!isEdit && (
               <div className="space-y-1.5">

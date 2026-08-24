@@ -13,7 +13,10 @@ import (
 // by the memberof and ppolicy overlays, respectively), so neither is ever
 // returned by a "*" wildcard request — both must be listed explicitly,
 // same as any other requested attribute here.
-var userAttrs = []string{"uid", "cn", "sn", "givenName", "mail", "displayName", "memberOf", "pwdAccountLockedTime"}
+var userAttrs = []string{
+	"uid", "cn", "sn", "givenName", "mail", "displayName", "memberOf", "pwdAccountLockedTime",
+	"departmentNumber", "o", "ou",
+}
 
 // ListUsers returns every inetOrgPerson entry under base. See
 // searchAllPaged for how results larger than the server's admin size limit
@@ -39,14 +42,17 @@ func (c *client) ListUsers(ctx context.Context, base string) ([]domain.User, boo
 
 func entryToUser(e *ldap.Entry) domain.User {
 	u := domain.User{
-		DN:          e.DN,
-		UID:         e.GetAttributeValue("uid"),
-		CN:          e.GetAttributeValue("cn"),
-		SN:          e.GetAttributeValue("sn"),
-		GivenName:   e.GetAttributeValue("givenName"),
-		Mail:        e.GetAttributeValue("mail"),
-		DisplayName: e.GetAttributeValue("displayName"),
-		MemberOf:    e.GetAttributeValues("memberOf"),
+		DN:                 e.DN,
+		UID:                e.GetAttributeValue("uid"),
+		CN:                 e.GetAttributeValue("cn"),
+		SN:                 e.GetAttributeValue("sn"),
+		GivenName:          e.GetAttributeValue("givenName"),
+		Mail:               e.GetAttributeValue("mail"),
+		DisplayName:        e.GetAttributeValue("displayName"),
+		MemberOf:           e.GetAttributeValues("memberOf"),
+		Department:         e.GetAttributeValue("departmentNumber"),
+		Organization:       e.GetAttributeValue("o"),
+		OrganizationalUnit: e.GetAttributeValue("ou"),
 	}
 	// Locked is derived from the attribute's mere presence, independent of
 	// whether its value happens to parse as a timestamp (see
@@ -88,6 +94,15 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 	if in.Mail != "" {
 		add.Attribute("mail", []string{in.Mail})
 	}
+	if in.Department != "" {
+		add.Attribute("departmentNumber", []string{in.Department})
+	}
+	if in.Organization != "" {
+		add.Attribute("o", []string{in.Organization})
+	}
+	if in.OrganizationalUnit != "" {
+		add.Attribute("ou", []string{in.OrganizationalUnit})
+	}
 	err := c.conn.Add(add)
 	c.mu.Unlock()
 	if err != nil {
@@ -124,6 +139,9 @@ func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput)
 	mod.Replace("sn", []string{in.SN})
 	replaceOrClear(mod, "givenName", in.GivenName)
 	replaceOrClear(mod, "mail", in.Mail)
+	replaceOrClear(mod, "departmentNumber", in.Department)
+	replaceOrClear(mod, "o", in.Organization)
+	replaceOrClear(mod, "ou", in.OrganizationalUnit)
 
 	if err := c.conn.Modify(mod); err != nil {
 		return mapErr("update user", err)
@@ -131,11 +149,22 @@ func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput)
 	return nil
 }
 
-// replaceOrClear replaces attrType with a single value, or deletes it
-// entirely when value is empty (LDAP rejects zero-length attribute values).
+// replaceOrClear replaces attrType with a single value, or clears it when
+// value is empty (LDAP rejects zero-length attribute values, so an empty
+// string can't be written directly).
+//
+// Clearing uses Replace with zero values, not Delete: a delete modify op
+// requires the attribute to already be present on the entry and fails
+// otherwise ("no such attribute") — verified live, not assumed, and a real
+// failure mode here, not hypothetical: any optional attribute that was
+// never set (mail, givenName, or the organizational fields added later)
+// hits it the first time a caller "clears" a field that was already
+// blank. Replace with zero values is idempotent per RFC 4511 — it means
+// "this attribute now has no values," which is true whether the attribute
+// existed a moment ago or not, so it succeeds either way.
 func replaceOrClear(mod *ldap.ModifyRequest, attrType, value string) {
 	if value == "" {
-		mod.Delete(attrType, nil)
+		mod.Replace(attrType, []string{})
 		return
 	}
 	mod.Replace(attrType, []string{value})

@@ -217,6 +217,9 @@ const ko: Record<DictKey, string> = {
   'userForm.editTitle': '사용자 수정',
   'userForm.newTitle': '새 사용자',
   'userForm.givenNameLabel': '이름',
+  'userForm.organizationalUnitLabel': '부서(ou)',
+  'userForm.departmentLabel': '부서 번호',
+  'userForm.organizationLabel': '조직(o)',
   'userForm.initialPasswordLabel': '초기 비밀번호 (선택)',
   'userForm.initialPasswordHint':
     'LDAP Password Modify 오퍼레이션(RFC 3062)으로 설정됩니다. 비워두면 나중에 설정할 수 있습니다.',
