@@ -43,11 +43,15 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
             uid: user.uid,
             cn: user.cn,
             sn: user.sn,
-            givenName: user.givenName,
-            mail: user.mail,
-            department: user.department,
-            organization: user.organization,
-            organizationalUnit: user.organizationalUnit,
+            // ?? '': an absent optional field (omitempty in the API
+            // response) would otherwise seed the input as undefined,
+            // making it start uncontrolled and then flip to controlled
+            // the moment it's typed into — React warns on that switch.
+            givenName: user.givenName ?? '',
+            mail: user.mail ?? '',
+            department: user.department ?? '',
+            organization: user.organization ?? '',
+            organizationalUnit: user.organizationalUnit ?? '',
           }
         : emptyForm,
     )

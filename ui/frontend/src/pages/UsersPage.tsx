@@ -55,7 +55,9 @@ export function UsersPage() {
     const q = query.trim().toLowerCase()
     if (!q) return users
     return users.filter((u) =>
-      [u.uid, u.cn, u.mail, u.displayName].some((v) => v?.toLowerCase().includes(q)),
+      [u.uid, u.cn, u.mail, u.displayName, u.department, u.organization, u.organizationalUnit].some((v) =>
+        v?.toLowerCase().includes(q),
+      ),
     )
   }, [users, query])
 
