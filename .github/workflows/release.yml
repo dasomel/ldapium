@@ -117,6 +117,58 @@ jobs:
 
           echo "every check run on $SHA passed, and every check main requires was among them"
 
+      # #36: "license/vulnerability/SBOM gate applied to release promotion"
+      # and "release workflow and e2e/upgrade/backup evidence linked by the
+      # same release identity". These jobs are deliberately NOT in branch
+      # protection's required-checks list above — that list gates a PR
+      # *merge*, and this project's convention (see e.g. hadolint's
+      # continue-on-error) is that not everything worth running has to block
+      # a merge to be worth running. A release is a stronger promise than a
+      # merge, though: promoting a tag whose vulnerability scan or
+      # upgrade/backup e2e never ran — or ran and failed — on this exact SHA
+      # is exactly the gap #36 asks to close. The "did not pass" check above
+      # already catches a failure in any of these if they ran; this closes
+      # the other half, that they ran at all.
+      #
+      # Deliberately NOT including security-scan.yml's "Published images"
+      # job here: it only runs on schedule/workflow_dispatch (`if:` in that
+      # job — it scans the already-published :main tag, which does not
+      # exist yet on the push that first builds a given commit), so it is
+      # always "skipped" on a push-triggered SHA and would make this step
+      # fail on every release regardless of the code (confirmed against a
+      # real check-run on this repo's own main before writing this).
+      #
+      # Known limitation, shared with the "required checks" step above: all
+      # six of these trigger on `push: branches: [main]`, the same push
+      # that put this commit on main, not on the tag. Tagging fast enough to
+      # race ahead of them — upgrade/backup e2e can run 10-20 minutes — makes
+      # this step correctly fail a release that would otherwise be fine, not
+      # incorrectly pass a bad one. Wait for main's checks to finish before
+      # tagging; this deliberately does not poll/retry for them, the same
+      # tradeoff the required-checks step above already makes.
+      - name: Require release-critical checks specifically
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_critical=(
+            "Go vulnerabilities (reachable)"
+            "rolling upgrade + rollback (standalone)"
+            "rolling upgrade + rollback (replicated)"
+            "backup → verify → corrupt-check → restore"
+            "3-node backup → bad delete → restore → resync"
+          )
+          missing=0
+          for context in "${release_critical[@]}"; do
+            if ! grep -qxF "success $context" /tmp/checks.txt; then
+              echo "::error::release-critical check \"$context\" did not succeed on $SHA"
+              missing=1
+            fi
+          done
+
+          [ "$missing" -eq 0 ] || exit 1
+          echo "vulnerability scan and upgrade/backup e2e all succeeded on $SHA"
+
   build-server:
     name: Build server image
     needs: [preflight]
