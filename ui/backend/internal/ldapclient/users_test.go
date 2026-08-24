@@ -252,3 +252,29 @@ func TestUnlockModify_DeletesOnlyPwdAccountLockedTime(t *testing.T) {
 		}
 	}
 }
+
+func TestLockModify_ReplacesPwdAccountLockedTimeWithIndefiniteSentinel(t *testing.T) {
+	dn := "uid=jdoe,ou=people,dc=example,dc=com"
+	mod := lockModify(dn)
+
+	if mod.DN != dn {
+		t.Errorf("DN = %q, want %q", mod.DN, dn)
+	}
+	if len(mod.Changes) != 1 {
+		t.Fatalf("Changes = %v, want exactly one change", mod.Changes)
+	}
+
+	change := mod.Changes[0]
+	// Replace, not Add: an already-locked account (whether via ppolicy or
+	// a previous Lock call) still has pwdAccountLockedTime present, and
+	// Add would fail ("attribute already exists") in that case.
+	if change.Operation != ldap.ReplaceAttribute {
+		t.Errorf("Operation = %v, want ReplaceAttribute (not Add — see comment)", change.Operation)
+	}
+	if change.Modification.Type != "pwdAccountLockedTime" {
+		t.Errorf("Modification.Type = %q, want %q", change.Modification.Type, "pwdAccountLockedTime")
+	}
+	if len(change.Modification.Vals) != 1 || change.Modification.Vals[0] != pwdAccountLockedTimeIndefinite {
+		t.Errorf("Modification.Vals = %v, want [%q]", change.Modification.Vals, pwdAccountLockedTimeIndefinite)
+	}
+}

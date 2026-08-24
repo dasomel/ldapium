@@ -85,6 +85,11 @@ type Client interface {
 	// whether the bound user may write dn's pwdAccountLockedTime is
 	// entirely up to the directory's ACLs.
 	Unlock(ctx context.Context, dn string) error
+	// Lock administratively disables dn — the symmetric counterpart to
+	// Unlock, for taking an account out of service rather than clearing a
+	// ppolicy-applied lockout. No authorization check of its own; the
+	// directory's ACLs decide who may write dn's pwdAccountLockedTime.
+	Lock(ctx context.Context, dn string) error
 
 	// ListGroups returns all groupOfNames entries under base, paging
 	// transparently past the server's admin size limit. truncated is true

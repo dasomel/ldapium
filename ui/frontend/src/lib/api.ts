@@ -90,6 +90,7 @@ export const api = {
       body: JSON.stringify({ dn, password, oldPassword }),
     }),
   unlockUser: (dn: string) => request<void>('/users/unlock', { method: 'POST', body: JSON.stringify({ dn }) }),
+  lockUser: (dn: string) => request<void>('/users/lock', { method: 'POST', body: JSON.stringify({ dn }) }),
 
   listGroups: () =>
     request<{ groups: Group[]; truncated: boolean }>('/groups').then(

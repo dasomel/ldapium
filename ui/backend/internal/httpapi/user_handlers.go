@@ -160,6 +160,27 @@ func (s *Server) handleUnlockUser(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// handleLockUser administratively disables a user (sets
+// pwdAccountLockedTime to the same "locked indefinitely" sentinel a
+// ppolicy lockout would use), the symmetric counterpart to
+// handleUnlockUser. See ldapclient.Client.Lock for exactly what it does.
+// As with handleUnlockUser, no application-level authorization check here
+// — the directory's ACLs decide who may lock whom.
+func (s *Server) handleLockUser(c echo.Context) error {
+	var req lockRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	if err := validate.DN(req.DN); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	if err := currentSession(c).Bound.Lock(c.Request().Context(), req.DN); err != nil {
+		return respondErr(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func validateUserFields(req userRequest) error {
 	if err := validate.CN(req.CN); err != nil {
 		return err

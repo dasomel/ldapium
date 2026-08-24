@@ -246,3 +246,43 @@ func (c *client) Unlock(ctx context.Context, dn string) error {
 	}
 	return nil
 }
+
+// pwdAccountLockedTimeIndefinite is the password policy draft's sentinel
+// for "locked until an administrator intervenes" — a value with no
+// meaningful timestamp (parseLDAPGeneralizedTime deliberately can't parse
+// it; see entryToUser's Locked/LockedAt handling). Administrative disable
+// uses this instead of the current time because it means "disabled" even
+// though nothing about the account triggered it, matching ppolicy's own
+// convention for the same "locked with no timestamp" state a failed-bind
+// lockout would leave behind if the policy set pwdLockoutDuration to 0.
+const pwdAccountLockedTimeIndefinite = "000001010000Z"
+
+// lockModify builds the modify request Lock sends. Replace, not Add: an
+// account already locked (whether by ppolicy after failed binds, or by a
+// previous administrative disable) still has pwdAccountLockedTime present,
+// and Add fails ("attribute already exists") in that case — Replace
+// succeeds either way, setting the same indefinite value.
+func lockModify(dn string) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, nil)
+	mod.Replace("pwdAccountLockedTime", []string{pwdAccountLockedTimeIndefinite})
+	return mod
+}
+
+// Lock administratively disables dn — the symmetric counterpart to Unlock,
+// for taking an account out of service (e.g. an employee's departure)
+// rather than clearing a lockout ppolicy already applied. As with every
+// other method here, this performs no authorization check of its own;
+// whether the bound user may write dn's pwdAccountLockedTime is entirely
+// up to the directory's ACLs.
+func (c *client) Lock(ctx context.Context, dn string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.Modify(lockModify(dn)); err != nil {
+		return mapErr("lock user", err)
+	}
+	return nil
+}
