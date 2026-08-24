@@ -21,6 +21,11 @@ on:
         required: true
         type: string
 
+# Restrictive by default (OpenSSF Scorecard's TokenPermissions check), not
+# because anything reads it today: the sole job below declares its own full
+# permissions: block, which replaces this rather than adding to it. This
+# stays as the floor a job added later without its own block would get,
+# rather than the full default GITHUB_TOKEN grant.
 permissions:
   contents: read
 
@@ -31,13 +36,15 @@ jobs:
   build-and-push:
     name: Build and push multi-arch image
     runs-on: ubuntu-24.04
-    # id-token + attestations: this job's own permissions block is the
-    # actual ceiling, regardless of what the caller (release.yml) grants —
-    # a reusable workflow job that does not list these itself cannot use
-    # them even if invoked with broader permissions. Without them, the
-    # attest steps below fail with 403 at release time, and `gh attestation
-    # verify` (documented in docs/legal.md and the Makefile) has nothing to
-    # find for any image this workflow ever published.
+    # id-token + attestations: a called reusable workflow's effective
+    # permissions are the intersection of what the caller grants the job
+    # AND what this job's own block requests — either one omitting them
+    # caps it at none. release.yml and weekly-rebuild.yml both already
+    # grant these to their calls into this workflow, so this job's own
+    # block was the missing half: without it, the attest steps below fail
+    # with 403 at release time, and `gh attestation verify` (documented in
+    # docs/legal.md and the Makefile) has nothing to find for any image
+    # this workflow ever published.
     permissions:
       contents: read
       packages: write

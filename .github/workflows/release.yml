@@ -129,6 +129,23 @@ jobs:
       # is exactly the gap #36 asks to close. The "did not pass" check above
       # already catches a failure in any of these if they ran; this closes
       # the other half, that they ran at all.
+      #
+      # Deliberately NOT including security-scan.yml's "Published images"
+      # job here: it only runs on schedule/workflow_dispatch (`if:` in that
+      # job — it scans the already-published :main tag, which does not
+      # exist yet on the push that first builds a given commit), so it is
+      # always "skipped" on a push-triggered SHA and would make this step
+      # fail on every release regardless of the code (confirmed against a
+      # real check-run on this repo's own main before writing this).
+      #
+      # Known limitation, shared with the "required checks" step above: all
+      # six of these trigger on `push: branches: [main]`, the same push
+      # that put this commit on main, not on the tag. Tagging fast enough to
+      # race ahead of them — upgrade/backup e2e can run 10-20 minutes — makes
+      # this step correctly fail a release that would otherwise be fine, not
+      # incorrectly pass a bad one. Wait for main's checks to finish before
+      # tagging; this deliberately does not poll/retry for them, the same
+      # tradeoff the required-checks step above already makes.
       - name: Require release-critical checks specifically
         env:
           SHA: ${{ github.sha }}
@@ -136,7 +153,6 @@ jobs:
           set -euo pipefail
           release_critical=(
             "Go vulnerabilities (reachable)"
-            "Published images"
             "rolling upgrade + rollback (standalone)"
             "rolling upgrade + rollback (replicated)"
             "backup → verify → corrupt-check → restore"
