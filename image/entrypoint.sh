@@ -435,6 +435,13 @@ if [ ! -f "$MARKER" ]; then
       printf 'olcTLSCertificateFile: %s\n' "$LDAP_TLS_CERT_FILE"
       printf 'olcTLSCertificateKeyFile: %s\n' "$LDAP_TLS_KEY_FILE"
       [ -n "${LDAP_TLS_CA_FILE:-}" ] && printf 'olcTLSCACertificateFile: %s\n' "$LDAP_TLS_CA_FILE"
+      # 3.3 is OpenLDAP's own major.minor encoding for TLS 1.2 (3.1/3.2/3.4
+      # are 1.0/1.1/1.3) — not a version of this image or of OpenLDAP
+      # itself. Fixed, not an env var: this is a floor nobody deploying in
+      # 2026 wants lower, and the library default it replaces is whatever
+      # the linked OpenSSL build happens to ship rather than a policy this
+      # project actually chose and can point to in cn=config.
+      printf 'olcTLSProtocolMin: 3.3\n'
     } > "$tls_attrs"
     sed -i "/^#__TLS_ATTRS__$/{r ${tls_attrs}
 d}" "$cn_config"

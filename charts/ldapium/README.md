@@ -75,7 +75,11 @@ LDAPS listener on 636, and — on a replicated install — points every
 `olcSyncrepl` provider at `ldaps://` instead of `ldap://`. The image sets
 `LDAPTLS_REQCERT=demand` (OpenLDAP's own client default), so a certificate that
 does not verify against the configured CA fails the connection rather than
-quietly falling back to plaintext.
+quietly falling back to plaintext. `olcTLSProtocolMin: 3.3` (OpenLDAP's own
+encoding for TLS 1.2 — not a version of this image) is also set unconditionally
+whenever TLS is enabled: an explicit floor this project chose, rather than
+whatever the linked OpenSSL build happens to default to. Not configurable —
+nothing deploying in 2026 wants it lower.
 
 The Secret is the standard Kubernetes TLS shape plus the CA:
 
@@ -127,6 +131,9 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 - authenticated LDAPS bind with strict verification
 - an unknown CA, a name the certificate does not cover, and an expired
   certificate are each rejected
+- the TLS 1.2 floor is actually enforced, not merely present in `cn=config`:
+  raising `olcTLSProtocolMin` to TLS 1.3 stops a TLS 1.2 client that worked a
+  moment earlier, while TLS 1.3 keeps working throughout
 - `olcSyncrepl` uses `ldaps://` and never plaintext `ldap://`
 - a write over LDAPS converges on every replica
 - a certificate rotation, with LDAPS availability sampled every second from a
