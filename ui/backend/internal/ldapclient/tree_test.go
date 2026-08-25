@@ -53,3 +53,40 @@ func TestHasChildrenFromProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestEntryToDomainEntry_RedactsUserPassword(t *testing.T) {
+	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{
+		"uid":          {"jdoe"},
+		"cn":           {"Jane Doe"},
+		"userPassword": {"{ARGON2}$argon2id$v=19$m=7168,t=5,p=1$salt$hash"},
+	})
+
+	got := entryToDomainEntry(e)
+
+	if _, present := got.Attributes["userPassword"]; present {
+		t.Error("Attributes contains userPassword, want it redacted")
+	}
+	if got.Attributes["uid"][0] != "jdoe" || got.Attributes["cn"][0] != "Jane Doe" {
+		t.Errorf("Attributes = %v, want uid/cn preserved alongside the redaction", got.Attributes)
+	}
+}
+
+func TestEntryToDomainEntry_RedactionIsCaseInsensitive(t *testing.T) {
+	// LDAP attribute names are case-insensitive on the wire; a server is
+	// free to return "userpassword" or "UserPassword" just as validly as
+	// "userPassword", and the redaction must not depend on it picking the
+	// one spelling this file happens to compare against elsewhere.
+	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{
+		"uid":          {"jdoe"},
+		"USERPASSWORD": {"{ARGON2}$argon2id$v=19$m=7168,t=5,p=1$salt$hash"},
+	})
+
+	got := entryToDomainEntry(e)
+
+	if len(got.Attributes) != 1 {
+		t.Errorf("Attributes = %v, want only uid to survive redaction", got.Attributes)
+	}
+	if _, present := got.Attributes["uid"]; !present {
+		t.Error("Attributes missing uid, want it preserved")
+	}
+}
