@@ -22,20 +22,48 @@ configuration. `slapd` is built `--with-cyrus-sasl` (`image/Dockerfile`), so
 the library is present, but a compiled-in library is not a configured
 mechanism — nothing in `image/ldifs/*.ldif` or `image/entrypoint.sh` sets
 `olcSaslSecProps`, `olcSaslHost`, `olcSaslRealm`, `olcAuthzRegexp`, or
-`TLSVerifyClient`, and grepping those files confirms it: none of them appear
-anywhere in this image.
+`TLSVerifyClient` by default. The optional mTLS configuration described below
+adds the latter two only when an operator enables it.
 
 What that means per mechanism, concretely:
 
 - **`SIMPLE` (bind with a DN and password)** is what this project actually
   supports and is verified continuously by `security-e2e.yml`. Every example
   in this repo's docs uses it.
-- **`EXTERNAL` (TLS client-certificate authentication)** needs, at minimum,
-  `TLSVerifyClient: demand` and an `olcAuthzRegexp` mapping a certificate
-  subject to a bind DN — neither is set here. `EXTERNAL` is the SASL
-  mechanism most operators actually want (mutual TLS instead of a shared
-  password), and it is architecturally reachable — TLS support already exists
-  (`tls.enabled` in the chart) — but wiring it is not done and is not claimed.
+- **`EXTERNAL` (TLS client-certificate authentication)** is available when
+  the image is bootstrapped with `LDAP_TLS_MUTUAL_AUTH=true`, TLS and
+  `LDAP_TLS_CA_FILE`, plus the operator's `LDAP_TLS_AUTHZ_REGEXP` /
+  `LDAP_TLS_AUTHZ_DN` subject-to-DN mapping. It deliberately sets
+  `olcTLSVerifyClient: try`, not `demand`: a client certificate is requested
+  and verified when supplied, but it is not required for the TLS handshake.
+  Existing TLS clients using password/SIMPLE bind without a client certificate
+  therefore continue to work unchanged. The image's default mapping is a
+  documented example only; operators should override it for their CA subject
+  shape and directory layout.
+
+  **Verified live, and load-bearing for anyone enabling this**: a certificate
+  signed by the configured CA whose subject does **not** match
+  `LDAP_TLS_AUTHZ_REGEXP` does not fail the bind. OpenLDAP falls back to
+  binding as the raw, unmapped certificate-subject string (confirmed with
+  both a static-DN `olcAuthzRegexp` replacement and the `ldap:///…??sub?(…)`
+  search-URI form — neither rejects an unresolved identity; RFC 4513's
+  identity-mapping fallback applies regardless). That bind still counts as
+  "authenticated" for ACL purposes, and this repo's own `by users read`
+  fallback ACL (see `image/entrypoint.sh`'s primary-database ACL, audited
+  live in #76) grants **any** authenticated identity broad read access
+  across the DIT — verified by binding with a certificate for an entirely
+  unrelated, non-matching subject and successfully reading another user's
+  `description` attribute with it.
+
+  The practical consequence: **`LDAP_TLS_CA_FILE` under mutual auth must be
+  a CA dedicated solely to issuing this directory's client certificates.**
+  If the same CA also signs certificates for any other purpose (service
+  mesh mTLS, unrelated internal services, monitoring agents), every one of
+  those certificates gains this directory's baseline authenticated-read
+  access too, regardless of what `LDAP_TLS_AUTHZ_REGEXP` was written to
+  match. There is currently no ACL-only mitigation for this with the ACL
+  model in place today — see #76 for the "authenticated users get broad
+  read" question this makes more urgent, not less.
 - **`DIGEST-MD5` / `CRAM-MD5` / `PLAIN`** need `saslauthd` or a SASL password
   database slapd can check against; this image ships neither. `PLAIN` over a
   TLS-protected channel is materially equivalent to `SIMPLE` over `ldaps://`
@@ -170,7 +198,7 @@ shape.
 | Go `go-ldap` client (this project's own UI backend) | Supported, continuously verified | `ui/backend/internal/ldapclient` |
 | Any LDAPv3 client using `SIMPLE` bind | Supported | The verified path |
 | SSSD / PAM / nsswitch (Linux) | Supported in principle, not live-tested | See above |
-| SASL `EXTERNAL` (mTLS) | Not configured | Architecturally reachable, not wired |
+| SASL `EXTERNAL` (mTLS) | Opt-in image configuration | `LDAP_TLS_MUTUAL_AUTH=true` with CA and operator-configured subject-to-DN mapping; uses `try`, so password binds remain compatible |
 | SASL `DIGEST-MD5` / `CRAM-MD5` / `PLAIN` | Not supported | No `saslauthd`/SASL password backend shipped |
 | Windows as an LDAPv3 client | Supported (LDAP only) | Not a domain join — see above |
 | Windows/AD domain member, Kerberos, Group Policy | Not supported | Different protocol family, out of scope |

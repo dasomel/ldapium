@@ -81,6 +81,9 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_TLS_CERT_FILE` | if TLS enabled | — | `olcTLSCertificateFile`. |
 | `LDAP_TLS_KEY_FILE` | if TLS enabled | — | `olcTLSCertificateKeyFile`. |
 | `LDAP_TLS_CA_FILE` | no | — | `olcTLSCACertificateFile`, optional even with TLS enabled. |
+| `LDAP_TLS_MUTUAL_AUTH` | no | `false` | `true`/`1` enables client-certificate verification and SASL `EXTERNAL`; requires `LDAP_TLS_ENABLED=true` and `LDAP_TLS_CA_FILE`. Uses `olcTLSVerifyClient: try`, so a client certificate is requested but not required and existing password binds remain available. |
+| `LDAP_TLS_AUTHZ_REGEXP` | if mutual auth enabled | `^cn=([^,]+)$` | `olcAuthzRegexp` match expression for OpenLDAP's normalized SASL EXTERNAL certificate-subject DN. Override for the subject DN shape issued by your CA; an explicitly empty value is rejected. |
+| `LDAP_TLS_AUTHZ_DN` | if mutual auth enabled | `uid=$1,${LDAP_ROOT_DN}` | `olcAuthzRegexp` replacement DN. The default maps the matching certificate CN to a `uid` below the base DN; override it for your DIT. An explicitly empty value is rejected. |
 | `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on first launch only**. Your extension point for OUs, groups, real users, ACLs, etc. |
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
@@ -107,6 +110,29 @@ TLS settings are only written into `cn=config` at bootstrap time. Enabling
 `LDAP_TLS_ENABLED` against an already-bootstrapped data/config volume has no
 effect — either seed a fresh volume with TLS enabled from the start, or edit
 `cn=config` by hand (`olcTLSCertificateFile` etc. under `cn=config`).
+
+When `LDAP_TLS_MUTUAL_AUTH=true`, the image writes `olcTLSVerifyClient: try`
+and one `olcAuthzRegexp` from `LDAP_TLS_AUTHZ_REGEXP` and
+`LDAP_TLS_AUTHZ_DN`. `try` verifies any client certificate presented by a
+client trusted by `LDAP_TLS_CA_FILE`, but does not require one; TLS clients
+without a certificate continue to use a normal password/SIMPLE bind. The
+default regexp/replacement is an example for `CN=<uid>` certificates and a
+flat `uid=<uid>,${LDAP_ROOT_DN}` user layout, not a universal CA convention;
+set both variables for the certificate subject and DIT you operate.
+
+**`LDAP_TLS_CA_FILE` must be a CA dedicated to this directory's client
+certificates when mutual auth is on — never a shared/general-purpose CA.**
+Verified live: a certificate signed by that CA whose subject does not match
+`LDAP_TLS_AUTHZ_REGEXP` still binds successfully (OpenLDAP falls back to the
+raw certificate-subject identity — this holds for both the static-DN and the
+`ldap:///…??sub?(…)` search-URI forms of `olcAuthzRegexp`; neither rejects an
+unresolved identity). That bind still satisfies `by users` in this image's
+default ACLs, which grant any authenticated identity broad read access
+across the DIT (see `docs/client-compatibility.md`'s SASL section for the
+full verification and #76 for the ACL this depends on) — so **any**
+certificate from that CA gets this directory's baseline read access, whether
+or not `LDAP_TLS_AUTHZ_REGEXP` was ever meant to cover its subject. There is
+no way to scope this down with `LDAP_TLS_AUTHZ_REGEXP` alone.
 
 ### Other bootstrap-only settings
 
