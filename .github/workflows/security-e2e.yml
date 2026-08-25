@@ -160,6 +160,114 @@ jobs:
               ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base sn | grep -q "sn: SelfService"
             '
 
+      - name: Verify an authenticated user cannot change group membership
+        run: |
+          set -euo pipefail
+          # A group entry is not the bound user's own entry. Without this
+          # check, `by users read` could accidentally become a write grant
+          # and let any authenticated user add themselves to a privileged
+          # group. Check result 50 so an invalid group DN or failed bind does
+          # not masquerade as ACL enforcement.
+          # shellcheck disable=SC2016 # The quoted script is evaluated by the client container.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              url="ldap://directory-ldapium:389"
+              admin="cn=admin,dc=example,dc=org"
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              group="cn=operators,ou=groups,dc=example,dc=org"
+
+              ldapadd -x -H "$url" -D "$admin" -w security-e2e-password <<EOF
+          dn: ou=groups,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: groups
+
+          dn: $group
+          objectClass: groupOfNames
+          cn: operators
+          member: uid=alice,ou=people,dc=example,dc=org
+          EOF
+
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/group-modify.out 2>&1 <<EOF
+          dn: $group
+          changetype: modify
+          add: member
+          member: $bob
+          EOF
+              then
+                echo "::error::a bound user modified another group member list"
+                exit 1
+              fi
+              echo "::group::rejected group membership change"
+              cat /tmp/group-modify.out
+              echo "::endgroup::"
+              if ! grep -q "Insufficient access (50)" /tmp/group-modify.out; then
+                echo "::error::group membership change was not rejected by the ACL (result 50)"
+                exit 1
+              fi
+              echo "PASS: authenticated users cannot change another entry group membership"
+            '
+
+      - name: Verify password-policy entries deny unprivileged modification
+        run: |
+          set -euo pipefail
+          # Password policy controls lockout and password requirements. It is
+          # readable to authenticated users under the current `by users read`
+          # fallback, but it must never be writable by one: a successful
+          # change could weaken the password policy for every account. Result 50
+          # distinguishes ACL denial from a missing policy entry or bad bind.
+          # shellcheck disable=SC2016 # The quoted script is evaluated by the client container.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              url="ldap://directory-ldapium:389"
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              policy="cn=default,ou=policies,dc=example,dc=org"
+
+              ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! \
+                -b "$policy" -s base "(objectClass=*)" pwdMinLength | grep -q "pwdMinLength: 8"
+
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/policy-modify.out 2>&1 <<EOF
+          dn: $policy
+          changetype: modify
+          replace: pwdMinLength
+          pwdMinLength: 9
+          EOF
+              then
+                echo "::error::a bound user changed the directory password policy"
+                exit 1
+              fi
+              echo "::group::rejected password-policy change"
+              cat /tmp/policy-modify.out
+              echo "::endgroup::"
+              if ! grep -q "Insufficient access (50)" /tmp/policy-modify.out; then
+                echo "::error::password-policy change was not rejected by the ACL (result 50)"
+                exit 1
+              fi
+              echo "PASS: authenticated users may inspect but cannot weaken password policy"
+            '
+
+      - name: Verify anonymous fallback denies password-policy attributes
+        run: |
+          set -euo pipefail
+          # Anonymous uid lookup needs only entry, uid, and objectClass. A
+          # password-policy attribute is outside that exception and proves the
+          # final `access to * ... by anonymous none` fallback actually denies
+          # attributes that have no documented anonymous-access rationale.
+          # shellcheck disable=SC2016 # The quoted script is evaluated by the client container.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              policy="cn=default,ou=policies,dc=example,dc=org"
+              out=$(ldapsearch -x -H ldap://directory-ldapium:389 \
+                -b "$policy" -s base "(objectClass=*)" pwdMinLength)
+              echo "::group::anonymous password-policy search"
+              echo "$out"
+              echo "::endgroup::"
+              if echo "$out" | grep -q "pwdMinLength:"; then
+                echo "::error::anonymous bind read a password-policy attribute outside the uid-search exception"
+                exit 1
+              fi
+              echo "PASS: the anonymous fallback redacts password-policy attributes"
+            '
+
       - name: Verify cn=config is not exposed on LDAP service
         run: |
           set -euo pipefail
