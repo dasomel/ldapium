@@ -84,3 +84,19 @@ func (s *Server) handleAuthConfig(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, authConfigResponse{Mode: mode})
 }
+
+// handleLDAPHealth reports whether the configured LDAP server is reachable,
+// for an operator or monitoring system watching authentication-provider
+// health — not for the pod's own readinessProbe (see the route comment in
+// server.go for why those stay separate). No detail about *why* a failed
+// ping failed is returned: this endpoint is unauthenticated, and a raw
+// connection error can carry the same internal host/port detail
+// respondErr's 500 case exists to keep out of a client response.
+func (s *Server) handleLDAPHealth(c echo.Context) error {
+	reachable := s.dialer.Ping(c.Request().Context()) == nil
+	status := http.StatusOK
+	if !reachable {
+		status = http.StatusServiceUnavailable
+	}
+	return c.JSON(status, ldapHealthResponse{Reachable: reachable})
+}

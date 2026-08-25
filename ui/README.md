@@ -74,6 +74,27 @@ login page without auto-starting a new session. Register
 provider does not advertise that endpoint, logout is local-only; use
 Keycloak's own session controls when provider-session logout is required.
 
+### No automatic fallback between modes
+
+LDAP login and SSO are configured, not negotiated — whichever one
+`SSO_ENABLED` selects at startup is the only one available until the
+process is reconfigured and restarted. If that provider becomes
+unreachable there is no automatic switch to the other: an SSO deployment
+with an unreachable Keycloak does not fall back to asking for an LDAP
+password, and there is no CAS/SAML adapter here to fall back to either —
+both are out of scope for this project today.
+
+`GET /api/health/ldap` exists for exactly this gap: an unauthenticated,
+LDAP-only reachability check (`{"reachable": true|false}`, HTTP 200/503)
+for whatever is watching provider health, separate from the pod's own
+`readinessProbe` (`/api/auth/config`, which never touches LDAP — see
+`charts/ldapium/templates/ui-deployment.yaml` — so the UI process itself
+still comes up and reports its configured mode even when the directory
+is down). It reveals nothing about *why* a failed check failed — no error text, just
+the boolean and the status code — the same redaction `respondErr`
+(`internal/httpapi/errors.go`) applies to every other unmapped internal
+error, applied here too since this endpoint has no session to gate it.
+
 ## Configuration (environment variables)
 
 No security-relevant setting has a hardcoded default — you must set the

@@ -76,6 +76,11 @@ func (s *Server) routes(spa fs.FS) {
 	api := s.echo.Group("/api")
 
 	api.GET("/auth/config", s.handleAuthConfig)
+	// Deliberately not what readinessProbe/livenessProbe target (see
+	// charts/ldapium/templates/ui-deployment.yaml) — this is a diagnostic
+	// signal for whoever is watching provider health, not a pod-restart
+	// trigger for a directory outage this process didn't cause.
+	api.GET("/health/ldap", s.handleLDAPHealth)
 	api.POST("/login", s.handleLogin)
 	api.POST("/logout", s.handleLogout)
 	api.GET("/sso/start", s.handleSSOStart)
