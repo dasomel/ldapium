@@ -270,6 +270,51 @@ jobs:
               echo "PASS: provider $ordinal converged over LDAPS"
             done
           fi
+
+      - name: Verify the TLS protocol floor is enforced
+        run: |
+          set -euo pipefail
+          echo "Checking cn=config carries the floor..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "cn=config" -s base olcTLSProtocolMin' \
+            | tee /tmp/tls-protocol-min.txt
+          grep -q '^olcTLSProtocolMin: 3.3$' /tmp/tls-protocol-min.txt
+
+          # The floor a client's own OpenSSL build still lets it *offer* is
+          # not something this job controls, so proving TLS 1.0/1.1 are
+          # rejected by requesting them would only prove the client refused
+          # to ask — not that the server would have refused if asked. Raise
+          # the floor past what a real client just used instead: if 3.3
+          # (TLS 1.2) genuinely gates connections, then a live TLS 1.2
+          # session must stop working the moment the floor becomes 3.4
+          # (TLS 1.3), while TLS 1.3 keeps working throughout. That is
+          # actual proof the directive is enforced, not just present.
+          echo "Confirming TLS 1.2 currently succeeds..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_2 2>&1' | tee /tmp/tls12-before.txt
+          grep -q 'Cipher is' /tmp/tls12-before.txt
+
+          echo "Raising the floor to TLS 1.3 (olcTLSProtocolMin: 3.4)..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapmodify -x -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" <<EOF
+          dn: cn=config
+          changetype: modify
+          replace: olcTLSProtocolMin
+          olcTLSProtocolMin: 3.4
+          EOF'
+
+          echo "Confirming TLS 1.2 is now rejected..."
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_2 2>&1' | tee /tmp/tls12-after.txt | grep -q 'Cipher is'; then
+            echo "::error::TLS 1.2 still succeeded after raising olcTLSProtocolMin to 3.4 — the floor is not actually enforced"
+            exit 1
+          fi
+          echo "Confirming TLS 1.3 still succeeds..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_3 2>&1' | tee /tmp/tls13-after.txt
+          grep -q 'Cipher is' /tmp/tls13-after.txt
+          echo "PASS: olcTLSProtocolMin actually gates the negotiated protocol, not just present in cn=config"
+
       - name: Verify an expired server certificate fails closed
         if: matrix.scenario == 'standalone'
         run: |
