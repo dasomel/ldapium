@@ -84,7 +84,24 @@ func hasChildrenFromProbe(entries int, err error) bool {
 	return entries > 0
 }
 
-// GetEntry returns the full attribute set of a single entry.
+// entryRedactedAttrs are attributes GetEntry never surfaces, regardless of
+// what the bound session's ACLs would otherwise let it read. userPassword
+// is the one attribute this codebase treats as sensitive everywhere else —
+// entryToUser (users.go) never maps it onto domain.User, and the password
+// change flow (also users.go) only ever writes it — but the generic DIT
+// browser this func backs requests "*" precisely because it has to show
+// arbitrary schema for arbitrary object classes, so it needs its own
+// explicit exception rather than inheriting one written for a single-purpose
+// endpoint. For a root/admin bind in particular, LDAP ACLs do not even
+// apply, so without this the browser is the one place in the app that would
+// hand back a raw (hashed, but still) userPassword value to render in a UI.
+var entryRedactedAttrs = map[string]bool{
+	"userpassword": true,
+}
+
+// GetEntry returns the full attribute set of a single entry, with
+// entryRedactedAttrs held back regardless of what the directory's ACLs
+// would otherwise permit this session to read.
 func (c *client) GetEntry(ctx context.Context, dn string) (*domain.Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -106,13 +123,18 @@ func (c *client) GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 	if len(res.Entries) != 1 {
 		return nil, domain.ErrNotFound
 	}
-	e := res.Entries[0]
+	return entryToDomainEntry(res.Entries[0]), nil
+}
 
+func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 	attrs := make(map[string][]string, len(e.Attributes))
 	for _, a := range e.Attributes {
+		if entryRedactedAttrs[strings.ToLower(a.Name)] {
+			continue
+		}
 		attrs[a.Name] = a.Values
 	}
-	return &domain.Entry{DN: e.DN, Attributes: attrs}, nil
+	return &domain.Entry{DN: e.DN, Attributes: attrs}
 }
 
 // rdnOf returns the leftmost RDN component of dn, e.g. "ou=people" from
