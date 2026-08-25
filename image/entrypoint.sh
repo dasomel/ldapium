@@ -259,6 +259,25 @@ LDAP_REPLICATION_ENABLED="${LDAP_REPLICATION_ENABLED:-false}"
 if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "1" ]; then
   : "${LDAP_REPLICATION_PEERS:?LDAP_REPLICATION_ENABLED requires LDAP_REPLICATION_PEERS (comma-separated LDAP URLs, including self)}"
 
+  # Multi-provider's conflict resolution (entryCSN timestamp, last-write-
+  # wins) is otherwise completely silent — the losing write just stops
+  # existing, with nothing in cn=accesslog or the auditlog overlay to show
+  # it ever happened. The `Sync` log subsystem is the one place slapd says
+  # anything at all: `do_syncrep2: rid=N CSN too old, ignoring <csn>
+  # (<dn>)` names the exact entry and the exact CSN it discarded. Turned on
+  # unconditionally here rather than gated by another env var — a
+  # replicated deployment is precisely the one place this line can ever
+  # fire, so there's no "off" case worth a knob for, the way there is for
+  # LDAP_AUDIT_ENABLED/LDAP_ACCESSLOG_ENABLED (which cost real disk on
+  # every deployment, replicated or not). `-d` only accepts one keyword per
+  # occurrence or a comma-joined list — space-separated silently fails
+  # ("unrecognized log level") — so this appends onto whatever
+  # LDAP_LOG_LEVEL already resolved to, unless "sync" is already in it.
+  case ",${LDAP_LOG_LEVEL}," in
+    *,sync,*) : ;;
+    *) LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL},sync" ;;
+  esac
+
   if [ -n "${LDAP_SERVER_ID:-}" ]; then
     case "$LDAP_SERVER_ID" in
       ''|*[!0-9]*) die "LDAP_SERVER_ID must be numeric (got: ${LDAP_SERVER_ID})" ;;
