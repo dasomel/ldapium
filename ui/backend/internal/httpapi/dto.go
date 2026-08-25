@@ -62,6 +62,10 @@ type authConfigResponse struct {
 	Mode string `json:"mode"`
 }
 
+type ldapHealthResponse struct {
+	Reachable bool `json:"reachable"`
+}
+
 type logoutResponse struct {
 	RedirectURL string `json:"redirectURL,omitempty"`
 }

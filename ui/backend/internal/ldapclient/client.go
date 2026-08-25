@@ -113,4 +113,9 @@ type Client interface {
 // user in; everything else flows through the returned Client.
 type Dialer interface {
 	Bind(ctx context.Context, dn, password string) (Client, error)
+	// Ping opens a connection to the LDAP server and closes it again — no
+	// bind, no query, just "is anything answering". Deliberately weaker
+	// than Bind: it exists for an unauthenticated health signal, so it
+	// must not require (or leak anything about) a credential.
+	Ping(ctx context.Context) error
 }

@@ -63,6 +63,24 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 	return &client{conn: c, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}}, nil
 }
 
+// Ping is the unauthenticated counterpart to Bind: it proves the LDAP
+// server is reachable and speaking the protocol (TCP/TLS handshake
+// completes) without authenticating as anyone. mapErr is deliberately not
+// used here — this is meant to back an endpoint no session guards, and
+// mapErr's fallback path is exactly the raw dial/network error text
+// respondErr's 500 case exists to keep out of an HTTP response.
+func (d *dialer) Ping(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c, err := d.newConn()
+	if err != nil {
+		return err
+	}
+	c.Close()
+	return nil
+}
+
 // resolveUID looks up the DN for a bare uid using an anonymous search with
 // the configured filter template. Using an anonymous (unauthenticated)
 // bind for the lookup — rather than a privileged service account — is what
