@@ -80,6 +80,10 @@ fi
 
 LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL:-stats}"
 LDAP_TLS_ENABLED="${LDAP_TLS_ENABLED:-false}"
+# Mutual TLS remains opt-in even when TLS is enabled: `try` asks clients for a
+# certificate without making one a prerequisite for the TLS handshake, so
+# existing password/simple-bind clients keep working unchanged.
+LDAP_TLS_MUTUAL_AUTH="${LDAP_TLS_MUTUAL_AUTH:-false}"
 LDAP_SEED_DIR="${LDAP_SEED_DIR:-/opt/ldifs}"
 
 # olcSizeLimit / olcTimeLimit on the mdb database (see
@@ -250,6 +254,34 @@ if [ "$LDAP_TLS_ENABLED" = "true" ] || [ "$LDAP_TLS_ENABLED" = "1" ]; then
     [ -r "$LDAP_TLS_CA_FILE" ] || die "LDAP_TLS_CA_FILE not readable: ${LDAP_TLS_CA_FILE}"
   fi
   LISTEN_URLS="${LISTEN_URLS} ldaps:///"
+fi
+
+if [ "$LDAP_TLS_MUTUAL_AUTH" = "true" ] || [ "$LDAP_TLS_MUTUAL_AUTH" = "1" ]; then
+  if [ "$LDAP_TLS_ENABLED" != "true" ] && [ "$LDAP_TLS_ENABLED" != "1" ]; then
+    die "LDAP_TLS_MUTUAL_AUTH=true requires LDAP_TLS_ENABLED=true"
+  fi
+  # LDAP_TLS_CA_FILE under mutual auth must be a CA dedicated to this
+  # directory's client certificates, never a shared/general-purpose one.
+  # Verified live: any certificate this CA signs — even one whose subject
+  # LDAP_TLS_AUTHZ_REGEXP was never meant to match — still binds via SASL
+  # EXTERNAL (OpenLDAP falls back to the raw certificate-subject identity
+  # rather than rejecting an unresolved one), and that bind still satisfies
+  # this image's `by users` ACLs, which grant broad DIT read access to any
+  # authenticated identity. See docs/client-compatibility.md's SASL section
+  # and image/README.md for the full verification — there is no
+  # authzRegexp-only way to scope this down.
+  [ -n "${LDAP_TLS_CA_FILE:-}" ] || die "LDAP_TLS_MUTUAL_AUTH=true requires LDAP_TLS_CA_FILE so client certificates can be verified"
+
+  # Preserve explicit empty values so the contract can reject them rather
+  # than silently replacing an operator's typo with the example defaults.
+  # OpenLDAP normalizes a certificate subject used for SASL EXTERNAL to a
+  # lower-case DN; this example maps a certificate CN to uid=<CN> below this
+  # directory's base DN. Operators should override both values for the
+  # subject shape and DIT layout used by their CA.
+  LDAP_TLS_AUTHZ_REGEXP="${LDAP_TLS_AUTHZ_REGEXP-^cn=([^,]+)$}"
+  LDAP_TLS_AUTHZ_DN="${LDAP_TLS_AUTHZ_DN-uid=\$1,${LDAP_ROOT_DN}}"
+  [ -n "$LDAP_TLS_AUTHZ_REGEXP" ] || die "LDAP_TLS_MUTUAL_AUTH=true requires non-empty LDAP_TLS_AUTHZ_REGEXP"
+  [ -n "$LDAP_TLS_AUTHZ_DN" ] || die "LDAP_TLS_MUTUAL_AUTH=true requires non-empty LDAP_TLS_AUTHZ_DN"
 fi
 
 # Replication (N-way multi-provider). Disabled by default — when disabled,
@@ -454,6 +486,13 @@ if [ ! -f "$MARKER" ]; then
       printf 'olcTLSCertificateFile: %s\n' "$LDAP_TLS_CERT_FILE"
       printf 'olcTLSCertificateKeyFile: %s\n' "$LDAP_TLS_KEY_FILE"
       [ -n "${LDAP_TLS_CA_FILE:-}" ] && printf 'olcTLSCACertificateFile: %s\n' "$LDAP_TLS_CA_FILE"
+      if [ "$LDAP_TLS_MUTUAL_AUTH" = "true" ] || [ "$LDAP_TLS_MUTUAL_AUTH" = "1" ]; then
+        # `try`, never `demand`: request and verify an offered client cert,
+        # while allowing certificate-less TLS clients to continue to SIMPLE
+        # bind exactly as they did before mTLS was enabled.
+        printf 'olcTLSVerifyClient: try\n'
+        printf 'olcAuthzRegexp: {0}%s %s\n' "$LDAP_TLS_AUTHZ_REGEXP" "$LDAP_TLS_AUTHZ_DN"
+      fi
       # 3.3 is OpenLDAP's own major.minor encoding for TLS 1.2 (3.1/3.2/3.4
       # are 1.0/1.1/1.3) — not a version of this image or of OpenLDAP
       # itself. Fixed, not an env var: this is a floor nobody deploying in
