@@ -213,9 +213,16 @@ cd frontend && npm install && npm run dev
 
 The LDAP layer (`internal/ldapclient`) is structured behind the `Client`
 interface specifically so it can be exercised with a fake in unit tests
-(see `internal/session/store_test.go` for one such fake). **Live
-integration against a real LDAP server has not been verified** — the
-server image this app talks to is being built in a separate, parallel
-workstream and wasn't available while this UI was developed. Everything
-below `go build ./...`, `go vet ./...`, and `go test ./...` passing is
-verified; end-to-end behavior against an actual OpenLDAP instance is not.
+(see `internal/session/store_test.go` for one such fake). Beyond that,
+this codebase does not mock the LDAP wire protocol: anything that
+actually dials a server (`Bind`, `Ping`, search/dial paths) has no unit
+test and isn't meant to — there's no injectable interface for the
+underlying `*ldap.Conn`. Instead it's verified live against a running
+`ldapium:e2e` container, both continuously (`.github/workflows/*.yml`
+— `e2e.yml`, `security-e2e.yml`, `replication-chaos-e2e.yml`, etc. all
+stand up real containers/clusters) and as standard practice when
+changing this code: rebuild the image, run it, exercise the actual API
+over HTTP, tear down. PR descriptions in this repo's history show this
+pattern — a "Test plan" section with live verification steps, not just
+`go test` output. See the repo root `CLAUDE.md` for specific gotchas
+(container UID/bind-mount issues on macOS/Colima, `docker exec -i`).
