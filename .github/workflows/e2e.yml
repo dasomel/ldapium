@@ -608,14 +608,18 @@ jobs:
 
           # The actual proof the old CA was dropped, not just left unused:
           # a client that trusts *only* the retired CA must now be refused.
-          # Assert against a raw TLS handshake (openssl s_client), not
-          # ldapwhoami: libldap doesn't consistently surface the underlying
-          # TLS alert reason as text — this exact rejection showed up as
-          # "certificate verify failed" in one run and a generic "Can't
-          # contact LDAP server (-1)" in another, so grepping ldapwhoami's
-          # stderr for one specific phrase is not reliable. openssl's own
-          # "verify error:num=...:reason" line is deterministic.
-          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c "cat > /tmp/old-ca-only.crt" < "$dir/ca.crt"
+          # Assert against a raw TLS handshake (openssl s_client) rather than
+          # ldapwhoami, since openssl's own "verify error:num=...:reason"
+          # line is a deterministic signal that verification specifically
+          # failed (vs. libldap's less consistent error text).
+          #
+          # `kubectl exec` needs -i to forward local stdin into the
+          # container — same gotcha as `docker exec -i` documented in this
+          # repo's CLAUDE.md. Without it this cat silently wrote an empty
+          # file, so openssl failed immediately on "no certificate or crl
+          # found" before ever attempting the handshake this step exists to
+          # test — a false pass in disguise, not the real assertion.
+          kubectl -n directory exec -i directory-ldapium-0 -c openldap -- sh -c "cat > /tmp/old-ca-only.crt" < "$dir/ca.crt"
           if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
             "openssl s_client -connect directory-ldapium.directory.svc.cluster.local:636 -CAfile /tmp/old-ca-only.crt -verify_return_error </dev/null" \
             >/tmp/tls-evidence/old-ca-rejected.txt 2>&1; then
