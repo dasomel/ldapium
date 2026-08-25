@@ -139,6 +139,12 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 - a certificate rotation, with LDAPS availability sampled every second from a
   pod outside the StatefulSet for the whole rolling restart, and the served
   serial asserted to have actually changed
+- the "Replacing the CA is two rotations, not one" procedure above, in full:
+  bundling old+new CA leaves the old-CA leaf certificate still trusted, a
+  rolling leaf swap to the new CA is zero-downtime while both are still
+  trusted, replication keeps converging throughout, and dropping the old CA
+  afterward is verified by confirming a client that trusts *only* the
+  retired CA is genuinely refused — not just that the new CA works
 
 ## Values
 
