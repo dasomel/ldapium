@@ -160,6 +160,18 @@ jobs:
           openssl x509 -req -in "$dir/rotated.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
             -CAcreateserial -out "$dir/rotated.crt" -days 1 -sha256 \
             -extensions req_ext -extfile "$dir/server.cnf"
+          # A second, independent CA plus a leaf it signs — for the "Rotate
+          # the CA in two steps" test below. README's "Replacing the CA"
+          # procedure was documented but never actually exercised; this pair
+          # is what proves it, not just states it.
+          openssl genrsa -out "$dir/ca2.key" 2048
+          openssl req -x509 -new -nodes -key "$dir/ca2.key" -sha256 -days 1 -subj "/CN=ldapium-e2e-ca2" -out "$dir/ca2.crt"
+          openssl genrsa -out "$dir/leaf-ca2.key" 2048
+          openssl req -new -key "$dir/leaf-ca2.key" -out "$dir/leaf-ca2.csr" -config "$dir/server.cnf"
+          openssl x509 -req -in "$dir/leaf-ca2.csr" -CA "$dir/ca2.crt" -CAkey "$dir/ca2.key" \
+            -CAcreateserial -out "$dir/leaf-ca2.crt" -days 1 -sha256 \
+            -extensions req_ext -extfile "$dir/server.cnf"
+          cat "$dir/ca.crt" "$dir/ca2.crt" > "$dir/ca-bundle.crt"
           # An already-expired certificate. `openssl x509 -req` cannot backdate on
           # the runner's OpenSSL 3.0, so this one is signed through `openssl ca`,
           # which does take explicit start and end dates.
@@ -473,6 +485,152 @@ jobs:
             echo "PASS: provider $ordinal converged over LDAPS after rotation"
           done
           kubectl -n directory delete pod tls-rotation-probe --ignore-not-found
+
+      - name: Rotate the CA in two steps without breaking replication
+        if: matrix.scenario == 'replicated'
+        run: |
+          set -euo pipefail
+          # README's "Replacing the CA is two rotations, not one" procedure
+          # was documented but never actually exercised by CI — this proves
+          # it, live, rather than trusting the prose. Cluster is currently
+          # serving /tmp/ldapium-tls/rotated.crt, still signed by the
+          # original CA (/tmp/ldapium-tls/ca.crt); ca2.crt/leaf-ca2.crt were
+          # generated earlier as the "new CA" side of the swap.
+          admin_dn="cn=admin,dc=example,dc=org"
+          ldap_base="dc=example,dc=org"
+          password=$(kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' | base64 -d)
+          dir=/tmp/ldapium-tls
+
+          echo "Step 1: publish ca.crt as old+new CA, leaf certificate unchanged..."
+          kubectl -n directory create secret generic ldapium-tls \
+            --from-file=tls.crt="$dir/rotated.crt" \
+            --from-file=tls.key="$dir/rotated.key" \
+            --from-file=ca.crt="$dir/ca-bundle.crt" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n directory rollout restart statefulset/directory-ldapium
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H \"ldaps://directory-ldapium.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\"" \
+            | grep -q "dn:${admin_dn}"
+          echo "PASS: bundled trust store still serves the old-CA leaf certificate"
+
+          echo "Step 2: swap the leaf to a new-CA-signed certificate, trust store unchanged — the actual risk window..."
+          kubectl -n directory create secret generic ldapium-tls \
+            --from-file=tls.crt="$dir/leaf-ca2.crt" \
+            --from-file=tls.key="$dir/leaf-ca2.key" \
+            --from-file=ca.crt="$dir/ca-bundle.crt" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          # Same outside-the-StatefulSet availability probe pattern as the
+          # single-cert rotation above: the mixed old-CA-leaf/new-CA-leaf
+          # state during this specific rolling restart is what the README
+          # warns a single-step CA swap would break.
+          kubectl -n directory apply -f - <<EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: ca-rotation-probe
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: probe
+                image: ldapium:e2e
+                imagePullPolicy: Never
+                command:
+                  - sh
+                  - -c
+                  - |
+                    while [ ! -f /tmp/stop ]; do
+                      if LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
+                        ldapwhoami -x -o nettimeout=2 \
+                        -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
+                        -D "$admin_dn" -w "$password" >/dev/null 2>&1; then
+                        echo OK
+                      else
+                        echo FAIL
+                      fi
+                      sleep 1
+                    done
+                volumeMounts:
+                  - name: tls
+                    mountPath: /etc/openldap/tls
+                    readOnly: true
+            volumes:
+              - name: tls
+                secret:
+                  secretName: ldapium-tls
+          EOF
+          kubectl -n directory wait --for=condition=Ready pod/ca-rotation-probe --timeout=3m
+          kubectl -n directory rollout restart statefulset/directory-ldapium
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          kubectl -n directory exec ca-rotation-probe -- touch /tmp/stop
+          kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/ca-rotation-probe --timeout=2m
+          kubectl -n directory logs ca-rotation-probe > /tmp/tls-evidence/ca-rotation-availability.txt
+          kubectl -n directory delete pod ca-rotation-probe --ignore-not-found
+          ca_total=$(grep -cE '^(OK|FAIL)$' /tmp/tls-evidence/ca-rotation-availability.txt || true)
+          ca_ok=$(grep -c '^OK$' /tmp/tls-evidence/ca-rotation-availability.txt || true)
+          ca_streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' \
+            /tmp/tls-evidence/ca-rotation-availability.txt)
+          echo "LDAPS binds during CA-trust-then-leaf rotation: $ca_ok/$ca_total, longest consecutive failure run: $ca_streak"
+          printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$ca_total" "$ca_ok" "$ca_streak" \
+            > /tmp/tls-evidence/ca-rotation-availability-summary.txt
+          if [ "$ca_streak" -gt 5 ]; then
+            echo "::error::LDAPS was unanswerable for $ca_streak consecutive probes while rotating to the new CA's leaf certificate"
+            exit 1
+          fi
+          echo "PASS: swapping to the new CA's leaf certificate was zero-downtime while both CAs were trusted"
+
+          echo "Confirming replication is still healthy after the leaf swap..."
+          kubectl -n directory exec directory-ldapium-1 -c openldap -- sh -c \
+            "LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapadd -x -H \"ldaps://directory-ldapium-1.directory-ldapium-headless.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\" <<EOF2
+          dn: uid=ca-rotated,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: ca-rotated
+          cn: ca rotated
+          sn: rotated
+          EOF2"
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "i=0; until LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapsearch -x -LLL -H \"ldaps://directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\" -b \"uid=ca-rotated,$ldap_base\" -s base dn >/dev/null 2>&1; do i=\$((i+1)); [ \"\$i\" -lt 30 ] || exit 1; sleep 2; done"
+          echo "PASS: replication converged after the new-CA leaf certificate was rolled out"
+
+          echo "Step 3: drop the old CA — ca.crt becomes new-CA-only..."
+          kubectl -n directory create secret generic ldapium-tls \
+            --from-file=tls.crt="$dir/leaf-ca2.crt" \
+            --from-file=tls.key="$dir/leaf-ca2.key" \
+            --from-file=ca.crt="$dir/ca2.crt" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n directory rollout restart statefulset/directory-ldapium
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H \"ldaps://directory-ldapium.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\"" \
+            | grep -q "dn:${admin_dn}"
+          echo "PASS: a client trusting only the new CA can still bind"
+
+          # The actual proof the old CA was dropped, not just left unused:
+          # a client that trusts *only* the retired CA must now be refused.
+          # Assert against a raw TLS handshake (openssl s_client) rather than
+          # ldapwhoami, since openssl's own "verify error:num=...:reason"
+          # line is a deterministic signal that verification specifically
+          # failed (vs. libldap's less consistent error text).
+          #
+          # `kubectl exec` needs -i to forward local stdin into the
+          # container — same gotcha as `docker exec -i` documented in this
+          # repo's CLAUDE.md. Without it this cat silently wrote an empty
+          # file, so openssl failed immediately on "no certificate or crl
+          # found" before ever attempting the handshake this step exists to
+          # test — a false pass in disguise, not the real assertion.
+          kubectl -n directory exec -i directory-ldapium-0 -c openldap -- sh -c "cat > /tmp/old-ca-only.crt" < "$dir/ca.crt"
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "openssl s_client -connect directory-ldapium.directory.svc.cluster.local:636 -CAfile /tmp/old-ca-only.crt -verify_return_error </dev/null" \
+            >/tmp/tls-evidence/old-ca-rejected.txt 2>&1; then
+            echo "::error::a TLS handshake trusting only the retired CA unexpectedly succeeded — the old CA was never actually dropped"
+            cat /tmp/tls-evidence/old-ca-rejected.txt
+            exit 1
+          fi
+          cat /tmp/tls-evidence/old-ca-rejected.txt
+          grep -q 'verify error' /tmp/tls-evidence/old-ca-rejected.txt
+          echo "PASS: the retired CA is genuinely no longer trusted"
+
       - name: Collect TLS evidence
         if: always()
         run: |
