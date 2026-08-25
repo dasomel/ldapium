@@ -327,6 +327,36 @@ jobs:
           grep -q 'Cipher is' /tmp/tls13-after.txt
           echo "PASS: olcTLSProtocolMin actually gates the negotiated protocol, not just present in cn=config"
 
+      - name: Verify the TLS cipher suite baseline is enforced
+        run: |
+          set -euo pipefail
+          echo "Checking cn=config carries the cipher suite baseline..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "cn=config" -s base olcTLSCipherSuite' \
+            | tee /tmp/tls-cipher-suite.txt
+          grep -q '^olcTLSCipherSuite: ECDHE-ECDSA-AES128-GCM-SHA256' /tmp/tls-cipher-suite.txt
+
+          # Same proof shape as the protocol floor above: pick a cipher
+          # inside the baseline and one outside it, and show the server
+          # actually accepts/refuses on that basis — not just that the
+          # directive is present in cn=config.
+          echo "Confirming a cipher inside the baseline (ECDHE+AEAD) is accepted over TLS 1.2..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256 2>&1' \
+            | tee /tmp/cipher-allowed.txt
+          grep -q 'Cipher is' /tmp/cipher-allowed.txt
+
+          echo "Confirming a cipher outside the baseline (static-RSA key exchange, no forward secrecy) is rejected..."
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_2 -cipher AES128-SHA 2>&1' \
+            | tee /tmp/cipher-rejected.txt | grep -q 'Cipher is'; then
+            echo "::error::a client offering only AES128-SHA (outside the configured olcTLSCipherSuite) still negotiated a cipher — the baseline is not actually enforced"
+            cat /tmp/cipher-rejected.txt
+            exit 1
+          fi
+          cat /tmp/cipher-rejected.txt
+          echo "PASS: olcTLSCipherSuite actually gates the negotiated cipher, not just present in cn=config"
+
       - name: Verify an expired server certificate fails closed
         if: matrix.scenario == 'standalone'
         run: |
