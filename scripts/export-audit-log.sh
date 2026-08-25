@@ -43,7 +43,8 @@ Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-on
 
 Prints one JSON object per line to stdout:
   {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"..."}
-  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"..."}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0"}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49"}
 
   -n, --namespace   Kubernetes namespace (default: current kubectl context's)
   -r, --release     Helm release name. Only needed when a namespace holds more
@@ -151,16 +152,21 @@ if [ "$want_reads" = 1 ]; then
   if [ -n "$password" ]; then
     for i in $(seq 0 $((replicas - 1))); do
       pod="${sts}-${i}"
+      # auditBind alongside auditSearch: reqResult is what tells success
+      # from failure (0 = LDAP_SUCCESS) for both, and a failed bind is the
+      # one event this export existed to surface but couldn't, back when
+      # the overlay only logged reads and only logged successes.
       out=$(kubectl -n "$ns" exec "$pod" -c openldap -- \
         ldapsearch -x -o ldif-wrap=no -D "cn=admin,cn=accesslog" -w "$password" \
-          -b cn=accesslog -LLL "(objectClass=auditSearch)" \
-          reqStart reqAuthzID reqDN reqFilter 2>/dev/null) || {
+          -b cn=accesslog -LLL "(|(objectClass=auditSearch)(objectClass=auditBind))" \
+          objectClass reqStart reqAuthzID reqDN reqFilter reqResult 2>/dev/null) || {
         echo "pod ${pod}: accesslog not reachable (audit.accessLog.enabled may be false) — skipping" >&2
         continue
       }
       printf '%s\n' "$out" | awk -v pod="$pod" '
-        BEGIN { t=""; actor=""; dn=""; filt="" }
-        /^dn: reqStart=/ { if (t != "") print_record(); t=""; actor=""; dn=""; filt="" }
+        BEGIN { t=""; actor=""; dn=""; filt=""; result=""; is_bind=0 }
+        /^dn: reqStart=/ { if (t != "") print_record(); t=""; actor=""; dn=""; filt=""; result=""; is_bind=0 }
+        /^objectClass: auditBind$/ { is_bind=1 }
         /^reqStart: / { t=substr($0,11) }
         /^reqAuthzID: / { actor=substr($0,13) }
         /^reqAuthzID:: / { actor=b64dec(substr($0,14)) }
@@ -168,6 +174,7 @@ if [ "$want_reads" = 1 ]; then
         /^reqDN:: / { dn=b64dec(substr($0,9)) }
         /^reqFilter: / { filt=substr($0,12) }
         /^reqFilter:: / { filt=b64dec(substr($0,13)) }
+        /^reqResult: / { result=substr($0,12) }
         # LDIF uses "attr:: <base64>" instead of "attr: <value>" whenever the
         # value itself would be unsafe as plain text — a leading space or
         # colon, a trailing space, or a non-UTF8 byte. A DN or filter with
@@ -203,9 +210,15 @@ if [ "$want_reads" = 1 ]; then
           gsub(/\t/,"\\t",s)
           return s
         }
-        function print_record() {
-          printf "{\"pod\":\"%s\",\"source\":\"accesslog\",\"time\":\"%s\",\"actor\":\"%s\",\"op\":\"search\",\"target\":\"%s\",\"filter\":\"%s\"}\n", \
-            pod, esc(t), esc(actor), esc(dn), esc(filt)
+        # A bind record has an empty reqAuthzID (there is no authorization
+        # identity until the bind itself succeeds) — reqDN, the identity the
+        # client attempted to bind as, is the only "who" a bind record has,
+        # so it stands in for actor here rather than being left blank.
+        function print_record(    op, who) {
+          op = is_bind ? "bind" : "search"
+          who = is_bind ? dn : actor
+          printf "{\"pod\":\"%s\",\"source\":\"accesslog\",\"time\":\"%s\",\"actor\":\"%s\",\"op\":\"%s\",\"target\":\"%s\",\"filter\":\"%s\",\"result\":\"%s\"}\n", \
+            pod, esc(t), esc(who), op, esc(dn), esc(filt), esc(result)
         }
         END { if (t != "") print_record() }
       '
