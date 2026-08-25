@@ -211,6 +211,92 @@ jobs:
           diff /tmp/contextcsn-0.txt /tmp/contextcsn-2.txt
           echo "PASS: all three providers report the same contextCSN set" | tee -a /tmp/chaos-evidence.txt
 
+      - name: Partition one provider and modify the SAME entry on both sides
+        run: |
+          set -euo pipefail
+          # The scenario above proves disjoint writes across a partition
+          # converge — it never puts two providers in actual disagreement
+          # about one entry's state. This one does: uid=baseline (from
+          # "Seed baseline data") gets a different `description` written on
+          # each side of a real partition, which is the one thing #22 flags
+          # as unverified — multi-provider's entryCSN-timestamp conflict
+          # resolution is silent, so nothing here should error on write;
+          # the question this answers is what survives once the halves
+          # rejoin, not whether the writes themselves succeed.
+          ip=$(kubectl -n directory get pod directory-ldapium-2 -o jsonpath='{.status.podIP}')
+          echo "$ip" > /tmp/partitioned-ip
+          docker exec chaos-control-plane iptables -I FORWARD 1 -s "$ip" -j DROP
+          docker exec chaos-control-plane iptables -I FORWARD 1 -d "$ip" -j DROP
+          echo "partitioned directory-ldapium-2 (${ip}) for the same-entry conflict test" | tee -a /tmp/chaos-evidence.txt
+
+          write_description() {
+            kubectl -n directory exec "directory-ldapium-$1" -c openldap -- sh -c \
+              "ldapmodify -x -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' <<EOF
+          dn: uid=baseline,ou=chaos,dc=example,dc=org
+          changetype: modify
+          replace: description
+          description: $2
+          EOF"
+          }
+          write_description 0 majority-side-value
+          write_description 2 minority-side-value
+          echo "PASS: both sides accepted a conflicting write with no error — this overlay never rejects one"
+
+          majority_seen=$(kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+            -b uid=baseline,ou=chaos,dc=example,dc=org -s base description | grep '^description:')
+          minority_seen=$(kubectl -n directory exec directory-ldapium-2 -c openldap -- \
+            ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+            -b uid=baseline,ou=chaos,dc=example,dc=org -s base description | grep '^description:')
+          echo "majority side sees: ${majority_seen}"
+          echo "minority side sees: ${minority_seen}"
+          if [ "$majority_seen" = "$minority_seen" ]; then
+            echo "::error::both sides agree on the entry mid-partition — the partition was never real"
+            exit 1
+          fi
+          echo "PASS: the two sides genuinely disagree on the same entry while partitioned" | tee -a /tmp/chaos-evidence.txt
+
+      - name: Heal the partition and confirm the conflict resolved silently
+        run: |
+          set -euo pipefail
+          ip=$(cat /tmp/partitioned-ip)
+          docker exec chaos-control-plane iptables -D FORWARD -s "$ip" -j DROP
+          docker exec chaos-control-plane iptables -D FORWARD -d "$ip" -j DROP
+          rm -f /tmp/partitioned-ip
+
+          # Convergence here means all three providers hold the identical
+          # value, not that the value is any particular one. There is no
+          # majority-wins rule to assert — see the workflow's own manual
+          # local repro (session notes for #22) where the *minority* side's
+          # write won purely because its entryCSN timestamp was later. If
+          # this ever changes to reject-on-conflict or merge, this step
+          # should fail loudly rather than silently keep passing.
+          start=$(date +%s)
+          for ordinal in 0 1 2; do
+            i=0
+            until [ "$(kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+                ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+                -b uid=baseline,ou=chaos,dc=example,dc=org -s base description | grep '^description:')" \
+              = "$(kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- \
+                ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+                -b uid=baseline,ou=chaos,dc=example,dc=org -s base description | grep '^description:')" ]; do
+              i=$((i+1)); [ "$i" -lt 60 ] || { echo "::error::provider ${ordinal} never converged with provider 0 on the conflicting entry"; exit 1; }
+              sleep 2
+            done
+          done
+          elapsed=$(( $(date +%s) - start ))
+          echo "same-entry conflict convergence seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
+
+          winner=$(kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -LLL -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+            -b uid=baseline,ou=chaos,dc=example,dc=org -s base description | grep '^description:')
+          case "$winner" in
+            "description: majority-side-value"|"description: minority-side-value") : ;;
+            *) echo "::error::converged value is neither write — corrupted or merged: ${winner}"; exit 1 ;;
+          esac
+          echo "::warning::same-entry conflict resolved silently — winner: '${winner}', no error or conflict record anywhere. This is expected slapd behavior (entryCSN last-write-wins), not a bug in this chart — see #22 for the tracked follow-up to detect and log this rather than let it stay silent." | tee -a /tmp/chaos-evidence.txt
+          echo "PASS: exactly one write survived and every provider agrees on it" | tee -a /tmp/chaos-evidence.txt
+
       - name: Remove any partition left behind
         if: always()
         run: |
