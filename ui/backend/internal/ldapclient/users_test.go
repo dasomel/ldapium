@@ -1,12 +1,71 @@
 package ldapclient
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
+
+func TestCreateUser_InvalidRequiredFields(t *testing.T) {
+	tests := []struct {
+		name string
+		in   domain.UserInput
+	}{
+		{
+			// A blank uid would otherwise construct an RDN that cannot name a
+			// user, so it must be rejected before the LDAP connection is used.
+			name: "empty uid",
+			in:   domain.UserInput{CN: "Jane Doe", SN: "Doe"},
+		},
+		{
+			name: "empty cn",
+			in:   domain.UserInput{UID: "jdoe", SN: "Doe"},
+		},
+		{
+			name: "empty sn",
+			in:   domain.UserInput{UID: "jdoe", CN: "Jane Doe"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &client{}
+			_, err := c.CreateUser(context.Background(), "ou=people,dc=example,dc=com", tt.in)
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("CreateUser() error = %v, want domain.ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
+func TestBuildUserDN_InvalidUTF8(t *testing.T) {
+	tests := []struct {
+		name string
+		uid  string
+	}{
+		{
+			// Invalid byte sequences cannot survive ldap.EscapeDN's rune-based
+			// encoding, so accepting them would change the account being named.
+			name: "invalid byte sequence",
+			uid:  string([]byte{0xff, 0xfe, 0x80}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildUserDN(tt.uid, "ou=people,dc=example,dc=com")
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("buildUserDN() error = %v, want domain.ErrInvalidInput", err)
+			}
+		})
+	}
+}
 
 func TestEntryToUser_MapsMemberOf(t *testing.T) {
 	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{

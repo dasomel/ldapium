@@ -3,6 +3,7 @@ package ldapclient
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -16,6 +17,16 @@ import (
 var userAttrs = []string{
 	"uid", "cn", "sn", "givenName", "mail", "displayName", "memberOf", "pwdAccountLockedTime",
 	"departmentNumber", "o", "ou",
+}
+
+// buildUserDN keeps the user-controlled RDN value separate from the
+// configuration-controlled parent DN. Escaping the former prevents uid
+// input from adding another RDN or changing the entry being created.
+func buildUserDN(uid, base string) (string, error) {
+	if !utf8.ValidString(uid) {
+		return "", fmt.Errorf("%w: uid must be valid UTF-8", domain.ErrInvalidInput)
+	}
+	return fmt.Sprintf("uid=%s,%s", ldap.EscapeDN(uid), base), nil
 }
 
 // ListUsers returns every inetOrgPerson entry under base. See
@@ -80,7 +91,10 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 		return "", fmt.Errorf("%w: uid, cn and sn are required", domain.ErrInvalidInput)
 	}
 
-	dn := fmt.Sprintf("uid=%s,%s", ldap.EscapeDN(in.UID), base)
+	dn, err := buildUserDN(in.UID, base)
+	if err != nil {
+		return "", err
+	}
 
 	c.mu.Lock()
 	add := ldap.NewAddRequest(dn, nil)
@@ -103,7 +117,7 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 	if in.OrganizationalUnit != "" {
 		add.Attribute("ou", []string{in.OrganizationalUnit})
 	}
-	err := c.conn.Add(add)
+	err = c.conn.Add(add)
 	c.mu.Unlock()
 	if err != nil {
 		return "", mapErr("create user", err)
