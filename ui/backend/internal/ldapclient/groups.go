@@ -3,6 +3,7 @@ package ldapclient
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -10,6 +11,16 @@ import (
 )
 
 var groupAttrs = []string{"cn", "description", "member"}
+
+// buildGroupDN keeps the group-controlled RDN value separate from the
+// configuration-controlled parent DN. Escaping the former prevents cn
+// input from adding another RDN or changing the entry being created.
+func buildGroupDN(cn, base string) (string, error) {
+	if !utf8.ValidString(cn) {
+		return "", fmt.Errorf("%w: cn must be valid UTF-8", domain.ErrInvalidInput)
+	}
+	return fmt.Sprintf("cn=%s,%s", ldap.EscapeDN(cn), base), nil
+}
 
 // ListGroups returns every groupOfNames entry under base. See
 // searchAllPaged for how results larger than the server's admin size limit
@@ -52,7 +63,10 @@ func (c *client) CreateGroup(ctx context.Context, base string, in domain.GroupIn
 		return "", fmt.Errorf("%w: cn is required", domain.ErrInvalidInput)
 	}
 
-	dn := fmt.Sprintf("cn=%s,%s", ldap.EscapeDN(in.CN), base)
+	dn, err := buildGroupDN(in.CN, base)
+	if err != nil {
+		return "", err
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

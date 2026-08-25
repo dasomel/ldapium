@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // LooksLikeDN reports whether input already appears to be a distinguished
@@ -21,15 +23,41 @@ func LooksLikeDN(input string) bool {
 
 // BuildUserFilter substitutes uid into filterTemplate (which must contain
 // exactly one "%s"), escaping uid per RFC 4515 so it cannot inject
-// additional filter clauses. It returns an error if filterTemplate has no
-// placeholder or uid is empty.
+// additional filter clauses. It returns an error if filterTemplate does not
+// contain exactly one placeholder, cannot form a valid LDAP filter, or uid is
+// empty.
 func BuildUserFilter(filterTemplate, uid string) (string, error) {
 	if uid == "" {
-		return "", fmt.Errorf("uid must not be empty")
+		return "", fmt.Errorf("%w: uid must not be empty", domain.ErrInvalidInput)
 	}
-	if !strings.Contains(filterTemplate, "%s") {
-		return "", fmt.Errorf("user search filter template %q has no %%s placeholder", filterTemplate)
+
+	placeholders := 0
+	for i := 0; i < len(filterTemplate); i++ {
+		if filterTemplate[i] != '%' {
+			continue
+		}
+		if i+1 == len(filterTemplate) {
+			return "", fmt.Errorf("%w: user search filter template %q ends with %%", domain.ErrInvalidInput, filterTemplate)
+		}
+		switch filterTemplate[i+1] {
+		case 's':
+			placeholders++
+		case '%':
+			// A literal percent is allowed, but it must not be mistaken for
+			// an identity substitution that fmt.Sprintf will ignore.
+		default:
+			return "", fmt.Errorf("%w: user search filter template %q has unsupported format directive %%%c", domain.ErrInvalidInput, filterTemplate, filterTemplate[i+1])
+		}
+		i++
 	}
+	if placeholders != 1 {
+		return "", fmt.Errorf("%w: user search filter template %q must contain exactly one %%s placeholder", domain.ErrInvalidInput, filterTemplate)
+	}
+
 	escaped := ldap.EscapeFilter(uid)
-	return fmt.Sprintf(filterTemplate, escaped), nil
+	filter := fmt.Sprintf(filterTemplate, escaped)
+	if _, err := ldap.CompileFilter(filter); err != nil {
+		return "", fmt.Errorf("%w: user search filter template %q produces an invalid LDAP filter: %v", domain.ErrInvalidInput, filterTemplate, err)
+	}
+	return filter, nil
 }

@@ -1,6 +1,12 @@
 package ldapclient
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
+)
 
 func TestLooksLikeDN(t *testing.T) {
 	cases := []struct {
@@ -44,14 +50,98 @@ func TestBuildUserFilter_EscapesInjection(t *testing.T) {
 	}
 }
 
-func TestBuildUserFilter_EmptyUID(t *testing.T) {
-	if _, err := BuildUserFilter("(uid=%s)", ""); err == nil {
-		t.Fatal("expected error for empty uid")
+func TestBuildUserFilter_InvalidInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		uid      string
+	}{
+		{
+			// A missing substitution would make every login search the same
+			// configured identity instead of the account that was supplied.
+			name:     "no placeholder",
+			template: "(uid=jdoe)",
+			uid:      "jdoe",
+		},
+		{
+			// Reusing the uid in two clauses makes a configuration mistake look
+			// valid and violates the one-identity lookup contract.
+			name:     "duplicate placeholder",
+			template: "(&(uid=%s)(cn=%s))",
+			uid:      "jdoe",
+		},
+		{
+			// An unclosed assertion would otherwise be sent to LDAP as a
+			// malformed request instead of failing at configuration use.
+			name:     "invalid LDAP grammar",
+			template: "(uid=%s",
+			uid:      "jdoe",
+		},
+		{
+			// A literal fmt escape must not masquerade as a uid placeholder
+			// because fmt.Sprintf would silently leave the uid unused.
+			name:     "escaped percent is not placeholder",
+			template: "(uid=%%s)",
+			uid:      "jdoe",
+		},
+		{
+			// Empty input has no account identity to safely substitute.
+			name:     "empty uid",
+			template: "(uid=%s)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildUserFilter(tt.template, tt.uid)
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("BuildUserFilter() error = %v, want domain.ErrInvalidInput", err)
+			}
+		})
 	}
 }
 
-func TestBuildUserFilter_NoPlaceholder(t *testing.T) {
-	if _, err := BuildUserFilter("(uid=jdoe)", "jdoe"); err == nil {
-		t.Fatal("expected error for template without a placeholder")
+func TestResolveUID_InvalidFilterInput(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		uid  string
+	}{
+		{
+			name: "missing filter",
+			uid:  "jdoe",
+		},
+		{
+			name: "duplicate uid placeholder",
+			cfg:  config.Config{UserSearchFilter: "(&(uid=%s)(cn=%s))"},
+			uid:  "jdoe",
+		},
+		{
+			name: "invalid LDAP grammar",
+			cfg:  config.Config{UserSearchFilter: "(uid=%s"},
+			uid:  "jdoe",
+		},
+		{
+			// A configured search filter without the substitution point would
+			// resolve a fixed account regardless of who is logging in.
+			name: "filter without uid placeholder",
+			cfg:  config.Config{UserSearchFilter: "(uid=jdoe)"},
+			uid:  "jdoe",
+		},
+		{
+			// Empty identifiers must fail before a search request can turn an
+			// absent value into an LDAP wildcard or a misleading server error.
+			name: "empty uid",
+			cfg:  config.Config{UserSearchFilter: "(uid=%s)"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveUID(nil, tt.cfg, tt.uid)
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("resolveUID() error = %v, want domain.ErrInvalidInput", err)
+			}
+		})
 	}
 }
