@@ -2,13 +2,19 @@
 # Export this release's audit trail as newline-delimited JSON — one line per
 # event, suitable for piping straight into a SIEM's file/stdin ingestion.
 #
-# Two overlays, two record shapes, unified into one stream here because a
+# Two overlays and one replication diagnostic, unified into one stream here because a
 # SIEM wants one feed, not "read the auditlog doc, then separately read the
 # accesslog doc":
 #
-#   auditlog   writes (add/modify/modrdn/delete) — container stdout, per pod
-#   accesslog  reads (search/bind), when audit.accessLog.enabled — its own
-#              LDAP database (cn=accesslog), per pod
+#   auditlog                  writes (add/modify/modrdn/delete) — container stdout, per pod
+#   accesslog                 reads (search/bind), when audit.accessLog.enabled — its own
+#                             LDAP database (cn=accesslog), per pod
+#   replication-conflict-raw  discarded replication CSNs — container stdout, per pod
+#
+# replication-conflict-raw is deliberately raw, not a conflict detector: it
+# mixes genuine same-entry conflicts with harmless duplicate delivery over
+# N-way relay paths. Consumers must not treat every record as confirmed data
+# loss; that needs correlation with converged state or other nodes' records.
 #
 # "Per pod" both times, deliberately: on a replicated install each provider
 # only has the events it personally handled — that is what replication
@@ -18,7 +24,7 @@
 #
 #   ./scripts/export-audit-log.sh                    # auto-discover, both overlays
 #   ./scripts/export-audit-log.sh -n ldapium -r prod
-#   ./scripts/export-audit-log.sh --writes-only       # skip the accesslog reads
+#   ./scripts/export-audit-log.sh --writes-only       # skip accesslog reads; keep container-log diagnostics
 #   ./scripts/export-audit-log.sh --reads-only        # skip the container-log writes
 #
 # Known limitation: cn=accesslog's bind credential (like cn=Monitor's and
@@ -45,11 +51,15 @@ Prints one JSON object per line to stdout:
   {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"..."}
   {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0"}
   {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49"}
+  {"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
 
   -n, --namespace   Kubernetes namespace (default: current kubectl context's)
   -r, --release     Helm release name. Only needed when a namespace holds more
                     than one ldapium install.
-      --writes-only Export only auditlog (write) events.
+      --writes-only Export auditlog (write) events and raw replication
+                    diagnostics from the same container logs. The latter
+                    includes harmless relay duplicates; it is not confirmed
+                    data-loss reporting.
       --reads-only  Export only accesslog (read) events — fails per pod with a
                     warning on stderr if that pod does not have
                     audit.accessLog.enabled, rather than failing the run.
@@ -111,6 +121,10 @@ json_escape() {
 if [ "$want_writes" = 1 ]; then
   for i in $(seq 0 $((replicas - 1))); do
     pod="${sts}-${i}"
+    # Fetch the container log once: auditlog writes and syncrep diagnostics
+    # share stdout, and fetching them independently risks seeing a different
+    # slice of a rotating log between the two requests.
+    container_log=$(kubectl -n "$ns" logs "$pod" -c openldap --since=720h 2>/dev/null || true)
     # auditlog's own format: "# <op> <unixtime> <suffix> <bindDN> IP=... conn=..."
     # opening each record, ended by the next such line or EOF. Only the
     # opening line is needed here — it already carries actor, time and op;
@@ -131,8 +145,7 @@ if [ "$want_writes" = 1 ]; then
     # script before it ever reaches the accesslog half below; `|| true`
     # neutralizes it at the source rather than the caller having to guess
     # what a bare failure meant.
-    { kubectl -n "$ns" logs "$pod" -c openldap --since=720h 2>/dev/null \
-      | grep -E '^# (add|modify|modrdn|delete) ' || true; } \
+    { printf '%s\n' "$container_log" | grep -E '^# (add|modify|modrdn|delete) ' || true; } \
       | while IFS= read -r line; do
           op=$(printf '%s' "$line" | awk '{print $2}')
           t=$(printf '%s' "$line" | awk '{print $3}')
@@ -141,6 +154,36 @@ if [ "$want_writes" = 1 ]; then
           printf '{"pod":"%s","source":"auditlog","time":"%s","actor":"%s","op":"%s","target":"%s"}\n' \
             "$pod" "$t" "$actor" "$op" "$target"
         done
+
+    # `CSN too old, ignoring` also marks ordinary relay duplicates, so leave
+    # this undeduplicated evidence intact rather than guessing which records
+    # lost data. --writes-only owns it because it comes from this exact log
+    # fetch; a third selector would imply a certainty the stream cannot offer.
+    printf '%s\n' "$container_log" \
+      | grep -E 'do_syncrep2: rid=[0-9]+ CSN too old, ignoring [^ ]+ \(.*\)$' \
+      | awk -v pod="$pod" '
+        function esc(s) {
+          gsub(/\\/,"\\\\",s)
+          gsub(/"/,"\\\"",s)
+          return s
+        }
+        {
+          record=$0
+          sub(/^.*do_syncrep2: rid=/, "", record)
+          rid=record
+          sub(/ CSN too old, ignoring .*/, "", rid)
+          csn=record
+          sub(/^[0-9]+ CSN too old, ignoring /, "", csn)
+          entry=csn
+          sub(/^.* \(/, "", entry)
+          sub(/\)$/, "", entry)
+          sub(/ \(.*/, "", csn)
+          time=csn
+          sub(/#.*/, "", time)
+          printf "{\"pod\":\"%s\",\"source\":\"replication-conflict-raw\",\"time\":\"%s\",\"entry\":\"%s\",\"discardedCSN\":\"%s\",\"rid\":\"%s\"}\n", \
+            esc(pod), esc(time), esc(entry), esc(csn), esc(rid)
+        }
+      ' || true
   done
 fi
 
