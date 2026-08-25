@@ -536,15 +536,19 @@ itself and would otherwise grow without bound the same way an unrotated
 
 ### Exporting both, unified
 
-`scripts/export-audit-log.sh` reads `auditlog` (container logs, every pod)
-and `accesslog` (an LDAP bind, every pod, skipped with a warning on any pod
-where it is not enabled) and prints one JSON object per line — one feed for
-a SIEM instead of two separate manual procedures:
+`scripts/export-audit-log.sh` reads `auditlog` writes and raw replication
+diagnostics (container logs, every pod), plus `accesslog` reads/binds (an LDAP
+bind, every pod, skipped with a warning on any pod where it is not enabled),
+and prints one JSON object per line — one feed for a SIEM instead of separate
+manual procedures. The replication stream is deliberately undeduplicated:
+its `CSN too old, ignoring` lines mix genuine same-entry conflicts with
+harmless N-way relay duplicates, so no individual line is confirmed data loss.
 
 ```bash
 ./scripts/export-audit-log.sh -n <namespace> -r <fullname>
 {"pod":"...","source":"auditlog","time":"1787500678","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org"}
 {"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0"}
+{"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
 {"pod":"...","source":"accesslog","time":"20260823155733.000004Z","actor":"cn=admin,dc=example,dc=org","op":"bind","target":"cn=admin,dc=example,dc=org","filter":"","result":"49"}
 ```
 
