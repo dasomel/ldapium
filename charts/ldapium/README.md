@@ -569,6 +569,37 @@ On a replicated install this iterates every pod for the same reason the
 extraction procedure above does: each provider only has the events it
 personally handled.
 
+### Detecting cn=config drift
+
+`cn=config` is rendered once by each pod's own `entrypoint.sh` at bootstrap and
+never touched again unless an operator hand-edits it with `ldapmodify` against
+`cn=config` directly — nothing else in this project changes it after that.
+`scripts/detect-config-drift.sh` snapshots every pod's `cn=config` and diffs a
+later snapshot against a saved baseline, so that kind of out-of-band edit
+doesn't go unnoticed:
+
+```bash
+./scripts/detect-config-drift.sh -n <namespace> -r <fullname> --baseline > baseline.ldif
+# ... later, on a cron or before a maintenance window ...
+./scripts/detect-config-drift.sh -n <namespace> -r <fullname> --check baseline.ldif
+```
+
+Exit code from `--check` is the actual signal (0 = no drift, 1 = drift found
+or a pod unreachable) — suitable as a CI/cron gate; the diff itself goes to
+stdout for a human to read. It strips `entryUUID`/`entryCSN`/`creatorsName`/
+`createTimestamp`/`modifiersName`/`modifyTimestamp` — bootstrap bookkeeping
+that differs on every independent bootstrap even when the logical config is
+identical — plus `olcRootPW`, which entrypoint.sh re-hashes with a fresh
+Argon2 salt every bootstrap regardless of whether the admin password
+actually changed (confirmed live: two containers started with the
+byte-identical password produced two different `olcRootPW` values). Without
+stripping all seven, redeploying onto a fresh PVC with unchanged Helm values
+— an ordinary disaster-recovery event, not a config change — would report as
+full drift. `olcSyncrepl`'s `credentials="..."` (the cleartext replication
+bind password) is masked to a fixed placeholder rather than compared, so it
+never reaches the baseline file or a diff line, same principle as the
+`userPassword` denylist above.
+
 ## Observability
 
 `metrics.enabled=true` adds an exporter sidecar on port 9330. With Prometheus
