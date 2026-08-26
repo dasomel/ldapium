@@ -426,51 +426,9 @@ jobs:
           before=$(served_serial)
           echo "$before" | tee /tmp/tls-evidence/serial-before-rotation.txt
           # The availability sample runs from a pod outside the StatefulSet, so it
-          # survives every directory pod being replaced in turn.
-          kubectl -n directory apply -f - <<'EOF'
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: tls-rotation-probe
-          spec:
-            restartPolicy: Never
-            containers:
-              - name: probe
-                image: ldapium:e2e
-                imagePullPolicy: Never
-                command:
-                  - sh
-                  - -c
-                  - |
-                    while [ ! -f /tmp/stop ]; do
-                      if LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-                        ldapwhoami -x -o nettimeout=2 \
-                        -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
-                        -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" >/dev/null 2>&1; then
-                        echo OK
-                      else
-                        echo FAIL
-                      fi
-                      sleep 1
-                    done
-                env:
-                  - name: LDAP_ADMIN_DN
-                    value: cn=admin,dc=example,dc=org
-                  - name: LDAP_ADMIN_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: directory-ldapium-admin
-                        key: admin-password
-                volumeMounts:
-                  - name: tls
-                    mountPath: /etc/openldap/tls
-                    readOnly: true
-            volumes:
-              - name: tls
-                secret:
-                  secretName: ldapium-tls
-          EOF
-          kubectl -n directory wait --for=condition=Ready pod/tls-rotation-probe --timeout=3m
+          # survives every directory pod being replaced in turn; `stop` applies
+          # the zero-downtime contract (see scripts/e2e-ldaps-probe.sh).
+          scripts/e2e-ldaps-probe.sh start tls-rotation-probe
           kubectl -n directory create secret generic ldapium-tls \
             --from-file=tls.crt=/tmp/ldapium-tls/rotated.crt \
             --from-file=tls.key=/tmp/ldapium-tls/rotated.key \
@@ -478,35 +436,7 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n directory rollout restart statefulset/directory-ldapium
           kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
-          kubectl -n directory exec tls-rotation-probe -- touch /tmp/stop
-          kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/tls-rotation-probe --timeout=2m
-          kubectl -n directory logs tls-rotation-probe > /tmp/tls-evidence/rotation-availability.txt
-          # Counting every line would fold anything the probe's shell wrote on
-          # its way in or out into the availability figure. Only the verdicts
-          # count.
-          total=$(grep -cE '^(OK|FAIL)$' /tmp/tls-evidence/rotation-availability.txt || true)
-          ok=$(grep -c '^OK$' /tmp/tls-evidence/rotation-availability.txt || true)
-          # The interesting number is not how many binds failed but whether they
-          # ever failed consecutively: a rolling restart drains one pod at a time,
-          # so a single bind landing on an endpoint already on its way out is
-          # expected. A *run* of failures means no pod was answering.
-          streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' \
-            /tmp/tls-evidence/rotation-availability.txt)
-          echo "LDAPS binds during rotation: $ok/$total, longest consecutive failure run: $streak"
-          printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$total" "$ok" "$streak" \
-            > /tmp/tls-evidence/rotation-availability-summary.txt
-          if [ "$total" -lt 20 ]; then
-            echo "::error::rotation completed too quickly to measure availability ($total samples)"
-            exit 1
-          fi
-          if [ "$streak" -gt 5 ]; then
-            echo "::error::LDAPS was unanswerable for $streak consecutive probes during rotation"
-            exit 1
-          fi
-          if [ $((ok * 100 / total)) -lt 80 ]; then
-            echo "::error::LDAPS availability dropped to $ok/$total during certificate rotation"
-            exit 1
-          fi
+          scripts/e2e-ldaps-probe.sh stop tls-rotation-probe /tmp/tls-evidence/rotation "certificate rotation"
           after=$(served_serial)
           echo "$after" | tee /tmp/tls-evidence/serial-after-rotation.txt
           expected=$(openssl x509 -in /tmp/ldapium-tls/rotated.crt -noout -serial)
@@ -530,7 +460,6 @@ jobs:
               "i=0; until LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapsearch -x -LLL -H \"ldaps://directory-ldapium-${ordinal}.directory-ldapium-headless.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\" -b \"uid=tls-rotated,$ldap_base\" -s base dn >/dev/null 2>&1; do i=\$((i+1)); [ \"\$i\" -lt 30 ] || exit 1; sleep 2; done"
             echo "PASS: provider $ordinal converged over LDAPS after rotation"
           done
-          kubectl -n directory delete pod tls-rotation-probe --ignore-not-found
 
       - name: Rotate the CA in two steps without breaking replication
         if: matrix.scenario == 'replicated'
@@ -566,63 +495,14 @@ jobs:
             --from-file=tls.key="$dir/leaf-ca2.key" \
             --from-file=ca.crt="$dir/ca-bundle.crt" \
             --dry-run=client -o yaml | kubectl apply -f -
-          # Same outside-the-StatefulSet availability probe pattern as the
-          # single-cert rotation above: the mixed old-CA-leaf/new-CA-leaf
-          # state during this specific rolling restart is what the README
-          # warns a single-step CA swap would break.
-          kubectl -n directory apply -f - <<EOF
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: ca-rotation-probe
-          spec:
-            restartPolicy: Never
-            containers:
-              - name: probe
-                image: ldapium:e2e
-                imagePullPolicy: Never
-                command:
-                  - sh
-                  - -c
-                  - |
-                    while [ ! -f /tmp/stop ]; do
-                      if LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt \
-                        ldapwhoami -x -o nettimeout=2 \
-                        -H "ldaps://directory-ldapium.directory.svc.cluster.local:636" \
-                        -D "$admin_dn" -w "$password" >/dev/null 2>&1; then
-                        echo OK
-                      else
-                        echo FAIL
-                      fi
-                      sleep 1
-                    done
-                volumeMounts:
-                  - name: tls
-                    mountPath: /etc/openldap/tls
-                    readOnly: true
-            volumes:
-              - name: tls
-                secret:
-                  secretName: ldapium-tls
-          EOF
-          kubectl -n directory wait --for=condition=Ready pod/ca-rotation-probe --timeout=3m
+          # Same outside-the-StatefulSet availability probe as the single-cert
+          # rotation above, same zero-downtime contract: the mixed
+          # old-CA-leaf/new-CA-leaf state during this specific rolling restart
+          # is what the README warns a single-step CA swap would break.
+          scripts/e2e-ldaps-probe.sh start ca-rotation-probe
           kubectl -n directory rollout restart statefulset/directory-ldapium
           kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
-          kubectl -n directory exec ca-rotation-probe -- touch /tmp/stop
-          kubectl -n directory wait --for=jsonpath='{.status.phase}'=Succeeded pod/ca-rotation-probe --timeout=2m
-          kubectl -n directory logs ca-rotation-probe > /tmp/tls-evidence/ca-rotation-availability.txt
-          kubectl -n directory delete pod ca-rotation-probe --ignore-not-found
-          ca_total=$(grep -cE '^(OK|FAIL)$' /tmp/tls-evidence/ca-rotation-availability.txt || true)
-          ca_ok=$(grep -c '^OK$' /tmp/tls-evidence/ca-rotation-availability.txt || true)
-          ca_streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' \
-            /tmp/tls-evidence/ca-rotation-availability.txt)
-          echo "LDAPS binds during CA-trust-then-leaf rotation: $ca_ok/$ca_total, longest consecutive failure run: $ca_streak"
-          printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$ca_total" "$ca_ok" "$ca_streak" \
-            > /tmp/tls-evidence/ca-rotation-availability-summary.txt
-          if [ "$ca_streak" -gt 5 ]; then
-            echo "::error::LDAPS was unanswerable for $ca_streak consecutive probes while rotating to the new CA's leaf certificate"
-            exit 1
-          fi
+          scripts/e2e-ldaps-probe.sh stop ca-rotation-probe /tmp/tls-evidence/ca-rotation "CA-trust-then-leaf rotation"
           echo "PASS: swapping to the new CA's leaf certificate was zero-downtime while both CAs were trusted"
 
           echo "Confirming replication is still healthy after the leaf swap..."
