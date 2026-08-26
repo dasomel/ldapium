@@ -327,6 +327,22 @@ jobs:
           grep -q 'Cipher is' /tmp/tls13-after.txt
           echo "PASS: olcTLSProtocolMin actually gates the negotiated protocol, not just present in cn=config"
 
+          # Restore the project's actual floor: this step raises it to 3.4
+          # purely to prove enforcement, and leaving it there would silently
+          # change the effective TLS policy for every step that runs after
+          # this one in the same job.
+          echo "Restoring olcTLSProtocolMin to 3.3..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapmodify -x -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" <<EOF
+          dn: cn=config
+          changetype: modify
+          replace: olcTLSProtocolMin
+          olcTLSProtocolMin: 3.3
+          EOF'
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'echo | openssl s_client -connect localhost:636 -tls1_2 2>&1' | tee /tmp/tls12-restored.txt
+          grep -q 'Cipher is' /tmp/tls12-restored.txt
+
       - name: Verify the TLS cipher suite baseline is enforced
         run: |
           set -euo pipefail
