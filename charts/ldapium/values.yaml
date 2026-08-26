@@ -428,6 +428,29 @@ ui:
     ttl: 30m
     # -- COOKIE_SECURE. Disable only for local HTTP development.
     cookieSecure: true
+    # -- UI_LOGIN_FAILURE_LIMIT: failed POST /api/login attempts allowed per
+    #    client IP within loginFailureWindow before a 429 is returned. 0
+    #    disables the limiter. In-memory and per-pod; with more than one UI
+    #    replica the OpenLDAP ppolicy lockout is the backstop that holds
+    #    cluster-wide.
+    loginFailureLimit: 10
+    # -- UI_LOGIN_FAILURE_WINDOW: the sliding window loginFailureLimit
+    #    applies over (Go duration syntax).
+    loginFailureWindow: 1m
+
+  # -- UI_TRUSTED_PROXIES: how the login limiter resolves a request's client
+  #    IP. "private" (default) trusts loopback/link-local/private-network
+  #    hops ahead of the client, matching an in-cluster ingress — Echo walks
+  #    X-Forwarded-For from the right and keys on the first untrusted
+  #    address, so a public client can't spoof past a trusted proxy. "none"
+  #    ignores X-Forwarded-For and keys on the raw TCP peer instead; only
+  #    correct with no proxy in front, since behind one every client would
+  #    share a single budget. A comma-separated CIDR list trusts ONLY those
+  #    listed hops — not a superset of "private" — for a proxy whose own
+  #    address isn't itself private and needs stricter trust. A multi-CIDR
+  #    list should go in a values file rather than `--set`, which splits on
+  #    bare commas (escape with `\,` if `--set` is unavoidable).
+  trustedProxies: private
 
   # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
   # Enabling SSO makes the UI SSO-only: LDAP passwords are never accepted by

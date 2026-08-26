@@ -115,6 +115,9 @@ LDAP connection details and a session secret explicitly.
 | `LDAP_TLS_INSECURE_SKIP_VERIFY` | no | `false` | Skip TLS certificate verification — local dev only |
 | `SESSION_TTL` | no | `30m` | Idle session lifetime (Go duration syntax, e.g. `1h`) |
 | `COOKIE_SECURE` | no | `true` | Mark the session cookie `Secure`; disable only for plain-HTTP local dev |
+| `UI_LOGIN_FAILURE_LIMIT` | no | `10` | Failed `POST /api/login` attempts allowed per client IP (see `UI_TRUSTED_PROXIES` below for how that IP is resolved) within the window before a `429` is returned; `0` disables the limiter. In-memory and per-pod — with multiple UI replicas the OpenLDAP ppolicy lockout is the backstop that holds cluster-wide |
+| `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
+| `UI_TRUSTED_PROXIES` | no | `private` | How the login limiter resolves a request's client IP: `private`, a comma-separated CIDR list, or `none` — see "Login throttling and trusted proxies" below |
 | `SSO_ENABLED` | no | `false` | Enable Keycloak SSO; disables LDAP password login |
 | `SSO_ISSUER_URL` | SSO | — | Keycloak realm issuer, e.g. `https://sso.example.com/realms/example` |
 | `SSO_CLIENT_ID` | SSO | — | Confidential Keycloak OIDC client ID |
@@ -123,6 +126,36 @@ LDAP connection details and a session secret explicitly.
 | `SSO_CALLBACK_ORIGINS` | SSO | — | Comma-separated exact browser origins allowed to form the callback URI; no paths |
 | `LDAP_SERVICE_ACCOUNT_DN` | SSO | — | Dedicated LDAP UI service-account DN |
 | `LDAP_SERVICE_ACCOUNT_PASSWORD` | SSO | — | Dedicated LDAP UI service-account password |
+
+### Login throttling and trusted proxies
+
+`UI_TRUSTED_PROXIES` controls how the per-IP `POST /api/login` failure
+limiter (above) resolves a request's client IP — get this wrong and the
+limiter is either bypassable or shared by everyone:
+
+- `private` (default): trust loopback/link-local/private-network hops
+  ahead of the client, matching an in-cluster ingress (this chart's
+  default deployment). `X-Forwarded-For` is walked from the right,
+  skipping trusted hops, so a public client cannot forge a fresh budget by
+  setting its own `X-Forwarded-For` header — the ingress-appended, real
+  address is reached first.
+- a comma-separated CIDR list: trust ONLY those listed hops — deliberately
+  not a superset of `private`, since adding it on top would leave this
+  mode no stricter than `private` — for a proxy whose own address isn't
+  itself on a private range and needs stricter trust than `private`
+  grants. Via Helm, a multi-CIDR list must go in a `-f values.yaml` file
+  rather than `--set`, which splits on bare commas (see the chart README's
+  "Three helm footguns"); escape with `\,` if `--set` is unavoidable.
+- `none`: ignore `X-Forwarded-For` entirely and key on the raw TCP peer.
+  Only correct with no proxy in front of this service; behind one, every
+  client arrives from the proxy's own address and shares a single budget.
+
+Even configured correctly, blocking is per source IP, not per account:
+everyone behind one NAT gateway or corporate egress IP shares a budget, so
+one user mistyping a password repeatedly can get a different, correct user
+on the same IP a `429` on their next attempt. The default 10 failures per
+1-minute window keeps that window brief; `UI_LOGIN_FAILURE_LIMIT=0` turns
+the limiter off entirely if this trade-off doesn't fit a deployment.
 
 ### Keycloak client setup
 

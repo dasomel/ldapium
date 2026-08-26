@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
@@ -21,6 +24,18 @@ func (s *Server) handleLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "password login is disabled")
 	}
 
+	// D3: the per-IP failed-login budget is checked before the request
+	// body is even parsed, so a blocked client never reaches the directory.
+	// D2/D7: c.RealIP() resolves through s.echo.IPExtractor, configured in
+	// New() from UI_TRUSTED_PROXIES (see ipExtractorFor) — never Echo's
+	// unconfigured fallback, which takes the first X-Forwarded-For entry
+	// verbatim and lets any client forge a fresh budget on every request.
+	ip := c.RealIP()
+	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
+		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed login attempts")
+	}
+
 	var req loginRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -31,6 +46,13 @@ func (s *Server) handleLogin(c echo.Context) error {
 
 	bound, err := s.dialer.Bind(c.Request().Context(), req.Identity, req.Password)
 	if err != nil {
+		// D1: only a rejected bind (bad credentials) counts against the
+		// limiter. A 5xx-class error — e.g. the directory being
+		// unreachable — must not count, or an LDAP outage would lock
+		// clients out for a full window after it recovers.
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			s.loginLimiter.recordFailure(ip)
+		}
 		return respondErr(c, err)
 	}
 

@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -93,6 +94,39 @@ type Config struct {
 	// unless Enabled is true, preserving LDAP-password authentication for
 	// existing deployments.
 	SSO SSOConfig
+
+	// LoginFailureLimit is the number of failed POST /api/login attempts a
+	// single client IP (see c.RealIP() in the login handler) may make
+	// within LoginFailureWindow before further attempts are rejected with
+	// 429, without ever reaching the directory. Only failed binds count; a
+	// successful login never consumes budget, and neither does an
+	// LDAP-unreachable error. Zero disables the limiter entirely.
+	//
+	// This is in-memory, per-process state: with more than one UI replica
+	// the limit is per pod, not cluster-wide. OpenLDAP's ppolicy lockout
+	// (pwdMaxFailure) remains the per-account backstop that holds across
+	// replicas.
+	LoginFailureLimit int
+
+	// LoginFailureWindow is the sliding window LoginFailureLimit applies
+	// over.
+	LoginFailureWindow time.Duration
+
+	// TrustedProxies controls how the login-failure limiter resolves a
+	// request's client IP (UI_TRUSTED_PROXIES), via httpapi's
+	// ipExtractorFor. One of:
+	//   - "private" (default): trust loopback/link-local/private-network
+	//     hops ahead of the client, i.e. an in-cluster ingress.
+	//   - "none": ignore X-Forwarded-For entirely and key on the raw TCP
+	//     peer. Only correct with no proxy in front — behind one, every
+	//     client shares a single budget.
+	//   - a comma-separated CIDR list: trust ONLY those specific hops —
+	//     not a superset of "private" — for a proxy that isn't itself on
+	//     a private range and needs stricter trust than "private" grants.
+	// Validated at load time; the raw string is kept as-is (not
+	// re-parsed into net.IPNet here) so httpapi can build the concrete
+	// echo.IPExtractor without this package importing echo.
+	TrustedProxies string
 }
 
 // SSOConfig is the configuration required to use a confidential OIDC client
@@ -176,6 +210,29 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg.SessionTTL, err = time.ParseDuration(ttlRaw)
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid SESSION_TTL %q: %w", ttlRaw, err)
+	}
+
+	limitRaw := orDefault(getenv("UI_LOGIN_FAILURE_LIMIT"), "10")
+	cfg.LoginFailureLimit, err = strconv.Atoi(strings.TrimSpace(limitRaw))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid UI_LOGIN_FAILURE_LIMIT %q: %w", limitRaw, err)
+	}
+	if cfg.LoginFailureLimit < 0 {
+		return Config{}, fmt.Errorf("UI_LOGIN_FAILURE_LIMIT must not be negative, got %d", cfg.LoginFailureLimit)
+	}
+
+	windowRaw := orDefault(getenv("UI_LOGIN_FAILURE_WINDOW"), "1m")
+	cfg.LoginFailureWindow, err = time.ParseDuration(windowRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid UI_LOGIN_FAILURE_WINDOW %q: %w", windowRaw, err)
+	}
+	if cfg.LoginFailureWindow <= 0 {
+		return Config{}, fmt.Errorf("UI_LOGIN_FAILURE_WINDOW must be positive, got %v", cfg.LoginFailureWindow)
+	}
+
+	cfg.TrustedProxies, err = validateTrustedProxies(getenv("UI_TRUSTED_PROXIES"))
+	if err != nil {
+		return Config{}, err
 	}
 
 	if cfg.UserSearchBase == "" {
@@ -279,6 +336,32 @@ func orDefault(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// validateTrustedProxies resolves and validates UI_TRUSTED_PROXIES. "private"
+// and "none" pass through as-is; anything else must be a comma-separated
+// list of CIDRs, each checked with net.ParseCIDR so a typo is caught at
+// startup rather than silently falling back to trusting nothing. The
+// original string (not a parsed []net.IPNet) is what's stored, since
+// building the actual echo.IPExtractor is httpapi's job.
+func validateTrustedProxies(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		v = "private"
+	}
+	if v == "private" || v == "none" {
+		return v, nil
+	}
+	for _, entry := range strings.Split(v, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(entry); err != nil {
+			return "", fmt.Errorf("invalid UI_TRUSTED_PROXIES entry %q: %w", entry, err)
+		}
+	}
+	return v, nil
 }
 
 // parseHTTPURL applies the checks every SSO URL setting shares: absolute,
