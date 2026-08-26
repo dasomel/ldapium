@@ -98,7 +98,12 @@ test('creates, edits, resets the password for, and deletes a user through the UI
   await deleteUserIfPresent(page, CRUD_USER.uid)
   await filterUsers(page, '')
 
-  await page.getByRole('button', { name: 'New user' }).click()
+  // There are two "New user" buttons when the directory has no users: the
+  // always-present one in the page toolbar and a second inside the empty-state
+  // card. On a freshly seeded CI directory the empty state renders too, so an
+  // unscoped name match is ambiguous — target the toolbar button, which comes
+  // first in the DOM and is present regardless of how many users exist.
+  await page.getByRole('button', { name: 'New user' }).first().click()
   const createDialog = page.getByRole('dialog', { name: 'New user' })
   await createDialog.locator('#uid').fill(CRUD_USER.uid)
   await createDialog.locator('#mail').fill(CRUD_USER.initialMail)
