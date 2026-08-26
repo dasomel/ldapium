@@ -43,6 +43,13 @@ ldap:
   # -- Optional: LDAP_ADMIN_DN. Defaults (in the image) to cn=admin,<rootDN>.
   #    Must use "cn=" as its RDN if set.
   adminDN: ""
+  # -- Optional: LDAP_ANONYMOUS_READ_BASE. Empty (default) means anonymous
+  #    read of entry/uid/objectClass stays DIT-wide, unchanged from today.
+  #    Set to a DN under rootDN (e.g. ou=people,dc=example,dc=org) to narrow
+  #    it to that subtree only — see image/README.md, "Access control
+  #    (ACL)". DN-shaped, so it hits the `--set` comma footgun below: use
+  #    `--set-string` with an escaped comma, or a values file.
+  anonymousReadBase: ""
   # -- LDAP_DB_MAX_SIZE: mdb's olcDbMaxSize, in BYTES. Empty means "derive it
   #    from persistence.data.size", which is almost always what you want.
   #    A map larger than the filesystem behind it buys nothing, which is the

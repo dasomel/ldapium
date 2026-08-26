@@ -74,6 +74,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_ROOT_DN` | **yes** | — | e.g. `dc=example,dc=org`. Must start with `dc=`. Container refuses to start if unset. |
 | `LDAP_ORG_NAME` | no | first `dc=` component of `LDAP_ROOT_DN` | Used as the `o:` attribute on the root entry. |
 | `LDAP_ADMIN_DN` | no | `cn=admin,${LDAP_ROOT_DN}` | Must use `cn=` as its RDN attribute. |
+| `LDAP_ANONYMOUS_READ_BASE` | no | `""` (whole DIT) | Must sit under `LDAP_ROOT_DN` if set. Narrows anonymous read of `entry`/`uid`/`objectClass` (see [Access control (ACL)](#access-control-acl)) to this subtree instead of the whole directory; a bind-then-search client (SSSD, this project's UI) can still resolve a `uid` from a root-base search, but anonymous can no longer enumerate entries outside this base. Applied at bootstrap only (see below). |
 | `LDAP_ADMIN_PASSWORD` | **yes**\* | — | No default, ever. Container refuses to start if unset. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
 | `LDAP_ADMIN_PASSWORD_FILE` | no\* | — | Path to a file containing the admin password (for secret mounts). Takes precedence if both are set and readable. |
 | `LDAP_LOG_LEVEL` | no | `stats` | Passed to `slapd -d`. Any value (including a quiet one) keeps slapd in the foreground, which is required for it to run as PID 1. |
@@ -138,7 +139,8 @@ no way to scope this down with `LDAP_TLS_AUTHZ_REGEXP` alone.
 
 `LDAP_SIZE_LIMIT`, `LDAP_TIME_LIMIT`, `LDAP_PASSWORD_HASH`,
 `LDAP_UNIQUE_ATTRIBUTES`, `LDAP_PASSWORD_POLICY_ENABLED` and its three
-`LDAP_PASSWORD_*` knobs, and `LDAP_DB_MAX_SIZE` are all baked into
+`LDAP_PASSWORD_*` knobs, `LDAP_DB_MAX_SIZE`, and `LDAP_ANONYMOUS_READ_BASE`
+are all baked into
 `cn=config` (or, for the policy entries, directly into the `mdb` database)
 the same way TLS is — read once, at first launch, from
 `image/ldifs/01-cn-config.ldif` / `image/ldifs/03-base-structure.ldif`.

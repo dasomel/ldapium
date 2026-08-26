@@ -80,6 +80,10 @@ spec:
             - name: LDAP_ADMIN_DN
               value: {{ .Values.ldap.adminDN | quote }}
             {{- end }}
+            {{- if .Values.ldap.anonymousReadBase }}
+            - name: LDAP_ANONYMOUS_READ_BASE
+              value: {{ .Values.ldap.anonymousReadBase | quote }}
+            {{- end }}
             - name: LDAP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
