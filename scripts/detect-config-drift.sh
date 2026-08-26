@@ -133,9 +133,13 @@ redact_secrets() {
   sed -E 's/(credentials=")[^"]*(")/\1<redacted>\2/'
 }
 
+# Prints one pod's cn=config, body only: the "# pod:" section marker the
+# baseline file uses is written by the baseline loop, not here, so that a
+# --check capture compares against a baseline section like-for-like (the
+# marker line is what delimits sections and is stripped when one is
+# extracted).
 dump_pod_config() {
   pod="$1"
-  echo "# pod: ${pod}"
   kubectl -n "$ns" exec "$pod" -c openldap -- sh -c \
     "ldapsearch -x -o ldif-wrap=no -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D 'cn=admin,cn=config' -w '${password}' -b cn=config -s sub '(objectClass=*)' '*' '+'" \
     2>/dev/null | strip_noise | redact_secrets
@@ -144,19 +148,22 @@ dump_pod_config() {
 case "$mode" in
   baseline)
     for i in $(seq 0 $((replicas - 1))); do
-      dump_pod_config "${sts}-${i}"
+      pod="${sts}-${i}"
+      echo "# pod: ${pod}"
+      dump_pod_config "$pod"
     done
     ;;
   check)
     drift=0
     for i in $(seq 0 $((replicas - 1))); do
       pod="${sts}-${i}"
-      current=$(mktemp)
-      dump_pod_config "$pod" > "$current"
-      if [ ! -s "$current" ]; then
+      # `|| true` so an unreachable pod reaches the branch below rather than
+      # aborting the whole run under pipefail — the other pods still get
+      # checked and the failure is reported per pod.
+      current=$(dump_pod_config "$pod" || true)
+      if [ -z "$current" ]; then
         echo "::error:: could not read cn=config from ${pod} — treating as drift" >&2
         drift=1
-        rm -f "$current"
         continue
       fi
       # Extract just this pod's section from the baseline (bounded by the
@@ -170,16 +177,14 @@ case "$mode" in
       if [ -z "$baseline_section" ]; then
         echo "::error:: no baseline section found for ${pod} in ${baseline_file}" >&2
         drift=1
-        rm -f "$current"
         continue
       fi
-      pod_diff=$(diff <(printf '%s\n' "$baseline_section") "$current" || true)
+      pod_diff=$(diff <(printf '%s\n' "$baseline_section") <(printf '%s\n' "$current") || true)
       if [ -n "$pod_diff" ]; then
         echo "=== drift detected: ${pod} ==="
         echo "$pod_diff"
         drift=1
       fi
-      rm -f "$current"
     done
     if [ "$drift" = 1 ]; then
       exit 1
