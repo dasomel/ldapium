@@ -121,14 +121,20 @@ using `ldaps://` on 636 once `tls.enabled` is set — this chart's documented,
 tested TLS path (`charts/ldapium/README.md`, "TLS"). Checked directly: a
 container with no TLS configured at all does not advertise the StartTLS
 extended-operation OID (`1.3.6.1.4.1.1466.20037`) in its root DSE
-`supportedExtension` list. Whether StartTLS on port 389 also becomes
-available once `tls.enabled` is set was not checked directly — OpenLDAP
-typically enables it automatically once `olcTLSCertificateFile`/
-`olcTLSCertificateKeyFile` are configured, which this chart does set, so it
-may work, but `ldaps://` is the path this project actually tests and
-documents; treat StartTLS as unverified rather than assume it from this
-sentence. Add `ldap_default_bind_dn`/`ldap_default_authtok` for the search
-identity if anonymous read is not enough for your deployment's ACL.
+`supportedExtension` list, and once `tls.enabled` is set, StartTLS on port
+389 does work — OpenLDAP enables it automatically as soon as
+`olcTLSCertificateFile`/`olcTLSCertificateKeyFile` are configured, which this
+chart always sets together. Verified live: `ldapwhoami -x -ZZ -H
+ldap://<host>:389 -D <bindDN> -w <password>` with `LDAPTLS_REQCERT=demand
+LDAPTLS_CACERT=/etc/openldap/tls/ca.crt` succeeds and returns the bound DN,
+and the same command fails closed (does not fall back to plaintext) against
+an unverifiable CA — see the "Verify StartTLS on port 389" step in
+`.github/workflows/e2e.yml`'s `tls` job. `ldaps://` on 636 remains the path
+this project documents as the primary TLS integration (a separate
+TLS-from-the-first-byte connection rather than a protocol upgrade
+mid-connection), but StartTLS on 389 is a supported alternative, not an
+open question. Add `ldap_default_bind_dn`/`ldap_default_authtok` for the
+search identity if anonymous read is not enough for your deployment's ACL.
 
 **Not live-tested against a real `sssd`/`nsswitch` client** — this is the
 standard integration procedure for an RFC 2307 (`nis`-schema) directory,
