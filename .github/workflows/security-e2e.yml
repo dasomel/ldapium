@@ -433,6 +433,18 @@ jobs:
           done
           echo "PASS: export-audit-log.sh produced valid NDJSON with both sources"
 
+          # A privileged write has to be tellable from an ordinary user's
+          # write in the same feed (#76): the rootdn bypasses every ACL, so
+          # the bind DN auditlog records is the only thing that says which
+          # kind of write a change was. Both happened earlier in this job —
+          # the seed and modify steps bound as the rootdn, the self-service
+          # step bound as bob — so both actors must show up, distinctly, as
+          # auditlog modify records. `target` is the database suffix in
+          # auditlog's format, not the entry DN, so it is not asserted here.
+          echo "$out" | grep -q '"source":"auditlog".*"actor":"cn=admin,dc=example,dc=org","op":"modify"'
+          echo "$out" | grep -q '"source":"auditlog".*"actor":"uid=bob,ou=people,dc=example,dc=org","op":"modify"'
+          echo "PASS: rootdn and self-service writes are attributed to distinct actors in the export"
+
       - name: Verify chart security context
         run: |
           helm template directory charts/ldapium \
