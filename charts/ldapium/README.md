@@ -124,6 +124,11 @@ presents a certificate the pods that have not restarted do not yet trust.
 
 ### What CI verifies
 
+`.github/workflows/sssd-e2e.yml` installs the chart with the UI disabled,
+seeds an RFC 2307 POSIX user and group, and runs a disposable client with a
+real SSSD NSS daemon. It proves `getent` and `id` identity resolution only;
+it does not claim PAM authentication or login-session coverage.
+
 The `tls` job in `.github/workflows/e2e.yml` runs against a standalone and a
 3-node install and uploads a `tls-evidence-<scenario>` artifact holding the
 served certificate, the `cn=config` TLS attributes, and the rotation samples:
