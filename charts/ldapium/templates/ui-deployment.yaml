@@ -190,6 +190,12 @@ spec:
               value: {{ .Values.ui.session.ttl | quote }}
             - name: COOKIE_SECURE
               value: {{ .Values.ui.session.cookieSecure | quote }}
+            - name: UI_LOGIN_FAILURE_LIMIT
+              value: {{ .Values.ui.session.loginFailureLimit | quote }}
+            - name: UI_LOGIN_FAILURE_WINDOW
+              value: {{ .Values.ui.session.loginFailureWindow | quote }}
+            - name: UI_TRUSTED_PROXIES
+              value: {{ .Values.ui.trustedProxies | quote }}
             {{- if .Values.ui.sso.enabled }}
             - name: SSO_ENABLED
               value: "true"

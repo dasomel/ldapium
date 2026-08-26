@@ -22,11 +22,12 @@ import (
 // plain struct (not a global) so tests can construct one with a fake
 // Dialer and an isolated Store.
 type Server struct {
-	echo     *echo.Echo
-	cfg      config.Config
-	dialer   ldapclient.Dialer
-	sessions *session.Store
-	sso      *oidcAuthenticator
+	echo         *echo.Echo
+	cfg          config.Config
+	dialer       ldapclient.Dialer
+	sessions     *session.Store
+	sso          *oidcAuthenticator
+	loginLimiter *loginLimiter
 }
 
 // New builds the Echo application: middleware, the JSON API under /api,
@@ -34,10 +35,11 @@ type Server struct {
 // for everything else.
 func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS) (*Server, error) {
 	s := &Server{
-		echo:     echo.New(),
-		cfg:      cfg,
-		dialer:   dialer,
-		sessions: sessions,
+		echo:         echo.New(),
+		cfg:          cfg,
+		dialer:       dialer,
+		sessions:     sessions,
+		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
 	}
 	if cfg.SSO.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -50,6 +52,11 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}
 	s.echo.HideBanner = true
 	s.echo.HidePort = true
+	// Without this, c.RealIP() (used to key the login limiter — see
+	// handleLogin) falls back to Echo's naive first-XFF-entry behavior,
+	// which any client can forge. See ipExtractorFor's doc comment for
+	// what UI_TRUSTED_PROXIES/cfg.TrustedProxies actually guarantees.
+	s.echo.IPExtractor = ipExtractorFor(cfg)
 
 	s.echo.Use(middleware.Recover())
 	// RequestID before the logger: the logger's ${id} reads whatever this

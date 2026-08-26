@@ -219,6 +219,9 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ui.session.existingSecret` / `existingSecretKey` | `""` / `session-secret` | → `SESSION_SECRET`. Auto-generated (48 bytes) and reused across upgrades via `lookup` when unset. |
 | `ui.session.ttl` | `30m` | → `SESSION_TTL`. |
 | `ui.session.cookieSecure` | `true` | → `COOKIE_SECURE`. Disable only for local HTTP dev. |
+| `ui.session.loginFailureLimit` | `10` | → `UI_LOGIN_FAILURE_LIMIT`. Failed `POST /api/login` attempts per client IP within the window before a `429`; `0` disables. Per pod, not cluster-wide — ppolicy lockout is the backstop across replicas. |
+| `ui.session.loginFailureWindow` | `1m` | → `UI_LOGIN_FAILURE_WINDOW`. Sliding window the limit applies over. |
+| `ui.trustedProxies` | `private` | → `UI_TRUSTED_PROXIES`. How the login limiter resolves a client IP: `private` trusts loopback/link-local/private-net hops (an in-cluster ingress); a comma-separated CIDR list trusts ONLY those listed hops (not a superset of `private`); `none` ignores `X-Forwarded-For` and keys on the raw TCP peer (only correct with no proxy in front). A multi-CIDR list hits the `--set` comma footgun above — use a `-f values.yaml` file or escape the commas (`\,`). |
 | `ui.sso.enabled` | `false` | Enables Keycloak OIDC SSO and disables LDAP password login. |
 | `ui.sso.issuerURL` | Beluga realm issuer | → `SSO_ISSUER_URL`. Required when SSO is enabled. |
 | `ui.sso.clientID` | `""` | Confidential OIDC client ID. Required when SSO is enabled. |

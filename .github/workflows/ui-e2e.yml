@@ -78,6 +78,8 @@ jobs:
             --set ui.image.repository=ldapium-ui \
             --set ui.image.tag=e2e \
             --set ui.image.pullPolicy=Never \
+            --set ui.session.loginFailureLimit=3 \
+            --set ui.session.loginFailureWindow=5s \
             --wait --timeout 5m
 
       # cn=Monitor denies read to every bind except its own dedicated
@@ -115,6 +117,40 @@ jobs:
           E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
           CI: "true"
         run: npx playwright test
+
+      # Runs after the browser suite so none of its logins are ever
+      # throttled. The install above sets limit=3 / window=5s — small enough
+      # to prove the whole contract live rather than trusting the unit
+      # tests: the fourth bad password is refused before it reaches the
+      # directory, a *correct* password from the same IP is refused too while
+      # the block holds, and the block lifts once the window has slid past.
+      # The identity is the rootdn on purpose: its bind is resolved by the
+      # frontend against olcRootPW, so ppolicy lockout can't fire on the
+      # deliberate failures and turn the final 200 into a false failure.
+      - name: Verify failed-login throttling (#77)
+        env:
+          E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
+        run: |
+          set -euo pipefail
+          login() {
+            curl -s -o /dev/null -D /tmp/login-headers -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -d "{\"identity\":\"cn=admin,dc=example,dc=org\",\"password\":\"$1\"}" \
+              http://127.0.0.1:8080/api/login
+          }
+          for i in 1 2 3; do
+            code=$(login wrong-password)
+            [ "$code" = 401 ] || { echo "::error::failure $i: expected 401, got $code"; exit 1; }
+          done
+          code=$(login wrong-password)
+          [ "$code" = 429 ] || { echo "::error::4th failure: expected 429, got $code"; exit 1; }
+          grep -i '^retry-after: [0-9]' /tmp/login-headers
+          code=$(login "$E2E_ADMIN_PASSWORD")
+          [ "$code" = 429 ] || { echo "::error::correct password while blocked: expected 429, got $code"; exit 1; }
+          sleep 6
+          code=$(login "$E2E_ADMIN_PASSWORD")
+          [ "$code" = 200 ] || { echo "::error::after the window slid past: expected 200, got $code"; exit 1; }
+          echo "PASS: 3 failures -> 429 with Retry-After, correct password blocked meanwhile, block lifts after the window"
 
       - name: Upload Playwright report
         if: always()

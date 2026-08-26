@@ -63,6 +63,167 @@ func TestLoad_DefaultsAndOverrides(t *testing.T) {
 	if !cfg.CookieSecure {
 		t.Error("CookieSecure should default to true")
 	}
+	if cfg.LoginFailureLimit != 10 {
+		t.Errorf("LoginFailureLimit = %d, want 10", cfg.LoginFailureLimit)
+	}
+	if cfg.LoginFailureWindow != time.Minute {
+		t.Errorf("LoginFailureWindow = %v, want 1m", cfg.LoginFailureWindow)
+	}
+}
+
+func TestLoad_LoginFailureLimitOverrideAndDisable(t *testing.T) {
+	base := map[string]string{
+		"LDAP_URL":       "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":   "dc=example,dc=com",
+		"SESSION_SECRET": "01234567890123456789012345678901",
+	}
+
+	override := map[string]string{}
+	for k, v := range base {
+		override[k] = v
+	}
+	override["UI_LOGIN_FAILURE_LIMIT"] = "25"
+	override["UI_LOGIN_FAILURE_WINDOW"] = "5m"
+	cfg, err := Load(env(override))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LoginFailureLimit != 25 {
+		t.Errorf("LoginFailureLimit = %d, want 25", cfg.LoginFailureLimit)
+	}
+	if cfg.LoginFailureWindow != 5*time.Minute {
+		t.Errorf("LoginFailureWindow = %v, want 5m", cfg.LoginFailureWindow)
+	}
+
+	disabled := map[string]string{}
+	for k, v := range base {
+		disabled[k] = v
+	}
+	disabled["UI_LOGIN_FAILURE_LIMIT"] = "0"
+	cfg, err = Load(env(disabled))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LoginFailureLimit != 0 {
+		t.Errorf("LoginFailureLimit = %d, want 0 (disabled)", cfg.LoginFailureLimit)
+	}
+}
+
+func TestLoad_LoginFailureLimitRejectsInvalidValues(t *testing.T) {
+	base := map[string]string{
+		"LDAP_URL":       "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":   "dc=example,dc=com",
+		"SESSION_SECRET": "01234567890123456789012345678901",
+	}
+
+	negativeLimit := map[string]string{}
+	for k, v := range base {
+		negativeLimit[k] = v
+	}
+	negativeLimit["UI_LOGIN_FAILURE_LIMIT"] = "-1"
+	if _, err := Load(env(negativeLimit)); err == nil {
+		t.Fatal("expected error for negative UI_LOGIN_FAILURE_LIMIT")
+	}
+
+	badLimit := map[string]string{}
+	for k, v := range base {
+		badLimit[k] = v
+	}
+	badLimit["UI_LOGIN_FAILURE_LIMIT"] = "not-a-number"
+	if _, err := Load(env(badLimit)); err == nil {
+		t.Fatal("expected error for non-numeric UI_LOGIN_FAILURE_LIMIT")
+	}
+
+	zeroWindow := map[string]string{}
+	for k, v := range base {
+		zeroWindow[k] = v
+	}
+	zeroWindow["UI_LOGIN_FAILURE_WINDOW"] = "0s"
+	if _, err := Load(env(zeroWindow)); err == nil {
+		t.Fatal("expected error for non-positive UI_LOGIN_FAILURE_WINDOW")
+	}
+
+	negativeWindow := map[string]string{}
+	for k, v := range base {
+		negativeWindow[k] = v
+	}
+	negativeWindow["UI_LOGIN_FAILURE_WINDOW"] = "-1m"
+	if _, err := Load(env(negativeWindow)); err == nil {
+		t.Fatal("expected error for negative UI_LOGIN_FAILURE_WINDOW")
+	}
+
+	badWindow := map[string]string{}
+	for k, v := range base {
+		badWindow[k] = v
+	}
+	badWindow["UI_LOGIN_FAILURE_WINDOW"] = "not-a-duration"
+	if _, err := Load(env(badWindow)); err == nil {
+		t.Fatal("expected error for invalid UI_LOGIN_FAILURE_WINDOW")
+	}
+}
+
+func TestLoad_TrustedProxiesDefaultsAndModes(t *testing.T) {
+	base := map[string]string{
+		"LDAP_URL":       "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":   "dc=example,dc=com",
+		"SESSION_SECRET": "01234567890123456789012345678901",
+	}
+
+	cfg, err := Load(env(base))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TrustedProxies != "private" {
+		t.Errorf("TrustedProxies = %q, want private by default", cfg.TrustedProxies)
+	}
+
+	none := map[string]string{}
+	for k, v := range base {
+		none[k] = v
+	}
+	none["UI_TRUSTED_PROXIES"] = "none"
+	if cfg, err = Load(env(none)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TrustedProxies != "none" {
+		t.Errorf("TrustedProxies = %q, want none", cfg.TrustedProxies)
+	}
+
+	cidrList := map[string]string{}
+	for k, v := range base {
+		cidrList[k] = v
+	}
+	cidrList["UI_TRUSTED_PROXIES"] = "10.42.0.0/16, 192.168.1.5/32"
+	if cfg, err = Load(env(cidrList)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TrustedProxies != "10.42.0.0/16, 192.168.1.5/32" {
+		t.Errorf("TrustedProxies = %q, want the CIDR list preserved verbatim", cfg.TrustedProxies)
+	}
+
+	ipv6CIDR := map[string]string{}
+	for k, v := range base {
+		ipv6CIDR[k] = v
+	}
+	ipv6CIDR["UI_TRUSTED_PROXIES"] = "2001:db8::/32"
+	if cfg, err = Load(env(ipv6CIDR)); err != nil {
+		t.Fatalf("unexpected error for a valid IPv6 CIDR: %v", err)
+	}
+	if cfg.TrustedProxies != "2001:db8::/32" {
+		t.Errorf("TrustedProxies = %q, want the IPv6 CIDR preserved verbatim", cfg.TrustedProxies)
+	}
+}
+
+func TestLoad_TrustedProxiesRejectsInvalidCIDR(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"LDAP_URL":           "ldap://ldap.example.com:389",
+		"LDAP_BASE_DN":       "dc=example,dc=com",
+		"SESSION_SECRET":     "01234567890123456789012345678901",
+		"UI_TRUSTED_PROXIES": "not-a-cidr",
+	}))
+	if err == nil {
+		t.Fatal("expected error for an invalid UI_TRUSTED_PROXIES CIDR entry")
+	}
 }
 
 func TestLoad_InvalidBoolAndDuration(t *testing.T) {
