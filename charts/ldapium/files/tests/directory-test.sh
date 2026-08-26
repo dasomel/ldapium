@@ -34,6 +34,12 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
 TEST_OU="ou=helm-test,${LDAP_ROOT_DN}"
 TEST_USER="uid=helm-test-user,${TEST_OU}"
 TEST_GROUP="cn=helm-test-group,${TEST_OU}"
+# For the unique-overlay check: one real entry plus two that must be refused.
+# The refused pair should never be created, but they are cleaned up anyway in
+# case a prior run died between the add attempt and the server's rejection.
+UNIQUE_BASE="uid=helm-test-uniq,${TEST_OU}"
+UNIQUE_DUP_UID="uid=helm-test-uniq-dupuid,${TEST_OU}"
+UNIQUE_DUP_MAIL="uid=helm-test-uniq-dupmail,${TEST_OU}"
 
 # Writes go to ONE node, not through the load-balanced Service. The memberof
 # overlay updates memberOf on the node that performs the write, as part of
@@ -95,7 +101,7 @@ fi
 if [ "$TEST_WRITE" = "1" ]; then
 	cleanup() {
 		# Children first: the directory refuses to delete a non-leaf entry.
-		for dn in "$TEST_USER" "$TEST_GROUP" "$TEST_OU"; do
+		for dn in "$UNIQUE_BASE" "$UNIQUE_DUP_UID" "$UNIQUE_DUP_MAIL" "$TEST_USER" "$TEST_GROUP" "$TEST_OU"; do
 			ldapdelete -x -o nettimeout=10 -H "$WRITE_URL" \
 				-D "$LDAP_ADMIN_DN" -y "$PASSWORD_FILE" "$dn" >/dev/null 2>&1 || true
 		done
@@ -140,6 +146,72 @@ if [ "$TEST_WRITE" = "1" ]; then
 		pass "memberof overlay populated memberOf on the test user"
 	else
 		fail "memberOf was not populated — the memberof overlay is not active"
+	fi
+
+	# --------------------------------------------------- unique overlay
+	# Same reasoning as the memberof check: the chart advertises uid/mail
+	# uniqueness through the unique overlay, and nothing else here would
+	# notice if the module failed to load and slapd accepted a duplicate.
+	# Prove a duplicate uid and a duplicate mail are each refused with an
+	# LDAP constraint violation (result 19), not merely that the first write
+	# happened to succeed.
+	expect_unique_rejection() {
+		desc="$1"
+		# `if out=$(...)` so a non-zero ldapadd (the expected outcome) is
+		# consumed by the conditional rather than tripping `set -e`, while
+		# still capturing the server's message to classify the failure.
+		if out=$(ldapadd -x -o nettimeout=10 -H "$WRITE_URL" \
+			-D "$LDAP_ADMIN_DN" -y "$PASSWORD_FILE" 2>&1); then
+			fail "$desc: the write was accepted — the unique overlay is not enforcing uniqueness"
+			return
+		fi
+		case "$out" in
+		*"Constraint violation"* | *"(19)"*)
+			pass "$desc: refused with a constraint violation" ;;
+		*)
+			fail "$desc: refused, but not as a uniqueness violation: $out" ;;
+		esac
+	}
+
+	if ldapadd -x -o nettimeout=10 -H "$WRITE_URL" \
+		-D "$LDAP_ADMIN_DN" -y "$PASSWORD_FILE" >/dev/null 2>&1 <<-LDIF
+			dn: ${UNIQUE_BASE}
+			objectClass: inetOrgPerson
+			uid: helm-test-uniq
+			cn: helm test uniq
+			sn: uniq
+			mail: helm-test-uniq@example.invalid
+		LDIF
+	then
+		pass "created the uniqueness baseline entry $UNIQUE_BASE"
+
+		expect_unique_rejection "duplicate uid" <<-LDIF
+			dn: ${UNIQUE_DUP_UID}
+			objectClass: inetOrgPerson
+			uid: helm-test-uniq
+			cn: dup uid
+			sn: dup
+			mail: helm-test-uniq-other@example.invalid
+		LDIF
+
+		expect_unique_rejection "duplicate mail" <<-LDIF
+			dn: ${UNIQUE_DUP_MAIL}
+			objectClass: inetOrgPerson
+			uid: helm-test-uniq-other
+			cn: dup mail
+			sn: dup
+			mail: helm-test-uniq@example.invalid
+		LDIF
+
+		# The rejected writes must not have disturbed the original entry.
+		if [ "$(search "$WRITE_URL" -b "$UNIQUE_BASE" -s base dn 2>/dev/null |
+			grep -c "^dn: ${UNIQUE_BASE}$")" = "1" ]; then
+			pass "the uniqueness baseline entry is still present and singular"
+		else
+			fail "the uniqueness baseline entry is missing after the rejected duplicates"
+		fi
+	else
+		fail "could not create the uniqueness baseline entry $UNIQUE_BASE"
 	fi
 
 	# ------------------------------------------------------- replication
