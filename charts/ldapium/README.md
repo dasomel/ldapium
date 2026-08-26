@@ -935,9 +935,10 @@ kubectl -n <ns> scale statefulset <fullname> --replicas=<original>
 Do not `slapadd` the same backup onto every replica independently — each
 would mint its own view of "current" and they would conflict permanently.
 
+Rendered chart manifests are schema-validated by
+[`scripts/verify-chart-schema.sh`](../../scripts/verify-chart-schema.sh), which
+CI runs for the default, replicated, TLS, and UI profiles.
+
 ## Known gaps
 
-- No `kubeconform`/schema-validation run was part of this chart's own
-  verification (tool unavailable in the authoring environment); `kubectl
-  apply --dry-run=client` was used instead.
 - Not deployed to a real cluster as part of authoring this chart.

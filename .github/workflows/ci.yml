@@ -298,6 +298,33 @@ jobs:
           fi
           echo "chart correctly refused to render without an admin password"
 
+  chart-schema:
+    name: Chart manifests pass kubeconform
+    runs-on: ubuntu-24.04
+    env:
+      KUBECONFORM_VERSION: v0.6.7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.17.3
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          archive="/tmp/kubeconform-linux-amd64.tar.gz"
+          curl --fail --location --show-error --retry 3 \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            --output "$archive"
+          tar -xzf "$archive" -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Validate rendered chart manifests
+        run: ./scripts/verify-chart-schema.sh
+
   licenses:
     name: Third-party licenses
     runs-on: ubuntu-24.04
