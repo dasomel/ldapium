@@ -167,6 +167,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ldap.rootDN` | `dc=example,dc=org` | → `LDAP_ROOT_DN`. Override for real installs. |
 | `ldap.orgName` | `""` | → `LDAP_ORG_NAME` (image derives a default when unset). |
 | `ldap.adminDN` | `""` | → `LDAP_ADMIN_DN` (image derives a default when unset). |
+| `ldap.anonymousReadBase` | `""` | → `LDAP_ANONYMOUS_READ_BASE`. Empty keeps today's DIT-wide anonymous read of `entry`/`uid`/`objectClass`; set to a DN under `ldap.rootDN` to narrow it to that subtree only (`image/README.md`, "Access control (ACL)"). DN-shaped, so it hits the `--set` comma footgun above — use `--set-string` with an escaped comma (`--set-string 'ldap.anonymousReadBase=ou=people\,dc=example\,dc=org'`) or a values file. |
 | `ldap.logLevel` | `stats` | → `LDAP_LOG_LEVEL`. |
 | `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required unless `existingSecret` is set. |
 | `auth.existingSecret` | `""` | Pre-existing Secret name to source the admin password from. |

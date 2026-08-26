@@ -93,8 +93,19 @@ The bind-then-search pattern SSSD needs is already what this directory's ACL
 is shaped for (`image/README.md`, "Access control (ACL)"): anonymous or an
 authenticated identity can read `entry`, `uid`, `objectClass` to resolve a
 bare `uid` to a DN, then bind as that DN to verify a password — the same flow
-the management UI's own login uses. A standard `sssd.conf` `[domain]` section
-against this directory:
+the management UI's own login uses. This can't be turned off outright without
+breaking that resolution flow for every anonymously-binding client, but as of
+`LDAP_ANONYMOUS_READ_BASE` (`image/README.md`) it can be **narrowed**: set it
+to the subtree that actually holds your user entries (e.g.
+`ou=people,dc=example,dc=org`) and a root-base anonymous `uid` search — the
+`ldap_search_base = <rootDN>` shown below — keeps working unchanged, because
+slapd still needs (and keeps) `search` access to traverse the root and
+intermediate OUs on the way to that subtree. What stops is enumeration
+outside the base: an anonymous bind can no longer list or read `entry`/`uid`/
+`objectClass` on entries in, say, `ou=groups` or `ou=policies`, and a filter
+against those trees returns nothing rather than the DIT-wide visibility this
+directory has always granted anonymous by default. A standard `sssd.conf`
+`[domain]` section against this directory:
 
 ```ini
 [domain/ldapium]

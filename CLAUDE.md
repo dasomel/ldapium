@@ -31,6 +31,14 @@ wrong by default. Not a general intro — see `README.md`, `ui/README.md`, `imag
   open question) resolves a same-entry conflict by `entryCSN` timestamp, last-write-wins — not
   by which side has more nodes. An isolated single node's write can silently beat a two-node
   majority's write if its clock timestamp is later, and nothing logs that a conflict happened.
+- ACL `search` vs `read` on the `entry` pseudo-attribute are different grants: `search` lets
+  slapd use an entry as a search base / traverse it as a candidate without ever returning it;
+  `read` is what makes it returnable. Scoping anonymous `read` to a subtree while leaving
+  `by anonymous search` on `entry` elsewhere is how `LDAP_ANONYMOUS_READ_BASE` keeps root-base
+  `(uid=x)` lookups working yet hides everything outside the base — and a filter on an
+  attribute the identity has no `search` access to evaluates undefined (even `(objectClass=*)`),
+  so those entries are never matched. Live-verified; see the `#__ANON_READ_ACCESS__` comment
+  in `image/entrypoint.sh`.
 
 ## Attribute exposure
 

@@ -74,6 +74,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_ROOT_DN` | **yes** | — | e.g. `dc=example,dc=org`. Must start with `dc=`. Container refuses to start if unset. |
 | `LDAP_ORG_NAME` | no | first `dc=` component of `LDAP_ROOT_DN` | Used as the `o:` attribute on the root entry. |
 | `LDAP_ADMIN_DN` | no | `cn=admin,${LDAP_ROOT_DN}` | Must use `cn=` as its RDN attribute. |
+| `LDAP_ANONYMOUS_READ_BASE` | no | `""` (whole DIT) | Must sit under `LDAP_ROOT_DN` if set. Narrows anonymous read of `entry`/`uid`/`objectClass` (see [Access control (ACL)](#access-control-acl)) to this subtree instead of the whole directory; a bind-then-search client (SSSD, this project's UI) can still resolve a `uid` from a root-base search, but anonymous can no longer enumerate entries outside this base. Applied at bootstrap only (see below). |
 | `LDAP_ADMIN_PASSWORD` | **yes**\* | — | No default, ever. Container refuses to start if unset. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
 | `LDAP_ADMIN_PASSWORD_FILE` | no\* | — | Path to a file containing the admin password (for secret mounts). Takes precedence if both are set and readable. |
 | `LDAP_LOG_LEVEL` | no | `stats` | Passed to `slapd -d`. Any value (including a quiet one) keeps slapd in the foreground, which is required for it to run as PID 1. |
@@ -138,7 +139,8 @@ no way to scope this down with `LDAP_TLS_AUTHZ_REGEXP` alone.
 
 `LDAP_SIZE_LIMIT`, `LDAP_TIME_LIMIT`, `LDAP_PASSWORD_HASH`,
 `LDAP_UNIQUE_ATTRIBUTES`, `LDAP_PASSWORD_POLICY_ENABLED` and its three
-`LDAP_PASSWORD_*` knobs, and `LDAP_DB_MAX_SIZE` are all baked into
+`LDAP_PASSWORD_*` knobs, `LDAP_DB_MAX_SIZE`, and `LDAP_ANONYMOUS_READ_BASE`
+are all baked into
 `cn=config` (or, for the policy entries, directly into the `mdb` database)
 the same way TLS is — read once, at first launch, from
 `image/ldifs/01-cn-config.ldif` / `image/ldifs/03-base-structure.ldif`.
@@ -279,7 +281,7 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 | Target | anonymous | authenticated user | the entry itself | `cn=admin,<rootDN>` |
 |---|---|---|---|---|
 | `userPassword`, `shadowLastChange` | bind only, never read | none | write | write |
-| `entry`, `uid`, `objectClass` | read | read | read (see below) | write |
+| `entry`, `uid`, `objectClass` | read — DIT-wide by default, only under `LDAP_ANONYMOUS_READ_BASE` when that is set (see below) | read | read (see below) | write |
 | every other attribute | none | read | write | write |
 | another user's entry (write or delete) | none | **none** | n/a | write |
 | `cn=config` | none | none | n/a | no — it is a separate database with its own admin identity, `cn=admin,cn=config` |
@@ -288,6 +290,34 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 The admin column is the rootdn, which bypasses ACLs by definition — the useful
 statement is not that it can do everything but that **nothing else in the first
 three columns can write anything outside its own entry**.
+
+### Narrowing anonymous read: `LDAP_ANONYMOUS_READ_BASE`
+
+Rule 2 as shipped has no `dn.subtree` scope, so anonymous can enumerate the
+existence, `uid` and `objectClass` of *every* entry — `ou=groups`,
+`ou=policies` included — even though the only thing that read exists for is
+resolving a `uid` under wherever the user entries live. Setting
+`LDAP_ANONYMOUS_READ_BASE` to that subtree (it must sit under `LDAP_ROOT_DN`)
+replaces rules 2–3 with four:
+
+1. `dn.subtree="<base>"`, `entry`/`uid`/`objectClass`: anonymous read, users read
+2. `entry`, everywhere: anonymous **search**, users read
+3. `uid`/`objectClass`, everywhere else: users read (anonymous nothing)
+4. everything else: exactly the old rule 3
+
+The load-bearing one is 2. `search` and `read` on the `entry` pseudo-attribute
+are different grants: `search` lets slapd use an entry as a search base and
+walk through it as a candidate without ever disclosing or returning it, `read`
+is what makes it returnable. Keeping `search` DIT-wide is what lets a
+root-base anonymous `(uid=x)` search — the SSSD / management-UI login flow —
+keep working unchanged; keeping `read` only under the base is what stops
+enumeration outside it. And because anonymous has no `search` on `uid` or
+`objectClass` outside the base, any filter against those entries — even
+`(objectClass=*)` — evaluates undefined and never matches, so a base-scope
+search on a known DN there returns nothing rather than confirming it exists.
+Authenticated users keep exactly the access described above. Unset (the
+default), the ACL is byte-for-byte what it has always been; this is verified
+live in `.github/workflows/security-e2e.yml`.
 
 Rule 2 has no `by self write`, and the omission is deliberate rather than an
 oversight. It would be dead anyway — `by` clauses match in order and `self` is

@@ -42,6 +42,7 @@ jobs:
             --set image.tag=security \
             --set image.pullPolicy=Never \
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
+            --set-string 'ldap.anonymousReadBase=ou=people\,dc=example\,dc=org' \
             --set auth.adminPassword='security-e2e-password' \
             --set ui.enabled=false \
             --set audit.enabled=true \
@@ -205,6 +206,46 @@ jobs:
                 exit 1
               fi
               echo "PASS: authenticated users cannot change another entry group membership"
+            '
+
+      - name: Verify anonymous read is scoped to LDAP_ANONYMOUS_READ_BASE
+        run: |
+          set -euo pipefail
+          # ldap.anonymousReadBase above narrows anonymous read of
+          # entry/uid/objectClass to ou=people,dc=example,dc=org. This must
+          # hold after the group-membership step above created ou=groups, so
+          # it can prove enumeration is actually blocked there rather than
+          # the OU simply not existing yet.
+          # shellcheck disable=SC2016 # The quoted script is evaluated by the client container.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              url="ldap://directory-ldapium:389"
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              group="cn=operators,ou=groups,dc=example,dc=org"
+
+              echo "(a) anonymous root-base uid search still resolves a DN under the base"
+              out=$(ldapsearch -x -H "$url" -b dc=example,dc=org "(uid=alice)" dn)
+              echo "$out" | grep -q "^dn: uid=alice,ou=people,dc=example,dc=org$"
+
+              echo "(b) anonymous search under ou=groups (outside the base) returns nothing"
+              out=$(ldapsearch -x -H "$url" -b ou=groups,dc=example,dc=org "(objectClass=*)")
+              count=$(echo "$out" | grep -c "^dn:" || true)
+              if [ "$count" != "0" ]; then
+                echo "::error::anonymous search under ou=groups returned ${count} entries, expected 0"
+                exit 1
+              fi
+
+              echo "(c) anonymous base-scope search on the group entry returns no entry"
+              out=$(ldapsearch -x -H "$url" -b "$group" -s base "(objectClass=*)" 2>&1 || true)
+              if echo "$out" | grep -q "^dn:"; then
+                echo "::error::anonymous base-scope search returned the group entry"
+                exit 1
+              fi
+
+              echo "(d) an authenticated user can still read the group entry cn"
+              ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$group" -s base cn | grep -q "^cn: operators$"
+
+              echo "PASS: anonymous read is scoped to LDAP_ANONYMOUS_READ_BASE"
             '
 
       - name: Verify password-policy entries deny unprivileged modification

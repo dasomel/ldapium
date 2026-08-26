@@ -71,6 +71,22 @@ esac
 
 LDAP_ADMIN_RDN_VALUE=$(printf '%s' "$LDAP_ADMIN_DN" | sed -E 's/^cn=([^,]+),.*/\1/')
 
+# LDAP_ANONYMOUS_READ_BASE (default empty — no behavior change) narrows
+# anonymous read from the whole DIT down to one subtree; see the
+# #__ANON_READ_ACCESS__ rendering below and its comment in
+# 01-cn-config.ldif for the ACL shape. Same normalization/`die` pattern as
+# LDAP_ADMIN_DN above, including the same `helm --set` comma footgun.
+LDAP_ANONYMOUS_READ_BASE="${LDAP_ANONYMOUS_READ_BASE:-}"
+if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
+  _anon_base_cmp=$(printf '%s' "$LDAP_ANONYMOUS_READ_BASE" | sed 's/, */,/g' | tr '[:upper:]' '[:lower:]')
+  _root_dn_cmp=$(printf '%s' "$LDAP_ROOT_DN" | sed 's/, */,/g' | tr '[:upper:]' '[:lower:]')
+  case "$_anon_base_cmp" in
+    "$_root_dn_cmp"|*",${_root_dn_cmp}") ;;
+    *) die "LDAP_ANONYMOUS_READ_BASE must sit under LDAP_ROOT_DN (got: ${LDAP_ANONYMOUS_READ_BASE}, root: ${LDAP_ROOT_DN}) — if this came from 'helm --set', escape the commas: ldap.anonymousReadBase=ou=people\\,${LDAP_ROOT_DN}" ;;
+  esac
+  unset _anon_base_cmp _root_dn_cmp
+fi
+
 if [ -n "${LDAP_ADMIN_PASSWORD_FILE:-}" ]; then
   [ -r "$LDAP_ADMIN_PASSWORD_FILE" ] || die "LDAP_ADMIN_PASSWORD_FILE is set but not readable: ${LDAP_ADMIN_PASSWORD_FILE}"
   LDAP_ADMIN_PASSWORD=$(cat "$LDAP_ADMIN_PASSWORD_FILE")
@@ -523,6 +539,55 @@ d}" "$cn_config"
   else
     sed -i '/^#__TLS_ATTRS__$/d' "$cn_config"
   fi
+
+  # anonymous-read ACL: whole-block conditional, same r/d technique as
+  # #__TLS_ATTRS__ above but replacing the marker with one or more whole
+  # olcAccess values rather than attribute lines within an existing entry.
+  # Default (empty LDAP_ANONYMOUS_READ_BASE) renders the same two rules this
+  # image has always shipped — anonymous read of entry/uid/objectClass
+  # DIT-wide — so an unset env var is a strict no-op.
+  #
+  # When LDAP_ANONYMOUS_READ_BASE is set, anonymous read of entry/uid/
+  # objectClass is scoped to that subtree only (rule {1}), but anonymous
+  # still needs `search` (not `read`) on `entry` everywhere else (rule {2})
+  # so slapd can still walk through the root and intermediate OUs to reach
+  # the base — `search` lets slapd use an entry as a stepping stone without
+  # ever disclosing or returning it. `uid`/`objectClass` get no anonymous
+  # access at all outside the base (rule {3}, `by users` only), so a filter
+  # like `(objectClass=*)` evaluates undefined against those entries for an
+  # anonymous bind and never matches them. Order matters — rule {1} must
+  # come before rule {2} or anonymous would match {2} first on `entry` with
+  # only `search`, never reaching the `read` grant under the base.
+  anon_read_access="${work}/anon-read-access.ldif"
+  if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
+    {
+      printf 'olcAccess: {1}to dn.subtree="%s" attrs=entry,uid,objectClass\n' "$LDAP_ANONYMOUS_READ_BASE"
+      printf '  by anonymous read\n'
+      printf '  by users read\n'
+      printf 'olcAccess: {2}to attrs=entry\n'
+      printf '  by anonymous search\n'
+      printf '  by users read\n'
+      printf 'olcAccess: {3}to attrs=uid,objectClass\n'
+      printf '  by users read\n'
+      printf 'olcAccess: {4}to *\n'
+      printf '  by self write\n'
+      printf '  by users read\n'
+      printf '  by anonymous none\n'
+    } > "$anon_read_access"
+    log "narrowing anonymous read to ${LDAP_ANONYMOUS_READ_BASE}"
+  else
+    {
+      printf 'olcAccess: {1}to attrs=entry,uid,objectClass\n'
+      printf '  by anonymous read\n'
+      printf '  by users read\n'
+      printf 'olcAccess: {2}to *\n'
+      printf '  by self write\n'
+      printf '  by users read\n'
+      printf '  by anonymous none\n'
+    } > "$anon_read_access"
+  fi
+  sed -i "/^#__ANON_READ_ACCESS__$/{r ${anon_read_access}
+d}" "$cn_config"
 
   # unique overlay: whole-entry conditional, same r/d technique as
   # #__TLS_ATTRS__ above but replacing the marker with an entire olcOverlay
