@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,11 +14,11 @@ import (
 // depends on.
 type fakeClient struct {
 	dn     string
-	closed bool
+	closed atomic.Bool
 }
 
 func (f *fakeClient) WhoAmI() string                                          { return f.dn }
-func (f *fakeClient) Close() error                                            { f.closed = true; return nil }
+func (f *fakeClient) Close() error                                            { f.closed.Store(true); return nil }
 func (f *fakeClient) ResolveUID(context.Context, string) (string, error)      { return "", nil }
 func (f *fakeClient) ServerVersion(context.Context) (string, error)           { return "", nil }
 func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error) { return nil, nil }
@@ -107,7 +108,7 @@ func TestStore_Delete_ClosesClient(t *testing.T) {
 
 	s.Delete(sess.ID)
 
-	if !fc.closed {
+	if !fc.closed.Load() {
 		t.Error("expected Delete to close the bound client")
 	}
 	if _, ok := s.Get(sess.ID); ok {
@@ -133,10 +134,10 @@ func TestStore_ExpiredSession_ClosesClientOnGet(t *testing.T) {
 	// Close happens asynchronously in Get for the expired path; give it a
 	// moment rather than asserting immediately.
 	deadline := time.Now().Add(time.Second)
-	for !fc.closed && time.Now().Before(deadline) {
+	for !fc.closed.Load() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if !fc.closed {
+	if !fc.closed.Load() {
 		t.Error("expected expired session's client to be closed")
 	}
 }
@@ -176,7 +177,7 @@ func TestStore_Sweep_RemovesExpired(t *testing.T) {
 	if s.Len() != 0 {
 		t.Errorf("Len() = %d, want 0 after sweep", s.Len())
 	}
-	if !fc.closed {
+	if !fc.closed.Load() {
 		t.Error("expected sweep to close expired client")
 	}
 }
