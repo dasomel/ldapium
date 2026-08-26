@@ -29,6 +29,35 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page).toHaveURL(/\/tree$/, { timeout: 15_000 })
 }
 
+const CRUD_USER = {
+  uid: 'e2e-ui-crud-user',
+  cn: 'E2E UI CRUD User',
+  sn: 'User',
+  initialMail: 'e2e-ui-crud-initial@example.org',
+  updatedMail: 'e2e-ui-crud-updated@example.org',
+  initialPassword: 'UiE2EInitial-2026!',
+  resetPassword: 'UiE2EReset-2026!',
+}
+
+function userRow(page: import('@playwright/test').Page, uid: string) {
+  return page.getByRole('row').filter({ has: page.getByRole('cell', { name: uid, exact: true }) })
+}
+
+async function filterUsers(page: import('@playwright/test').Page, query: string) {
+  await page.getByPlaceholder('Filter users…').fill(query)
+}
+
+async function deleteUserIfPresent(page: import('@playwright/test').Page, uid: string) {
+  const row = userRow(page, uid)
+  if ((await row.count()) === 0) return
+
+  await row.getByRole('button', { name: 'Delete' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Delete user' })
+  await dialog.locator('#confirm-text').fill(uid)
+  await dialog.getByRole('button', { name: 'Delete' }).click()
+  await expect(row).toHaveCount(0)
+}
+
 test('logs in and browses the DIT tree', async ({ page }) => {
   await login(page)
   // The base DN is always the tree's root node — confirms the backend
@@ -54,6 +83,57 @@ test('health page shows live cn=Monitor data once granted', async ({ page }) => 
   // found by actually running this against a live server, not assumed.
   await expect(page.getByText('Bind', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Database' })).toBeVisible()
+})
+
+test('creates, edits, resets the password for, and deletes a user through the UI', async ({ page }) => {
+  await login(page)
+  await page.getByRole('link', { name: 'Users' }).click()
+  await expect(page).toHaveURL(/\/users$/)
+  await expect(page.getByText(/^\d+ total$/)).toBeVisible()
+
+  // A failed prior run can leave this dedicated account behind. Remove it
+  // through the same confirmation UI before starting, keeping reruns
+  // idempotent without bypassing the application or LDAP.
+  await filterUsers(page, CRUD_USER.uid)
+  await deleteUserIfPresent(page, CRUD_USER.uid)
+  await filterUsers(page, '')
+
+  // There are two "New user" buttons when the directory has no users: the
+  // always-present one in the page toolbar and a second inside the empty-state
+  // card. On a freshly seeded CI directory the empty state renders too, so an
+  // unscoped name match is ambiguous — target the toolbar button, which comes
+  // first in the DOM and is present regardless of how many users exist.
+  await page.getByRole('button', { name: 'New user' }).first().click()
+  const createDialog = page.getByRole('dialog', { name: 'New user' })
+  await createDialog.locator('#uid').fill(CRUD_USER.uid)
+  await createDialog.locator('#mail').fill(CRUD_USER.initialMail)
+  await createDialog.locator('#sn').fill(CRUD_USER.sn)
+  await createDialog.locator('#cn').fill(CRUD_USER.cn)
+  await createDialog.locator('#password').fill(CRUD_USER.initialPassword)
+  await createDialog.getByRole('button', { name: 'Create user' }).click()
+  await expect(page.getByText(`Created user ${CRUD_USER.uid}`)).toBeVisible()
+
+  await filterUsers(page, CRUD_USER.uid)
+  const row = userRow(page, CRUD_USER.uid)
+  await expect(row).toContainText(CRUD_USER.cn)
+  await expect(row).toContainText(CRUD_USER.initialMail)
+
+  await row.getByRole('button', { name: 'Edit' }).click()
+  const editDialog = page.getByRole('dialog', { name: 'Edit user' })
+  await editDialog.locator('#mail').fill(CRUD_USER.updatedMail)
+  await editDialog.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByText(`Updated ${CRUD_USER.uid}`)).toBeVisible()
+  await expect(row).toContainText(CRUD_USER.updatedMail)
+
+  await row.getByRole('button', { name: 'Set password' }).click()
+  const passwordDialog = page.getByRole('dialog', { name: 'Set password' })
+  await passwordDialog.locator('#new-password').fill(CRUD_USER.resetPassword)
+  await passwordDialog.getByRole('button', { name: 'Set password' }).click()
+  await expect(page.getByText('Password updated')).toBeVisible()
+  await expect(passwordDialog).toHaveCount(0)
+
+  await deleteUserIfPresent(page, CRUD_USER.uid)
+  await expect(userRow(page, CRUD_USER.uid)).toHaveCount(0)
 })
 
 test('logs out and cannot reach an authed page without a session', async ({ page }) => {
