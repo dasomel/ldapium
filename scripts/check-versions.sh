@@ -59,6 +59,19 @@ for var in OPENLDAP_IMAGE UI_IMAGE; do
 	fi
 done
 
+# .env.example shows the same two images commented out as a starting point.
+# They are the published release tags, not the OpenLDAP appVersion — the same
+# distinction docker-compose.yml's default tags follow — so drift here is the
+# same footgun, one copy further out.
+for var in OPENLDAP_IMAGE UI_IMAGE; do
+	tag=$(sed -n "s/^# *$var=[^:]*:\(.*\)$/\1/p" .env.example)
+	if [ -z "$tag" ]; then
+		note ".env.example has no example tag for \$$var"
+	elif [ "$tag" != "$chart_version" ]; then
+		note ".env.example \$$var example tag ($tag) != release version ($chart_version)"
+	fi
+done
+
 # The frontend package is never published to npm, but its version shows up in
 # lockfiles and SBOMs, so it is one more copy of the same number.
 npm_version=$(awk -F'"' '/^  "version":/ { print $4; exit }' ui/frontend/package.json)
