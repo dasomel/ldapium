@@ -190,6 +190,35 @@ ACL — group entries fall under the "every other attribute" row in
 here so the integration is describable rather than left as a gap with no
 shape.
 
+## TLS cipher suite baseline
+
+`olcTLSCipherSuite` is fixed to the Mozilla "Intermediate" profile's TLS 1.2
+list — AEAD ciphers with ECDHE forward secrecy only:
+
+```
+ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:
+ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:
+ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305
+```
+
+This excludes CBC+SHA-1 ciphers, static-RSA key exchange (no forward
+secrecy), and 3DES/RC4/export/NULL ciphers — all still technically
+negotiable on a bare TLS 1.2 connection unless a server explicitly narrows
+its list, which `olcTLSProtocolMin: 3.3` alone does not do. Practical impact:
+a client stuck on TLS 1.2 that only offers one of the excluded ciphers now
+fails the handshake instead of falling back to it. Every client this project
+has verified against (`ldapsearch`, this project's own `go-ldap` UI backend,
+any TLS 1.3-capable client) already prefers ECDHE+AEAD and is unaffected.
+Only a legacy client hard-coded to a static-RSA or CBC-only cipher list
+(pre-2014-era Java/.NET LDAP clients are the realistic case) would need an
+update — the same clients that a TLS 1.2 floor already pushes toward
+modernizing.
+
+This directive has **no effect on TLS 1.3**: OpenSSL negotiates TLS 1.3's
+fixed AEAD ciphersuite list (`TLS_AES_128_GCM_SHA256` and friends)
+separately, and OpenLDAP does not expose a directive to further restrict it.
+A TLS 1.3 client sees no behavior change from this baseline at all.
+
 ## General compatibility matrix
 
 | Client / tool | Status | Notes |

@@ -500,6 +500,23 @@ if [ ! -f "$MARKER" ]; then
       # the linked OpenSSL build happens to ship rather than a policy this
       # project actually chose and can point to in cn=config.
       printf 'olcTLSProtocolMin: 3.3\n'
+      # Cipher suite baseline for TLS <=1.2 connections, split out from the
+      # protocol floor above (see docs/client-compatibility.md) because it
+      # needed its own OpenSSL cipher-list-syntax + client-compatibility
+      # review. This is the Mozilla "Intermediate" profile's TLS 1.2 list
+      # (ssl-config.mozilla.org, verified current as of this project's own
+      # 2026 policy review) — AEAD ciphers with ECDHE forward secrecy only,
+      # no CBC/SHA-1, no static RSA key exchange, no 3DES/RC4/export/NULL.
+      # Fixed, not an env var, same rationale as the protocol floor: this is
+      # this project's chosen policy, not whatever OpenSSL's own default
+      # cipher list happens to allow.
+      #
+      # This directive maps to OpenSSL's SSL_CTX_set_cipher_list(), which
+      # only governs TLS 1.2 and below — it has no effect on TLS 1.3, whose
+      # fixed AEAD ciphersuite list (TLS_AES_128_GCM_SHA256 and friends) is
+      # negotiated separately and is not something OpenLDAP exposes a
+      # directive for. A TLS 1.3 client is unaffected either way.
+      printf 'olcTLSCipherSuite: ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305\n'
     } > "$tls_attrs"
     sed -i "/^#__TLS_ATTRS__$/{r ${tls_attrs}
 d}" "$cn_config"

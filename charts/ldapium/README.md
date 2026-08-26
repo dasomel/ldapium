@@ -134,6 +134,10 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 - the TLS 1.2 floor is actually enforced, not merely present in `cn=config`:
   raising `olcTLSProtocolMin` to TLS 1.3 stops a TLS 1.2 client that worked a
   moment earlier, while TLS 1.3 keeps working throughout
+- the `olcTLSCipherSuite` baseline is actually enforced, not merely present
+  in `cn=config`: a TLS 1.2 client offering only an ECDHE+AEAD cipher inside
+  the configured baseline connects, while one offering only a static-RSA
+  cipher outside it is refused
 - `olcSyncrepl` uses `ldaps://` and never plaintext `ldap://`
 - a write over LDAPS converges on every replica
 - a certificate rotation, with LDAPS availability sampled every second from a
