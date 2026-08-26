@@ -16,10 +16,14 @@ cd "$(dirname "$0")/.."
 
 # Scripts CI runs that `make check` deliberately does not.
 #
-#   check-base-images.sh  queries a container registry for each pinned digest,
-#                         so it needs network and credentials that an air-gapped
-#                         checkout will not have. CI has both.
-ci_only="./scripts/check-base-images.sh"
+#   check-base-images.sh    queries a container registry for each pinned digest,
+#                           so it needs network and credentials that an air-gapped
+#                           checkout will not have. CI has both.
+#
+#   verify-chart-schema.sh  needs the kubeconform binary. CI downloads it as its
+#                           own step right before this script runs; `make check`
+#                           deliberately does not require installing it locally.
+ci_only="./scripts/check-base-images.sh ./scripts/verify-chart-schema.sh"
 
 # A comment that mentions a script is not a step that runs one, and counting it
 # would demand the Makefile run something CI only talks about.
