@@ -5,6 +5,7 @@ on:
     paths:
       - "image/**"
       - "charts/**"
+      - ".github/fixtures/replication-offline-seed-values.yaml"
       - ".github/workflows/replication-chaos-e2e.yml"
   push:
     branches: [main]
@@ -34,10 +35,39 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
-      - name: Install 3-node LDAPium
+      - name: Install the initial provider with an offline LDIF seed
         run: |
           helm install directory charts/ldapium \
             --namespace directory --create-namespace \
+            -f .github/fixtures/replication-offline-seed-values.yaml \
+            --set replicaCount=1 \
+            --set image.repository=ldapium \
+            --set image.tag=chaos \
+            --set image.pullPolicy=Never \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
+            --set auth.adminPassword='chaos-e2e-password' \
+            --set ui.enabled=false \
+            --wait --timeout 10m
+
+      - name: Verify the initial provider applied the offline LDIF seed
+        run: |
+          set -euo pipefail
+          seed_dn='uid=offline-seed,ou=bootstrap,dc=example,dc=org'
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- \
+            ldapsearch -x -LLL -H ldap://localhost:389 \
+            -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+            -b "$seed_dn" -s base dn \
+            | grep -Fxc "dn: $seed_dn" | grep -qx 1
+
+      - name: Disable the seed and expand to three replicated providers
+        run: |
+          set -euo pipefail
+          # --reset-values drops the first-install seed fixture. StatefulSet
+          # ordinal 0 retains its PVCs, while 1 and 2 receive fresh claims and
+          # must populate through syncrepl's initial refresh.
+          helm upgrade directory charts/ldapium \
+            --namespace directory \
+            --reset-values \
             --set replicaCount=3 \
             --set image.repository=ldapium \
             --set image.tag=chaos \
@@ -46,6 +76,69 @@ jobs:
             --set auth.adminPassword='chaos-e2e-password' \
             --set ui.enabled=false \
             --wait --timeout 10m
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+          if kubectl -n directory get configmap directory-ldapium-seed >/dev/null 2>&1; then
+            echo '::error::seed ConfigMap remained after the replication upgrade'
+            exit 1
+          fi
+          for ordinal in 1 2; do
+            if [ "$(kubectl -n directory get pod "directory-ldapium-${ordinal}" -o jsonpath='{.spec.volumes[?(@.name=="seed")].name}')" = 'seed' ]; then
+              echo "::error::provider ${ordinal} still mounts the offline seed"
+              exit 1
+            fi
+          done
+
+      - name: Verify offline seed replication and post-bootstrap convergence
+        run: |
+          set -euo pipefail
+          seed_dn='uid=offline-seed,ou=bootstrap,dc=example,dc=org'
+          for ordinal in 0 1 2; do
+            i=0
+            until result=$(kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- \
+              ldapsearch -x -LLL -H ldap://localhost:389 \
+              -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+              -b "$seed_dn" -s base dn 2>/dev/null) \
+              && [ "$(printf '%s\n' "$result" | grep -Fxc "dn: $seed_dn" || true)" -eq 1 ]; do
+              i=$((i+1)); [ "$i" -lt 60 ] || { echo "::error::provider ${ordinal} never exposed exactly one offline seed entry"; exit 1; }
+              sleep 2
+            done
+            echo "PASS: provider ${ordinal} exposes the offline seed exactly once"
+          done
+
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -ec '
+            ldapadd -x -H ldap://localhost:389 -D cn=admin,dc=example,dc=org -w chaos-e2e-password <<EOF
+          dn: uid=post-bootstrap,ou=bootstrap,dc=example,dc=org
+          objectClass: inetOrgPerson
+          uid: post-bootstrap
+          cn: Post Bootstrap
+          sn: Test
+          EOF
+          '
+          for ordinal in 0 1 2; do
+            i=0
+            until kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- \
+              ldapsearch -x -LLL -H ldap://localhost:389 \
+              -D 'cn=admin,dc=example,dc=org' -w 'chaos-e2e-password' \
+              -b 'uid=post-bootstrap,ou=bootstrap,dc=example,dc=org' -s base dn \
+              | grep -Fxc 'dn: uid=post-bootstrap,ou=bootstrap,dc=example,dc=org' | grep -qx 1; do
+              i=$((i+1)); [ "$i" -lt 60 ] || { echo "::error::provider ${ordinal} never received the post-bootstrap write"; exit 1; }
+              sleep 2
+            done
+          done
+          for i in $(seq 1 60); do
+            for ordinal in 0 1 2; do
+              kubectl -n directory exec "directory-ldapium-${ordinal}" -c openldap -- sh -ec \
+                'ldapsearch -x -LLL -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -D "cn=admin,cn=config" -w "chaos-e2e-password" -b "dc=example,dc=org" -s base contextCSN' \
+                | grep '^contextCSN:' | sort > "/tmp/offline-seed-contextcsn-${ordinal}.txt"
+            done
+            if diff /tmp/offline-seed-contextcsn-0.txt /tmp/offline-seed-contextcsn-1.txt \
+              && diff /tmp/offline-seed-contextcsn-0.txt /tmp/offline-seed-contextcsn-2.txt; then
+              break
+            fi
+            [ "$i" -lt 60 ] || { echo '::error::providers never converged on contextCSN after the post-bootstrap write'; exit 1; }
+            sleep 2
+          done
+          echo "PASS: all providers converged after the post-bootstrap write" | tee -a /tmp/chaos-evidence.txt
 
       - name: Seed baseline data
         run: |
