@@ -1,0 +1,16 @@
+# Test-only first-boot data for replication-chaos-e2e.yml. The chart mounts
+# this LDIF before any provider starts, so the test exercises offline bootstrap
+# rather than adding the entry through a running LDAP listener.
+seed:
+  enabled: true
+  ldifs:
+    10-offline-replication.ldif: |
+      dn: ou=bootstrap,dc=example,dc=org
+      objectClass: organizationalUnit
+      ou: bootstrap
+
+      dn: uid=offline-seed,ou=bootstrap,dc=example,dc=org
+      objectClass: inetOrgPerson
+      uid: offline-seed
+      cn: Offline Seed
+      sn: Bootstrap

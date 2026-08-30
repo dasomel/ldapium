@@ -40,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build server image
         run: docker build -t ldapium:e2e image
       - name: Build UI image
@@ -112,7 +112,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build server image
         run: docker build -t ldapium:e2e image
       - name: Build UI image
@@ -282,6 +282,49 @@ jobs:
               echo "PASS: provider $ordinal converged over LDAPS"
             done
           fi
+
+      - name: Verify StartTLS on port 389
+        run: |
+          set -euo pipefail
+          admin_dn="cn=admin,dc=example,dc=org"
+          service_host="directory-ldapium.directory.svc.cluster.local"
+          password=$(kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' | base64 -d)
+          # OpenLDAP enables the StartTLS extended operation automatically once
+          # olcTLSCertificateFile/olcTLSCertificateKeyFile are configured (this
+          # chart sets both whenever tls.enabled), so port 389 is not
+          # plaintext-only once TLS is turned on — a client can upgrade the
+          # same connection in place instead of opening a separate ldaps://636
+          # one. Checked directly against this image rather than assumed;
+          # docs/client-compatibility.md previously called this "unverified".
+          echo "Checking the root DSE advertises the StartTLS extended operation OID..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -H ldap://localhost:389 -b "" -s base supportedExtension' \
+            | tee /tmp/starttls-oid.txt
+          grep -q '^supportedExtension: 1\.3\.6\.1\.4\.1\.1466\.20037$' /tmp/starttls-oid.txt
+          echo "Checking an authenticated bind over StartTLS on port 389 succeeds with strict CA verification..."
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -ZZ -H \"ldap://${service_host}:389\" -D \"$admin_dn\" -w \"$password\"" \
+            | tee /tmp/starttls-whoami.txt
+          grep -q "dn:${admin_dn}" /tmp/starttls-whoami.txt
+          echo "Checking StartTLS is rejected when the CA does not verify (fails closed, not open)..."
+          # A real, well-formed CA that simply did not sign the server's
+          # certificate — not a malformed file. A garbage CA file fails at
+          # load time (openssl can't parse it), which would "pass" this
+          # negative test for the wrong reason and prove nothing about
+          # verification; a valid-but-wrong CA forces the failure to happen
+          # at certificate verification, which is what "fails closed" means
+          # here. -ZZ (not -Z) makes ldapwhoami abort if StartTLS fails
+          # rather than continue in plaintext, so a non-zero exit is the
+          # proof there was no silent downgrade.
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/wrong-ca.key -out /tmp/wrong-ca.pem -days 1 -subj /CN=wrong-ca >/dev/null 2>&1; LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/tmp/wrong-ca.pem ldapwhoami -x -ZZ -H \"ldap://${service_host}:389\" -D \"$admin_dn\" -w \"$password\"" \
+            >/tmp/starttls-badca.out 2>&1; then
+            echo "::error::StartTLS on port 389 unexpectedly succeeded against a CA that did not sign the server certificate"
+            cat /tmp/starttls-badca.out
+            exit 1
+          fi
+          cat /tmp/starttls-badca.out
+          echo "PASS: StartTLS on port 389 works and is verified against the CA, same as ldaps://636"
 
       - name: Verify the TLS protocol floor is enforced
         run: |
