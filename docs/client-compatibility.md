@@ -89,12 +89,11 @@ default carries `posixAccount`: the bootstrap admin entry
 on an SSSD-joined host will not resolve either until an entry — or an
 equivalent one — exists with POSIX attributes.
 
-The bind-then-search pattern SSSD needs is already what this directory's ACL
-is shaped for (`image/README.md`, "Access control (ACL)"): anonymous or an
-authenticated identity can read `entry`, `uid`, `objectClass` to resolve a
-bare `uid` to a DN, then bind as that DN to verify a password — the same flow
-the management UI's own login uses. This can't be turned off outright without
-breaking that resolution flow for every anonymously-binding client, but as of
+The initial DN lookup SSSD can make is already what this directory's ACL is
+shaped for: anonymous or an authenticated identity can read `entry`, `uid`,
+`objectClass` to resolve a bare `uid` to a DN. This cannot be turned off
+outright without breaking that resolution flow for every anonymously-binding
+client, but as of
 `LDAP_ANONYMOUS_READ_BASE` (`image/README.md`) it can be **narrowed**: set it
 to the subtree that actually holds your user entries (e.g.
 `ou=people,dc=example,dc=org`) and a root-base anonymous `uid` search — the
@@ -110,7 +109,6 @@ directory has always granted anonymous by default. A standard `sssd.conf`
 ```ini
 [domain/ldapium]
 id_provider = ldap
-auth_provider = ldap
 ldap_uri = ldaps://<fullname>.<namespace>.svc.<clusterDomain>:636
 ldap_search_base = <rootDN>
 ldap_tls_cacert = /etc/openldap/tls/ca.crt
@@ -135,13 +133,19 @@ TLS-from-the-first-byte connection rather than a protocol upgrade
 mid-connection), but StartTLS on 389 is a supported alternative, not an
 open question. Add `ldap_default_bind_dn`/`ldap_default_authtok` for the
 search identity if anonymous read is not enough for your deployment's ACL.
+In fact, ldapium's default anonymous ACL deliberately exposes only `entry`,
+`uid`, and `objectClass`; SSSD needs `uidNumber`, `gidNumber`,
+`homeDirectory`, and other POSIX attributes as well. The live CI therefore
+uses an authenticated search bind and leaves `ldap.anonymousReadBase` unset:
+that preserves the default DIT-wide DN-discovery behavior while avoiding a
+broader anonymous attribute grant.
 
-**Not live-tested against a real `sssd`/`nsswitch` client** — this is the
-standard integration procedure for an RFC 2307 (`nis`-schema) directory,
-cross-checked against this repo's actual ACL and schema configuration rather
-than written from memory alone, but it has not been run through an actual
-`getent passwd` / `id` / PAM login on a joined host. Flagged rather than
-claimed as verified.
+**Live-tested for NSS identity resolution, not PAM authentication.**
+`.github/workflows/sssd-e2e.yml` starts a real SSSD daemon with
+`services = nss`, `passwd: sss files`, and `group: sss files` in a disposable
+client, then proves `getent passwd posixuser` and `id posixuser` against a
+seeded RFC 2307 user and group. It deliberately makes no claim about PAM
+login, password verification, session setup, or host enrollment.
 
 ## Windows / Active Directory
 
@@ -243,7 +247,7 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | `ldapsearch` / `ldapadd` / `ldapmodify` / `ldapdelete` (OpenLDAP CLI) | Supported, continuously verified | Used throughout this project's own E2E suites |
 | Go `go-ldap` client (this project's own UI backend) | Supported, continuously verified | `ui/backend/internal/ldapclient` |
 | Any LDAPv3 client using `SIMPLE` bind | Supported | The verified path |
-| SSSD / PAM / nsswitch (Linux) | Supported in principle, not live-tested | See above |
+| SSSD / nsswitch (Linux) | NSS identity resolution continuously live-tested | `getent passwd` / `id`; no PAM claim — see above |
 | SASL `EXTERNAL` (mTLS) | Opt-in image configuration | `LDAP_TLS_MUTUAL_AUTH=true` with CA and operator-configured subject-to-DN mapping; uses `try`, so password binds remain compatible |
 | SASL `DIGEST-MD5` / `CRAM-MD5` / `PLAIN` | Not supported | No `saslauthd`/SASL password backend shipped |
 | Windows as an LDAPv3 client | Supported (LDAP only) | Not a domain join — see above |

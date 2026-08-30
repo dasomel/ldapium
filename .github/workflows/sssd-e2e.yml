@@ -1,0 +1,106 @@
+name: SSSD E2E
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "charts/**"
+      - "tests/sssd-client/**"
+      - ".github/workflows/sssd-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sssd:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build server and disposable SSSD client images
+        run: |
+          docker build -t ldapium:security image
+          docker build -t ldapium:sssd-client tests/sssd-client
+
+      - name: Create cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: sssd
+
+      - name: Load images
+        run: |
+          kind load docker-image ldapium:security --name sssd
+          kind load docker-image ldapium:sssd-client --name sssd
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install LDAPium
+        run: |
+          # Keep ldap.anonymousReadBase unset. The default anonymous rule
+          # permits only DN-discovery attributes, not the POSIX fields SSSD
+          # consumes, so this test uses its authenticated search bind instead
+          # of widening anonymous access.
+          helm install directory charts/ldapium \
+            --namespace directory --create-namespace \
+            --set image.repository=ldapium \
+            --set image.tag=security \
+            --set image.pullPolicy=Never \
+            --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
+            --set auth.adminPassword='sssd-e2e-password' \
+            --set ui.enabled=false \
+            --wait --timeout 5m
+
+      - name: Seed POSIX user and group
+        run: |
+          set -euo pipefail
+          # kubectl's stdin is the reliable transport for this LDIF; do not
+          # replace it with docker exec without -i (the heredoc would vanish).
+          kubectl -n directory exec -i statefulset/directory-ldapium -- \
+            ldapadd -x -H ldap://localhost:389 \
+              -D 'cn=admin,dc=example,dc=org' -w 'sssd-e2e-password' <<'EOF'
+          dn: ou=people,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: people
+
+          dn: ou=groups,dc=example,dc=org
+          objectClass: organizationalUnit
+          ou: groups
+
+          dn: uid=posixuser,ou=people,dc=example,dc=org
+          objectClass: inetOrgPerson
+          objectClass: posixAccount
+          cn: POSIX User
+          sn: User
+          uid: posixuser
+          uidNumber: 10001
+          gidNumber: 10001
+          homeDirectory: /home/posixuser
+          loginShell: /bin/sh
+          userPassword: PosixUserPassword1!
+
+          dn: cn=posixgroup,ou=groups,dc=example,dc=org
+          objectClass: posixGroup
+          cn: posixgroup
+          gidNumber: 10001
+          memberUid: posixuser
+          EOF
+
+      - name: Prove SSSD NSS resolution
+        run: |
+          set -euo pipefail
+          kubectl -n directory run sssd-client --rm -i --restart=Never \
+            --image=ldapium:sssd-client --image-pull-policy=Never -- \
+            /usr/local/bin/run-nss-check
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n directory get pods -o wide
+          kubectl -n directory describe pods
+          kubectl -n directory logs statefulset/directory-ldapium --tail=200 || true
+          kubectl -n directory get events --sort-by=.lastTimestamp | tail -40

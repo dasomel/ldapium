@@ -1,0 +1,29 @@
+# Path-scoped Trivy misconfiguration suppressions for the disposable CI-only
+# SSSD client image, scoped to that one file so a real regression in a
+# published image (server/UI) Dockerfile is never hidden. IDs are listed in
+# both the AVD-prefixed and bare forms so the suppression matches regardless
+# of which form the running Trivy uses.
+misconfigurations:
+  - id: AVD-DS-0002 # "Image user should not be 'root'"
+    paths:
+      - "tests/sssd-client/Dockerfile"
+    statement: >-
+      SSSD must run as root: its daemon reads /etc/sssd/sssd.conf (mode 0600),
+      manages /var/lib/sss, and serves NSS over a privileged socket. This
+      image is a CI-only NSS-resolution client (.github/workflows/sssd-e2e.yml),
+      never built or published as a product image; the server and UI images
+      still run unprivileged and are not covered here.
+  - id: DS-0002
+    paths:
+      - "tests/sssd-client/Dockerfile"
+    statement: See AVD-DS-0002 above — SSSD requires root; CI-only client image.
+  - id: AVD-DS-0026 # "No HEALTHCHECK defined"
+    paths:
+      - "tests/sssd-client/Dockerfile"
+    statement: >-
+      A one-shot CI client that runs a check script to completion and exits;
+      a container HEALTHCHECK is meaningless for a Pod that runs to completion.
+  - id: DS-0026
+    paths:
+      - "tests/sssd-client/Dockerfile"
+    statement: See AVD-DS-0026 above — one-shot CI client, no HEALTHCHECK needed.
