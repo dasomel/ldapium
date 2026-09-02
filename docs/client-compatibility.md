@@ -171,48 +171,244 @@ Where this genuinely interoperates with a Windows-adjacent workflow:
   that performs basic LDAPv3 `SIMPLE` bind and search is within the protocol
   boundary. In `ldp.exe`, explicitly select Simple bind rather than an
   Integrated/SSPI bind, and configure the TLS trust store when using LDAPS or
-  StartTLS. This project does not yet have a Windows-specific live test, so
-  validate the intended client and its TLS settings before treating that
-  compatibility as verified.
+  StartTLS.
 - **Migrating identities *from* AD** — exporting AD's LDIF and re-importing
   it here needs schema reconciliation (AD's `objectClass`/attribute set
   differs from what is loaded — see the schema list above) and is a
   migration project, not a compatibility mode. Not covered here; would be its
   own issue if wanted.
 
+### Active Directory coexistence and "where applicable" boundary
+
+Where requirements or RFPs specify "Active Directory coexistence and integration
+where applicable" (e.g. #16), what "where applicable" concretely means for
+ldapium is strictly protocol-level:
+
+- **Applicable (protocol-level interoperability)**: Standard LDAPv3 clients
+  running on Windows (such as `ldp.exe`, PowerShell LDAP cmdlets, or Windows-hosted
+  enterprise applications) connecting to ldapium over standard LDAPv3 using `SIMPLE`
+  bind, over plaintext (port 389), StartTLS (port 389), or LDAPS (port 636).
+- **Out of scope (domain-level integration)**: Native Active Directory domain
+  features — Kerberos realm trusts, cross-forest trusts, Active Directory
+  replication (DRS-RPC / MS-DRSR), Active Directory Lightweight Directory Services
+  (AD LDS) schema synchronization, Group Policy Objects (GPO), SID history, and
+  SMB/CIFS/DFS file services. ldapium is an LDAPv3 directory, not an Active Directory
+  domain controller or multi-directory sync engine.
+
+**Active Directory coexistence has no live test in this repository.** CI workflows
+execute entirely within containerized Linux environments (`.github/workflows/*.yml`)
+and verify OpenLDAP CLI tools, Go `go-ldap`, and Linux SSSD/NSS. Coexistence where
+an organization maintains both Active Directory and ldapium requires treating them
+as separate directory realms or brokering authentication and synchronization via
+an external Identity Provider (such as Keycloak user federation) or dedicated
+integration tooling; ldapium contains no built-in AD connector or synchronization
+agent (see [docs/product-boundary.md](docs/product-boundary.md)).
+
 Anyone evaluating this project as "the LDAP server for a Windows shop" should
 read this table as the boundary, not as a to-do list — several of these
 (Kerberos, Group Policy) are entire subsystems, not configuration flags.
 
-## Kubernetes RBAC group mapping
+## Identity classes and trust boundaries
 
-This chart does not, and architecturally cannot on its own, become a
-Kubernetes `Group` subject — that mapping happens in the Kubernetes API
-server's own auth configuration, outside anything this repository controls.
-The integration pattern, for the record:
+ldapium is a single LDAPv3 directory: upstream OpenLDAP packaged for
+Kubernetes plus a thin management UI. It deliberately does not ship, and will
+not grow: a multi-directory federation/sync engine, a Source-of-Authority
+matching/merge engine, a SCIM server or client, an IGA connector framework (SPI,
+retry/dead-letter, reconciliation engine), a PAM/JIT/JEA request workflow or
+credential vault, a SPIFFE/SPIRE integration, or a ChatOps/AI remediation
+executor (see [docs/product-boundary.md](docs/product-boundary.md)). The
+integration boundary for each of those capabilities is an external IdP / IGA /
+PAM / observability product (e.g. Keycloak, an enterprise IGA suite, a PAM
+vault, a SIEM) that talks to ldapium over standard LDAPv3
+(`bind`/`search`/`modify`/`modrdn`) and consumes ldapium's audit NDJSON export.
 
-1. **An OIDC provider sits between Kubernetes and this directory.** This
-   project's own UI already authenticates through one
-   (`ui/backend/internal/httpapi/sso.go`, `charts/ldapium/README.md`'s
-   "Keycloak SSO" section) — the same provider
-   (Keycloak or equivalent) can be configured with an LDAP user federation
-   pointing at this directory, and to include LDAP group membership in its
-   issued tokens' `groups` claim.
-2. **The Kubernetes API server is started with `--oidc-issuer-url`,
-   `--oidc-client-id`, and `--oidc-groups-claim=groups`** pointing at that
-   same provider. This is a control-plane flag on the API server itself —
-   not something a chart running workloads inside the cluster can set.
-3. **RBAC binds to the `Group` subject Kubernetes now recognizes** —
-   `RoleBinding`/`ClusterRoleBinding` with `kind: Group`,
-   `name: <the LDAP group's name as it appears in the groups claim>`.
+Integrating ldapium into Kubernetes and SSO environments establishes distinct
+trust boundaries across four identity classes.
 
-This chart's part of that chain stops at step 1: being an LDAP directory a
-provider can federate against, with groups a client can read (subject to the
-ACL — group entries fall under the "every other attribute" row in
-`image/README.md`'s matrix, readable by any authenticated bind). Steps 2 and
-3 are cluster-operator configuration outside this project's scope, documented
-here so the integration is describable rather than left as a gap with no
-shape.
+### Identity classes
+
+1. **Human user (`inetOrgPerson`)**:
+   Standard directory users residing in the DIT under `LDAP_USER_SEARCH_BASE`
+   (e.g. `ou=people,dc=example,dc=org`). These entries use the `inetOrgPerson`
+   structural objectClass (defined in `image/ldifs/01-cn-config.ldif` via
+   `file:///etc/openldap/schema/inetorgperson.ldif`), carrying standard naming
+   and profile attributes (`uid`, `cn`, `sn`, `mail`, `userPassword`). Human users
+   authenticate either directly via LDAPv3 `SIMPLE` bind (when UI SSO is disabled)
+   or federate through Keycloak via browser-based OIDC.
+2. **Directory administrator (`rootdn`)**:
+   The administrative superuser identity (`cn=admin,$LDAP_ROOT_DN` or
+   `cn=admin,cn=config`), represented as `organizationalRole` with
+   `simpleSecurityObject` (`image/ldifs/03-base-structure.ldif`). This identity
+   bypasses OpenLDAP directory ACLs entirely. It is strictly reserved for
+   offline container bootstrap, seeding (`LDAP_SEED_DIR`), disaster recovery,
+   and administrative batch jobs (`scripts/backup.sh`). It must never be exposed
+   to browser sessions or used as an application service account.
+3. **UI service account (`LDAP_SERVICE_ACCOUNT_DN`)**:
+   When Keycloak SSO is enabled (`SSO_ENABLED=true`), human users do not provide
+   LDAP passwords to the UI backend. Instead, the UI backend authenticates
+   against LDAP using a dedicated service account identity configured via
+   `LDAP_SERVICE_ACCOUNT_DN` and `LDAP_SERVICE_ACCOUNT_PASSWORD`
+   (`ui/backend/internal/httpapi/sso.go` lines 146–150). This identity executes
+   search, user/group CRUD, password reset, and account unlock operations on
+   behalf of authenticated administrators. It is governed by explicit,
+   operator-defined LDAP ACLs and must never reuse the `rootdn` credentials
+   (`charts/ldapium/README.md`, "Keycloak SSO").
+4. **Kubernetes ServiceAccount (workload identity)**:
+   A Kubernetes ServiceAccount (`system:serviceaccount:<namespace>:<name>`) is
+   issued and verified exclusively by the Kubernetes control plane or an
+   associated workload identity framework (e.g. SPIFFE/SPIRE). **A Kubernetes
+   ServiceAccount is NEVER an ldapium identity and must not be mapped to or
+   treated as a human directory user.** Workload identities operate within the
+   Kubernetes execution boundary; ldapium contains no workload identity code,
+   issues no SPIFFE SVIDs, and accepts no Kubernetes service account tokens
+   directly.
+
+### LDAP group and attribute mapping contract (Keycloak)
+
+When Keycloak integrates with ldapium using LDAP user federation, it connects as
+an authenticated LDAPv3 client. The contract relies on schemas explicitly loaded
+by ldapium's bootstrap configuration (`image/ldifs/01-cn-config.ldif`):
+
+- **User attribute resolution**:
+  - `uid` -> Keycloak username and `preferred_username` claim.
+  - `mail` -> Keycloak email address claim.
+  - `cn` / `givenName` / `sn` -> user first name, last name, and full name.
+  These attributes are provided by the `core.ldif`, `cosine.ldif`, and
+  `inetorgperson.ldif` schemas loaded into `cn=schema,cn=config` and indexed in
+  `olcDatabase={1}mdb` (`olcDbIndex: uid eq`, `cn pres,eq,sub`, `mail eq`, `sn pres,eq,sub`, `givenName eq`).
+- **Group membership resolution**:
+  - Keycloak's `group-ldap-mapper` reads `groupOfNames` entries (from `core.ldif`),
+    evaluating user DNs listed in the `member` attribute (`olcDbIndex: member eq`).
+  - Alternatively, Keycloak can read the user's `memberOf` operational attribute,
+    which is dynamically generated and maintained by OpenLDAP's `slapo-memberof`
+    overlay (`olcOverlay=memberof,olcDatabase={1}mdb,cn=config`, `01-cn-config.ldif:104–109`).
+    Referential integrity is guaranteed by `slapo-refint` (`01-cn-config.ldif:110–117`),
+    which automatically purges stale member references on user deletion or rename.
+- **Claim emission**:
+  Keycloak maps resolved LDAP groups and roles into token claims:
+  - For the ldapium UI: Keycloak maps the required administrator entitlement into
+    the `roles` claim array or `realm_access.roles` (configured by `SSO_ADMIN_ROLE`,
+    default `ldap-admin`).
+  - For Kubernetes API access: Keycloak maps LDAP groups into a designated `groups`
+    claim array in the issued ID/access tokens.
+
+### Keycloak to Kubernetes issuer and audience validation
+
+ldapium does not validate Kubernetes API tokens, nor does it interact with the
+Kubernetes API server's authentication pipeline. The mapping of LDAP-derived
+identities to Kubernetes RBAC occurs strictly between Keycloak and the Kubernetes
+API server:
+
+1. **An OIDC provider sits between Kubernetes and this directory**: Keycloak
+   federates users and groups from ldapium, issuing cryptographically signed JWT
+   tokens containing the user identity and group memberships.
+2. **The Kubernetes API server verifies tokens directly**: The cluster operator
+   configures `kube-apiserver` with OIDC control-plane flags:
+   - `--oidc-issuer-url`: The exact issuer URL of the Keycloak realm (e.g.
+     `https://sso.example.com/realms/example`). `kube-apiserver` verifies the
+     `iss` claim and discovers Keycloak's public signing keys via JWKS
+     (`/.well-known/openid-configuration`).
+   - `--oidc-client-id`: The expected audience (`aud` claim) matching the client ID
+     registered in Keycloak for cluster authentication.
+   - `--oidc-username-claim`: The claim mapped to the Kubernetes user identity
+     (e.g. `preferred_username` or `sub`).
+   - `--oidc-groups-claim`: The claim mapped to Kubernetes RBAC groups (e.g. `groups`).
+   - `--oidc-ca-file`: CA certificate bundle validating Keycloak's TLS certificate.
+3. **RBAC binds to the resulting `Group` subjects**: Kubernetes RBAC
+   `RoleBinding` or `ClusterRoleBinding` manifests bind roles to `kind: Group`
+   subjects (`name: <ldap-group-name>`), corresponding to the group names emitted
+   in the `groups` claim.
+
+This chart's role stops at step 1: operating as an LDAPv3 directory that Keycloak
+can federate against. Steps 2 and 3 are Kubernetes cluster control-plane configurations
+outside this project's scope.
+
+### UI OIDC login validation contract (`sso.go`)
+
+When SSO is enabled (`SSO_ENABLED=true`), the ldapium management UI backend
+(`ui/backend/internal/httpapi/sso.go`) acts as an OIDC Relying Party. It
+implements strict cryptographic, session, and role verification at each step:
+
+- **Provider Discovery & Verifier Construction**: `newOIDCAuthenticator`
+  initializes the OIDC client via `oidc.NewProvider` (`sso.go:42`), discovering
+  provider endpoints and JWKS keys. It initializes an `oidc.IDTokenVerifier`
+  enforcing `ClientID: cfg.ClientID` (`sso.go:67`).
+- **Scope Minimization**: The client scopes are strictly restricted to
+  `openid` and `profile` (`sso.go:72`).
+- **State, PKCE, and Nonce Generation**: On `POST /api/sso/start`, `states.Create`
+  generates high-entropy cryptographic random values: a 32-byte `state`, a
+  64-byte PKCE `code_verifier` (encoding to 86 base64url characters, RFC 7636), a
+  32-byte `nonce`, and a 32-byte browser `binding` cookie (`sso.go:90–95`,
+  `353–370`).
+- **Authorization Request**: The browser is redirected to Keycloak with the PKCE
+  `S256` challenge (`oauth2.S256ChallengeOption(login.verifier)`) and the `nonce`
+  (`oidc.Nonce(login.nonce)`) (`sso.go:99–103`).
+- **Callback State & Browser Binding Verification**: On `/api/sso/callback`, the
+  backend checks that the request origin matches allowlisted `SSO_CALLBACK_ORIGINS`
+  (`sso.go:125–128`, `222–231`). It consumes the state from the single-use in-memory
+  cache (`sso.go:121`, `421–438`) and compares the stored binding against the
+  `ldapium_sso_login` cookie using constant-time comparison
+  (`subtle.ConstantTimeCompare`, `sso.go:431`), defeating login CSRF (RFC 6749 §10.12).
+- **Code Exchange with PKCE Verifier**: The backend exchanges the authorization
+  code using the stored PKCE `verifier` (`sso.go:188`).
+- **Cryptographic ID Token Validation**: `a.verifier.Verify(ctx, rawIDToken)`
+  (`sso.go:196–199`) cryptographically validates the token against Keycloak's
+  published JWKS keys, ensuring the signature is valid, `iss` matches `SSO_ISSUER_URL`,
+  `aud` matches `SSO_CLIENT_ID`, and the token is not expired.
+- **Nonce Verification**: The backend compares the token's `nonce` claim to the
+  session's expected nonce in constant time (`sso.go:200–202`), rejecting replayed
+  tokens.
+- **Administrative Role Enforcement**: Decodes token claims (`sso.go:204–207`) and
+  asserts that the user possesses `SSO_ADMIN_ROLE` (default `ldap-admin`) in either
+  the custom `roles` array or Keycloak's standard `realm_access.roles`
+  (`sso.go:208–210`, `303–315`). Users without this role are redirected with
+  `not_authorized` (`sso.go:140–142`).
+- **LDAP Account Resolution**: The backend extracts `preferred_username`
+  (`sso.go:211–214`), binds to LDAP as `LDAP_SERVICE_ACCOUNT_DN` (`sso.go:146–153`),
+  and resolves the username to exactly one LDAP entry DN via `ResolveUID`
+  (`sso.go:154–161`). If no matching LDAP entry exists, login is refused with
+  `directory_account_not_found`.
+
+### Claim and attribute minimization policy
+
+To minimize identity exposure across trust boundaries:
+- **OIDC scopes**: The UI requests only `openid` and `profile` (`sso.go:72`).
+  Scopes such as `email`, `phone`, `address`, or broad user profile data are not
+  requested.
+- **Token claims**: Downstream consumers inspect only minimal required claims:
+  the UI extracts only `preferred_username` and role claims (`roles` /
+  `realm_access.roles`); Kubernetes `kube-apiserver` extracts only the username
+  claim and `groups`.
+- **Directory attribute exposure**: Keycloak's LDAP user federation mapper should
+  read only attributes required for authentication and access control (`uid`,
+  `mail`, `cn`, `sn`, `givenName`, `memberOf`/`member`). `userPassword` and
+  `shadowLastChange` are restricted by OpenLDAP ACLs
+  (`image/ldifs/01-cn-config.ldif:86–89`); `userPassword` specifically is also
+  held back from every UI API response via a hardcoded denylist regardless of
+  what those ACLs would otherwise permit (`entryRedactedAttrs` in
+  `ui/backend/internal/ldapclient/tree.go`) — the root/admin bind the UI uses
+  bypasses ACLs entirely, so that denylist is the only thing stopping it from
+  returning a raw `userPassword` value.
+
+### Hop-by-hop invalid token rejection
+
+Invalid tokens and unauthorized credentials fail closed and are rejected at each
+component boundary:
+1. **At the UI backend**: Tokens with invalid signatures, expired timestamps,
+   mismatched issuers, incorrect audience (`ClientID`), mismatched nonces, or
+   missing administrative roles are rejected immediately
+   (`sso.go:134–144`). No UI session is created, and no LDAP operation is
+   performed.
+2. **At the Kubernetes API server**: Bearer tokens with invalid cryptographic
+   signatures, unknown issuers, mismatched audiences, or expired timestamps are
+   rejected with HTTP 401 Unauthorized by `kube-apiserver` prior to RBAC
+   evaluation.
+3. **At ldapium**: ldapium does not consume, validate, or trust JWTs. All
+   requests from Keycloak or the UI service account arrive as standard LDAPv3 wire
+   operations (`BIND`, `SEARCH`, `MODIFY`). Operations with invalid credentials,
+   unregistered identities, or insufficient ACL permissions are rejected directly
+   by OpenLDAP with standard LDAP result codes (e.g. `invalidCredentials` [49],
+   `insufficientAccessRights` [50]).
 
 ## TLS cipher suite baseline
 
@@ -253,6 +449,13 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | SSSD / nsswitch (Linux) | NSS identity resolution continuously live-tested | `getent passwd` / `id`; no PAM claim — see above |
 | SASL `EXTERNAL` (mTLS) | Opt-in image configuration | `LDAP_TLS_MUTUAL_AUTH=true` with CA and operator-configured subject-to-DN mapping; uses `try`, so password binds remain compatible |
 | SASL `DIGEST-MD5` / `CRAM-MD5` / `PLAIN` | Not supported | No `saslauthd`/SASL password backend shipped |
-| Windows as an LDAPv3 client | Protocol-level compatibility; not Windows-specific verified | Not a domain join — see above |
+| Windows as an LDAPv3 client | Protocol-level compatibility; not Windows-specific verified | Standard LDAPv3 `SIMPLE` bind over plaintext, LDAPS, or StartTLS; not a domain join. No live test in this repository — see above |
 | Windows/AD domain member, Kerberos, Group Policy | Not supported | Different protocol family, out of scope |
+| Microsoft Entra ID | Not supported directly | Not a supported direct federation peer; integration is supported only through an external IdP (such as Keycloak identity brokering). ldapium does not implement Entra sync, SCIM, or graph connectors. |
+| PAM / JIT / JEA products | Protocol-level compatibility; unverified | Any PAM product that uses standard LDAPv3 (`bind`/`modify`/`search`) is protocol-level compatible. ldapium provides no credential vault integration, JIT/JEA request/elevation workflows, or session recording; no specific PAM product combination has been verified in CI. |
+| Keycloak LDAP user federation | Supported via documented path; no CI E2E yet | Documented integration path (`charts/ldapium/README.md`, "Keycloak SSO"); continuous CI E2E test is not yet implemented in this repository. |
+| Kubernetes API server OIDC via Keycloak | Supported via external IdP | `kube-apiserver` validates OIDC tokens issued by Keycloak; ldapium serves as the backing LDAP user/group directory. |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
+| SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. |
+| Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [docs/product-boundary.md](docs/product-boundary.md). |
+| SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [docs/product-boundary.md](docs/product-boundary.md). |
