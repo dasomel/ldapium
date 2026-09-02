@@ -1,0 +1,5 @@
+{"pod":"ldap-0","source":"accesslog","time":"20260903000000.000000Z","actor":"","op":"bind","target":"uid=attacker,ou=people,dc=example,dc=org","filter":"","result":"49"}
+{"pod":"ldap-0","source":"accesslog","time":"20260903000010.000000Z","actor":"","op":"bind","target":"uid=attacker,ou=people,dc=example,dc=org","filter":"","result":"49"}
+{"pod":"ldap-0","source":"accesslog","time":"20260903000020.000000Z","actor":"","op":"bind","target":"uid=attacker,ou=people,dc=example,dc=org","filter":"","result":"49"}
+{"pod":"ldap-0","source":"accesslog","time":"20260903000030.000000Z","actor":"","op":"bind","target":"uid=attacker,ou=people,dc=example,dc=org","filter":"","result":"49"}
+{"pod":"ldap-0","source":"accesslog","time":"20260903000040.000000Z","actor":"","op":"bind","target":"uid=attacker,ou=people,dc=example,dc=org","filter":"","result":"49"}

@@ -1,0 +1,8 @@
+# provider: ldap-0
+dn: dc=example,dc=org
+contextCSN: 20260903000000.000000Z#000000#001#000000
+olcSyncrepl: rid=002 provider=ldap://ldap-1.example.org:389 bindmethod=simple binddn="cn=admin,cn=config" credentials="s3cr3t-repl-pw" searchbase="cn=config" type=refreshAndPersist retry="60 +" interval=00:00:05:00
+
+# provider: ldap-1
+dn: dc=example,dc=org
+contextCSN: 20260902235955.000000Z#000000#002#000000

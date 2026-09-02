@@ -60,6 +60,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - write-availability sampling during upgrade
 - offline bundle verification with `imagePullPolicy=Never`
 - cn=config drift detection
+- deterministic, redacted, versioned incident-evidence export for offline/local-LLM RCA (no ChatOps bot, AI service, or remediation executor shipped)
 - local scale benchmark tooling and documented 20K / 1M reference measurements
 - rendered chart schema validation with kubeconform
 
@@ -95,6 +96,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - `docs/encryption-at-rest.md`
 - `docs/scale-benchmarks.md`
 - `docs/audit-event-schema.md`
+- `docs/incident-evidence.md`
 - `.github/workflows/e2e.yml`
 - `.github/workflows/security-e2e.yml`
 - `.github/workflows/replication-chaos-e2e.yml`
