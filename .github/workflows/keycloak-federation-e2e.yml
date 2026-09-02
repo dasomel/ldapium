@@ -1,0 +1,456 @@
+name: Keycloak LDAP federation E2E
+
+# Proves the *federation* direction: Keycloak configured with an LDAP user
+# storage provider reading real users/groups out of ldapium, not the UI's
+# existing OIDC-relying-party login (that's ui-e2e.yml / ui/README.md's
+# "Keycloak SSO"). Serves docs/client-compatibility.md's "Kubernetes RBAC
+# group mapping" chain end to end: LDAP group -> Keycloak group (via LDAP
+# federation) -> token `groups` claim (via a protocol mapper) -> what a
+# Kubernetes API server's --oidc-groups-claim actually consumes.
+#
+# Plain docker network, not kind: neither ldapium nor Keycloak needs to run
+# as a Kubernetes workload for this — two containers on one bridge network
+# and the Keycloak Admin REST API (via kcadm.sh) is the whole test surface.
+# Related: #16 (Keycloak federation E2E), #13 (Keycloak federation), #19
+# (role/group mapping consistency), #25 (LDAP group/attribute -> Keycloak
+# role/group mapping contract, validation side).
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "docs/client-compatibility.md"
+      - "charts/ldapium/README.md"
+      - ".github/workflows/keycloak-federation-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keycloak-federation-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact tag, per this repo's own pinning convention for third-party images
+  # (see e.g. AGENTS.md's ldapium:e2e note) — "latest"/"nightly" would make a
+  # failure here ambiguous between "this integration broke" and "upstream
+  # changed under us".
+  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.0.7
+  LDAP_ROOT_DN: dc=example,dc=org
+  REALM: ldap-fed
+
+jobs:
+  keycloak-federation:
+    name: Keycloak LDAP user federation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Generate test credentials
+        # Run-scoped, printed nowhere, thrown away with the runner — same
+        # shape as e2e.yml's adminPassword and ui-e2e.yml's
+        # ADMIN_PASSWORD_FOR_TEST ("...-e2e-not-a-real-secret"). All must be
+        # >= LDAP_PASSWORD_MIN_LENGTH (default 8, image/README.md) since
+        # ppolicy's pwdCheckQuality gates the seed ldapadd too.
+        run: |
+          set -euo pipefail
+          {
+            echo "LDAP_ADMIN_PASSWORD=$(head -c 24 /dev/urandom | base64)"
+            echo "KEYCLOAK_SVC_PASSWORD=${{ github.run_id }}-kc-svc-e2e-pw"
+            echo "ALICE_PASSWORD=${{ github.run_id }}-alice-e2e-pw"
+            echo "BOB_PASSWORD=${{ github.run_id }}-bob-e2e-pw"
+            echo "KEYCLOAK_ADMIN_PASSWORD=${{ github.run_id }}-kc-admin-e2e-pw"
+          } >> "$GITHUB_ENV"
+
+      - name: Write LDAP seed LDIF
+        # cn=keycloak-svc gets no bespoke ACL grant. image/README.md's
+        # "Access control (ACL)" default already gives any authenticated
+        # bind read on every attribute except userPassword — exactly what
+        # LDAP federation needs (search ou=people/ou=groups, read
+        # mail/sn/givenName/member) and no more: it cannot write, delete, or
+        # read anyone's password. It uses organizationalRole +
+        # simpleSecurityObject, the same shape image/ldifs/03-base-structure.ldif
+        # uses for <LDAP_ADMIN_DN> — just without rootdn's ACL-bypass, and
+        # with no uid/mail so the `unique` overlay's
+        # `(objectClass=inetOrgPerson)` scope (image/README.md, "Uniqueness
+        # enforcement") never applies to it, same as the admin entry.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ldapium-seed
+          cat > /tmp/ldapium-seed/10-keycloak-federation.ldif <<EOF
+          dn: cn=keycloak-svc,${LDAP_ROOT_DN}
+          objectClass: organizationalRole
+          objectClass: simpleSecurityObject
+          cn: keycloak-svc
+          description: Read-only bind identity for Keycloak LDAP user federation (least privilege: no write, no admin, cannot read userPassword)
+          userPassword: ${KEYCLOAK_SVC_PASSWORD}
+
+          dn: ou=people,${LDAP_ROOT_DN}
+          objectClass: organizationalUnit
+          ou: people
+
+          dn: ou=groups,${LDAP_ROOT_DN}
+          objectClass: organizationalUnit
+          ou: groups
+
+          dn: uid=alice,ou=people,${LDAP_ROOT_DN}
+          objectClass: inetOrgPerson
+          uid: alice
+          cn: Alice Anderson
+          sn: Anderson
+          givenName: Alice
+          mail: alice@example.org
+          userPassword: ${ALICE_PASSWORD}
+
+          dn: uid=bob,ou=people,${LDAP_ROOT_DN}
+          objectClass: inetOrgPerson
+          uid: bob
+          cn: Bob Brown
+          sn: Brown
+          givenName: Bob
+          mail: bob@example.org
+          userPassword: ${BOB_PASSWORD}
+
+          dn: cn=developers,ou=groups,${LDAP_ROOT_DN}
+          objectClass: groupOfNames
+          cn: developers
+          description: Keycloak federation E2E group
+          member: uid=alice,ou=people,${LDAP_ROOT_DN}
+          member: uid=bob,ou=people,${LDAP_ROOT_DN}
+
+          dn: cn=marketing,ou=groups,${LDAP_ROOT_DN}
+          objectClass: groupOfNames
+          cn: marketing
+          description: Keycloak federation E2E group
+          member: uid=alice,ou=people,${LDAP_ROOT_DN}
+          EOF
+
+      - name: Start ldapium and Keycloak on a shared docker network
+        run: |
+          set -euo pipefail
+          docker network create kcfed
+          docker run -d --name ldap --network kcfed \
+            -e LDAP_ROOT_DN="${LDAP_ROOT_DN}" \
+            -e LDAP_ADMIN_PASSWORD="${LDAP_ADMIN_PASSWORD}" \
+            -v /tmp/ldapium-seed:/opt/ldifs:ro \
+            ldapium:e2e
+          # Bootstrap admin via KC_BOOTSTRAP_ADMIN_* (KEYCLOAK_ADMIN/
+          # KEYCLOAK_ADMIN_PASSWORD are deprecated as of Keycloak 26). Port
+          # 8080 is published so later steps can hit the Admin REST API and
+          # the token/userinfo endpoints directly with curl from the runner,
+          # not just via docker exec.
+          docker run -d --name keycloak --network kcfed -p 8080:8080 \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+            -e KC_BOOTSTRAP_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}" \
+            "${KEYCLOAK_IMAGE}" start-dev
+
+      - name: Wait for ldapium
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            docker exec ldap ldapwhoami -x -D "cn=admin,${LDAP_ROOT_DN}" -w "${LDAP_ADMIN_PASSWORD}" >/dev/null 2>&1 && break
+            [ "$i" -lt 30 ] || { echo "::error::ldapium never became ready"; docker logs ldap; exit 1; }
+            sleep 2
+          done
+
+      - name: Verify the Keycloak bind DN's least-privilege access
+        # Evidence, not assumption: the dedicated identity can search users
+        # and groups (what federation needs) and specifically cannot read
+        # userPassword (image/README.md's ACL matrix, "the entry itself /
+        # authenticated user" rows).
+        run: |
+          set -euo pipefail
+          echo "Searching ou=people as cn=keycloak-svc..."
+          docker exec ldap ldapsearch -x -LLL \
+            -D "cn=keycloak-svc,${LDAP_ROOT_DN}" -w "${KEYCLOAK_SVC_PASSWORD}" \
+            -b "ou=people,${LDAP_ROOT_DN}" "(objectClass=inetOrgPerson)" uid mail \
+            | tee /tmp/kcsvc-people.txt
+          grep -q '^uid: alice$' /tmp/kcsvc-people.txt
+          grep -q '^uid: bob$' /tmp/kcsvc-people.txt
+          echo "Searching ou=groups as cn=keycloak-svc..."
+          docker exec ldap ldapsearch -x -LLL \
+            -D "cn=keycloak-svc,${LDAP_ROOT_DN}" -w "${KEYCLOAK_SVC_PASSWORD}" \
+            -b "ou=groups,${LDAP_ROOT_DN}" "(objectClass=groupOfNames)" cn member \
+            | tee /tmp/kcsvc-groups.txt
+          grep -q '^cn: developers$' /tmp/kcsvc-groups.txt
+          grep -q '^cn: marketing$' /tmp/kcsvc-groups.txt
+          echo "Confirming userPassword is never returned to this identity..."
+          docker exec ldap ldapsearch -x -LLL \
+            -D "cn=keycloak-svc,${LDAP_ROOT_DN}" -w "${KEYCLOAK_SVC_PASSWORD}" \
+            -b "uid=alice,ou=people,${LDAP_ROOT_DN}" -s base userPassword \
+            | tee /tmp/kcsvc-pw-attempt.txt
+          if grep -q '^userPassword:' /tmp/kcsvc-pw-attempt.txt; then
+            echo "::error::cn=keycloak-svc unexpectedly read userPassword"
+            exit 1
+          fi
+          echo "PASS: least-privilege bind can search users/groups and cannot read userPassword"
+
+      - name: Wait for Keycloak
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8080/realms/master >/dev/null 2>&1 && break
+            [ "$i" -lt 60 ] || { echo "::error::Keycloak never became ready"; docker logs keycloak; exit 1; }
+            sleep 3
+          done
+
+      - name: Configure kcadm admin session
+        run: |
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+            --server http://localhost:8080 --realm master \
+            --user admin --password "${KEYCLOAK_ADMIN_PASSWORD}"
+
+      - name: Create realm and LDAP user federation provider
+        run: |
+          set -euo pipefail
+          # id is set explicitly (equal to the realm name) so parentId below
+          # can reference it directly, rather than round-tripping through
+          # `kcadm.sh get realms/<realm> --fields id` first.
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create realms \
+            -s id="${REALM}" -s realm="${REALM}" -s enabled=true
+
+          LDAP_ID=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" -i \
+            -s name=ldapium \
+            -s providerId=ldap \
+            -s providerType=org.keycloak.storage.UserStorageProvider \
+            -s parentId="${REALM}" \
+            -s 'config.enabled=["true"]' \
+            -s 'config.vendor=["other"]' \
+            -s 'config.connectionUrl=["ldap://ldap:389"]' \
+            -s 'config.usersDn=["ou=people,'"${LDAP_ROOT_DN}"'"]' \
+            -s 'config.authType=["simple"]' \
+            -s 'config.bindDn=["cn=keycloak-svc,'"${LDAP_ROOT_DN}"'"]' \
+            -s 'config.bindCredential=["'"${KEYCLOAK_SVC_PASSWORD}"'"]' \
+            -s 'config.editMode=["READ_ONLY"]' \
+            -s 'config.usernameLDAPAttribute=["uid"]' \
+            -s 'config.rdnLDAPAttribute=["uid"]' \
+            -s 'config.uuidLDAPAttribute=["entryUUID"]' \
+            -s 'config.userObjectClasses=["inetOrgPerson"]' \
+            -s 'config.searchScope=["2"]' \
+            -s 'config.pagination=["true"]' \
+            -s 'config.importEnabled=["true"]' \
+            -s 'config.syncRegistrations=["false"]' \
+            -s 'config.trustEmail=["true"]')
+          echo "LDAP_ID=${LDAP_ID}" >> "$GITHUB_ENV"
+          echo "Created LDAP provider component ${LDAP_ID}"
+
+      - name: Create group and user-attribute mappers
+        # Group mapper: LDAP groupOfNames.member (DN-valued) -> Keycloak
+        # groups, read-only (this federation never writes back to LDAP).
+        # LOAD_GROUPS_BY_MEMBER_ATTRIBUTE avoids one LDAP round trip per
+        # group per user during sync, same rationale as the `deref` overlay
+        # note in image/README.md, just done on Keycloak's side.
+        #
+        # Explicit mail/first/last-name mappers, named distinctly from
+        # Keycloak's own auto-created "email"/"first name"/"last name"
+        # mappers so creating these never collides with them — the task
+        # this workflow proves calls out these three attributes specifically
+        # (docs/client-compatibility.md's federation contract), so they're
+        # asserted on by name below rather than left to whatever the
+        # provider's defaults happen to be.
+        run: |
+          set -euo pipefail
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" \
+            -s name=groups \
+            -s providerId=group-ldap-mapper \
+            -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+            -s parentId="${LDAP_ID}" \
+            -s 'config."groups.dn"=["ou=groups,'"${LDAP_ROOT_DN}"'"]' \
+            -s 'config."group.name.ldap.attribute"=["cn"]' \
+            -s 'config."group.object.classes"=["groupOfNames"]' \
+            -s 'config."membership.ldap.attribute"=["member"]' \
+            -s 'config."membership.attribute.type"=["DN"]' \
+            -s 'config."membership.user.ldap.attribute"=["uid"]' \
+            -s 'config."mode"=["READ_ONLY"]' \
+            -s 'config."user.roles.retrieve.strategy"=["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"]' \
+            -s 'config."drop.non.existing.groups.during.sync"=["false"]'
+
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" \
+            -s name=e2e-mail-mapper \
+            -s providerId=user-attribute-ldap-mapper \
+            -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+            -s parentId="${LDAP_ID}" \
+            -s 'config."user.model.attribute"=["email"]' \
+            -s 'config."ldap.attribute"=["mail"]' \
+            -s 'config."read.only"=["true"]' \
+            -s 'config."always.read.value.from.ldap"=["true"]' \
+            -s 'config."is.mandatory.in.ldap"=["false"]'
+
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" \
+            -s name=e2e-first-name-mapper \
+            -s providerId=user-attribute-ldap-mapper \
+            -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+            -s parentId="${LDAP_ID}" \
+            -s 'config."user.model.attribute"=["firstName"]' \
+            -s 'config."ldap.attribute"=["givenName"]' \
+            -s 'config."read.only"=["true"]' \
+            -s 'config."always.read.value.from.ldap"=["true"]' \
+            -s 'config."is.mandatory.in.ldap"=["false"]'
+
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" \
+            -s name=e2e-last-name-mapper \
+            -s providerId=user-attribute-ldap-mapper \
+            -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+            -s parentId="${LDAP_ID}" \
+            -s 'config."user.model.attribute"=["lastName"]' \
+            -s 'config."ldap.attribute"=["sn"]' \
+            -s 'config."read.only"=["true"]' \
+            -s 'config."always.read.value.from.ldap"=["true"]' \
+            -s 'config."is.mandatory.in.ldap"=["false"]'
+
+      - name: Create test client with a groups protocol mapper
+        # This is the exact chain docs/client-compatibility.md's "Kubernetes
+        # RBAC group mapping" describes stopping short of: LDAP group ->
+        # Keycloak group -> a `groups` claim a Kubernetes API server's
+        # --oidc-groups-claim would read. Public + direct-access-grants so
+        # the workflow can obtain a token with a plain password grant,
+        # without also managing a confidential client secret.
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh create clients -r "${REALM}" -i \
+            -s clientId=k8s-oidc-test \
+            -s publicClient=true \
+            -s directAccessGrantsEnabled=true \
+            -s standardFlowEnabled=false \
+            -s enabled=true)
+          echo "Created client ${CLIENT_ID}"
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create clients/"${CLIENT_ID}"/protocol-mappers/models -r "${REALM}" \
+            -s name=groups \
+            -s protocol=openid-connect \
+            -s protocolMapper=oidc-group-membership-mapper \
+            -s 'config."full.path"=false' \
+            -s 'config."id.token.claim"=true' \
+            -s 'config."access.token.claim"=true' \
+            -s 'config."userinfo.token.claim"=true' \
+            -s 'config."claim.name"=groups'
+
+      - name: Trigger full LDAP sync
+        run: |
+          set -euo pipefail
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create \
+            "user-storage/${LDAP_ID}/sync?action=triggerFullSync" -r "${REALM}" \
+            | tee /tmp/sync-full.txt
+
+      - name: Assert federated users
+        run: |
+          set -euo pipefail
+          for pair in "alice:Alice:Anderson:alice@example.org" "bob:Bob:Brown:bob@example.org"; do
+            uid=${pair%%:*}; rest=${pair#*:}
+            first=${rest%%:*}; rest=${rest#*:}
+            last=${rest%%:*}; mail=${rest#*:}
+            got=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get users -r "${REALM}" -q "username=${uid}" \
+              --fields username,firstName,lastName,email --format csv --noquotes)
+            echo "${uid}: ${got}"
+            echo "${got}" | grep -q "^${uid},${first},${last},${mail}$" \
+              || { echo "::error::federated attributes for ${uid} did not match LDAP (got: ${got})"; exit 1; }
+          done
+          echo "PASS: alice and bob federated with matching email/firstName/lastName"
+
+      - name: Assert group membership matches LDAP exactly (both directions)
+        run: |
+          set -euo pipefail
+          assert_group_members() {
+            group="$1"; shift
+            expected=$(printf '%s\n' "$@" | sort)
+            gid=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get groups -r "${REALM}" -q "search=${group}" \
+              --fields id --format csv --noquotes | head -1)
+            [ -n "$gid" ] || { echo "::error::group ${group} was not created by federation"; exit 1; }
+            actual=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get "groups/${gid}/members" -r "${REALM}" \
+              --fields username --format csv --noquotes | sort)
+            echo "group ${group}: expected=[$(tr '\n' ' ' <<<"$expected")] actual=[$(tr '\n' ' ' <<<"$actual")]"
+            if [ "$expected" != "$actual" ]; then
+              echo "::error::group ${group} membership mismatch: expected [${expected}], got [${actual}]"
+              exit 1
+            fi
+          }
+          assert_group_members developers alice bob
+          assert_group_members marketing alice
+          echo "PASS: Keycloak group membership matches LDAP 'member' lists exactly, both directions"
+
+      - name: Assert authentication and the groups token claim
+        run: |
+          set -euo pipefail
+          token_response=$(curl -s -o /tmp/token.json -w '%{http_code}' \
+            -d "client_id=k8s-oidc-test" -d "grant_type=password" \
+            -d "username=alice" -d "password=${ALICE_PASSWORD}" \
+            "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
+          [ "$token_response" = 200 ] || { echo "::error::password grant for alice failed (HTTP ${token_response})"; cat /tmp/token.json; exit 1; }
+          access_token=$(jq -r .access_token /tmp/token.json)
+
+          echo "Checking a wrong password is rejected..."
+          bad_response=$(curl -s -o /tmp/bad-token.json -w '%{http_code}' \
+            -d "client_id=k8s-oidc-test" -d "grant_type=password" \
+            -d "username=alice" -d "password=wrong-password" \
+            "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
+          [ "$bad_response" = 401 ] || { echo "::error::wrong password expected 401, got ${bad_response}"; cat /tmp/bad-token.json; exit 1; }
+          echo "PASS: wrong password rejected"
+
+          echo "Checking the groups claim via userinfo..."
+          curl -sf -H "Authorization: Bearer ${access_token}" \
+            "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/userinfo" \
+            | tee /tmp/userinfo-alice.json
+          alice_groups=$(jq -c '.groups | sort' /tmp/userinfo-alice.json)
+          [ "$alice_groups" = '["/developers","/marketing"]' ] \
+            || { echo "::error::alice's groups claim was ${alice_groups}, expected developers+marketing"; exit 1; }
+          echo "PASS: alice's token groups claim lists both LDAP groups she is a member of"
+
+      - name: Modify LDAP group membership and re-verify after sync
+        # The mapping-consistency check (#19): a real LDAP membership change
+        # has to propagate to Keycloak, not just the initial import.
+        run: |
+          set -euo pipefail
+          echo "--- developers members before ---"
+          docker exec ldap ldapsearch -x -LLL -D "cn=admin,${LDAP_ROOT_DN}" -w "${LDAP_ADMIN_PASSWORD}" \
+            -b "cn=developers,ou=groups,${LDAP_ROOT_DN}" -s base member | tee /tmp/developers-before.txt
+
+          docker exec -i ldap ldapmodify -x -D "cn=admin,${LDAP_ROOT_DN}" -w "${LDAP_ADMIN_PASSWORD}" <<EOF
+          dn: cn=developers,ou=groups,${LDAP_ROOT_DN}
+          changetype: modify
+          delete: member
+          member: uid=bob,ou=people,${LDAP_ROOT_DN}
+          EOF
+
+          echo "--- developers members after ldapmodify (LDAP side) ---"
+          docker exec ldap ldapsearch -x -LLL -D "cn=admin,${LDAP_ROOT_DN}" -w "${LDAP_ADMIN_PASSWORD}" \
+            -b "cn=developers,ou=groups,${LDAP_ROOT_DN}" -s base member | tee /tmp/developers-after-ldap.txt
+
+          docker exec keycloak /opt/keycloak/bin/kcadm.sh create \
+            "user-storage/${LDAP_ID}/sync?action=triggerFullSync" -r "${REALM}" \
+            | tee /tmp/sync-full-2.txt
+
+          gid=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get groups -r "${REALM}" -q 'search=developers' \
+            --fields id --format csv --noquotes | head -1)
+          after_kc=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get "groups/${gid}/members" -r "${REALM}" \
+            --fields username --format csv --noquotes | sort)
+          echo "--- developers members after sync (Keycloak side) ---"
+          printf '%s\n' "$after_kc" | tee /tmp/developers-after-keycloak.txt
+
+          [ "$after_kc" = "alice" ] \
+            || { echo "::error::expected only alice in developers after removing bob and re-syncing, got [${after_kc}]"; exit 1; }
+          echo "PASS: removing bob from the LDAP group's 'member' list and re-syncing removed him from the Keycloak group too"
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          echo "::group::ldap logs"
+          docker logs ldap || true
+          echo "::endgroup::"
+          echo "::group::keycloak logs"
+          docker logs keycloak || true
+          echo "::endgroup::"
+
+      - name: Clean up containers
+        if: always()
+        run: |
+          docker rm -f ldap keycloak >/dev/null 2>&1 || true
+          docker network rm kcfed >/dev/null 2>&1 || true

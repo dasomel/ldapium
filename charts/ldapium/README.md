@@ -342,6 +342,77 @@ RP-initiated logout. Register `<origin>/login` as a valid post-logout
 redirect URI for every `ui.sso.callbackOrigins` entry. If Keycloak does not
 advertise an end-session endpoint, logout remains local-only.
 
+### Keycloak LDAP user federation
+
+The above is Keycloak as an OIDC provider the UI relies on. The *other*
+direction — Keycloak reading users and groups out of ldapium via its LDAP
+user storage SPI — is a separate integration with its own settings, live-
+verified end to end (LDAP write -> sync -> Keycloak group -> token `groups`
+claim) by `.github/workflows/keycloak-federation-e2e.yml`. This is the same
+provider `docs/client-compatibility.md`'s "Kubernetes RBAC group mapping"
+section has a Kubernetes API server's `--oidc-groups-claim` ultimately
+reading from.
+
+Bind DN: use a dedicated, least-privilege identity — never `<LDAP_ADMIN_DN>`
+or `cn=admin,cn=config`. The workflow's `cn=keycloak-svc,<rootDN>` needs no
+bespoke ACL grant at all: the default ACL (this file's parent
+`image/README.md`, "Access control (ACL)") already gives any authenticated
+bind read access to every attribute except `userPassword`, which is exactly
+what LDAP federation needs — search `ou=people`/`ou=groups`, read
+`mail`/`sn`/`givenName`/`member` — and nothing it doesn't. It uses
+`organizationalRole` + `simpleSecurityObject`, the same objectClasses
+`<LDAP_ADMIN_DN>` gets, just without rootdn's ACL bypass.
+
+Keycloak realm settings > User federation > Add Ldap providers, or the
+equivalent `kcadm.sh`/Admin REST API component, with:
+
+| Setting | Value | Why |
+|---|---|---|
+| Vendor | `other` | This is OpenLDAP, not one of Keycloak's named vendor presets |
+| Connection URL | `ldap://<host>:389` | Plaintext inside a trusted network/namespace; see the LDAPS note below |
+| Bind DN | `cn=keycloak-svc,<rootDN>` | Dedicated read-only identity, not the directory or `cn=config` admin |
+| Edit mode | `READ_ONLY` | Keycloak never writes back to this directory |
+| Users DN | `ou=people,<rootDN>` | |
+| Username LDAP attribute | `uid` | |
+| RDN LDAP attribute | `uid` | |
+| UUID LDAP attribute | `entryUUID` | Operational attribute every entry already has; no schema change needed |
+| User object classes | `inetOrgPerson` | |
+
+Group mapper (`group-ldap-mapper`):
+
+| Setting | Value | Why |
+|---|---|---|
+| Groups DN | `ou=groups,<rootDN>` | |
+| Group name LDAP attribute | `cn` | |
+| Group object classes | `groupOfNames` | |
+| Membership attribute | `member` | This image ships no `memberOf` overlay instance (`memberof.la` loads but is never configured — see "Verifying an install" below); group membership has to be read from the group side |
+| Membership attribute type | `DN` | `member` holds full DNs, not bare `uid`s |
+| Mode | `READ_ONLY` | |
+
+Plus user attribute mappers (`user-attribute-ldap-mapper`) for `mail` ->
+`email`, `givenName` -> `firstName`, `sn` -> `lastName`, all read-only.
+
+A group membership protocol mapper (`oidc-group-membership-mapper`,
+`claim.name=groups`) on the client turns the imported groups into the
+token's `groups` claim — the same claim `docs/client-compatibility.md`
+documents Kubernetes's `--oidc-groups-claim=groups` reading.
+
+**LDAPS**: this workflow deliberately runs plain `ldap://` inside a private
+docker network rather than standing up a CA. `e2e.yml`'s TLS job builds one,
+but it's scoped to that job's own Kubernetes Service DNS names and isn't
+something a separate, non-kind workflow can reuse. TLS transport itself is
+independently proven there; what this workflow proves is the federation
+*contract* (attribute/group mapping, sync, and the token claim chain), which
+is orthogonal to transport encryption. Terminate TLS the same way you would
+for any other LDAP client (`tls.enabled=true` + `ldaps://` in Connection
+URL) in a real deployment.
+
+Trigger a sync from Keycloak (`kcadm.sh create
+"user-storage/<id>/sync?action=triggerFullSync" -r <realm>`, or the realm's
+User federation page) after any LDAP-side user/group change — `READ_ONLY`
+federation is pull-based, not push-based; nothing in this chart or image
+notifies Keycloak of a change.
+
 ## Verifying an install
 
 ```bash

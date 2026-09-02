@@ -323,6 +323,13 @@ This chart's role stops at step 1: operating as an LDAPv3 directory that Keycloa
 can federate against. Steps 2 and 3 are Kubernetes cluster control-plane configurations
 outside this project's scope.
 
+This half of the chain — LDAP `member` -> Keycloak group -> token `groups`
+claim, including a live LDAP membership change propagating through a
+re-sync — is no longer just described here: it's live-verified end to
+end by `.github/workflows/keycloak-federation-e2e.yml`, with the exact
+provider settings in `charts/ldapium/README.md`'s "Keycloak LDAP user
+federation".
+
 ### UI OIDC login validation contract (`sso.go`)
 
 When SSO is enabled (`SSO_ENABLED=true`), the ldapium management UI backend
@@ -453,7 +460,7 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | Windows/AD domain member, Kerberos, Group Policy | Not supported | Different protocol family, out of scope |
 | Microsoft Entra ID | Not supported directly | Not a supported direct federation peer; integration is supported only through an external IdP (such as Keycloak identity brokering). ldapium does not implement Entra sync, SCIM, or graph connectors. |
 | PAM / JIT / JEA products | Protocol-level compatibility; unverified | Any PAM product that uses standard LDAPv3 (`bind`/`modify`/`search`) is protocol-level compatible. ldapium provides no credential vault integration, JIT/JEA request/elevation workflows, or session recording; no specific PAM product combination has been verified in CI. |
-| Keycloak LDAP user federation | Supported via documented path; no CI E2E yet | Documented integration path (`charts/ldapium/README.md`, "Keycloak SSO"); continuous CI E2E test is not yet implemented in this repository. |
+| Keycloak LDAP user federation (LDAP -> Keycloak group -> token `groups` claim) | Supported, continuously live-verified | `.github/workflows/keycloak-federation-e2e.yml`; settings in `charts/ldapium/README.md`'s "Keycloak LDAP user federation" — was previously described but untested |
 | Kubernetes API server OIDC via Keycloak | Supported via external IdP | `kube-apiserver` validates OIDC tokens issued by Keycloak; ldapium serves as the backing LDAP user/group directory. |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
 | SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. |

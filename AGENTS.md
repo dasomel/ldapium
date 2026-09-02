@@ -29,9 +29,10 @@ gotchas that aren't derivable from those.
   error — unless `docker exec -i` is passed. The heredoc never reaches the container's stdin
   without `-i`. Always pass it when piping LDIF into `ldapadd`/`ldapmodify` this way.
 - `ldapium:e2e` is the image tag most workflows build against (`e2e.yml`, `metrics-e2e.yml`,
-  `backup-restore.yml`, `ui-e2e.yml`, `upgrade-e2e.yml`); `replication-chaos-e2e.yml` and
-  `security-e2e.yml` use `ldapium:chaos` / `ldapium:security` instead. Rebuild after any
-  `image/entrypoint.sh` change: `docker build -t ldapium:e2e -f image/Dockerfile ./image`.
+  `backup-restore.yml`, `ui-e2e.yml`, `upgrade-e2e.yml`, `keycloak-federation-e2e.yml`);
+  `replication-chaos-e2e.yml` and `security-e2e.yml` use `ldapium:chaos` / `ldapium:security`
+  instead. Rebuild after any `image/entrypoint.sh` change:
+  `docker build -t ldapium:e2e -f image/Dockerfile ./image`.
 
 ## Non-obvious OpenLDAP / entrypoint.sh behavior
 
