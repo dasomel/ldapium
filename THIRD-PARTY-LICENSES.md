@@ -103,7 +103,7 @@ SBOM attached to that release, or:
 | `cookie@1.1.1` | https://github.com/jshttp/cookie |
 | `detect-node-es@1.1.0` | https://github.com/thekashey/detect-node |
 | `get-nonce@1.0.1` | https://github.com/theKashey/get-nonce |
-| `lucide-react@1.31.0` | https://github.com/lucide-icons/lucide |
+| `lucide-react@1.33.0` | https://github.com/lucide-icons/lucide |
 | `react-dom@19.2.8` | https://github.com/react/react |
 | `react-remove-scroll-bar@2.3.8` | https://github.com/theKashey/react-remove-scroll-bar |
 | `react-remove-scroll@2.7.2` | https://github.com/theKashey/react-remove-scroll |
