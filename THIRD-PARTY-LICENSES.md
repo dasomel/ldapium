@@ -45,11 +45,11 @@ SBOM attached to that release, or:
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
 | `github.com/valyala/bytebufferpool` | MIT | [link](https://github.com/valyala/bytebufferpool/blob/v1.0.0/LICENSE) |
 | `github.com/valyala/fasttemplate` | MIT | [link](https://github.com/valyala/fasttemplate/blob/v1.2.2/LICENSE) |
-| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.54.0:LICENSE) |
+| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.55.0:LICENSE) |
 | `golang.org/x/net` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE) |
 | `golang.org/x/oauth2` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
 | `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
-| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE) |
+| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
 | `golang.org/x/time/rate` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 
 ## UI frontend (npm, production dependencies)
@@ -103,7 +103,7 @@ SBOM attached to that release, or:
 | `cookie@1.1.1` | https://github.com/jshttp/cookie |
 | `detect-node-es@1.1.0` | https://github.com/thekashey/detect-node |
 | `get-nonce@1.0.1` | https://github.com/theKashey/get-nonce |
-| `lucide-react@1.33.0` | https://github.com/lucide-icons/lucide |
+| `lucide-react@1.31.0` | https://github.com/lucide-icons/lucide |
 | `react-dom@19.2.8` | https://github.com/react/react |
 | `react-remove-scroll-bar@2.3.8` | https://github.com/theKashey/react-remove-scroll-bar |
 | `react-remove-scroll@2.7.2` | https://github.com/theKashey/react-remove-scroll |
