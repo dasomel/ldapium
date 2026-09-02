@@ -26,17 +26,32 @@ trap 'rm -rf "$work"' EXIT
 # testdata/incident/: *.pem/*.crt/*.key are blanket-.gitignore'd repo-wide as
 # a leak guardrail (see .gitignore), and e2e.yml already establishes the
 # precedent of generating TLS material on the fly instead of fighting that
-# guardrail with `git add -f`. -not_before/-not_after keep both certs fixed
-# in time, so "days remaining" is exactly as deterministic as if they were
-# static fixtures.
+# guardrail with `git add -f`.
+#
+# `openssl req -x509 -not_before/-not_after` looked like the obvious way to
+# pin an absolute expiry, but those flags do not exist on OpenSSL 3.0 (the
+# version ubuntu-24.04 runners ship) — only on 3.1+ — so a CI run on that
+# runner failed at cert generation under `set -e` before ever reaching the
+# script under test. `-days N` is portable back to essentially every OpenSSL
+# release; N is computed here as "days until the target calendar date",
+# which lands each cert on the same fixed target regardless of what day this
+# suite actually runs on, without needing a flag introduced after 3.0.
+days_until() { # days_until YYYY-MM-DD
+  python3 -c "
+import datetime, sys
+target = datetime.date.fromisoformat(sys.argv[1])
+today = datetime.datetime.now(datetime.timezone.utc).date()
+print(max((target - today).days, 1))
+" "$1"
+}
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "${work}/cert-key.pem" -out "${work}/cert-expiring.pem" \
   -subj "/CN=ldap.example.org" \
-  -not_before 20260101000000Z -not_after 20260915000000Z >/dev/null 2>&1
+  -days "$(days_until 2026-09-15)" >/dev/null 2>&1
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "${work}/cert-key2.pem" -out "${work}/cert-healthy.pem" \
   -subj "/CN=ldap.example.org" \
-  -not_before 20260101000000Z -not_after 20300101000000Z >/dev/null 2>&1
+  -days "$(days_until 2030-01-01)" >/dev/null 2>&1
 
 fail=0
 pass=0
@@ -120,6 +135,12 @@ run audit-healthy "${work}/audit-healthy" \
   --cert-file "${work}/cert-healthy.pem"
 if has_finding "${work}/audit-healthy" auth-failure-burst; then bad "audit-healthy fixture unexpectedly has auth-failure-burst finding"; else ok "audit-healthy fixture has no auth-failure-burst finding"; fi
 
+run sensitive-filter "${work}/sensitive-filter" \
+  --replication-ldif "${fixtures}/replication-healthy.ldif" \
+  --audit-log-file "${fixtures}/audit-sensitive-filter.ndjson" \
+  --backup-dir "${fixtures}/backup-fresh" \
+  --cert-file "${work}/cert-healthy.pem"
+
 # --- (b) redaction guarantee ------------------------------------------------
 # replication-lag.ldif and replication-healthy.ldif both embed a live
 # olcSyncrepl credentials value ("s3cr3t-repl-pw"); it must never surface
@@ -128,6 +149,31 @@ if grep -RIl 's3cr3t-repl-pw' "${work}/lag" "${work}/repl-healthy" >/dev/null 2>
   bad "olcSyncrepl credential leaked into a bundle"
 else
   ok "olcSyncrepl credential redacted from every bundle"
+fi
+
+# audit-sensitive-filter.ndjson embeds a live secret ("hunter2") inside an
+# LDAP filter *value*, not as a top-level JSON key — the shape that used to
+# corrupt the NDJSON structure (P1-3: a greedy text-regex redaction ate the
+# record's own closing quote/brace). Every line must still be valid JSON
+# after redaction, and the secret itself must be gone.
+sensitive_tail="${work}/sensitive-filter/audit-tail.ndjson"
+if [ ! -s "$sensitive_tail" ]; then
+  bad "sensitive-filter fixture: audit-tail.ndjson missing or empty"
+else
+  json_ok=1
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
+      json_ok=0
+      printf 'invalid NDJSON line after redaction: %s\n' "$line" >&2
+    fi
+  done < "$sensitive_tail"
+  if [ "$json_ok" = 1 ]; then ok "every audit-tail.ndjson line still parses as JSON after redaction"; else bad "redaction produced invalid NDJSON"; fi
+fi
+if grep -RIl 'hunter2' "${work}/sensitive-filter" >/dev/null 2>&1; then
+  bad "sensitive reqFilter value (hunter2) leaked into the bundle"
+else
+  ok "sensitive reqFilter value redacted from the bundle"
 fi
 
 # --- (a) determinism ---------------------------------------------------------

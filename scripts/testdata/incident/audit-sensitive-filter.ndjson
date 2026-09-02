@@ -1,0 +1,2 @@
+{"pod":"ldap-0","source":"accesslog","time":"20260903000000.000000Z","actor":"cn=admin,dc=example,dc=org","op":"bind","target":"cn=admin,dc=example,dc=org","filter":"","result":"0"}
+{"pod":"ldap-0","source":"accesslog","time":"20260903000010.000000Z","actor":"uid=alice,ou=people,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(userPassword=hunter2)","result":"0"}

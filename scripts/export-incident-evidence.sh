@@ -179,6 +179,25 @@ for bin in jq python3 sha256sum mktemp grep sed; do
   command -v "$bin" >/dev/null 2>&1 || { echo "required command not found: $bin" >&2; exit 1; }
 done
 
+# Fail fast, before any live LDAP/kubectl work, rather than silently wiping
+# whatever the operator already had at -o — scripts/backup.sh's own output
+# path is never destructive (it only ever creates new timestamped files),
+# and this script matches that: an existing, non-empty output directory (or
+# an existing archive at --tar's target path) is refused outright, never
+# overwritten.
+if [ "$make_tar" = 1 ]; then
+  if [ -e "${output_dir}.tar.gz" ]; then
+    echo "refusing to overwrite existing file: ${output_dir}.tar.gz" >&2
+    exit 1
+  fi
+elif [ -e "$output_dir" ]; then
+  [ -d "$output_dir" ] || { echo "output path exists and is not a directory: ${output_dir}" >&2; exit 1; }
+  if [ -n "$(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    echo "output directory already exists and is not empty — refusing to overwrite it: ${output_dir}" >&2
+    exit 1
+  fi
+fi
+
 # Password is only needed for live LDAP calls (health/monitor/replication
 # sections without their offline *-ldif/--skip-health equivalents). Resolved
 # up front, same as backup.sh, but never required outright: a fully offline
@@ -233,8 +252,26 @@ mkdir -p "$bundle_dir"
 # the common case this is a no-op; it exists for the raw/semi-raw sections
 # (config-drift.txt, audit-tail.ndjson, any quoted olcSyncrepl line) where a
 # value from the directory passes through closer to verbatim.
+#
+# .json/.ndjson files are redacted structurally (parse -> walk ->
+# re-serialize), not with a whole-file regex: a plain-text regex applied to
+# raw JSON bytes can't tell a value's content from the JSON syntax around
+# it — a text-substring match like "userPassword=hunter2" embedded inside a
+# quoted LDAP filter value ("filter":"(userPassword=hunter2)") has no
+# reliable stopping point on undecoded JSON, and an earlier, greedier
+# version of this regex ate the record's own closing quote/brace, producing
+# invalid NDJSON. Walking the parsed structure means the redaction only
+# ever touches a string's content; json's own serializer re-escapes it
+# correctly no matter what ends up inside.
 # ---------------------------------------------------------------------------
 redact_file() {
+  case "$1" in
+    *.json|*.ndjson) redact_json_file "$1" ;;
+    *) redact_text_file "$1" ;;
+  esac
+}
+
+redact_text_file() {
   python3 - "$1" <<'PY'
 import re, sys
 path = sys.argv[1]
@@ -250,14 +287,8 @@ text = re.sub(
     text,
 )
 text = re.sub(
-    r'(?i)\b(' + SENSITIVE + r')(\s*=\s*)(?!")(\S+)',
+    r'(?i)\b(' + SENSITIVE + r')(\s*=\s*)(?!")([^\s")}\],]+)',
     lambda m: m.group(1) + m.group(2) + '<redacted>',
-    text,
-)
-# JSON "key": "value" where key matches.
-text = re.sub(
-    r'(?i)("(?:[^"\\]|\\.)*(?:' + SENSITIVE + r')(?:[^"\\]|\\.)*"\s*:\s*)"(?:[^"\\]|\\.)*"',
-    lambda m: m.group(1) + '"<redacted>"',
     text,
 )
 # LDIF-style "attr: value" / "attr:: base64value" lines.
@@ -268,6 +299,75 @@ text = re.sub(
 )
 with open(path, "w", encoding="utf-8") as f:
     f.write(text)
+PY
+}
+
+# redact_json_file FILE — .json is one JSON value; .ndjson is one JSON value
+# per line. Each string leaf is redacted in place (an embedded "attr=value"
+# fragment, e.g. inside an LDAP filter) and any object key that is itself a
+# sensitive attribute name has its whole value replaced — belt-and-braces
+# for a case this script's own section builders never produce today, but a
+# structural guarantee is cheap here and costs nothing while unused. A line
+# in a .ndjson file that fails to parse as JSON (a truncated/corrupt record
+# — export-audit-log.sh's own consumers already tolerate this) falls back
+# to the plain-text substitution for that single line rather than aborting
+# the whole file.
+redact_json_file() {
+  python3 - "$1" <<'PY'
+import json, re, sys
+
+path = sys.argv[1]
+is_ndjson = path.endswith(".ndjson")
+
+SENSITIVE = r'(?:user)?password\w*|secret\w*|credential\w*|token\w*'
+KEY_RE = re.compile(r'(?i)^(?:' + SENSITIVE + r')$')
+VALUE_RE = re.compile(r'(?i)\b(' + SENSITIVE + r')(\s*=\s*)(?!")([^\s")}\],]+)')
+
+
+def redact_string(s):
+    return VALUE_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", s)
+
+
+def walk(obj):
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if KEY_RE.match(k):
+                out[k] = "<redacted>"
+            else:
+                out[k] = walk(v)
+        return out
+    if isinstance(obj, list):
+        return [walk(v) for v in obj]
+    if isinstance(obj, str):
+        return redact_string(obj)
+    return obj
+
+
+with open(path, "r", encoding="utf-8", errors="replace") as f:
+    text = f.read()
+
+if is_ndjson:
+    out_lines = []
+    for line in text.split("\n"):
+        if line == "":
+            out_lines.append(line)
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            out_lines.append(VALUE_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", line))
+            continue
+        # sort_keys=False: preserve the field order the record was written
+        # in (export-audit-log.sh's own schema), not an arbitrary one.
+        out_lines.append(json.dumps(walk(obj), sort_keys=False))
+    new_text = "\n".join(out_lines)
+else:
+    obj = json.loads(text)
+    new_text = json.dumps(walk(obj), sort_keys=True, indent=2) + "\n"
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write(new_text)
 PY
 }
 
@@ -801,10 +901,15 @@ log "redaction assertion passed"
 
 mkdir -p "$(dirname "$output_dir")" 2>/dev/null || true
 if [ "$make_tar" = 1 ]; then
+  # Existing-file check already ran before any work started (see above);
+  # nothing to delete here.
   tar -C "$work_dir" -czf "${output_dir}.tar.gz" "$bundle_name"
   log "wrote ${output_dir}.tar.gz"
 else
-  rm -rf "$output_dir"
+  # Never rm -rf a caller-supplied path: the empty-or-nonexistent check
+  # above already guarantees $output_dir holds nothing of the operator's to
+  # lose, so this only ever creates it or writes into an empty directory —
+  # scripts/backup.sh's own output path is equally non-destructive.
   mkdir -p "$output_dir"
   cp -R "$bundle_dir"/. "$output_dir"/
   log "wrote ${output_dir}/"
