@@ -159,6 +159,7 @@ implements LDAPv3 and nothing else in that stack:
 |---|---|
 | LDAPv3 directory protocol | Yes — the actual surface this project targets |
 | Kerberos (domain auth, SSO) | No |
+| SPNEGO / Windows Negotiate (integrated LDAP authentication) | No — the image configures no GSSAPI/SASL mechanism; use LDAPv3 `SIMPLE` bind or an external IdP instead |
 | Group Policy | No |
 | SMB/CIFS, DFS | No |
 | AD's replication model / trusts / forests | No — this project's own multi-provider replication (`charts/ldapium/README.md`, "HA / replication") is unrelated and not AD-compatible |
@@ -166,11 +167,13 @@ implements LDAPv3 and nothing else in that stack:
 
 Where this genuinely interoperates with a Windows-adjacent workflow:
 
-- **A Windows machine as an LDAP client**, not a domain member — anything on
-  Windows that speaks LDAPv3 directly (e.g. `ldp.exe` for inspection, an
-  application configured with an explicit LDAP connection string) binds and
-  searches like any other `SIMPLE`-auth client. This works today and needs
-  nothing special.
+- **A Windows machine as an LDAP client**, not a domain member — an application
+  that performs basic LDAPv3 `SIMPLE` bind and search is within the protocol
+  boundary. In `ldp.exe`, explicitly select Simple bind rather than an
+  Integrated/SSPI bind, and configure the TLS trust store when using LDAPS or
+  StartTLS. This project does not yet have a Windows-specific live test, so
+  validate the intended client and its TLS settings before treating that
+  compatibility as verified.
 - **Migrating identities *from* AD** — exporting AD's LDIF and re-importing
   it here needs schema reconciliation (AD's `objectClass`/attribute set
   differs from what is loaded — see the schema list above) and is a
@@ -246,10 +249,10 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 |---|---|---|
 | `ldapsearch` / `ldapadd` / `ldapmodify` / `ldapdelete` (OpenLDAP CLI) | Supported, continuously verified | Used throughout this project's own E2E suites |
 | Go `go-ldap` client (this project's own UI backend) | Supported, continuously verified | `ui/backend/internal/ldapclient` |
-| Any LDAPv3 client using `SIMPLE` bind | Supported | The verified path |
+| LDAPv3 client using `SIMPLE` bind for basic bind/search | Protocol-level compatibility; not client-specific verified | OpenLDAP CLI and this project's Go client are continuously verified. Third-party controls/extensions, referrals, and TLS version/cipher requirements are unverified; validate the intended client before relying on it. |
 | SSSD / nsswitch (Linux) | NSS identity resolution continuously live-tested | `getent passwd` / `id`; no PAM claim — see above |
 | SASL `EXTERNAL` (mTLS) | Opt-in image configuration | `LDAP_TLS_MUTUAL_AUTH=true` with CA and operator-configured subject-to-DN mapping; uses `try`, so password binds remain compatible |
 | SASL `DIGEST-MD5` / `CRAM-MD5` / `PLAIN` | Not supported | No `saslauthd`/SASL password backend shipped |
-| Windows as an LDAPv3 client | Supported (LDAP only) | Not a domain join — see above |
+| Windows as an LDAPv3 client | Protocol-level compatibility; not Windows-specific verified | Not a domain join — see above |
 | Windows/AD domain member, Kerberos, Group Policy | Not supported | Different protocol family, out of scope |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
