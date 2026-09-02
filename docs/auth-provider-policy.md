@@ -90,10 +90,12 @@ third — an explicit per-attempt log line — closes the gap between them:
    provider field, and by design excludes the query string (`${path}`, not
    `${uri}`) so an OIDC authorization code or `state` value never lands in
    a log line.
-3. **Structured `auth` event line** (added for this issue): `handleLogin`
-   and `handleSSOCallback` each call `logAuthEvent`
-   (`ui/backend/internal/httpapi/audit_log.go`) on every login outcome,
-   emitting one JSON line via the same `log` sink `errors.go` already uses:
+3. **Structured `auth` event line** (added for this issue): every return
+   path out of `handleLogin` and `handleSSOCallback` — success, a rejected
+   bind, a rate-limited request, a malformed request body, missing
+   credentials, and every SSO failure reason — calls `logAuthEvent`
+   (`ui/backend/internal/httpapi/audit_log.go`), emitting one JSON line via
+   the same `log` sink `errors.go` already uses:
 
    ```json
    {"event":"auth","provider":"ldap","result":"failure","request_id":"...","subject":"jdoe","reason":"invalid_credentials"}
@@ -105,15 +107,45 @@ third — an explicit per-attempt log line — closes the gap between them:
    (`echo.HeaderXRequestID`), so the two can be correlated; `subject` is a
    uid or DN and `reason` a short failure code, both omitted entirely
    (never emitted as `""`) when not yet known — for example a
-   `rate_limited` outcome is logged before the request body is even parsed.
+   `rate_limited` outcome is logged before the request body is even
+   parsed. `subject_redacted` is `true` only when an identity *was*
+   submitted but withheld from the line (see below); it is otherwise
+   omitted, so a reader can tell "nothing was submitted" apart from
+   "something was submitted and hidden".
+
    **`subject` and `reason` never carry a password, bearer token, or OIDC
-   authorization code** — only an identity string or a fixed reason
-   constant (`invalid_credentials`, `bind_error`, `session_create_error`,
-   `access_denied`, `not_authorized`, `authentication_failed`,
-   `directory_account_not_found`, `invalid_state`, `invalid_origin`). The
-   field-building logic lives in the pure `buildAuthEvent` helper, unit
-   tested independently of any logger or LDAP connection
-   (`audit_log_test.go`).
+   authorization code.** `POST /api/login`'s `identity` field is free-form
+   client input — `dial.go`'s `Bind` tries anything that doesn't parse as a
+   DN as a bare uid, with no charset check of its own — so a user who
+   pastes a password or token into that field must not have it echoed back
+   into the log on the resulting failed bind. `sanitizeLoginSubject`
+   (`audit_log.go`) gates this: the submitted identity is only logged
+   as-is when it is syntactically a uid (the same charset
+   `internal/validate.UID` enforces for the create-user form) or a real DN
+   (parses with go-ldap's `ParseDN`, via `ldapclient.LooksLikeDN` — the
+   same classifier `dial.go` itself uses to decide whether to bind the
+   identity directly or resolve it as a uid first); anything else is
+   logged as `subject=""`, `subject_redacted=true`. This is a heuristic,
+   not a guarantee — a short secret made only of letters, digits, and
+   hyphens is syntactically indistinguishable from a real uid and is still
+   logged — but a value using characters outside that charset (spaces,
+   `@`, `!`, and most password/token alphabets) never is. An LDAP session's
+   `subject` is always the DN the directory itself authenticated
+   (`bound.WhoAmI()` / `sess.DN`), never the raw submitted identity, so
+   success and post-bind failures need no such gate; an SSO `subject` is
+   always a claim from an already-signature-verified ID token or a
+   directory-resolved DN, not free-form form input.
+
+   `reason` is always one of a fixed set of constants:
+   `malformed_request`, `missing_credentials`, `invalid_credentials`,
+   `bind_error`, `session_create_error` (LDAP); `access_denied`,
+   `not_authorized`, `authentication_failed`,
+   `directory_account_not_found`, `invalid_state`, `invalid_origin` (SSO).
+   The field-building and redaction logic lives in the pure
+   `buildAuthEvent` and `sanitizeLoginSubject` helpers, unit tested
+   independently of any logger or LDAP connection (`audit_log_test.go`),
+   plus a handler-level test that captures actual log output and asserts a
+   bogus identity never appears in it (`auth_audit_handlers_test.go`).
 
 ## 4. Fallback loop and retry-storm prevention
 

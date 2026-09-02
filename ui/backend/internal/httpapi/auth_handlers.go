@@ -33,15 +33,17 @@ func (s *Server) handleLogin(c echo.Context) error {
 	ip := c.RealIP()
 	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
-		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "")
+		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "", false)
 		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed login attempts")
 	}
 
 	var req loginRequest
 	if err := c.Bind(&req); err != nil {
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "malformed_request", false)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	if req.Identity == "" || req.Password == "" {
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "missing_credentials", false)
 		return echo.NewHTTPError(http.StatusBadRequest, "identity and password are required")
 	}
 
@@ -54,18 +56,26 @@ func (s *Server) handleLogin(c echo.Context) error {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
 			s.loginLimiter.recordFailure(ip)
 		}
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), req.Identity, authFailureReason(err))
+		// The submitted identity is free-form client input (dial.go's Bind
+		// tries it as a bare uid with no charset check when it isn't a
+		// DN), so on a failed bind it might be a password or token pasted
+		// into the wrong field. sanitizeLoginSubject only lets a value
+		// through the log line when it is syntactically a uid or DN.
+		subject, redacted := sanitizeLoginSubject(req.Identity)
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), subject, authFailureReason(err), redacted)
 		return respondErr(c, err)
 	}
 
 	sess, err := s.sessions.Create(bound.WhoAmI(), bound)
 	if err != nil {
 		bound.Close()
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error")
+		// bound.WhoAmI() is the DN the directory itself just authenticated,
+		// not the raw client-submitted identity, so it never needs sanitizing.
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error", false)
 		return respondErr(c, err)
 	}
 
-	logAuthEvent(authProviderLDAP, authResultSuccess, requestIDOf(c), sess.DN, "")
+	logAuthEvent(authProviderLDAP, authResultSuccess, requestIDOf(c), sess.DN, "", false)
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.JSON(http.StatusOK, meResponse{DN: sess.DN})
 }

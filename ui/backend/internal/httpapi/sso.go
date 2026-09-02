@@ -120,12 +120,12 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 
 	state, ok := s.sso.states.Consume(c.QueryParam("state"), binding)
 	if !ok {
-		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_state")
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_state", false)
 		return echo.NewHTTPError(http.StatusBadRequest, "SSO login state is invalid or expired")
 	}
 	redirectURI, err := s.sso.callbackURI(c.Request())
 	if err != nil || redirectURI != state.redirectURI {
-		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_origin")
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_origin", false)
 		return echo.NewHTTPError(http.StatusBadRequest, "unrecognized SSO callback origin")
 	}
 	if c.QueryParam("error") != "" {
@@ -167,7 +167,7 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 		serviceClient.Close()
 		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", dn)
 	}
-	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "")
+	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "", false)
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.Redirect(http.StatusSeeOther, callbackOrigin(state.redirectURI)+"/")
 }
@@ -177,7 +177,7 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 // known at the point of failure, or "" earlier in the flow) and redirects
 // the browser to the login page's error state.
 func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason, subject string) error {
-	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), subject, reason)
+	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), subject, reason, false)
 	loginURL := callbackOrigin(redirectURI) + "/login?sso_error=" + url.QueryEscape(reason)
 	return c.Redirect(http.StatusSeeOther, loginURL)
 }
