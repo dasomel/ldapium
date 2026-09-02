@@ -380,8 +380,12 @@ jobs:
       - name: Assert authentication and the groups token claim
         run: |
           set -euo pipefail
+          # scope=openid is required explicitly: without it in the password
+          # grant's request, Keycloak issues a token that later fails
+          # userinfo with USER_INFO_REQUEST_ERROR "Missing openid scope" —
+          # observed live in this workflow's first CI run.
           token_response=$(curl -s -o /tmp/token.json -w '%{http_code}' \
-            -d "client_id=k8s-oidc-test" -d "grant_type=password" \
+            -d "client_id=k8s-oidc-test" -d "grant_type=password" -d "scope=openid" \
             -d "username=alice" -d "password=${ALICE_PASSWORD}" \
             "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
           [ "$token_response" = 200 ] || { echo "::error::password grant for alice failed (HTTP ${token_response})"; cat /tmp/token.json; exit 1; }
@@ -389,7 +393,7 @@ jobs:
 
           echo "Checking a wrong password is rejected..."
           bad_response=$(curl -s -o /tmp/bad-token.json -w '%{http_code}' \
-            -d "client_id=k8s-oidc-test" -d "grant_type=password" \
+            -d "client_id=k8s-oidc-test" -d "grant_type=password" -d "scope=openid" \
             -d "username=alice" -d "password=wrong-password" \
             "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
           [ "$bad_response" = 401 ] || { echo "::error::wrong password expected 401, got ${bad_response}"; cat /tmp/bad-token.json; exit 1; }
