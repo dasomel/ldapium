@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -8,8 +10,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
-	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
-	"github.com/dasomel/ldapium/ui/backend/internal/validate"
 )
 
 // Provider and result values an auth-event line ever carries. LDAP mode and
@@ -29,13 +29,13 @@ const (
 // without ever carrying a credential. Subject and Reason are omitted from
 // the line when empty rather than logged as "".
 type authEvent struct {
-	Event           string `json:"event"`
-	Provider        string `json:"provider"`
-	Result          string `json:"result"`
-	RequestID       string `json:"request_id"`
-	Subject         string `json:"subject,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	SubjectRedacted bool   `json:"subject_redacted,omitempty"`
+	Event              string `json:"event"`
+	Provider           string `json:"provider"`
+	Result             string `json:"result"`
+	RequestID          string `json:"request_id"`
+	Subject            string `json:"subject,omitempty"`
+	SubjectFingerprint string `json:"subject_fingerprint,omitempty"`
+	Reason             string `json:"reason,omitempty"`
 }
 
 // buildAuthEvent assembles the fields for one auth-event log line. It is a
@@ -43,35 +43,36 @@ type authEvent struct {
 // logger or an LDAP connection (see AGENTS.md's testing philosophy) —
 // logAuthEvent is the only caller that touches an actual output stream.
 //
-// subject must already be known-safe to log — a uid or DN that passed
-// sanitizeLoginSubject, an authenticated LDAP bind DN, or an OIDC ID
-// token's own claim — or empty when no identity is known yet (a
-// rate-limited request whose body was never parsed, an SSO failure before
-// the ID token was validated, or an identity that failed sanitization).
-// Never a password, bearer token, or OIDC authorization code.
-// subjectRedacted is true only for the last of those cases, so a reader
-// can tell "no identity was submitted" apart from "one was submitted but
-// withheld".
-func buildAuthEvent(provider, result, requestID, subject, reason string, subjectRedacted bool) authEvent {
+// subject is only ever a server-derived identity: the DN an LDAP bind
+// actually authenticated as, or the DN/uid an SSO callback resolved from
+// the directory after verifying the ID token. It must never be raw
+// client-submitted identity text (D2, #116 review round 2): /api/login's
+// identity field is free-form — a user can paste a password or token into
+// it — so on any failure the field-building call sites below pass ""
+// here and put a fingerprint of whatever identity was submitted (if any)
+// in subjectFingerprint instead, via fingerprintIdentity. Reason is a
+// short machine-readable failure code, never the underlying error's raw
+// text (see authFailureReason).
+func buildAuthEvent(provider, result, requestID, subject, reason, subjectFingerprint string) authEvent {
 	return authEvent{
-		Event:           "auth",
-		Provider:        provider,
-		Result:          result,
-		RequestID:       requestID,
-		Subject:         subject,
-		Reason:          reason,
-		SubjectRedacted: subjectRedacted,
+		Event:              "auth",
+		Provider:           provider,
+		Result:             result,
+		RequestID:          requestID,
+		Subject:            subject,
+		SubjectFingerprint: subjectFingerprint,
+		Reason:             reason,
 	}
 }
 
 // logAuthEvent writes one structured auth-event log line via the standard
 // logger, the same sink respondErr already uses (see errors.go), so both
 // land in the same process log without adding a logging dependency.
-func logAuthEvent(provider, result, requestID, subject, reason string, subjectRedacted bool) {
-	line, err := json.Marshal(buildAuthEvent(provider, result, requestID, subject, reason, subjectRedacted))
+func logAuthEvent(provider, result, requestID, subject, reason, subjectFingerprint string) {
+	line, err := json.Marshal(buildAuthEvent(provider, result, requestID, subject, reason, subjectFingerprint))
 	if err != nil {
-		// The fields above are plain strings/bools; Marshal cannot fail on
-		// them in practice. Fall back rather than silently dropping the event.
+		// The fields above are plain strings; Marshal cannot fail on them
+		// in practice. Fall back rather than silently dropping the event.
 		log.Printf("auth event marshal error: %v", err)
 		return
 	}
@@ -89,28 +90,27 @@ func authFailureReason(err error) string {
 	return "bind_error"
 }
 
-// sanitizeLoginSubject decides whether a client-submitted /api/login
-// identity is safe to place in the audit log as-is. The identity field
-// accepts free-form text (see dial.go's Bind: anything not shaped like a
-// DN is used as a bare-uid search value with no further validation), so a
-// user who pastes a password or token into that field — by mistake or
-// otherwise — must not have it echoed back into the log on the resulting
-// failed bind.
+// fingerprintIdentity returns the first 16 hex characters (8 bytes) of
+// sha256(identity), or "" when identity is empty.
 //
-// A value is treated as safe only when it is syntactically a uid (the same
-// charset the create-user validator allows, validate.UID) or a real DN
-// (parses with go-ldap's ParseDN via ldapclient.LooksLikeDN, the same
-// classifier dial.go itself uses to route a login identity). Anything else
-// comes back as "", redacted=true. This is a heuristic, not a guarantee: a
-// short alphanumeric secret that happens to fit the uid charset is
-// indistinguishable from a real uid and is still logged — the guarantee is
-// only that a value using characters outside that charset (spaces, most
-// punctuation, most password/token alphabets) is never logged.
-func sanitizeLoginSubject(identity string) (subject string, redacted bool) {
-	if validate.UID(identity) == nil || ldapclient.LooksLikeDN(identity) {
-		return identity, false
+// D2 (#116 review round 2): the audit log must never record client-supplied
+// identity text on a failure, full stop — not even after checking whether
+// it merely happens to parse as a uid or DN, since a pasted secret can do
+// that too (a bare uid-shaped password, or an RDN-shaped string such as
+// "password=secret"). A fingerprint is a one-way summary: it lets an
+// operator confirm "these attempts used the same identity" or match a
+// specific known account against the log, but the log itself never
+// contains anything an attacker or a careless log viewer could read back
+// as a credential. It deliberately reuses no other hash in this codebase
+// (password hashing, session signing) — this is not a security boundary,
+// just a correlation aid, and 8 bytes of SHA-256 is more than enough
+// entropy for that without inviting confusion with an actual MAC.
+func fingerprintIdentity(identity string) string {
+	if identity == "" {
+		return ""
 	}
-	return "", true
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // requestIDOf returns the request ID the RequestID middleware assigned (or

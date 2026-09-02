@@ -33,17 +33,19 @@ func (s *Server) handleLogin(c echo.Context) error {
 	ip := c.RealIP()
 	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
-		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "", false)
+		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "", "")
 		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed login attempts")
 	}
 
 	var req loginRequest
 	if err := c.Bind(&req); err != nil {
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "malformed_request", false)
+		// The body never parsed, so no identity was even extracted to
+		// fingerprint.
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "malformed_request", "")
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	if req.Identity == "" || req.Password == "" {
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "missing_credentials", false)
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "missing_credentials", fingerprintIdentity(req.Identity))
 		return echo.NewHTTPError(http.StatusBadRequest, "identity and password are required")
 	}
 
@@ -58,11 +60,12 @@ func (s *Server) handleLogin(c echo.Context) error {
 		}
 		// The submitted identity is free-form client input (dial.go's Bind
 		// tries it as a bare uid with no charset check when it isn't a
-		// DN), so on a failed bind it might be a password or token pasted
-		// into the wrong field. sanitizeLoginSubject only lets a value
-		// through the log line when it is syntactically a uid or DN.
-		subject, redacted := sanitizeLoginSubject(req.Identity)
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), subject, authFailureReason(err), redacted)
+		// DN), so it may be a password or token pasted into the wrong
+		// field. D2 (#116 review round 2): never log it as-is on a
+		// failure, not even when it happens to look like a uid or DN — a
+		// pasted secret can look like one too. Only its fingerprint goes
+		// in the line.
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", authFailureReason(err), fingerprintIdentity(req.Identity))
 		return respondErr(c, err)
 	}
 
@@ -70,12 +73,13 @@ func (s *Server) handleLogin(c echo.Context) error {
 	if err != nil {
 		bound.Close()
 		// bound.WhoAmI() is the DN the directory itself just authenticated,
-		// not the raw client-submitted identity, so it never needs sanitizing.
-		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error", false)
+		// not raw client-submitted identity text, so it is safe to log
+		// as-is even though this outcome is a failure.
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error", "")
 		return respondErr(c, err)
 	}
 
-	logAuthEvent(authProviderLDAP, authResultSuccess, requestIDOf(c), sess.DN, "", false)
+	logAuthEvent(authProviderLDAP, authResultSuccess, requestIDOf(c), sess.DN, "", "")
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.JSON(http.StatusOK, meResponse{DN: sess.DN})
 }

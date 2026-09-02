@@ -120,12 +120,12 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 
 	state, ok := s.sso.states.Consume(c.QueryParam("state"), binding)
 	if !ok {
-		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_state", false)
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_state", "")
 		return echo.NewHTTPError(http.StatusBadRequest, "SSO login state is invalid or expired")
 	}
 	redirectURI, err := s.sso.callbackURI(c.Request())
 	if err != nil || redirectURI != state.redirectURI {
-		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_origin", false)
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_origin", "")
 		return echo.NewHTTPError(http.StatusBadRequest, "unrecognized SSO callback origin")
 	}
 	if c.QueryParam("error") != "" {
@@ -167,17 +167,19 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 		serviceClient.Close()
 		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", dn)
 	}
-	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "", false)
+	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "", "")
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.Redirect(http.StatusSeeOther, callbackOrigin(state.redirectURI)+"/")
 }
 
-// redirectSSOFailure logs one failed SSO auth-event line (subject is
-// whatever identity — Keycloak username or resolved LDAP DN — was already
-// known at the point of failure, or "" earlier in the flow) and redirects
-// the browser to the login page's error state.
-func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason, subject string) error {
-	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), subject, reason, false)
+// redirectSSOFailure logs one failed SSO auth-event line and redirects the
+// browser to the login page's error state. identity is whatever OIDC
+// subject claim (Keycloak's preferred_username) or resolved LDAP DN was
+// already known at the point of failure, or "" earlier in the flow — D2
+// (#116 review round 2): even here it is never logged as-is, only as a
+// fingerprint, since it originates from client-influenced input.
+func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason, identity string) error {
+	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", reason, fingerprintIdentity(identity))
 	loginURL := callbackOrigin(redirectURI) + "/login?sso_error=" + url.QueryEscape(reason)
 	return c.Redirect(http.StatusSeeOther, loginURL)
 }

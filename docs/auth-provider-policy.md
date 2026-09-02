@@ -98,54 +98,63 @@ third — an explicit per-attempt log line — closes the gap between them:
    the same `log` sink `errors.go` already uses:
 
    ```json
-   {"event":"auth","provider":"ldap","result":"failure","request_id":"...","subject":"jdoe","reason":"invalid_credentials"}
+   {"event":"auth","provider":"ldap","result":"failure","request_id":"...","subject_fingerprint":"a1b2c3d4e5f60718","reason":"invalid_credentials"}
    ```
 
    Fields: `event` is always `"auth"`; `provider` is `"ldap"` or `"oidc"`;
    `result` is `"success"`, `"failure"`, or `"rate_limited"`; `request_id`
    matches the access-log line for the same request
-   (`echo.HeaderXRequestID`), so the two can be correlated; `subject` is a
-   uid or DN and `reason` a short failure code, both omitted entirely
-   (never emitted as `""`) when not yet known — for example a
-   `rate_limited` outcome is logged before the request body is even
-   parsed. `subject_redacted` is `true` only when an identity *was*
-   submitted but withheld from the line (see below); it is otherwise
-   omitted, so a reader can tell "nothing was submitted" apart from
-   "something was submitted and hidden".
+   (`echo.HeaderXRequestID`), so the two can be correlated; `subject`,
+   `subject_fingerprint`, and `reason` are all omitted entirely (never
+   emitted as `""`) when not applicable — for example a `rate_limited`
+   outcome is logged before the request body is even parsed, so it has
+   neither.
 
-   **`subject` and `reason` never carry a password, bearer token, or OIDC
-   authorization code.** `POST /api/login`'s `identity` field is free-form
-   client input — `dial.go`'s `Bind` tries anything that doesn't parse as a
-   DN as a bare uid, with no charset check of its own — so a user who
-   pastes a password or token into that field must not have it echoed back
-   into the log on the resulting failed bind. `sanitizeLoginSubject`
-   (`audit_log.go`) gates this: the submitted identity is only logged
-   as-is when it is syntactically a uid (the same charset
-   `internal/validate.UID` enforces for the create-user form) or a real DN
-   (parses with go-ldap's `ParseDN`, via `ldapclient.LooksLikeDN` — the
-   same classifier `dial.go` itself uses to decide whether to bind the
-   identity directly or resolve it as a uid first); anything else is
-   logged as `subject=""`, `subject_redacted=true`. This is a heuristic,
-   not a guarantee — a short secret made only of letters, digits, and
-   hyphens is syntactically indistinguishable from a real uid and is still
-   logged — but a value using characters outside that charset (spaces,
-   `@`, `!`, and most password/token alphabets) never is. An LDAP session's
-   `subject` is always the DN the directory itself authenticated
-   (`bound.WhoAmI()` / `sess.DN`), never the raw submitted identity, so
-   success and post-bind failures need no such gate; an SSO `subject` is
-   always a claim from an already-signature-verified ID token or a
-   directory-resolved DN, not free-form form input.
+   **`subject` never carries client-submitted identity text, and neither
+   field ever carries a password, bearer token, or OIDC authorization
+   code.** `POST /api/login`'s `identity` field is free-form client
+   input — `dial.go`'s `Bind` tries anything that doesn't parse as a DN as
+   a bare uid, with no charset check of its own — so a user can paste a
+   password or token into it, by mistake or otherwise. An earlier version
+   of this line tried to allow the submitted identity through when it was
+   merely *syntactically* a uid or DN, but that check does not actually
+   distinguish a real account name from a secret: `hunter2` looks like a
+   uid, and `password=secret` or `cn=password=secret` parse as valid DNs.
+   The current rule (D2) is unconditional instead: **on any outcome other
+   than a fully successful login, `subject` is always empty and the
+   line carries `subject_fingerprint` — the first 16 hex characters of
+   `sha256(identity)`, via `fingerprintIdentity` — instead.** A
+   fingerprint is one-way and lets an operator confirm that two log lines
+   (or a log line and a known account name they hash themselves) refer to
+   the same submitted value, without the log ever holding text that could
+   itself be a leaked credential. `subject_fingerprint` is omitted rather
+   than emitted as `""` when no identity was ever available to fingerprint
+   (a rate-limited or malformed request, or an SSO failure before any
+   claim was read).
+
+   `subject` is populated only from a value the server itself derived,
+   never from raw request input: the DN an LDAP bind actually
+   authenticated as (`bound.WhoAmI()` / `sess.DN` — including the one
+   post-bind failure path, `session_create_error`, since the bind already
+   succeeded by that point) or the DN an SSO callback resolved from the
+   directory after verifying the ID token. An SSO failure's fingerprint,
+   when present, is taken over the OIDC subject claim already extracted
+   (Keycloak's `preferred_username`) — never the raw ID token, access
+   token, or authorization code.
 
    `reason` is always one of a fixed set of constants:
    `malformed_request`, `missing_credentials`, `invalid_credentials`,
    `bind_error`, `session_create_error` (LDAP); `access_denied`,
    `not_authorized`, `authentication_failed`,
    `directory_account_not_found`, `invalid_state`, `invalid_origin` (SSO).
-   The field-building and redaction logic lives in the pure
-   `buildAuthEvent` and `sanitizeLoginSubject` helpers, unit tested
+   The field-building and fingerprinting logic lives in the pure
+   `buildAuthEvent` and `fingerprintIdentity` helpers, unit tested
    independently of any logger or LDAP connection (`audit_log_test.go`),
-   plus a handler-level test that captures actual log output and asserts a
-   bogus identity never appears in it (`auth_audit_handlers_test.go`).
+   plus handler-level tests that capture actual log output and assert
+   several bogus identities — including `hunter2` and
+   `cn=password=secret` — never appear in it, and that a given identity's
+   fingerprint is stable across repeated attempts
+   (`auth_audit_handlers_test.go`).
 
 ## 4. Fallback loop and retry-storm prevention
 

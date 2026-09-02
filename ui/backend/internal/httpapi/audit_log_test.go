@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,17 +13,17 @@ import (
 
 func TestBuildAuthEvent(t *testing.T) {
 	tests := []struct {
-		name            string
-		provider        string
-		result          string
-		requestID       string
-		subject         string
-		reason          string
-		subjectRedacted bool
-		want            authEvent
+		name               string
+		provider           string
+		result             string
+		requestID          string
+		subject            string
+		reason             string
+		subjectFingerprint string
+		want               authEvent
 	}{
 		{
-			name:      "ldap success carries subject, omits reason",
+			name:      "ldap success carries the server-resolved subject, omits reason",
 			provider:  authProviderLDAP,
 			result:    authResultSuccess,
 			requestID: "req-1",
@@ -36,23 +38,24 @@ func TestBuildAuthEvent(t *testing.T) {
 			},
 		},
 		{
-			name:      "ldap failure carries subject and reason",
-			provider:  authProviderLDAP,
-			result:    authResultFailure,
-			requestID: "req-2",
-			subject:   "jdoe",
-			reason:    "invalid_credentials",
+			name:               "ldap failure carries only a fingerprint, never the raw identity",
+			provider:           authProviderLDAP,
+			result:             authResultFailure,
+			requestID:          "req-2",
+			subject:            "",
+			reason:             "invalid_credentials",
+			subjectFingerprint: "aaaaaaaaaaaaaaaa",
 			want: authEvent{
-				Event:     "auth",
-				Provider:  authProviderLDAP,
-				Result:    authResultFailure,
-				RequestID: "req-2",
-				Subject:   "jdoe",
-				Reason:    "invalid_credentials",
+				Event:              "auth",
+				Provider:           authProviderLDAP,
+				Result:             authResultFailure,
+				RequestID:          "req-2",
+				SubjectFingerprint: "aaaaaaaaaaaaaaaa",
+				Reason:             "invalid_credentials",
 			},
 		},
 		{
-			name:      "ldap rate limited has no subject yet",
+			name:      "ldap rate limited has no identity yet at all",
 			provider:  authProviderLDAP,
 			result:    authResultRateLimited,
 			requestID: "req-3",
@@ -66,7 +69,7 @@ func TestBuildAuthEvent(t *testing.T) {
 			},
 		},
 		{
-			name:      "oidc failure before identity is known",
+			name:      "oidc failure before any identity claim is known",
 			provider:  authProviderOIDC,
 			result:    authResultFailure,
 			requestID: "req-4",
@@ -81,7 +84,7 @@ func TestBuildAuthEvent(t *testing.T) {
 			},
 		},
 		{
-			name:      "oidc success carries resolved DN",
+			name:      "oidc success carries the directory-resolved DN",
 			provider:  authProviderOIDC,
 			result:    authResultSuccess,
 			requestID: "req-5",
@@ -95,28 +98,11 @@ func TestBuildAuthEvent(t *testing.T) {
 				Subject:   "uid=jdoe,ou=people,dc=example,dc=com",
 			},
 		},
-		{
-			name:            "ldap failure with an unsafe identity is redacted",
-			provider:        authProviderLDAP,
-			result:          authResultFailure,
-			requestID:       "req-6",
-			subject:         "",
-			reason:          "invalid_credentials",
-			subjectRedacted: true,
-			want: authEvent{
-				Event:           "auth",
-				Provider:        authProviderLDAP,
-				Result:          authResultFailure,
-				RequestID:       "req-6",
-				Reason:          "invalid_credentials",
-				SubjectRedacted: true,
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildAuthEvent(tt.provider, tt.result, tt.requestID, tt.subject, tt.reason, tt.subjectRedacted)
+			got := buildAuthEvent(tt.provider, tt.result, tt.requestID, tt.subject, tt.reason, tt.subjectFingerprint)
 			if got != tt.want {
 				t.Fatalf("buildAuthEvent() = %+v, want %+v", got, tt.want)
 			}
@@ -125,12 +111,11 @@ func TestBuildAuthEvent(t *testing.T) {
 }
 
 // TestBuildAuthEvent_JSONOmitsEmptyFields locks in the on-the-wire shape
-// logAuthEvent actually writes: an unknown subject or reason must not
-// appear as a literal "" in the log line, since that would be
-// indistinguishable from a genuinely empty identity, and subject_redacted
-// must not appear at all when false.
+// logAuthEvent actually writes: an unknown subject, fingerprint, or reason
+// must not appear as a literal "" in the log line, since that would be
+// indistinguishable from a genuinely empty value.
 func TestBuildAuthEvent_JSONOmitsEmptyFields(t *testing.T) {
-	event := buildAuthEvent(authProviderLDAP, authResultRateLimited, "req-1", "", "", false)
+	event := buildAuthEvent(authProviderLDAP, authResultRateLimited, "req-1", "", "", "")
 	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -142,17 +127,17 @@ func TestBuildAuthEvent_JSONOmitsEmptyFields(t *testing.T) {
 	}
 }
 
-// TestBuildAuthEvent_JSONMarksRedactedSubject asserts subject_redacted is
-// present and true when a subject was withheld, so a log reader can tell
-// "nothing was submitted" apart from "something was submitted and hidden".
-func TestBuildAuthEvent_JSONMarksRedactedSubject(t *testing.T) {
-	event := buildAuthEvent(authProviderLDAP, authResultFailure, "req-1", "", "invalid_credentials", true)
+// TestBuildAuthEvent_JSONCarriesFingerprintNotSubject is the on-the-wire
+// shape for a failed login: subject is always omitted and
+// subject_fingerprint carries the correlation value instead.
+func TestBuildAuthEvent_JSONCarriesFingerprintNotSubject(t *testing.T) {
+	event := buildAuthEvent(authProviderLDAP, authResultFailure, "req-1", "", "invalid_credentials", "0123456789abcdef")
 	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	got := string(raw)
-	want := `{"event":"auth","provider":"ldap","result":"failure","request_id":"req-1","reason":"invalid_credentials","subject_redacted":true}`
+	want := `{"event":"auth","provider":"ldap","result":"failure","request_id":"req-1","subject_fingerprint":"0123456789abcdef","reason":"invalid_credentials"}`
 	if got != want {
 		t.Fatalf("JSON = %s, want %s", got, want)
 	}
@@ -195,73 +180,62 @@ func TestAuthFailureReason(t *testing.T) {
 	}
 }
 
-func TestSanitizeLoginSubject(t *testing.T) {
-	tests := []struct {
-		name         string
-		identity     string
-		wantSubject  string
-		wantRedacted bool
-	}{
-		{
-			name:        "bare uid passes through",
-			identity:    "jdoe",
-			wantSubject: "jdoe",
-		},
-		{
-			name:        "uid with allowed punctuation passes through",
-			identity:    "j.doe-2",
-			wantSubject: "j.doe-2",
-		},
-		{
-			name:        "a real DN passes through",
-			identity:    "uid=jdoe,ou=people,dc=example,dc=com",
-			wantSubject: "uid=jdoe,ou=people,dc=example,dc=com",
-		},
-		{
-			name:         "a value with a space is redacted",
-			identity:     "hunter2 super secret",
-			wantSubject:  "",
-			wantRedacted: true,
-		},
-		{
-			name:         "a value with punctuation outside the uid charset is redacted",
-			identity:     "P@ssw0rd!",
-			wantSubject:  "",
-			wantRedacted: true,
-		},
-		{
-			name:         "text containing '=' with no attribute name is not a parseable DN and is redacted",
-			identity:     "=noattr",
-			wantSubject:  "",
-			wantRedacted: true,
-		},
-		{
-			name:         "empty identity is redacted",
-			identity:     "",
-			wantSubject:  "",
-			wantRedacted: true,
-		},
-		{
-			// Documents a known, accepted limit rather than hiding it: a
-			// short secret made only of letters/digits/hyphens is
-			// syntactically indistinguishable from a real uid and is not
-			// redacted. The guarantee this function actually provides is
-			// narrower — a value using characters outside the uid/DN
-			// charset (spaces, '@', '!', etc., as in the cases above) is
-			// never logged.
-			name:        "an alphanumeric-and-hyphen secret is indistinguishable from a uid and is logged",
-			identity:    "hunter2-secret",
-			wantSubject: "hunter2-secret",
-		},
+func TestFingerprintIdentity(t *testing.T) {
+	t.Run("empty identity fingerprints to empty", func(t *testing.T) {
+		if got := fingerprintIdentity(""); got != "" {
+			t.Errorf("fingerprintIdentity(\"\") = %q, want \"\"", got)
+		}
+	})
+
+	// A representative set of identities a client might submit, including
+	// the two shapes #116 review round 2 called out specifically: a bare
+	// secret that is not DN/uid-shaped, and one crafted to parse as an RDN
+	// (an attacker or a confused user pasting "password=secret" style
+	// text). Every one of them must never appear in the fingerprint, and
+	// two equal inputs must always fingerprint identically (stability),
+	// while different inputs must not collide with each other in this
+	// small sample.
+	identities := []string{
+		"jdoe",
+		"uid=jdoe,ou=people,dc=example,dc=com",
+		"hunter2",
+		"password=secret",
+		"cn=password=secret",
+		"hunter2 super secret",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			subject, redacted := sanitizeLoginSubject(tt.identity)
-			if subject != tt.wantSubject || redacted != tt.wantRedacted {
-				t.Errorf("sanitizeLoginSubject(%q) = (%q, %v), want (%q, %v)",
-					tt.identity, subject, redacted, tt.wantSubject, tt.wantRedacted)
+	seen := map[string]string{}
+	for _, identity := range identities {
+		t.Run(identity, func(t *testing.T) {
+			got := fingerprintIdentity(identity)
+			if len(got) != 16 {
+				t.Fatalf("fingerprintIdentity(%q) has length %d, want 16", identity, len(got))
+			}
+			if _, err := hex.DecodeString(got); err != nil {
+				t.Fatalf("fingerprintIdentity(%q) = %q is not hex: %v", identity, got, err)
+			}
+			// Stability: fingerprinting the same identity again must
+			// yield the exact same value, so an operator can correlate
+			// repeated attempts against it across separate log lines.
+			if again := fingerprintIdentity(identity); again != got {
+				t.Errorf("fingerprintIdentity(%q) is not stable: %q then %q", identity, got, again)
+			}
+			// Must match the documented derivation directly, not just be
+			// hex of the right length.
+			sum := sha256.Sum256([]byte(identity))
+			want := hex.EncodeToString(sum[:])[:16]
+			if got != want {
+				t.Errorf("fingerprintIdentity(%q) = %q, want %q (first 16 hex chars of sha256)", identity, got, want)
+			}
+			// The raw identity itself must never appear inside its own
+			// fingerprint (guards against a no-op/passthrough regression).
+			if got == identity {
+				t.Errorf("fingerprintIdentity(%q) returned the raw identity unchanged", identity)
 			}
 		})
+		if prevIdentity, ok := seen[fingerprintIdentity(identity)]; ok && prevIdentity != identity {
+			t.Errorf("fingerprintIdentity collision between %q and %q", identity, prevIdentity)
+		}
+		seen[fingerprintIdentity(identity)] = identity
 	}
 }
