@@ -1,0 +1,33 @@
+5b1234 slapd starting (2.6.14) ...
+5b1235 slapd config: cn=config
+# add 1756000000 dc=example,dc=org cn=admin,dc=example,dc=org
+dn: uid=alice,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice
+sn: Tester
+userPassword:: e1NTSEF9c2FtcGxlaGFzaA==
+
+# modify 1756000100 dc=example,dc=org cn=admin,dc=example,dc=org
+dn: uid=alice,ou=people,dc=example,dc=org
+changetype: modify
+replace: sn
+sn: Audited
+-
+
+# modify 1756000200 dc=example,dc=org uid=bob,ou=people,dc=example,dc=org
+dn: uid=alice,ou=people,dc=example,dc=org
+changetype: modify
+replace: userPassword
+userPassword:: e1NTSEF9YW5vdGhlcmhhc2g=
+-
+
+# delete 1756000300 dc=example,dc=org cn=admin,dc=example,dc=org
+dn: uid=bob,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob
+sn: Tester
+entryUUID: 4f8a3b2e-1111-4c9a-9999-abcdef012345
+
+5b1299 slapd shutting down on signal 15

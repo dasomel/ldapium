@@ -22,10 +22,28 @@
 # this script iterates the StatefulSet's own replica count rather than
 # assume one.
 #
+# Every record is normalized into the common identity-audit envelope
+# documented in docs/audit-event-schema.md (issue #24): schemaVersion,
+# source, seq, time, actor, target, op, result, objectId, correlationId,
+# privileged, plus the original source-specific fields verbatim under "raw"
+# so nothing this script has always emitted is lost, only moved. The actual
+# transform lives in scripts/lib/audit-normalize.py — a pure stdin/stdout
+# filter, unit-tested with fixtures in scripts/test/ — this script's own job
+# is only to fetch and flatten the three raw sources in a deterministic
+# order.
+#
 #   ./scripts/export-audit-log.sh                    # auto-discover, both overlays
 #   ./scripts/export-audit-log.sh -n ldapium -r prod
 #   ./scripts/export-audit-log.sh --writes-only       # skip accesslog reads; keep container-log diagnostics
 #   ./scripts/export-audit-log.sh --reads-only        # skip the container-log writes
+#   ./scripts/export-audit-log.sh --legacy            # skip the envelope; flat per-source records
+#
+# --legacy is NOT byte-identical to this script's pre-#24 output: the
+# underlying extraction now also captures entryUUID/changedAttrs/entryDn
+# (auditlog) and reqSession (accesslog), which are additive fields old
+# consumers never looked for. It exists for scripts that want the simple
+# flat shape without those extras getting in the way, not as a compatibility
+# guarantee — see docs/audit-event-schema.md.
 #
 # Known limitation: cn=accesslog's bind credential (like cn=Monitor's and
 # {1}mdb's own rootdn) is rendered once, at bootstrap, from the admin
@@ -42,15 +60,20 @@ ns=""
 sts=""
 want_writes=1
 want_reads=1
+legacy=0
 
 usage() {
   cat <<'EOF'
-Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-only]
+Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-only] [--legacy]
 
-Prints one JSON object per line to stdout:
-  {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"..."}
-  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0"}
-  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49"}
+Prints one normalized identity-audit event per line to stdout (see
+docs/audit-event-schema.md), e.g.:
+  {"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:54:13Z","actor":"cn=admin,dc=example,dc=org","target":"uid=alice,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:1787500453:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org","privileged":true,"raw":{"pod":"...","source":"auditlog","time":"1787500453","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}}
+
+With --legacy, prints the flat per-source records instead (no envelope):
+  {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"...","entryDn":"...","entryUUID":"...","changedAttrs":[...]}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0","reqSession":"..."}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49","reqSession":"..."}
   {"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
 
   -n, --namespace   Kubernetes namespace (default: current kubectl context's)
@@ -63,6 +86,8 @@ Prints one JSON object per line to stdout:
       --reads-only  Export only accesslog (read) events — fails per pod with a
                     warning on stderr if that pod does not have
                     audit.accessLog.enabled, rather than failing the run.
+      --legacy      Skip envelope normalization; print the flat per-source
+                    records the normalizer would otherwise wrap (see above).
   -h, --help        This text.
 EOF
 }
@@ -73,6 +98,7 @@ while [ $# -gt 0 ]; do
     -r|--release)   sts="${2:?-r needs a release name}"; shift 2 ;;
     --writes-only) want_reads=0; shift ;;
     --reads-only) want_writes=0; shift ;;
+    --legacy) legacy=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -110,14 +136,33 @@ fi
 replicas=$(kubectl -n "$ns" get statefulset "$sts" -o jsonpath='{.spec.replicas}' 2>/dev/null)
 [ -n "$replicas" ] || { echo "could not read replica count from StatefulSet '${sts}'." >&2; exit 1; }
 
-# JSON string escaping: backslash and double-quote, the two characters an
-# LDAP DN or filter can actually contain that would otherwise break the
-# object. Good enough for the ASCII this attribute set holds — reqDN/
-# reqFilter/reqAuthzID are DNs and filters, not free text.
-json_escape() {
-  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+# Same jsonpath-over-the-StatefulSet technique get-credentials.sh uses to
+# find LDAP_ADMIN_PASSWORD's Secret ref — reused here to find the actual
+# rootdn this release was configured with, so "privileged" classification
+# (docs/audit-event-schema.md) compares against the real value instead of
+# assuming the "cn=admin,<root dn>" default. jsonpath stays on one line —
+# see get-credentials.sh's own NOTE on why a wrapped template silently
+# breaks the match.
+get_env() { # get_env <ENV_NAME> — value of a plain (non-secretKeyRef) env var
+  kubectl -n "$ns" get statefulset "$sts" -o jsonpath="{range .spec.template.spec.containers[0].env[?(@.name=='$1')]}{.value}{end}" 2>/dev/null
 }
+admin_dn=$(get_env LDAP_ADMIN_DN)
+if [ -z "$admin_dn" ]; then
+  root_dn=$(get_env LDAP_ROOT_DN)
+  [ -n "$root_dn" ] && admin_dn="cn=admin,${root_dn}"
+fi
+[ -n "$admin_dn" ] || echo "warning: could not determine the rootdn (LDAP_ADMIN_DN/LDAP_ROOT_DN) from StatefulSet '${sts}' — every record will be exported as privileged:false" >&2
 
+lib_dir="$(cd "$(dirname "$0")/lib" && pwd)"
+
+# Everything below fetches and flattens the three raw sources, in a fixed,
+# deterministic order (writes then reads, pod 0..N-1 within each) — that
+# order is what makes `seq` in the normalized envelope both monotonic and
+# reproducible across two runs against the same unchanged logs. Wrapped in a
+# function so the pipe to the normalizer below is the ONLY place deciding
+# whether this run gets the envelope or the flat --legacy shape; the
+# extraction logic itself does not know or care which.
+run_export() {
 if [ "$want_writes" = 1 ]; then
   for i in $(seq 0 $((replicas - 1))); do
     pod="${sts}-${i}"
@@ -126,34 +171,26 @@ if [ "$want_writes" = 1 ]; then
     # slice of a rotating log between the two requests.
     container_log=$(kubectl -n "$ns" logs "$pod" -c openldap --since=720h 2>/dev/null || true)
     # auditlog's own format: "# <op> <unixtime> <suffix> <bindDN> IP=... conn=..."
-    # opening each record, ended by the next such line or EOF. Only the
-    # opening line is needed here — it already carries actor, time and op;
-    # the LDIF body between openings is the changed attributes, which is
-    # what a SIEM's own "show me the raw event" drill-down is for, not this
-    # summary line.
+    # opening each record, ended by the next such line or EOF, followed by
+    # the LDIF body of what changed. This awk pass now reads that body too —
+    # not to capture full attribute values (still left for a SIEM's own "show
+    # me the raw event" drill-down, and doing so would risk logging
+    # userPassword's value) but to pull two cheap, high-value fields out of
+    # it: the entry's real DN (the LDIF's own "dn:" line — the header's $4 is
+    # the database suffix, not the entry, see the security-e2e.yml comment on
+    # why it was never asserted as one) and which attribute NAMES changed
+    # (docs/audit-event-schema.md's redaction guarantee: names only, never
+    # values, which is what keeps a password out of this export without
+    # needing to know every password-like attribute name in advance).
     #
     # "time" is a string in both sources but not the same string format —
     # auditlog gives a raw Unix epoch, accesslog gives LDAP GeneralizedTime
-    # (20260823155413.000004Z). Reformatting one to match the other means
-    # doing date arithmetic in POSIX shell/awk, which behaves differently
-    # under GNU vs BSD date; left as-is rather than risk that silently
-    # producing a wrong time. A SIEM's own ingest pipeline is the place to
-    # normalize this, with a real date library instead of shell.
-    # `grep` exits 1 on no match — a normal outcome here (auditlog disabled,
-    # or a pod with nothing written yet), not a failure. Under pipefail that
-    # exit code propagates through the whole pipeline and set -e kills the
-    # script before it ever reaches the accesslog half below; `|| true`
-    # neutralizes it at the source rather than the caller having to guess
-    # what a bare failure meant.
-    { printf '%s\n' "$container_log" | grep -E '^# (add|modify|modrdn|delete) ' || true; } \
-      | while IFS= read -r line; do
-          op=$(printf '%s' "$line" | awk '{print $2}')
-          t=$(printf '%s' "$line" | awk '{print $3}')
-          target=$(printf '%s' "$line" | awk '{print $4}' | json_escape)
-          actor=$(printf '%s' "$line" | awk '{print $5}' | json_escape)
-          printf '{"pod":"%s","source":"auditlog","time":"%s","actor":"%s","op":"%s","target":"%s"}\n' \
-            "$pod" "$t" "$actor" "$op" "$target"
-        done
+    # (20260823155413.000004Z). Both are converted to RFC3339 by
+    # scripts/lib/audit-normalize.py below, not here — GeneralizedTime needs
+    # no `date` binary (pure string reformatting), but epoch-to-calendar does,
+    # and this script's own history already flagged GNU-vs-BSD `date` as a
+    # portability risk; Python's stdlib sidesteps it entirely.
+    printf '%s\n' "$container_log" | awk -v pod="$pod" -f "${lib_dir}/parse-auditlog.awk"
 
     # `CSN too old, ignoring` also marks ordinary relay duplicates, so leave
     # this undeduplicated evidence intact rather than guessing which records
@@ -161,29 +198,7 @@ if [ "$want_writes" = 1 ]; then
     # fetch; a third selector would imply a certainty the stream cannot offer.
     printf '%s\n' "$container_log" \
       | grep -E 'do_syncrep2: rid=[0-9]+ CSN too old, ignoring [^ ]+ \(.*\)$' \
-      | awk -v pod="$pod" '
-        function esc(s) {
-          gsub(/\\/,"\\\\",s)
-          gsub(/"/,"\\\"",s)
-          return s
-        }
-        {
-          record=$0
-          sub(/^.*do_syncrep2: rid=/, "", record)
-          rid=record
-          sub(/ CSN too old, ignoring .*/, "", rid)
-          csn=record
-          sub(/^[0-9]+ CSN too old, ignoring /, "", csn)
-          entry=csn
-          sub(/^.* \(/, "", entry)
-          sub(/\)$/, "", entry)
-          sub(/ \(.*/, "", csn)
-          time=csn
-          sub(/#.*/, "", time)
-          printf "{\"pod\":\"%s\",\"source\":\"replication-conflict-raw\",\"time\":\"%s\",\"entry\":\"%s\",\"discardedCSN\":\"%s\",\"rid\":\"%s\"}\n", \
-            esc(pod), esc(time), esc(entry), esc(csn), esc(rid)
-        }
-      ' || true
+      | awk -v pod="$pod" -f "${lib_dir}/parse-replication-conflict.awk" || true
   done
 fi
 
@@ -202,69 +217,23 @@ if [ "$want_reads" = 1 ]; then
       out=$(kubectl -n "$ns" exec "$pod" -c openldap -- \
         ldapsearch -x -o ldif-wrap=no -D "cn=admin,cn=accesslog" -w "$password" \
           -b cn=accesslog -LLL "(|(objectClass=auditSearch)(objectClass=auditBind))" \
-          objectClass reqStart reqAuthzID reqDN reqFilter reqResult 2>/dev/null) || {
+          objectClass reqStart reqSession reqAuthzID reqDN reqFilter reqResult 2>/dev/null) || {
         echo "pod ${pod}: accesslog not reachable (audit.accessLog.enabled may be false) — skipping" >&2
         continue
       }
-      printf '%s\n' "$out" | awk -v pod="$pod" '
-        BEGIN { t=""; actor=""; dn=""; filt=""; result=""; is_bind=0 }
-        /^dn: reqStart=/ { if (t != "") print_record(); t=""; actor=""; dn=""; filt=""; result=""; is_bind=0 }
-        /^objectClass: auditBind$/ { is_bind=1 }
-        /^reqStart: / { t=substr($0,11) }
-        /^reqAuthzID: / { actor=substr($0,13) }
-        /^reqAuthzID:: / { actor=b64dec(substr($0,14)) }
-        /^reqDN: / { dn=substr($0,8) }
-        /^reqDN:: / { dn=b64dec(substr($0,9)) }
-        /^reqFilter: / { filt=substr($0,12) }
-        /^reqFilter:: / { filt=b64dec(substr($0,13)) }
-        /^reqResult: / { result=substr($0,12) }
-        # LDIF uses "attr:: <base64>" instead of "attr: <value>" whenever the
-        # value itself would be unsafe as plain text — a leading space or
-        # colon, a trailing space, or a non-UTF8 byte. A DN or filter with
-        # such a character is unusual but not impossible, and an audit
-        # export silently dropping a field on exactly the kind of value
-        # someone might be trying to hide is the wrong failure mode.
-        # Known residual limit: `cmd | getline` reads exactly one line, so a
-        # decoded value containing an embedded newline of its own only
-        # yields that value up to its first line — the rest is discarded
-        # when the pipe is closed below. Covers the realistic case (a DN or
-        # filter needing base64 for a stray byte, not for holding multiple
-        # lines of content) without the complexity of a full multi-line read
-        # for a shape reqDN/reqFilter are not expected to take.
-        function b64dec(enc,    cmd, decoded) {
-          cmd = "printf %s '\''" enc "'\'' | base64 -d 2>/dev/null"
-          decoded = ""
-          cmd | getline decoded
-          close(cmd)
-          return decoded
-        }
-        # Order matters: backslash first, or the backslashes this function
-        # itself inserts for \n/\t below would get escaped a second time.
-        # \n/\t/\r matter specifically because a base64-decoded value (the
-        # one case a raw control character can actually reach this function)
-        # can legitimately contain one — that is the reason LDIF encoded it
-        # in the first place, and an un-escaped one here would split a
-        # single JSON record across two lines of output.
-        function esc(s) {
-          gsub(/\\/,"\\\\",s)
-          gsub(/"/,"\\\"",s)
-          gsub(/\r/,"\\r",s)
-          gsub(/\n/,"\\n",s)
-          gsub(/\t/,"\\t",s)
-          return s
-        }
-        # A bind record has an empty reqAuthzID (there is no authorization
-        # identity until the bind itself succeeds) — reqDN, the identity the
-        # client attempted to bind as, is the only "who" a bind record has,
-        # so it stands in for actor here rather than being left blank.
-        function print_record(    op, who) {
-          op = is_bind ? "bind" : "search"
-          who = is_bind ? dn : actor
-          printf "{\"pod\":\"%s\",\"source\":\"accesslog\",\"time\":\"%s\",\"actor\":\"%s\",\"op\":\"%s\",\"target\":\"%s\",\"filter\":\"%s\",\"result\":\"%s\"}\n", \
-            pod, esc(t), esc(who), op, esc(dn), esc(filt), esc(result)
-        }
-        END { if (t != "") print_record() }
-      '
+      # reqSession: slapo-accesslog's own per-connection counter, added here
+      # solely to build correlationId (docs/audit-event-schema.md) — it is
+      # the closest thing this overlay has to a request/session id, though
+      # it resets across a slapd restart so it is not cross-restart-unique
+      # on its own (the correlationId derivation pairs it with reqStart).
+      printf '%s\n' "$out" | awk -v pod="$pod" -f "${lib_dir}/parse-accesslog.awk"
     done
   fi
+fi
+}
+
+if [ "$legacy" = 1 ]; then
+  run_export
+else
+  run_export | python3 "${lib_dir}/audit-normalize.py" --admin-dn "$admin_dn"
 fi
