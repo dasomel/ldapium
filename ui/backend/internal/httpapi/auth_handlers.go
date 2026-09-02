@@ -33,6 +33,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 	ip := c.RealIP()
 	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
+		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "")
 		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed login attempts")
 	}
 
@@ -53,15 +54,18 @@ func (s *Server) handleLogin(c echo.Context) error {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
 			s.loginLimiter.recordFailure(ip)
 		}
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), req.Identity, authFailureReason(err))
 		return respondErr(c, err)
 	}
 
 	sess, err := s.sessions.Create(bound.WhoAmI(), bound)
 	if err != nil {
 		bound.Close()
+		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error")
 		return respondErr(c, err)
 	}
 
+	logAuthEvent(authProviderLDAP, authResultSuccess, requestIDOf(c), sess.DN, "")
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.JSON(http.StatusOK, meResponse{DN: sess.DN})
 }

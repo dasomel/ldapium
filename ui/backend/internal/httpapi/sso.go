@@ -120,14 +120,16 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 
 	state, ok := s.sso.states.Consume(c.QueryParam("state"), binding)
 	if !ok {
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_state")
 		return echo.NewHTTPError(http.StatusBadRequest, "SSO login state is invalid or expired")
 	}
 	redirectURI, err := s.sso.callbackURI(c.Request())
 	if err != nil || redirectURI != state.redirectURI {
+		logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", "invalid_origin")
 		return echo.NewHTTPError(http.StatusBadRequest, "unrecognized SSO callback origin")
 	}
 	if c.QueryParam("error") != "" {
-		return s.redirectSSOFailure(c, state.redirectURI, "access_denied")
+		return s.redirectSSOFailure(c, state.redirectURI, "access_denied", "")
 	}
 
 	identity, err := s.sso.exchangeAndValidate(c.Request().Context(), state, c.QueryParam("code"))
@@ -138,9 +140,9 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 		// tells an attacker the same thing, and the operator has the detail
 		// in the server log either way.
 		if errors.Is(err, errMissingRequiredRole) {
-			return s.redirectSSOFailure(c, state.redirectURI, "not_authorized")
+			return s.redirectSSOFailure(c, state.redirectURI, "not_authorized", "")
 		}
-		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed")
+		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", "")
 	}
 
 	serviceClient, err := s.dialer.Bind(
@@ -149,27 +151,33 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 		s.cfg.SSO.LDAPServiceAccountPassword,
 	)
 	if err != nil {
-		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed")
+		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", identity.username)
 	}
 	dn, err := serviceClient.ResolveUID(c.Request().Context(), identity.username)
 	if err != nil {
 		serviceClient.Close()
 		if errors.Is(err, domain.ErrInvalidCredentials) {
-			return s.redirectSSOFailure(c, state.redirectURI, "directory_account_not_found")
+			return s.redirectSSOFailure(c, state.redirectURI, "directory_account_not_found", identity.username)
 		}
-		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed")
+		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", identity.username)
 	}
 
 	sess, err := s.sessions.CreateSSO(dn, serviceClient, identity.idToken)
 	if err != nil {
 		serviceClient.Close()
-		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed")
+		return s.redirectSSOFailure(c, state.redirectURI, "authentication_failed", dn)
 	}
+	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "")
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
 	return c.Redirect(http.StatusSeeOther, callbackOrigin(state.redirectURI)+"/")
 }
 
-func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason string) error {
+// redirectSSOFailure logs one failed SSO auth-event line (subject is
+// whatever identity — Keycloak username or resolved LDAP DN — was already
+// known at the point of failure, or "" earlier in the flow) and redirects
+// the browser to the login page's error state.
+func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason, subject string) error {
+	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), subject, reason)
 	loginURL := callbackOrigin(redirectURI) + "/login?sso_error=" + url.QueryEscape(reason)
 	return c.Redirect(http.StatusSeeOther, loginURL)
 }
