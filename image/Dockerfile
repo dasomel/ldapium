@@ -6,7 +6,7 @@
 ARG OPENLDAP_VERSION=2.6.14
 ARG OPENLDAP_SHA256=806dcd21d366428187fba3278da773d5930f774852c9e92517f950d585f19107
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS builder
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS builder
 ARG OPENLDAP_VERSION
 ARG OPENLDAP_SHA256
 ENV DEBIAN_FRONTEND=noninteractive
@@ -111,7 +111,7 @@ RUN set -eux; \
         -o /out/openldap_exporter main.go; \
     test -x /out/openldap_exporter
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
 ARG OPENLDAP_VERSION
 
 # docker/metadata-action's labels (applied at build time in build-multiarch.yml)
