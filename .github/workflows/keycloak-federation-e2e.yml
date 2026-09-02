@@ -404,7 +404,10 @@ jobs:
             "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/userinfo" \
             | tee /tmp/userinfo-alice.json
           alice_groups=$(jq -c '.groups | sort' /tmp/userinfo-alice.json)
-          [ "$alice_groups" = '["/developers","/marketing"]' ] \
+          # full.path=false on the protocol mapper strips the leading "/" —
+          # observed live in run 33697173474: the claim came back as
+          # ["developers","marketing"], not ["/developers","/marketing"].
+          [ "$alice_groups" = '["developers","marketing"]' ] \
             || { echo "::error::alice's groups claim was ${alice_groups}, expected developers+marketing"; exit 1; }
           echo "PASS: alice's token groups claim lists both LDAP groups she is a member of"
 
