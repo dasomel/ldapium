@@ -223,10 +223,12 @@ jobs:
 
           kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
             'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "cn=ops-team,ou=operations,dc=example,dc=org" member' \
-            | grep -q 'member: uid=move-user,ou=engineering,dc=example,dc=org'
+            > /tmp/initial-group.txt
+          grep -q 'member: uid=move-user,ou=engineering,dc=example,dc=org' /tmp/initial-group.txt
           kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
             'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=move-user,ou=engineering,dc=example,dc=org" memberOf' \
-            | grep -q 'memberOf: cn=ops-team,ou=operations,dc=example,dc=org'
+            > /tmp/initial-memberof.txt
+          grep -q 'memberOf: cn=ops-team,ou=operations,dc=example,dc=org' /tmp/initial-memberof.txt
 
           move_code=$(curl -s -b /tmp/session-cookie -o /tmp/move-resp.json -w '%{http_code}' \
             -H 'Content-Type: application/json' \
@@ -244,7 +246,7 @@ jobs:
 
           kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
             'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "cn=ops-team,ou=operations,dc=example,dc=org" member' \
-            | tee /tmp/group-members.txt
+            > /tmp/group-members.txt
           grep -q 'member: uid=move-user,ou=operations,dc=example,dc=org' /tmp/group-members.txt
           if grep -q 'member: uid=move-user,ou=engineering,dc=example,dc=org' /tmp/group-members.txt; then
             echo "::error::refint did not remove old member DN from group"
@@ -253,7 +255,7 @@ jobs:
 
           kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
             'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=move-user,ou=operations,dc=example,dc=org" memberOf' \
-            | tee /tmp/user-memberof.txt
+            > /tmp/user-memberof.txt
           grep -q 'memberOf: cn=ops-team,ou=operations,dc=example,dc=org' /tmp/user-memberof.txt
 
           echo "PASS: move entry succeeded, new DN confirmed, and refint rewrote group membership"
