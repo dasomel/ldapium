@@ -93,6 +93,32 @@ func TestEntryToDomainEntry_RedactionIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestEntryToDomainEntry_RedactsUserPasswordWithAttributeOptions(t *testing.T) {
+	// "userPassword;binary" and "userPassword;lang-en" (RFC 4512 attribute
+	// options) are distinct attribute descriptions from bare
+	// "userPassword", not aliases of it -- a naive exact-match denylist
+	// lookup on the full name would let either straight through, handing a
+	// real hash back to the DIT browser from a root/admin bind that
+	// bypasses ACLs entirely. The base type, ignoring options, must still
+	// be redacted.
+	e := ldap.NewEntry("uid=jdoe,ou=people,dc=example,dc=com", map[string][]string{
+		"uid":                 {"jdoe"},
+		"userPassword;binary": {"{ARGON2}$argon2id$v=19$m=7168,t=5,p=1$salt$hash"},
+	})
+
+	got := entryToDomainEntry(e)
+
+	if _, present := got.Attributes["userPassword;binary"]; present {
+		t.Error("Attributes contains userPassword;binary, want it redacted")
+	}
+	if len(got.Attributes) != 1 {
+		t.Errorf("Attributes = %v, want only uid to survive redaction", got.Attributes)
+	}
+	if _, present := got.Attributes["uid"]; !present {
+		t.Error("Attributes missing uid, want it preserved")
+	}
+}
+
 func TestBuildMoveRequest_Valid(t *testing.T) {
 	dn := "uid=jdoe,ou=people,dc=example,dc=org"
 	newParent := "ou=engineering,dc=example,dc=org"

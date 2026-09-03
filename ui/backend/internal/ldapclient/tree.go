@@ -130,7 +130,14 @@ func (c *client) GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 	attrs := make(map[string][]string, len(e.Attributes))
 	for _, a := range e.Attributes {
-		if entryRedactedAttrs[strings.ToLower(a.Name)] {
+		// Attribute options ("userPassword;binary", "userPassword;lang-en",
+		// per RFC 4512) name a distinct attribute description from the bare
+		// type, so comparing a.Name verbatim against entryRedactedAttrs
+		// would let "userPassword;binary" straight through the denylist.
+		// Strip options before the lookup; the base type is what
+		// entryRedactedAttrs is keyed on.
+		baseName, _, _ := strings.Cut(a.Name, ";")
+		if entryRedactedAttrs[strings.ToLower(baseName)] {
 			continue
 		}
 		attrs[a.Name] = a.Values
