@@ -176,7 +176,7 @@ LDAP_AUDIT_FILE="${LDAP_AUDIT_FILE:-/dev/stdout}"
 # created, below, for why a subdirectory rather than the mount point itself.
 LDAP_ACCESSLOG_ENABLED="${LDAP_ACCESSLOG_ENABLED:-false}"
 LDAP_ACCESSLOG_PURGE_DAYS="${LDAP_ACCESSLOG_PURGE_DAYS:-30}"
-LDAP_ACCESSLOG_OPS="${LDAP_ACCESSLOG_OPS:-writes reads bind}"
+LDAP_ACCESSLOG_OPS="${LDAP_ACCESSLOG_OPS:-reads bind}"
 ACCESSLOG_DIR="${DATA_DIR}/accesslog"
 
 # Password policy (see image/ldifs/03-base-structure.ldif and
@@ -715,9 +715,10 @@ d}" "$cn_config"
       printf 'objectClass: olcAccessLogConfig\n'
       printf 'olcOverlay: accesslog\n'
       printf 'olcAccessLogDB: cn=accesslog\n'
-      # writes reads bind: operator history needs writes (add, modify, delete,
-      # modrdn), resource/log view needs reads and binds. Failed binds provide
-      # authentication failure telemetry.
+      # olcAccessLogOps defaults to "reads bind" (preserving the baseline
+      # accesslog contract without duplicating auditlog writes). When
+      # configured with "writes reads bind" (e.g. for the UI console operator
+      # action history), writes (add, modify, delete, modrdn) are also captured.
       printf 'olcAccessLogOps: %s\n' "$LDAP_ACCESSLOG_OPS"
       # FALSE (log every request, not only successful ones): with TRUE, a
       # rejected search or a failed bind — the two events most worth
