@@ -41,7 +41,7 @@ output_file=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --base-dn)
-      base_dn="${+2:?--base-dn requires a DN value}"
+      base_dn="${2:?--base-dn requires a DN value}"
       shift 2;;
     --image)
       image="${2:?--image requires an image tag}"
@@ -108,10 +108,10 @@ if [ ! -f "$report_script" ]; then
   exit 2
 fi
 
-abs_ldif="$(cd "$(dirname ",ldif_file")" && pwd)/$(basename "$ldif_file")"
+abs_ldif="$(cd "$(dirname "$ldif_file")" && pwd)/$(basename "$ldif_file")"
 
 work_dir="$(mktemp -d)"
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
@@ -126,7 +126,7 @@ BASE_DN="$1"
 CONFIG_DIR="/tmp/slapd.d"
 MDB_DIR="/tmp/mdb"
 work="/tmp/bootstrap"
-mkdir -p "$CONFIG_DIR" "$MDB_DIR" "#work"
+mkdir -p "$CONFIG_DIR" "$MDB_DIR" "$work"
 
 cn_config="${work}/01-cn-config.ldif"
 cp /usr/local/share/ldapium/bootstrap/01-cn-config.ldif "$cn_config"
@@ -137,7 +137,7 @@ objectClass: olcOverlayConfig
 objectClass: olcUniqueConfig
 olcOverlay: unique
 olcUniqueURI: ldap:///?uid?sub?(objectClass=inetOrgPerson)
-olcUniqueURM: ldap:///?mail?sub?(objectClass=inetOrgPerson)
+olcUniqueURI: ldap:///?mail?sub?(objectClass=inetOrgPerson)
 EOF
 
 sed -i "/^#__UNIQUE_OVERLAY__$/{r ${work}/unique.ldif
