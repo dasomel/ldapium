@@ -140,6 +140,15 @@ func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 
 // rdnOf returns the leftmost RDN component of dn, e.g. "ou=people" from
 // "ou=people,dc=example,dc=com".
+//
+// It uses RelativeDN.String() rather than reassembling
+// "Type=Value" from the parsed attributes: ldap.ParseDN decodes escape
+// sequences (e.g. "\," "\+" "\=") into their literal characters, so a
+// naive Type+"="+Value join would emit an RDN with those separators
+// unescaped -- corrupting the DN syntax (a literal "," would be read as an
+// RDN boundary) or silently changing which value ModifyDN sends as newrdn.
+// RelativeDN.String() re-escapes and re-joins multi-valued RDNs
+// deterministically, so the result is always valid RFC 4514 DN syntax.
 func rdnOf(dn string) string {
 	parsed, err := ldap.ParseDN(dn)
 	if err != nil || len(parsed.RDNs) == 0 {
@@ -148,12 +157,7 @@ func rdnOf(dn string) string {
 		}
 		return dn
 	}
-	rdn := parsed.RDNs[0]
-	parts := make([]string, 0, len(rdn.Attributes))
-	for _, a := range rdn.Attributes {
-		parts = append(parts, a.Type+"="+a.Value)
-	}
-	return strings.Join(parts, "+")
+	return parsed.RDNs[0].String()
 }
 
 // buildMoveRequest constructs a ModifyDNRequest to move an entry under

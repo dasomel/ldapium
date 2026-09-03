@@ -220,8 +220,14 @@ to remain on it.
 ## HTTP API
 
 All endpoints under `/api` except `/api/auth/config`, `/api/health/ldap`, `/api/login`,
-and `/api/sso/*` require an active session cookie (`ldapium_session`). Every authenticated
-operation runs as the bound directory user under OpenLDAP's own ACLs.
+and `/api/sso/*` require an active session cookie (`ldapium_session`). Which identity an
+operation runs as depends on the authentication mode (see
+[Authentication modes](#authentication-modes) above): in LDAP login mode it runs as the
+bound directory user, under that user's own OpenLDAP ACLs; in Keycloak SSO mode — including
+`POST /api/entry/move` — it runs as `LDAP_SERVICE_ACCOUNT_DN`, scoped by that service
+account's own ACLs and gated by the `SSO_ADMIN_ROLE` check on login, never as the
+individual Keycloak user. See
+[`docs/auth-provider-policy.md`](../docs/auth-provider-policy.md) for the full policy.
 
 | Method | Endpoint | Description | Status Codes |
 |---|---|---|---|

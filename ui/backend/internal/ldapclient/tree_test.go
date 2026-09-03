@@ -116,6 +116,59 @@ func TestBuildMoveRequest_Valid(t *testing.T) {
 	}
 }
 
+// buildMoveRequest's newRDN must come from RelativeDN.String() (which
+// re-escapes and re-joins the parsed RDN) rather than a naive
+// Type+"="+Value reassembly: ldap.ParseDN decodes "\," "\+" etc into
+// their literal characters, so rebuilding without re-escaping would emit a
+// newRDN with the RDN/multi-value separators unescaped, corrupting the
+// ModifyDN request's DN syntax.
+func TestBuildMoveRequest_PreservesEscapedAndMultiValuedRDN(t *testing.T) {
+	cases := []struct {
+		name       string
+		dn         string
+		wantNewRDN string
+	}{
+		{
+			name:       "escaped comma in value",
+			dn:         `uid=Doe\, Jane,ou=people,dc=example,dc=org`,
+			wantNewRDN: `uid=Doe\, Jane`,
+		},
+		{
+			name:       "escaped plus in value",
+			dn:         `cn=A\+B,ou=people,dc=example,dc=org`,
+			wantNewRDN: `cn=A\+B`,
+		},
+		{
+			name: "multi-valued RDN is preserved (and its attributes " +
+				"normalized into sorted order by the underlying library)",
+			dn:         "ou=Eng+cn=Doc,dc=example,dc=org",
+			wantNewRDN: "cn=Doc+ou=Eng",
+		},
+	}
+
+	newParent := "ou=engineering,dc=example,dc=org"
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := buildMoveRequest(tc.dn, newParent)
+			if err != nil {
+				t.Fatalf("buildMoveRequest(%q, %q) unexpected error: %v", tc.dn, newParent, err)
+			}
+			if req.DN != tc.dn {
+				t.Errorf("req.DN = %q, want %q", req.DN, tc.dn)
+			}
+			if req.NewRDN != tc.wantNewRDN {
+				t.Errorf("req.NewRDN = %q, want %q", req.NewRDN, tc.wantNewRDN)
+			}
+			if !req.DeleteOldRDN {
+				t.Errorf("req.DeleteOldRDN = %v, want true", req.DeleteOldRDN)
+			}
+			if req.NewSuperior != newParent {
+				t.Errorf("req.NewSuperior = %q, want %q", req.NewSuperior, newParent)
+			}
+		})
+	}
+}
+
 func TestBuildMoveRequest_RejectsInvalidInput(t *testing.T) {
 	cases := []struct {
 		name      string
