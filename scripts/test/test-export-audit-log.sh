@@ -316,6 +316,68 @@ else
   ok "verify-audit-chain.py correctly rejects deleted record"
 fi
 
+# 16. Mutual exclusion of --legacy and --chain (D9):
+# The combination must be rejected with exit code 2 and a clear error message
+# in both export-audit-log.sh wrapper and audit-normalize.py.
+if python3 "${lib_dir}/audit-normalize.py" --legacy --chain < /dev/null >"${work}/norm-legacy-chain.out" 2>"${work}/norm-legacy-chain.err"; then
+  bad "audit-normalize.py accepted --legacy --chain (should reject with exit 2)"
+else
+  if grep -q -- '--chain cannot be used with --legacy' "${work}/norm-legacy-chain.err"; then
+    ok "audit-normalize.py rejects --legacy --chain combination with documented error"
+  else
+    bad "audit-normalize.py rejected --legacy --chain but with unexpected error message"
+    cat "${work}/norm-legacy-chain.err" >&2
+  fi
+fi
+
+if "${here}/../export-audit-log.sh" --legacy --chain >"${work}/export-legacy-chain.out" 2>"${work}/export-legacy-chain.err"; then
+  bad "export-audit-log.sh accepted --legacy --chain (should reject with exit 2)"
+else
+  if grep -q -- '--chain cannot be used with --legacy' "${work}/export-legacy-chain.err"; then
+    ok "export-audit-log.sh wrapper rejects --legacy --chain combination with documented error"
+  else
+    bad "export-audit-log.sh rejected --legacy --chain but with unexpected error message"
+    cat "${work}/export-legacy-chain.err" >&2
+  fi
+fi
+
+# 17. Tail truncation detection requires --expected-head (D10):
+# Without --expected-head, tail truncation is undetectable because the remaining
+# prefix forms a valid chain from genesis. With --expected-head, tail truncation fails.
+expected_head=$(tail -n 1 "${work}/chained.ndjson" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["hash"])')
+if [ -z "$expected_head" ]; then
+  bad "could not extract expected head hash from chained.ndjson"
+else
+  # Assert valid chain passes with --expected-head
+  if python3 "${here}/../verify-audit-chain.py" --expected-head "$expected_head" "${work}/chained.ndjson" >/dev/null 2>&1; then
+    ok "verify-audit-chain.py passes valid chain when --expected-head matches"
+  else
+    bad "verify-audit-chain.py failed valid chain with matching --expected-head"
+  fi
+
+  # Delete the tail (last) record
+  sed '$d' "${work}/chained.ndjson" > "${work}/chained-tail-truncated.ndjson"
+
+  # Without --expected-head, tail deletion passes (undetectable from stream alone)
+  if python3 "${here}/../verify-audit-chain.py" "${work}/chained-tail-truncated.ndjson" >/dev/null 2>&1; then
+    ok "tail truncation passes verify-audit-chain.py without --expected-head (as documented)"
+  else
+    bad "tail truncation unexpectedly failed verify-audit-chain.py without --expected-head"
+  fi
+
+  # With --expected-head, tail deletion fails
+  if python3 "${here}/../verify-audit-chain.py" --expected-head "$expected_head" "${work}/chained-tail-truncated.ndjson" >"${work}/verify-tail-truncated.err" 2>&1; then
+    bad "verify-audit-chain.py unexpectedly passed on tail-truncated chain with --expected-head"
+  else
+    if grep -q "chain head hash mismatch" "${work}/verify-tail-truncated.err"; then
+      ok "verify-audit-chain.py rejects tail truncation when --expected-head is asserted"
+    else
+      bad "verify-audit-chain.py rejected tail-truncated chain but without expected error message"
+      cat "${work}/verify-tail-truncated.err" >&2
+    fi
+  fi
+fi
+
 if [ "$fail" != 0 ]; then
   echo "one or more audit export normalizer checks FAILED" >&2
   exit 1

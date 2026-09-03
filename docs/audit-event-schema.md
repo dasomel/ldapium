@@ -377,13 +377,32 @@ while preserving the distinction between pull extraction and push ingestion:
   It runs on-demand or on a cron schedule, pulling from container logs and `cn=accesslog`.
 - **The push shipper (`scripts/ship-audit-log.sh`)**:
   Takes the normalized NDJSON stream (piped from `scripts/export-audit-log.sh` or read from a file)
-  and ships it to a generic HTTP/HTTPS endpoint:
-  - **Idempotency**: Maintains a cursor state file (`--cursor-file`, default `.audit-ship-cursor.json`)
-    tracking the last delivered `correlationId` and `seq` per source. Re-running the shipper over
-    already-delivered records skips them without producing duplicate ingestion.
-  - **Generic SIEM boundary**: POSTs batches of plain NDJSON (`Content-Type: application/x-ndjson`)
-    to a configured HTTPS sink URL (`--sink-url`). Optional Bearer authentication is strictly
-    read from a file (`--token-file`, never as a CLI argument).
+  and ships it to a generic HTTPS endpoint:
+  - **Delivery semantics (at-least-once)**: The shipper guarantees at-least-once delivery.
+    If network connectivity drops after the sink receives a batch but before acknowledgment reaches
+    the shipper, or if the shipper retries a transient error or replays from dead-letter, batches may
+    be delivered again. There is no client-side "zero duplicate" guarantee.
+  - **Idempotency keys**: Each POST batch includes an `X-Ldapium-Batch-Id` header (the SHA-256 digest
+    of the batch's canonical NDJSON), plus per-record `hash` fields when `--chain` was used during export.
+    The downstream sink/adapter is expected to deduplicate on this batch idempotency key.
+  - **Cursor (NOT seq)**: Maintains a cursor state file (`--cursor-file`, default `.audit-ship-cursor.json`)
+    tracking the last delivered `(time, hashes)` per source. `seq` is strictly invocation-scoped
+    (assigned 1..N after sorting within a single run) and resets to 1 on every export run; treating `seq`
+    as a persistent cursor causes complete data loss on subsequent runs. A record is considered already
+    delivered only if its timestamp is strictly older than the cursor timestamp, or equal to the cursor
+    timestamp and its canonical record hash is in the set of hashes recorded at that timestamp.
+  - **Transport security**: HTTPS only by default (`--sink-url https://...`). Plaintext `http://`
+    is rejected unless `--allow-insecure-http` is explicitly passed (strictly for CI/local test fixtures).
+    Redirects are strictly forbidden via a custom redirect handler to prevent credential leakage.
+    TLS certificate verification is never disabled. Optional Bearer authentication is strictly read
+    from a file (`--token-file`, never as a CLI argument).
+  - **Process locking & fatal persistence failure**: The shipper acquires an exclusive `flock` on
+    the state directory for the run (failing fast if locked). Dead-letter appends and replays are
+    serialized under this same lock. Cursor persistence failure after an acknowledged batch is fatal:
+    the shipper exits non-zero immediately and halts.
+  - **Streaming & input validation**: The shipper streams NDJSON line-by-line and dead-letter records
+    batch-by-batch without buffering entire logs in memory. Arguments are validated (`batch_size >= 1`,
+    `max_retries >= 0`, `initial_backoff >= 0`, `max_backoff >= 0`).
   - **Bounded exponential backoff retry**: Network errors, timeouts, HTTP 5xx responses, and HTTP 429
     trigger retries with bounded exponential backoff (`--max-retries`, `--initial-backoff`, `--max-backoff`).
   - **Dead-letter queue & replay**: Undeliverable batches upon retry exhaustion are written to a
@@ -395,8 +414,10 @@ while preserving the distinction between pull extraction and push ingestion:
   - No persistent background daemon or resident message queue process (standard CLI script invocation model).
 - **`replication-conflict-raw` is still not a conflict detector** (unchanged from before #24):
   it mixes genuine same-entry conflicts with harmless duplicate delivery over N-way relay paths.
-  While distinct DNs are resolved to `objectId` (entryUUID) at export time when entries exist,
-  consumers must correlate with directory state rather than treating every discard record as data loss.
+  While distinct DNs are resolved to `objectId` (entryUUID) at export time by querying provider pods
+  in ordinal order (`pod-0`, `pod-1`, ...) and caching by exact DN string (case preserved to avoid
+  collisions across case-exact schemas), consumers must correlate with directory state rather than
+  treating every discard record as data loss.
 
 ## Tamper-evident chain option (`--chain`)
 
@@ -414,14 +435,17 @@ SHA-256 hash chaining to each envelope record for tamper-evidence (issue #126):
   - Any record has missing or malformed hash fields.
   - The genesis `prevHash` does not match the expected manifest line.
   - A record's payload was modified (content hash mismatch).
-  - A record was deleted or reordered (`prevHash` mismatch).
+  - An interior record was deleted or reordered (`prevHash` mismatch).
   - The final record's hash does not match `--expected-head` (when provided).
 - **Evidence integrity limits**:
-  Tamper evidence guarantees that any alteration, reordering, or deletion of exported records
-  after the fact is detectable once the chain head hash is stored out-of-band (e.g. in a signed
-  backup manifest or an external log sink). However, **this is still NOT immutable storage**:
+  Tamper evidence guarantees that any alteration, reordering, or interior deletion of exported records
+  after the fact is detectable. However, **without `--expected-head`, tail truncation (deleting the most
+  recent records from the end of the log) is undetectable from the log file alone**, because the remaining
+  prefix forms a cryptographically valid chain starting from genesis. Detecting tail truncation strictly
+  requires storing the chain head hash out-of-band (e.g. in a signed backup manifest or external SIEM)
+  and asserting it with `--expected-head`. Furthermore, **this is still NOT immutable storage**:
   raw container logs and local database rows prior to export can still be truncated or altered by
-  a container-level root adversary. Non-repudiation requires immediate off-cluster transmission.
+  a container-level root adversary before export. Non-repudiation requires immediate off-cluster transmission.
 
 ## Audit coverage matrix
 

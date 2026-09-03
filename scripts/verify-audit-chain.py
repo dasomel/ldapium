@@ -7,8 +7,18 @@ Each record in a chained audit log must contain 'prevHash' and 'hash'.
 - The record's hash must equal sha256 of the record's canonical JSON excluding
   the 'hash' field.
 
-Exits 0 if the chain is intact and valid; exits non-zero on any break, deletion,
-reordering, content mutation, or malformed JSON.
+Security guarantee and limitation (D10):
+- A valid chain proves forward continuity from the genesis record: any alteration
+  of record content, interior deletion of records, or reordering breaks the chain
+  and is detected.
+- TAIL TRUNCATION LIMITATION: Without an out-of-band anchor (--expected-head),
+  deleting the tail (the most recent records from the end) leaves a valid prefix
+  chain that still starts from genesis and passes verification. Tail truncation
+  is detectable ONLY when the expected head hash has been recorded externally
+  (e.g., in a signed backup manifest or external SIEM) and asserted via --expected-head.
+
+Exits 0 if the chain is intact and valid; exits non-zero on any break, interior
+deletion, reordering, content mutation, malformed JSON, or head mismatch.
 """
 from __future__ import annotations
 

@@ -1,34 +1,101 @@
 #!/usr/bin/env python3
 """Push shipper with retry and dead-letter queue for normalized identity-audit NDJSON.
 
-Reads normalized NDJSON events (from stdin or a file), batches them, and POSTs
-them to a generic HTTP/HTTPS sink URL (the SIEM adapter boundary).
+Reads normalized NDJSON events (from stdin or a file) line-by-line, batches them,
+and POSTs them to a generic HTTP/HTTPS sink URL (the SIEM adapter boundary).
 
-Key guarantees (issue #126, ACs from #24):
-- Cursor state file keeps the last delivered correlationId + seq per source so
-  re-runs are idempotent and produce no duplicate deliveries.
-- Generic HTTP sink boundary: plain NDJSON (application/x-ndjson) over HTTP/HTTPS.
-- Bearer token is strictly loaded from a file (--token-file), never a CLI argument.
-- Transient errors (HTTP 5xx, connection/timeout errors, 429) trigger bounded
-  exponential backoff retries.
-- Undeliverable batches after retry exhaustion are written to a dead-letter
-  NDJSON file alongside the error and timestamp.
-- On subsequent runs, dead-letter records are replayed first before new records.
+Key guarantees (issue #126, ACs from #24, critic review fixes):
+- Delivery semantics: At-least-once delivery. If network connectivity drops after
+  the sink receives a batch but before acknowledgment reaches the shipper, the batch
+  will be retransmitted. Batches carry an idempotency header:
+    X-Ldapium-Batch-Id = sha256(canonical NDJSON of batch)
+  plus per-record 'hash' when --chain was used during export. The downstream sink
+  deduplicates using these keys.
+- Cursor: Tracks (time, hashes) per source. 'seq' is strictly invocation-scoped
+  and resets on each export run, so seq CANNOT be used as a persistent cursor.
+  A record is already delivered if its timestamp is older than the cursor timestamp,
+  or equal and its canonical hash is in the set of hashes seen at that timestamp.
+- Transport: HTTPS only by default. Plaintext http:// is rejected unless
+  --allow-insecure-http is explicitly passed (for CI/local testing fixtures).
+  Redirects are strictly forbidden via a custom urllib opener to prevent credential leakage.
+  TLS certificate verification is never disabled.
+- Process locking: Takes an exclusive flock on the state directory for the run (fail fast
+  if locked). Dead-letter appends and replays are serialized by this lock.
+- Persistence failure: Cursor persistence failure after an acknowledged batch is fatal.
+  The shipper exits non-zero immediately with a clear error; it does not continue.
+  Cursor file writes use a tmpfile + os.replace for atomicity.
+- Streaming: Reads stdin or input file line-by-line and dead-letter line-by-line
+  without buffering whole files in memory.
+- CLI argument validation: batch_size >= 1, max_retries >= 0, backoff values >= 0.
 """
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
 
 def now_rfc3339() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def positive_int(val: str) -> int:
+    try:
+        ival = int(val)
+        if ival < 1:
+            raise ValueError()
+        return ival
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 1, got '{val}'")
+
+
+def non_negative_int(val: str) -> int:
+    try:
+        ival = int(val)
+        if ival < 0:
+            raise ValueError()
+        return ival
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 0, got '{val}'")
+
+
+def non_negative_float(val: str) -> float:
+    try:
+        fval = float(val)
+        if fval < 0.0:
+            raise ValueError()
+        return fval
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a float >= 0.0, got '{val}'")
+
+
+def canonical_record_json(rec: dict) -> str:
+    """Canonical JSON string of a record (sorted keys, compact separators)."""
+    return json.dumps(rec, sort_keys=True, separators=(",", ":"))
+
+
+def canonical_record_hash(rec: dict) -> str:
+    """SHA-256 hash of the record's canonical JSON representation."""
+    return hashlib.sha256(canonical_record_json(rec).encode("utf-8")).hexdigest()
+
+
+def compute_batch_id(batch: list[dict]) -> str:
+    """Canonical batch ID: sha256 of the batch's canonical NDJSON.
+
+    Used as the X-Ldapium-Batch-Id idempotency key so sinks can deduplicate
+    retried batches under at-least-once delivery semantics (D3).
+    """
+    canonical_lines = [canonical_record_json(r) for r in batch]
+    batch_ndjson = "\n".join(canonical_lines) + "\n"
+    return hashlib.sha256(batch_ndjson.encode("utf-8")).hexdigest()
 
 
 def load_token(token_file: str | None) -> str | None:
@@ -42,6 +109,23 @@ def load_token(token_file: str | None) -> str | None:
             return token
     except OSError as exc:
         sys.exit(f"audit-ship.py: failed to read token file: {exc}")
+
+
+def acquire_state_lock(state_dir: str) -> int:
+    """Acquire an exclusive non-blocking flock on the state directory for the run (D6)."""
+    os.makedirs(state_dir, exist_ok=True)
+    try:
+        lock_fd = os.open(state_dir, os.O_RDONLY)
+    except OSError as exc:
+        sys.exit(f"audit-ship.py: error: cannot open state directory {state_dir} for locking: {exc}")
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as exc:
+        sys.exit(
+            f"audit-ship.py: error: state directory {state_dir} is locked by another running shipper process (fail fast): {exc}"
+        )
+    return lock_fd
 
 
 def load_cursor(cursor_file: str) -> dict:
@@ -58,6 +142,10 @@ def load_cursor(cursor_file: str) -> dict:
 
 
 def save_cursor(cursor_file: str, cursor: dict) -> None:
+    """Persist cursor atomically via tmpfile + os.replace (D6).
+
+    Failure after an acknowledged batch is fatal: exit non-zero immediately.
+    """
     tmp_path = f"{cursor_file}.tmp.{os.getpid()}"
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -65,15 +153,19 @@ def save_cursor(cursor_file: str, cursor: dict) -> None:
             f.write("\n")
         os.replace(tmp_path, cursor_file)
     except Exception as exc:
-        print(f"audit-ship.py: error: could not write cursor file {cursor_file}: {exc}", file=sys.stderr)
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except OSError:
                 pass
+        sys.exit(f"audit-ship.py: fatal error: failed to persist cursor to {cursor_file}: {exc}")
 
 
 def is_already_delivered(rec: dict, cursor: dict) -> bool:
+    """Check if record is already delivered using (time, canonical_record_hash) (D4).
+
+    'seq' is invocation-scoped (resets to 1 each export run) and is NOT used as a cursor.
+    """
     source = rec.get("source")
     if not source:
         return False
@@ -81,40 +173,98 @@ def is_already_delivered(rec: dict, cursor: dict) -> bool:
     if not source_cursor:
         return False
 
-    last_seq = source_cursor.get("seq")
-    last_cid = source_cursor.get("correlationId")
-    curr_seq = rec.get("seq")
-    curr_cid = rec.get("correlationId")
+    cursor_time = source_cursor.get("time")
+    cursor_hashes = set(source_cursor.get("hashes", []))
 
-    if curr_seq is not None and last_seq is not None:
-        if curr_seq < last_seq:
+    rec_time = rec.get("time")
+    rec_hash = canonical_record_hash(rec)
+
+    if rec_time and cursor_time:
+        if rec_time < cursor_time:
             return True
-        if curr_seq == last_seq:
-            return curr_cid == last_cid
-    elif curr_cid and last_cid:
-        return curr_cid == last_cid
+        if rec_time == cursor_time:
+            return rec_hash in cursor_hashes
+        return False
+
+    if rec_time is None and cursor_time is None:
+        return rec_hash in cursor_hashes
 
     return False
 
 
 def update_cursor_for_batch(cursor: dict, batch: list[dict]) -> None:
+    """Update cursor state per source with the latest (time, hashes) (D4)."""
     sources = cursor.setdefault("sources", {})
     for rec in batch:
         source = rec.get("source")
         if not source:
             continue
-        curr_seq = rec.get("seq")
-        curr_cid = rec.get("correlationId")
+        rec_time = rec.get("time")
+        rec_hash = canonical_record_hash(rec)
+
         existing = sources.get(source)
-        if existing:
-            last_seq = existing.get("seq")
-            if curr_seq is not None and last_seq is not None:
-                if curr_seq >= last_seq:
-                    sources[source] = {"seq": curr_seq, "correlationId": curr_cid}
-            else:
-                sources[source] = {"seq": curr_seq, "correlationId": curr_cid}
+        if not existing:
+            sources[source] = {
+                "time": rec_time,
+                "hashes": [rec_hash],
+            }
+            continue
+
+        curr_time = existing.get("time")
+        curr_hashes = list(existing.get("hashes", []))
+
+        if rec_time and curr_time:
+            if rec_time > curr_time:
+                sources[source] = {
+                    "time": rec_time,
+                    "hashes": [rec_hash],
+                }
+            elif rec_time == curr_time:
+                if rec_hash not in curr_hashes:
+                    curr_hashes.append(rec_hash)
+                sources[source]["hashes"] = curr_hashes
+            # Older timestamp within batch: do not regress cursor
+        elif rec_time and not curr_time:
+            sources[source] = {
+                "time": rec_time,
+                "hashes": [rec_hash],
+            }
         else:
-            sources[source] = {"seq": curr_seq, "correlationId": curr_cid}
+            if curr_time is None:
+                if rec_hash not in curr_hashes:
+                    curr_hashes.append(rec_hash)
+                sources[source]["hashes"] = curr_hashes
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Custom redirect handler that refuses all HTTP redirects (D5).
+
+    Prevents leaking credentials (e.g. Authorization: Bearer ...) across origins
+    or following unintended redirects.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+    def http_error_301(self, req, fp, code, msg, headers):
+        loc = headers.get("Location", "")
+        raise urllib.error.HTTPError(req.full_url, code, f"HTTP redirect ({code}) to {loc} refused", headers, fp)
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        loc = headers.get("Location", "")
+        raise urllib.error.HTTPError(req.full_url, code, f"HTTP redirect ({code}) to {loc} refused", headers, fp)
+
+    def http_error_303(self, req, fp, code, msg, headers):
+        loc = headers.get("Location", "")
+        raise urllib.error.HTTPError(req.full_url, code, f"HTTP redirect ({code}) to {loc} refused", headers, fp)
+
+    def http_error_307(self, req, fp, code, msg, headers):
+        loc = headers.get("Location", "")
+        raise urllib.error.HTTPError(req.full_url, code, f"HTTP redirect ({code}) to {loc} refused", headers, fp)
+
+    def http_error_308(self, req, fp, code, msg, headers):
+        loc = headers.get("Location", "")
+        raise urllib.error.HTTPError(req.full_url, code, f"HTTP redirect ({code}) to {loc} refused", headers, fp)
 
 
 def send_batch_http(
@@ -129,24 +279,28 @@ def send_batch_http(
     lines = [json.dumps(r, separators=(",", ":")) for r in records]
     body = ("\n".join(lines) + "\n").encode("utf-8")
 
+    batch_id = compute_batch_id(records)
     headers = {
         "Content-Type": "application/x-ndjson",
         "User-Agent": "ldapium-audit-shipper/1.0",
+        "X-Ldapium-Batch-Id": batch_id,
     }
     if bearer_token:
         headers["Authorization"] = f"Bearer {bearer_token}"
+
+    opener = urllib.request.build_opener(NoRedirectHandler())
 
     last_err = None
     for attempt in range(max_retries + 1):
         req = urllib.request.Request(sink_url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with opener.open(req, timeout=15) as resp:
                 if 200 <= resp.status < 300:
                     return True, None
                 last_err = f"HTTP {resp.status}"
         except urllib.error.HTTPError as exc:
             last_err = f"HTTP {exc.code}: {exc.reason}"
-            # 5xx and 429 are retryable; 4xx (client error) is not
+            # 5xx and 429 are retryable; 3xx and 4xx are client/config errors and not retryable
             if not (500 <= exc.code < 600 or exc.code == 429):
                 return False, last_err
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -183,42 +337,150 @@ def replay_dead_letter(
     max_backoff: float,
     backoff_factor: float,
 ) -> bool:
+    """Stream replay of dead-letter records batch-by-batch without loading entire file into memory (D7)."""
     if not os.path.isfile(dead_letter_file) or os.path.getsize(dead_letter_file) == 0:
         return True
 
     try:
-        with open(dead_letter_file, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
+        dl_f = open(dead_letter_file, "r", encoding="utf-8")
     except OSError as exc:
-        print(f"audit-ship.py: error reading dead-letter file {dead_letter_file}: {exc}", file=sys.stderr)
+        print(f"audit-ship.py: error opening dead-letter file {dead_letter_file}: {exc}", file=sys.stderr)
         return False
 
-    if not lines:
-        return True
+    print("audit-ship.py: replaying records from dead-letter queue...", file=sys.stderr)
 
-    dl_items = []
-    for line in lines:
-        try:
-            item = json.loads(line)
-            record = item.get("record") if (isinstance(item, dict) and "record" in item) else item
-            dl_items.append((item, record))
-        except json.JSONDecodeError:
-            continue
-
-    if not dl_items:
-        return True
-
-    print(f"audit-ship.py: replaying {len(dl_items)} record(s) from dead-letter queue...", file=sys.stderr)
-
-    remaining_items = []
     replayed_count = 0
+    current_entries: list[dict] = []
+    current_records: list[dict] = []
+    replay_failed = False
+    fail_err = None
 
-    for i in range(0, len(dl_items), batch_size):
-        chunk = dl_items[i : i + batch_size]
-        chunk_records = [r for _, r in chunk]
+    try:
+        for line in dl_f:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            try:
+                item = json.loads(line_str)
+                record = item.get("record") if (isinstance(item, dict) and "record" in item) else item
+                current_entries.append(item)
+                current_records.append(record)
+            except json.JSONDecodeError:
+                continue
 
+            if len(current_records) >= batch_size:
+                ok, err = send_batch_http(
+                    current_records,
+                    sink_url,
+                    bearer_token,
+                    max_retries,
+                    initial_backoff,
+                    max_backoff,
+                    backoff_factor,
+                )
+                if ok:
+                    replayed_count += len(current_records)
+                    update_cursor_for_batch(cursor, current_records)
+                    save_cursor(cursor_file, cursor)
+                    current_entries = []
+                    current_records = []
+                else:
+                    replay_failed = True
+                    fail_err = err
+                    break
+
+        if not replay_failed and current_records:
+            ok, err = send_batch_http(
+                current_records,
+                sink_url,
+                bearer_token,
+                max_retries,
+                initial_backoff,
+                max_backoff,
+                backoff_factor,
+            )
+            if ok:
+                replayed_count += len(current_records)
+                update_cursor_for_batch(cursor, current_records)
+                save_cursor(cursor_file, cursor)
+                current_entries = []
+                current_records = []
+            else:
+                replay_failed = True
+                fail_err = err
+
+        if replay_failed:
+            print(f"audit-ship.py: dead-letter replay failed ({fail_err})", file=sys.stderr)
+            tmp_path = f"{dead_letter_file}.tmp.{os.getpid()}"
+            with open(tmp_path, "w", encoding="utf-8") as out_f:
+                for item in current_entries:
+                    out_f.write(json.dumps(item, separators=(",", ":")) + "\n")
+                for rest_line in dl_f:
+                    rest_stripped = rest_line.strip()
+                    if rest_stripped:
+                        out_f.write(rest_stripped + "\n")
+            os.replace(tmp_path, dead_letter_file)
+            return False
+        else:
+            try:
+                os.remove(dead_letter_file)
+            except OSError:
+                pass
+            print(f"audit-ship.py: successfully replayed {replayed_count} dead-letter record(s)", file=sys.stderr)
+            return True
+    finally:
+        dl_f.close()
+
+
+def spill_to_dead_letter(input_file, cursor: dict, dead_letter_file: str, error_msg: str) -> None:
+    """Stream remaining un-delivered input records directly into dead-letter file without buffering in memory."""
+    now = now_rfc3339()
+    with open(dead_letter_file, "a", encoding="utf-8") as f:
+        for line in input_file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if is_already_delivered(rec, cursor):
+                continue
+            dl_entry = {
+                "error": error_msg,
+                "failedAt": now,
+                "record": rec,
+            }
+            f.write(json.dumps(dl_entry, separators=(",", ":")) + "\n")
+
+
+def ship_stream(
+    input_file,
+    sink_url: str,
+    bearer_token: str | None,
+    cursor_file: str,
+    cursor: dict,
+    dead_letter_file: str,
+    batch_size: int,
+    max_retries: int,
+    initial_backoff: float,
+    max_backoff: float,
+    backoff_factor: float,
+) -> tuple[int, int, int, bool]:
+    """Stream records from input_file line-by-line, shipping in batches (D7).
+
+    Returns (shipped_count, skipped_count, batch_count, success_bool).
+    """
+    shipped_count = 0
+    skipped_count = 0
+    batch_count = 0
+    current_batch: list[dict] = []
+
+    def flush_batch(batch: list[dict]) -> tuple[bool, str | None]:
+        nonlocal shipped_count, batch_count
+        batch_count += 1
         ok, err = send_batch_http(
-            chunk_records,
+            batch,
             sink_url,
             bearer_token,
             max_retries,
@@ -226,31 +488,51 @@ def replay_dead_letter(
             max_backoff,
             backoff_factor,
         )
-
         if ok:
-            replayed_count += len(chunk_records)
-            update_cursor_for_batch(cursor, chunk_records)
+            shipped_count += len(batch)
+            update_cursor_for_batch(cursor, batch)
             save_cursor(cursor_file, cursor)
-        else:
-            print(f"audit-ship.py: dead-letter replay failed ({err})", file=sys.stderr)
-            remaining_items.extend(dl_items[i:])
-            break
+            return True, None
+        return False, err
 
-    if remaining_items:
-        tmp_path = f"{dead_letter_file}.tmp.{os.getpid()}"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            for item, _ in remaining_items:
-                f.write(json.dumps(item, separators=(",", ":")) + "\n")
-        os.replace(tmp_path, dead_letter_file)
-        return False
-    else:
-        # All dead-letter records replayed successfully
+    for lineno, line in enumerate(input_file, start=1):
+        line = line.strip()
+        if not line:
+            continue
         try:
-            os.remove(dead_letter_file)
-        except OSError:
-            pass
-        print(f"audit-ship.py: successfully replayed {replayed_count} dead-letter record(s)", file=sys.stderr)
-        return True
+            rec = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"audit-ship.py: warning: skipping invalid JSON on line {lineno}: {exc}", file=sys.stderr)
+            continue
+
+        if is_already_delivered(rec, cursor):
+            skipped_count += 1
+            continue
+
+        current_batch.append(rec)
+        if len(current_batch) >= batch_size:
+            ok, err = flush_batch(current_batch)
+            if not ok:
+                print(
+                    f"audit-ship.py: delivery failed for batch {batch_count} ({err}); writing to dead-letter",
+                    file=sys.stderr,
+                )
+                append_dead_letter(dead_letter_file, current_batch, err or "Delivery failed")
+                spill_to_dead_letter(input_file, cursor, dead_letter_file, err or "Delivery failed (spilled after prior failure)")
+                return shipped_count, skipped_count, batch_count, False
+            current_batch = []
+
+    if current_batch:
+        ok, err = flush_batch(current_batch)
+        if not ok:
+            print(
+                f"audit-ship.py: delivery failed for batch {batch_count} ({err}); writing to dead-letter",
+                file=sys.stderr,
+            )
+            append_dead_letter(dead_letter_file, current_batch, err or "Delivery failed")
+            return shipped_count, skipped_count, batch_count, False
+
+    return shipped_count, skipped_count, batch_count, True
 
 
 def main(argv: list[str]) -> int:
@@ -269,7 +551,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--cursor-file",
         default=".audit-ship-cursor.json",
-        help="Cursor state file path tracking last delivered seq + correlationId per source (default: .audit-ship-cursor.json)",
+        help="Cursor state file path tracking last delivered (time, hash) per source (default: .audit-ship-cursor.json)",
     )
     parser.add_argument(
         "--dead-letter-file",
@@ -284,43 +566,67 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--batch-size",
-        type=int,
+        type=positive_int,
         default=50,
-        help="Maximum records per POST batch (default: 50)",
+        help="Maximum records per POST batch (>= 1, default: 50)",
     )
     parser.add_argument(
         "--max-retries",
-        type=int,
+        type=non_negative_int,
         default=3,
-        help="Maximum retry attempts on 5xx or connection failures (default: 3)",
+        help="Maximum retry attempts on 5xx or connection failures (>= 0, default: 3)",
     )
     parser.add_argument(
         "--initial-backoff",
-        type=float,
+        type=non_negative_float,
         default=0.5,
-        help="Initial exponential backoff delay in seconds (default: 0.5)",
+        help="Initial exponential backoff delay in seconds (>= 0, default: 0.5)",
     )
     parser.add_argument(
         "--max-backoff",
-        type=float,
+        type=non_negative_float,
         default=10.0,
-        help="Maximum backoff delay in seconds (default: 10.0)",
+        help="Maximum backoff delay in seconds (>= 0, default: 10.0)",
     )
     parser.add_argument(
         "--backoff-factor",
-        type=float,
+        type=non_negative_float,
         default=2.0,
-        help="Exponential backoff factor (default: 2.0)",
+        help="Exponential backoff factor (>= 0, default: 2.0)",
+    )
+    parser.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        default=False,
+        help="Allow plaintext http:// sink URL (strictly for CI/local test fixtures; never in production)",
     )
     args = parser.parse_args(argv)
 
     if not args.sink_url:
         sys.exit("audit-ship.py: error: --sink-url (or SIEM_SINK_URL / AUDIT_SINK_URL env) is required")
 
+    # D5: Validate transport scheme: HTTPS only unless --allow-insecure-http is explicitly given
+    parsed_url = urllib.parse.urlparse(args.sink_url)
+    if parsed_url.scheme == "http":
+        if not args.allow_insecure_http:
+            sys.exit(
+                "audit-ship.py: error: plaintext http:// sink URL is forbidden to protect credentials; "
+                "use https:// or pass --allow-insecure-http for local testing"
+            )
+    elif parsed_url.scheme != "https":
+        sys.exit(
+            f"audit-ship.py: error: unsupported sink URL scheme '{parsed_url.scheme}', must be https:// "
+            "(or http:// with --allow-insecure-http)"
+        )
+
+    # D6: Take exclusive flock on state directory for the run (fail fast if locked)
+    state_dir = os.path.dirname(os.path.abspath(args.cursor_file))
+    lock_fd = acquire_state_lock(state_dir)
+
     bearer_token = load_token(args.token_file)
     cursor = load_cursor(args.cursor_file)
 
-    # 1. Replay dead-letter first
+    # 1. Replay dead-letter first (streaming)
     dl_ok = replay_dead_letter(
         args.dead_letter_file,
         args.cursor_file,
@@ -336,7 +642,7 @@ def main(argv: list[str]) -> int:
     if not dl_ok:
         sys.exit("audit-ship.py: stopping because dead-letter replay could not complete")
 
-    # 2. Read input records
+    # 2. Read and ship input records (streaming line-by-line)
     if args.file and args.file != "-":
         try:
             input_file = open(args.file, "r", encoding="utf-8")
@@ -345,61 +651,32 @@ def main(argv: list[str]) -> int:
     else:
         input_file = sys.stdin
 
-    records_to_ship = []
-    skipped_count = 0
-
     try:
-        for lineno, line in enumerate(input_file, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError as exc:
-                print(f"audit-ship.py: warning: skipping invalid JSON on line {lineno}: {exc}", file=sys.stderr)
-                continue
-
-            if is_already_delivered(rec, cursor):
-                skipped_count += 1
-                continue
-
-            records_to_ship.append(rec)
-    finally:
-        if input_file is not sys.stdin:
-            input_file.close()
-
-    if not records_to_ship:
-        print(f"audit-ship.py: all {skipped_count} record(s) already delivered according to cursor state; 0 to ship")
-        return 0
-
-    # 3. Ship batches
-    shipped_count = 0
-    batches = [records_to_ship[i : i + args.batch_size] for i in range(0, len(records_to_ship), args.batch_size)]
-
-    for idx, batch in enumerate(batches):
-        ok, err = send_batch_http(
-            batch,
+        shipped, skipped, batches, ok = ship_stream(
+            input_file,
             args.sink_url,
             bearer_token,
+            args.cursor_file,
+            cursor,
+            args.dead_letter_file,
+            args.batch_size,
             args.max_retries,
             args.initial_backoff,
             args.max_backoff,
             args.backoff_factor,
         )
+    finally:
+        if input_file is not sys.stdin:
+            input_file.close()
 
-        if ok:
-            shipped_count += len(batch)
-            update_cursor_for_batch(cursor, batch)
-            save_cursor(args.cursor_file, cursor)
-        else:
-            # Batch failed after retries: write to dead-letter queue along with any subsequent batches
-            print(f"audit-ship.py: delivery failed for batch {idx + 1}/{len(batches)} ({err}); writing to dead-letter", file=sys.stderr)
-            remaining_batches = batches[idx:]
-            for r_batch in remaining_batches:
-                append_dead_letter(args.dead_letter_file, r_batch, err or "Delivery failed")
-            return 1
+    if not ok:
+        return 1
 
-    print(f"audit-ship.py: shipped {shipped_count} record(s) across {len(batches)} batch(es) (skipped {skipped_count} already delivered)")
+    if shipped == 0 and skipped > 0:
+        print(f"audit-ship.py: all {skipped} record(s) already delivered according to cursor state; 0 to ship")
+        return 0
+
+    print(f"audit-ship.py: shipped {shipped} record(s) across {batches} batch(es) (skipped {skipped} already delivered)")
     return 0
 
 

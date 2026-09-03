@@ -108,10 +108,10 @@ workflow enforcement:
   draws from container stdout/files and an OpenLDAP MDB database (`cn=accesslog`).
   When run with the `--chain` option (`scripts/export-audit-log.sh --chain` / `audit-normalize.py --chain`),
   records are cryptographically hashed using SHA-256 (`prevHash` and `hash`) in canonical JSON order,
-  genesis-anchored to the export manifest line. When the chain head hash is stored out-of-band
-  (e.g., recorded in the backup manifest or streamed to an external SIEM), the exported evidence is
-  **tamper-evident**: any record modification, reordering, or deletion is detected by
-  `scripts/verify-audit-chain.py`.
+  genesis-anchored to the export manifest line. Interior record modification, reordering, or deletion is
+  detected by `scripts/verify-audit-chain.py`. **Tail truncation (deleting the most recent records from the end)**
+  is undetectable from the log file alone; it is detected only when the chain head hash is stored out-of-band
+  (e.g., recorded in the backup manifest or streamed to an external SIEM) and asserted with `--expected-head`.
 - **Still not immutable storage**: Cryptographic hash chaining provides tamper evidence, but is
   **NOT immutable storage on its own**. If an attacker gains root access to the container or direct write
   access to the underlying persistent volume, raw audit log files can still be wiped, truncated, or replaced,

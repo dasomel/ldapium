@@ -122,6 +122,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ "$legacy" = 1 ] && [ "$chain" = 1 ]; then
+  echo "export-audit-log.sh: --chain cannot be used with --legacy (the legacy flat shape does not support envelope hash chaining)" >&2
+  exit 2
+fi
+
 command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found on PATH" >&2; exit 1; }
 
 if [ -z "$ns" ]; then
@@ -262,16 +267,14 @@ fi
 }
 
 norm_flags=(--admin-dn "$admin_dn")
+if [ "$legacy" = 1 ]; then
+  norm_flags+=(--legacy)
+fi
 if [ "$chain" = 1 ]; then
   norm_flags+=(--chain)
 fi
 
-if [ "$legacy" = 1 ]; then
-  run_export \
-    | python3 "${lib_dir}/resolve-conflict-objectid.py" --namespace "$ns" --statefulset "$sts" --admin-dn "$admin_dn" \
-    | python3 "${lib_dir}/audit-normalize.py" --legacy
-else
-  run_export \
-    | python3 "${lib_dir}/resolve-conflict-objectid.py" --namespace "$ns" --statefulset "$sts" --admin-dn "$admin_dn" \
-    | python3 "${lib_dir}/audit-normalize.py" "${norm_flags[@]}"
-fi
+run_export \
+  | python3 "${lib_dir}/resolve-conflict-objectid.py" --namespace "$ns" --statefulset "$sts" --replicas "$replicas" --admin-dn "$admin_dn" \
+  | python3 "${lib_dir}/audit-normalize.py" "${norm_flags[@]}"
+
