@@ -2,6 +2,7 @@ dn: cn=John Doe,ou=users,dc=example,dc=org
 objectClass: top
 objectClass: person
 objectClass: organizationalPerson
+objectClass: inetOrgPerson
 objectClass: user
 cn: John Doe
 sn: Doe
@@ -16,6 +17,7 @@ dn: cn=Jane Smith,ou=users,dc=example,dc=org
 objectClass: top
 objectClass: person
 objectClass: organizationalPerson
+objectClass: inetOrgPerson
 objectClass: user
 cn: Jane Smith
 sn: Smith

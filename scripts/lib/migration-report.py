@@ -165,6 +165,12 @@ KNOWN_ATTRIBUTES: Set[str] = {
 REDACTED_PASSWORD = "***REDACTED***"
 
 
+class LDIFParseError(Exception):
+    def __init__(self, errors: List[Dict[str, str]]):
+        super().__init__("Unparseable LDIF")
+        self.errors = errors
+
+
 class LDIFEntry:
     def __init__(self, start_line: int, end_line: int):
         self.start_line = start_line
@@ -198,77 +204,188 @@ class LDIFEntry:
 
 
 def parse_ldif(path: str) -> List[LDIFEntry]:
-    """Parse LDIF file into LDIFEntry objects, handling RFC 2849 line continuations."""
+    """Parse LDIF file into LDIFEntry objects, handling RFC 2849 line continuations and validating syntax."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"LDIF file not found: {path}")
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         raw_lines = f.readlines()
 
-    entries: List[LDIFEntry] = []
-    current_entry: Optional[LDIFEntry] = None
-
+    parse_errors: List[Dict[str, str]] = []
     logical_lines: List[Tuple[int, str]] = []
-    # Unfold lines
+
+    # Unfold lines per RFC 2849
     for idx, line in enumerate(raw_lines, 1):
         line_stripped = line.rstrip("\r\n")
         if not line_stripped:
             logical_lines.append((idx, ""))
             continue
         if line_stripped.startswith(" ") or line_stripped.startswith("\t"):
-            if logical_lines:
+            if logical_lines and logical_lines[-1][1]:
                 orig_idx, prev_content = logical_lines[-1]
                 logical_lines[-1] = (orig_idx, prev_content + line_stripped[1:])
             else:
-                logical_lines.append((idx, line_stripped.lstrip()))
+                parse_errors.append({
+                    "dn": "unknown",
+                    "message": f'line {idx}: leading space continuation without preceding attribute line'
+                })
         else:
             logical_lines.append((idx, line_stripped))
 
-    entry_start_line = 1
+    entries: List[LDIFEntry] = []
+    current_entry: Optional[LDIFEntry] = None
     in_entry = False
 
     for line_num, line in logical_lines:
         trimmed = line.strip()
         if not trimmed or trimmed.startswith("#"):
-            if in_entry and current_entry and current_entry.dn:
-                current_entry.end_line = line_num - 1
-                entries.append(current_entry)
+            if in_entry and current_entry:
+                if current_entry.dn:
+                    current_entry.end_line = line_num - 1
+                    entries.append(current_entry)
+                else:
+                    parse_errors.append({
+                        "dn": "unknown",
+                        "message": f'entry starting at line {current_entry.start_line} lacks a "dn:" record'
+                    })
                 current_entry = None
                 in_entry = False
             continue
 
         if not in_entry:
             in_entry = True
-            entry_start_line = line_num
-            current_entry = LDIFEntry(entry_start_line, line_num)
+            current_entry = LDIFEntry(line_num, line_num)
 
-        # Parse attribute: value
-        if ":" in line:
-            parts = line.split(":", 1)
-            attr = parts[0].strip()
-            rest = parts[1]
-            val = ""
-            if rest.startswith(":"):
-                # base64
-                b64_str = rest[1:].strip()
-                try:
-                    val = base64.b64decode(b64_str).decode("utf-8", errors="replace")
-                except Exception:
-                    val = b64_str
-            elif rest.startswith("<"):
-                # URL reference
-                val = rest[1:].strip()
-            else:
-                val = rest.strip()
+        # Attribute name per RFC 2849: starts with letter, contains letters/digits/hyphens/semicolons
+        m = re.match(r"^([a-zA-Z][a-zA-Z0-9\-_;]*)\s*(::?|<)\s*(.*)$", line)
+        if not m:
+            parse_errors.append({
+                "dn": current_entry.dn if current_entry and current_entry.dn else "unknown",
+                "message": f'unparseable LDIF line {line_num}: "{line}"'
+            })
+            continue
 
-            if current_entry:
-                current_entry.add_attribute(attr, val)
+        attr = m.group(1)
+        sep = m.group(2)
+        rest = m.group(3)
+        val = ""
+        if sep == "::":
+            # base64
+            b64_str = rest.strip()
+            try:
+                val = base64.b64decode(b64_str).decode("utf-8", errors="replace")
+            except Exception:
+                val = b64_str
+        elif sep == "<":
+            val = rest.strip()
+        else:
+            val = rest.strip()
 
-    if in_entry and current_entry and current_entry.dn:
-        current_entry.end_line = len(raw_lines)
-        entries.append(current_entry)
+        if current_entry:
+            current_entry.add_attribute(attr, val)
+
+    if in_entry and current_entry:
+        if current_entry.dn:
+            current_entry.end_line = len(raw_lines)
+            entries.append(current_entry)
+        else:
+            parse_errors.append({
+                "dn": "unknown",
+                "message": f'entry starting at line {current_entry.start_line} lacks a "dn:" record'
+            })
+
+    if not entries:
+        parse_errors.append({
+            "dn": "unknown",
+            "message": 'unparseable LDIF: no valid "dn:" records found'
+        })
+
+    if parse_errors:
+        raise LDIFParseError(parse_errors)
 
     return entries
+
+
+def load_schema(schema_ldif_path: Optional[str]) -> Tuple[Dict[str, str], Set[str], str]:
+    """Load schema objectClasses and attributeTypes from a slapcat dump or return static fallback."""
+    if not schema_ldif_path or not os.path.exists(schema_ldif_path) or os.path.getsize(schema_ldif_path) == 0:
+        return dict(KNOWN_OBJECT_CLASSES), set(KNOWN_ATTRIBUTES), "static-fallback"
+
+    try:
+        with open(schema_ldif_path, "r", encoding="utf-8", errors="replace") as f:
+            raw_lines = f.readlines()
+
+        lines: List[str] = []
+        for line in raw_lines:
+            line_str = line.rstrip("\r\n")
+            if line_str.startswith(" ") or line_str.startswith("\t"):
+                if lines:
+                    lines[-1] += line_str[1:]
+                else:
+                    lines.append(line_str.lstrip())
+            else:
+                lines.append(line_str)
+
+        loaded_ocs: Dict[str, str] = {}
+        loaded_attrs: Set[str] = set()
+
+        for line in lines:
+            trimmed = line.strip()
+            # Match olcObjectClasses or objectClasses
+            m_oc = re.match(r"^(?:olcObjectClasses|objectClasses):\s*\((.*)\)\s*$", trimmed, re.IGNORECASE | re.DOTALL)
+            if m_oc:
+                body = m_oc.group(1)
+                m_names = re.search(r"\bNAME\s+(\([^)]+\)|'[^']+'|\"[^\"]+\"|\S+)", body, re.IGNORECASE)
+                names: List[str] = []
+                if m_names:
+                    raw = m_names.group(1).strip()
+                    if raw.startswith("(") and raw.endswith(")"):
+                        names = re.findall(r"['\"]?([a-zA-Z0-9_\-\.;]+)['\"]?", raw[1:-1])
+                    else:
+                        names = re.findall(r"['\"]?([a-zA-Z0-9_\-\.;]+)['\"]?", raw)
+                kind = "STRUCTURAL"
+                if re.search(r"\bAUXILIARY\b", body, re.IGNORECASE):
+                    kind = "AUXILIARY"
+                elif re.search(r"\bABSTRACT\b", body, re.IGNORECASE):
+                    kind = "ABSTRACT"
+                for n in names:
+                    clean = n.strip("'\"")
+                    if clean and clean not in ("$",):
+                        loaded_ocs[clean.lower()] = kind
+
+            # Match olcAttributeTypes or attributeTypes
+            m_at = re.match(r"^(?:olcAttributeTypes|attributeTypes):\s*\((.*)\)\s*$", trimmed, re.IGNORECASE | re.DOTALL)
+            if m_at:
+                body = m_at.group(1)
+                m_names = re.search(r"\bNAME\s+(\([^)]+\)|'[^']+'|\"[^\"]+\"|\S+)", body, re.IGNORECASE)
+                names = []
+                if m_names:
+                    raw = m_names.group(1).strip()
+                    if raw.startswith("(") and raw.endswith(")"):
+                        names = re.findall(r"['\"]?([a-zA-Z0-9_\-\.;]+)['\"]?", raw[1:-1])
+                    else:
+                        names = re.findall(r"['\"]?([a-zA-Z0-9_\-\.;]+)['\"]?", raw)
+                for n in names:
+                    clean = n.strip("'\"")
+                    if clean and clean not in ("$",):
+                        loaded_attrs.add(clean.lower())
+
+        if loaded_ocs or loaded_attrs:
+            standard_operational = {
+                "objectclass", "structuralobjectclass", "entryuuid", "entrycsn",
+                "createtimestamp", "modifytimestamp", "creatorsname", "modifiersname",
+                "subschemasubentry", "hassubordinates", "numsubordinates", "contextcsn",
+                "entrydn", "memberof", "authzto", "authzfrom", "vendorname", "vendorversion",
+            }
+            loaded_attrs.update(standard_operational)
+            for k, v in KNOWN_OBJECT_CLASSES.items():
+                if k not in loaded_ocs and (k.startswith("olc") or k.startswith("pwd")):
+                    loaded_ocs[k] = v
+            return loaded_ocs, loaded_attrs, "runtime-image"
+    except Exception:
+        pass
+
+    return dict(KNOWN_OBJECT_CLASSES), set(KNOWN_ATTRIBUTES), "static-fallback"
 
 
 def normalize_dn(dn: str) -> str:
@@ -352,17 +469,37 @@ def analyze_ldif(
     entries: List[LDIFEntry],
     base_dn: str,
     slapadd_errors: Optional[List[Dict[str, str]]] = None,
+    known_ocs: Optional[Dict[str, str]] = None,
+    known_attrs: Optional[Set[str]] = None,
+    schema_source: str = "static-fallback",
+    unique_attributes: Optional[List[str]] = None,
+    unique_filter: str = "objectClass=inetOrgPerson",
 ) -> Tuple[Dict, int]:
     """Analyze entries and produce the reconciliation report dictionary and exit code."""
+    if known_ocs is None:
+        known_ocs = dict(KNOWN_OBJECT_CLASSES)
+    if known_attrs is None:
+        known_attrs = set(KNOWN_ATTRIBUTES)
+    if unique_attributes is None:
+        unique_attributes = ["uid", "mail"]
+
     entry_count_by_objectclass: Dict[str, int] = {}
     unknown_object_classes: Dict[str, int] = {}
     unknown_attributes: Dict[str, int] = {}
     entries_outside_base_dn: List[str] = []
     entries_with_no_structural_oc: List[str] = []
 
-    # Value tracking for duplicate detection (case-insensitive key -> original value, list of DNs)
-    uid_tracker: Dict[str, Tuple[str, List[str]]] = {}
-    mail_tracker: Dict[str, Tuple[str, List[str]]] = {}
+    # Value tracking for duplicate detection per unique attribute
+    # attr_name -> { norm_value -> (original_value, [dn, ...]) }
+    unique_trackers: Dict[str, Dict[str, Tuple[str, List[str]]]] = {}
+    for ua in unique_attributes:
+        unique_trackers[ua.lower()] = {}
+
+    # Parse the unique filter to determine which objectClass to scope to
+    unique_filter_oc = ""
+    uf_match = re.match(r"objectClass=(\S+)", unique_filter)
+    if uf_match:
+        unique_filter_oc = uf_match.group(1).lower()
 
     generated_errors: List[Dict[str, str]] = []
 
@@ -381,15 +518,15 @@ def analyze_ldif(
         entry_ocs = entry.object_classes
         has_structural = False
 
-        seen_entry_ocs = set()
+        seen_entry_ocs: Set[str] = set()
         for oc in entry_ocs:
             low_oc = oc.lower()
             if low_oc not in seen_entry_ocs:
                 seen_entry_ocs.add(low_oc)
                 entry_count_by_objectclass[oc] = entry_count_by_objectclass.get(oc, 0) + 1
 
-            if low_oc in KNOWN_OBJECT_CLASSES:
-                if KNOWN_OBJECT_CLASSES[low_oc] == "STRUCTURAL":
+            if low_oc in known_ocs:
+                if known_ocs[low_oc] == "STRUCTURAL":
                     has_structural = True
             else:
                 unknown_object_classes[oc] = unknown_object_classes.get(oc, 0) + 1
@@ -406,56 +543,52 @@ def analyze_ldif(
             })
 
         # 3. Attributes check
+        # The unique overlay's olcUniqueURI filters (see image/entrypoint.sh)
+        # scope enforcement to entries matching unique_filter_oc — an entry
+        # outside that objectClass is never a candidate for the overlay, so
+        # duplicate tracking must honor the same scope or it reports false
+        # positives that slapadd -u never would.
+        entry_in_unique_scope = (not unique_filter_oc) or (unique_filter_oc in seen_entry_ocs)
+
         for low_attr, vals in entry.attributes.items():
             orig_attr_name = entry.attr_casing.get(low_attr, low_attr)
-            if low_attr not in KNOWN_ATTRIBUTES:
+            if low_attr not in known_attrs:
                 unknown_attributes[orig_attr_name] = unknown_attributes.get(orig_attr_name, 0) + len(vals)
                 generated_errors.append({
                     "dn": dn,
                     "message": f'attributeDescription "{orig_attr_name}": attribute type undefined'
                 })
 
-            # Unique tracking
-            if low_attr == "uid":
+            # Unique tracking, scoped to whichever attributes/filter the
+            # unique overlay is actually configured with.
+            if entry_in_unique_scope and low_attr in unique_trackers:
+                tracker = unique_trackers[low_attr]
                 for val in vals:
                     norm_v = val.strip().lower()
-                    if norm_v not in uid_tracker:
-                        uid_tracker[norm_v] = (val, [])
-                    uid_tracker[norm_v][1].append(dn)
-            elif low_attr == "mail":
-                for val in vals:
-                    norm_v = val.strip().lower()
-                    if norm_v not in mail_tracker:
-                        mail_tracker[norm_v] = (val, [])
-                    mail_tracker[norm_v][1].append(dn)
+                    if norm_v not in tracker:
+                        tracker[norm_v] = (val, [])
+                    tracker[norm_v][1].append(dn)
 
-    # Compile duplicate collisions
-    duplicate_uid: List[Dict] = []
-    for norm_v, (orig_v, dns) in sorted(uid_tracker.items()):
-        if len(dns) > 1:
-            duplicate_uid.append({"value": orig_v, "dns": sorted(dns)})
-            for d in sorted(dns):
-                generated_errors.append({
-                    "dn": d,
-                    "message": f'unique overlay constraint violation: duplicate uid "{orig_v}"'
-                })
+    # Compile duplicate collisions, one list per configured unique attribute.
+    # "uid" and "mail" keys are always present (even if empty) for report
+    # shape stability; any other configured --unique-attributes value adds
+    # its own key.
+    duplicate_collisions: Dict[str, List[Dict]] = {"uid": [], "mail": []}
+    for attr_name, tracker in unique_trackers.items():
+        bucket = duplicate_collisions.setdefault(attr_name, [])
+        for norm_v, (orig_v, dns) in sorted(tracker.items()):
+            if len(dns) > 1:
+                bucket.append({"value": orig_v, "dns": sorted(dns)})
+                for d in sorted(dns):
+                    generated_errors.append({
+                        "dn": d,
+                        "message": f'unique overlay constraint violation: duplicate {attr_name} "{orig_v}"'
+                    })
 
-    duplicate_mail: List[Dict] = []
-    for norm_v, (orig_v, dns) in sorted(mail_tracker.items()):
-        if len(dns) > 1:
-            duplicate_mail.append({"value": orig_v, "dns": sorted(dns)})
-            for d in sorted(dns):
-                generated_errors.append({
-                    "dn": d,
-                    "message": f'unique overlay constraint violation: duplicate mail "{orig_v}"'
-                })
-
-    # Error collation: prefer slapadd errors if provided, otherwise generated errors
-    final_errors: List[Dict[str, str]] = []
-    if slapadd_errors is not None and len(slapadd_errors) > 0:
-        final_errors = slapadd_errors
-    else:
-        final_errors = generated_errors
+    # Error collation: merge slapadd errors with generated errors (never drop either)
+    final_errors: List[Dict[str, str]] = list(generated_errors)
+    if slapadd_errors:
+        final_errors.extend(slapadd_errors)
 
     # Deduplicate errors deterministically
     unique_errors: List[Dict[str, str]] = []
@@ -473,12 +606,13 @@ def analyze_ldif(
     entries_outside_base_dn.sort()
     entries_with_no_structural_oc.sort()
 
+    duplicate_collision_count = sum(len(v) for v in duplicate_collisions.values())
+
     findings_count = (
         len(unknown_object_classes)
         + len(unknown_attributes)
         + len(entries_outside_base_dn)
-        + len(duplicate_uid)
-        + len(duplicate_mail)
+        + duplicate_collision_count
         + len(entries_with_no_structural_oc)
         + len(unique_errors)
     )
@@ -489,14 +623,16 @@ def analyze_ldif(
             "clean": findings_count == 0,
             "findings_count": findings_count,
         },
+        "schema_source": schema_source,
+        "unique_overlay": {
+            "attributes": list(unique_attributes),
+            "filter": unique_filter,
+        },
         "entry_count_by_objectclass": dict(sorted(entry_count_by_objectclass.items())),
         "unknown_object_classes": dict(sorted(unknown_object_classes.items())),
         "unknown_attributes": dict(sorted(unknown_attributes.items())),
         "entries_outside_base_dn": entries_outside_base_dn,
-        "duplicate_collisions": {
-            "uid": duplicate_uid,
-            "mail": duplicate_mail,
-        },
+        "duplicate_collisions": {k: v for k, v in sorted(duplicate_collisions.items())},
         "entries_with_no_structural_object_class": entries_with_no_structural_oc,
         "errors": unique_errors,
     }
@@ -510,12 +646,64 @@ def main() -> int:
     parser.add_argument("ldif", help="Path to input LDIF file")
     parser.add_argument("--base-dn", default="dc=example,dc=org", help="Base DN (default: dc=example,dc=org)")
     parser.add_argument("--slapadd-log", help="Path to slapadd dry-run output log")
+    parser.add_argument("--schema-ldif", help="Path to runtime schema dump (slapcat -n 0 output)")
+    parser.add_argument(
+        "--unique-attributes", default="uid,mail",
+        help="Comma-separated attributes the unique overlay enforces (default: uid,mail; empty = disabled)")
+    parser.add_argument(
+        "--unique-filter", default="objectClass=inetOrgPerson",
+        help="LDAP filter the unique overlay scopes to (default: objectClass=inetOrgPerson)")
     parser.add_argument("-o", "--output", help="Output JSON report path (stdout if omitted)")
 
     args = parser.parse_args()
 
+    def emit(report: Dict) -> Optional[int]:
+        """Write the report to --output or stdout. Returns 2 on a write failure, else None."""
+        output_json = json.dumps(report, indent=2, sort_keys=True) + "\n"
+        if args.output:
+            try:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(output_json)
+            except Exception as e:
+                print(f"ERROR: Failed to write output file: {e}", file=sys.stderr)
+                return 2
+        else:
+            sys.stdout.write(output_json)
+        return None
+
+    unique_attributes = [a.strip() for a in args.unique_attributes.split(",") if a.strip()]
+
     try:
         entries = parse_ldif(args.ldif)
+    except LDIFParseError as e:
+        # Unparseable input is itself a fatal finding, not silence: the report
+        # still carries the parse error list (per-entry `dn: "unknown"` where
+        # no dn could be recovered) so the caller can see exactly what failed,
+        # but the script exits 2 — never 0/1 — because no entry could be
+        # trusted enough to analyze.
+        unique_errors = sorted(
+            ({"dn": err.get("dn", "unknown"), "message": redact_text(err.get("message", ""))} for err in e.errors),
+            key=lambda x: (x["dn"], x["message"]),
+        )
+        report = {
+            "summary": {
+                "total_entries": 0,
+                "clean": False,
+                "findings_count": len(unique_errors),
+            },
+            "schema_source": "n/a",
+            "unique_overlay": {"attributes": unique_attributes, "filter": args.unique_filter},
+            "entry_count_by_objectclass": {},
+            "unknown_object_classes": {},
+            "unknown_attributes": {},
+            "entries_outside_base_dn": [],
+            "duplicate_collisions": {"uid": [], "mail": []},
+            "entries_with_no_structural_object_class": [],
+            "errors": unique_errors,
+        }
+        print(f"ERROR: Unparseable LDIF: {args.ldif}", file=sys.stderr)
+        write_failed = emit(report)
+        return write_failed if write_failed is not None else 2
     except Exception as e:
         print(f"ERROR: Failed to parse LDIF: {e}", file=sys.stderr)
         return 2
@@ -528,23 +716,26 @@ def main() -> int:
             print(f"ERROR: Failed to parse slapadd log: {e}", file=sys.stderr)
             return 2
 
+    known_ocs, known_attrs, schema_source = load_schema(args.schema_ldif)
+
     try:
-        report, exit_code = analyze_ldif(entries, args.base_dn, slapadd_errors)
+        report, exit_code = analyze_ldif(
+            entries,
+            args.base_dn,
+            slapadd_errors,
+            known_ocs=known_ocs,
+            known_attrs=known_attrs,
+            schema_source=schema_source,
+            unique_attributes=unique_attributes,
+            unique_filter=args.unique_filter,
+        )
     except Exception as e:
         print(f"ERROR: Analysis failed: {e}", file=sys.stderr)
         return 2
 
-    output_json = json.dumps(report, indent=2, sort_keys=True) + "\n"
-
-    if args.output:
-        try:
-            with open(args.output, "w", encoding="utf-8") as f:
-                f.write(output_json)
-        except Exception as e:
-            print(f"ERROR: Failed to write output file: {e}", file=sys.stderr)
-            return 2
-    else:
-        sys.stdout.write(output_json)
+    write_failed = emit(report)
+    if write_failed is not None:
+        return write_failed
 
     return exit_code
 
