@@ -57,6 +57,30 @@ Service, and passed into the image; the image never has to guess K8s
 topology. `PodDisruptionBudget` and `topologySpreadConstraints` are also only
 rendered when `replicaCount > 1`.
 
+### Replication compatibility matrix
+
+This is the supported and tested boundary, not a claim that every OpenLDAP
+topology works with this chart. Re-test a row whenever the image's OpenLDAP
+version or the replication configuration changes.
+
+| Layer | Supported / verified combination | Evidence |
+|---|---|---|
+| OpenLDAP | 2.6.14, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
+| Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
+| Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
+| HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
+| Peer transport | `ldap://` inside the cluster, or `ldaps://` with a CA mounted and `tls.caFile` configured for strict peer-certificate verification | The TLS E2E verifies that a 3-provider install uses only `ldaps://`, rejects an invalid peer certificate, and converges a write. |
+| Bootstrap / recovery | One-provider offline LDIF seed or offline restore into ordinal `-0`, then scale to three providers for initial refresh | `replication-chaos-e2e.yml` and `backup-restore.yml` verify seed/restore followed by 3-provider convergence. |
+
+The following combinations are **not supported or not yet verified**: a
+non-MDB backend; OpenLDAP versions other than the image-pinned version;
+Mirror mode, active/standby, single-writer fencing, or provider/consumer
+topologies; independently bootstrapped data on every provider; and cross-site
+or multi-DC replication. Do not infer compatibility from an OpenLDAP feature
+existing upstream. In particular, a replicated restore requires the procedure
+in [Restoring a replicated deployment](#restoring-a-replicated-deployment),
+not loading the same backup into every pod.
+
 ## Scale / Performance
 
 "This holds up to N entries" is a claim; [docs/scale-benchmarks.md](../../docs/scale-benchmarks.md)
