@@ -251,15 +251,28 @@ jobs:
         # group per user during sync, same rationale as the `deref` overlay
         # note in image/README.md, just done on Keycloak's side.
         #
-        # Explicit mail/first/last-name mappers, named distinctly from
-        # Keycloak's own auto-created "email"/"first name"/"last name"
-        # mappers so creating these never collides with them — the task
-        # this workflow proves calls out these three attributes specifically
-        # (docs/client-compatibility.md's federation contract), so they're
-        # asserted on by name below rather than left to whatever the
-        # provider's defaults happen to be.
+        # Creating the LDAP provider component also auto-creates Keycloak's
+        # own default "first name"/"last name"/"email" mappers — this is
+        # server-side behavior, not admin-console-only, confirmed live in
+        # this workflow's run 33697417792: alice's federated firstName came
+        # back as "Alice Anderson" (the default mapper's `cn`), clobbering
+        # the explicit givenName-sourced mapper below, since mappers apply
+        # in name order and "first name" (default) sorts after this
+        # workflow's own mapper names alphabetically. Deleting the
+        # conflicting defaults first makes the explicit mappers the only
+        # source of truth instead of depending on undocumented ordering.
         run: |
           set -euo pipefail
+          for default_name in "first name" "last name" "email"; do
+            id=$(docker exec keycloak /opt/keycloak/bin/kcadm.sh get components -r "${REALM}" \
+              -q parent="${LDAP_ID}" -q type=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+              | jq -r --arg n "${default_name}" '.[] | select(.name==$n) | .id')
+            if [ -n "${id}" ]; then
+              docker exec keycloak /opt/keycloak/bin/kcadm.sh delete "components/${id}" -r "${REALM}"
+              echo "deleted Keycloak's auto-created default mapper '${default_name}' (${id})"
+            fi
+          done
+
           docker exec keycloak /opt/keycloak/bin/kcadm.sh create components -r "${REALM}" \
             -s name=groups \
             -s providerId=group-ldap-mapper \
