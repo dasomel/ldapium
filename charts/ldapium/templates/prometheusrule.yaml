@@ -28,6 +28,24 @@ spec:
             summary: "LDAPium replication lag is high"
             description: "At least one replication peer is more than the configured threshold behind the local provider."
 
+        - alert: LDAPiumPeerUnreachable
+          expr: rate(openldap_dial{result="fail"}[5m]) > 0
+          for: {{ .Values.metrics.prometheusRule.peerUnreachableFor | default "5m" }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "LDAPium peer or endpoint is unreachable"
+            description: "OpenLDAP exporter has encountered failed TCP dial attempts to a peer or local instance over the last 5 minutes."
+
+        - alert: LDAPiumContextCSNDivergence
+          expr: max by (replica) (abs(openldap_replication_delta)) > {{ .Values.metrics.prometheusRule.replicationDivergenceThreshold | default 300 }}
+          for: {{ .Values.metrics.prometheusRule.replicationDivergenceFor | default "5m" }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "LDAPium contextCSN divergence is critical"
+            description: "At least one replication peer contextCSN has diverged by more than the critical threshold from the local provider."
+
         - alert: LDAPiumConnectionSaturation
           # `ignoring(dn)` is load-bearing. Both sides are the same metric
           # distinguished only by dn, so a plain division finds no matching

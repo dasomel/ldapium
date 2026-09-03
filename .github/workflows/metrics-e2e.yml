@@ -74,6 +74,8 @@ jobs:
           grep -q 'kind: ServiceMonitor' /tmp/rendered-metrics.yaml
           grep -q 'kind: PrometheusRule' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumConnectionSaturation' /tmp/rendered-metrics.yaml
+          grep -q 'LDAPiumPeerUnreachable' /tmp/rendered-metrics.yaml
+          grep -q 'LDAPiumContextCSNDivergence' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumBackupStale' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumMDBUsageHigh' /tmp/rendered-metrics.yaml
 
