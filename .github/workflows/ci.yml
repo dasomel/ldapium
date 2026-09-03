@@ -473,6 +473,10 @@ jobs:
       # kind-deployed directory).
       - run: ./scripts/test-incident-evidence.sh
 
+      # Fixture-based unit test for migration dry-run reconciliation (#123) —
+      # no Docker needed for the schema normalizer / report tests.
+      - run: ./scripts/test/test-migration-dryrun.sh
+
   hadolint:
     name: hadolint (Dockerfiles, informational)
     runs-on: ubuntu-24.04

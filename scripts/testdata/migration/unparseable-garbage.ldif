@@ -1,0 +1,4 @@
+# Invalid unparseable LDIF test fixture
+This is an arbitrary unparseable text line with no attribute colon.
+Another invalid line with no LDAP attribute syntax!
+???
