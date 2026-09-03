@@ -27,6 +27,12 @@ func (f *fakeClient) MoveEntry(context.Context, string, string) error         { 
 func (f *fakeClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
 	return nil, nil
 }
+func (f *fakeClient) AuditActions(context.Context, int, string) ([]domain.AuditEvent, string, bool, error) {
+	return nil, "", false, nil
+}
+func (f *fakeClient) RecentLogs(context.Context, int) ([]domain.AuditEvent, error) {
+	return nil, nil
+}
 func (f *fakeClient) ListPasswordPolicies(context.Context, string) ([]domain.PasswordPolicy, error) {
 	return nil, nil
 }

@@ -47,7 +47,8 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - password change / reset
 - account lock/unlock
 - organizational metadata fields
-- cn=Monitor health view
+- cn=Monitor health view with uptime, thread/connection waiters, replication CSNs, and access log stream
+- operator action history view (`/history`, `GET /api/audit/actions`) with actor/op filtering, cursor pagination, and attribute value redaction
 - unauthenticated LDAP reachability health endpoint
 - browser-driven Playwright E2E against a real directory
 - Keycloak/OIDC integration path

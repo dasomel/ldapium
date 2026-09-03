@@ -240,6 +240,7 @@ individual Keycloak user. See
 | `GET` | `/api/me` | Current session's authenticated DN | `200`, `401` |
 | `GET` | `/api/server-settings` | Directory configuration and deployment metadata | `200`, `401` |
 | `GET` | `/api/monitor` | Read `cn=Monitor` statistics | `200`, `401`, `403` |
+| `GET` | `/api/audit/actions` | List operator action history (`?limit=&before=`) from `cn=accesslog` (admin only) | `200`, `401`, `403` |
 | `GET` | `/api/tree` | List child nodes of `?dn=` (or base DN if omitted) | `200`, `400`, `401` |
 | `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `404` |
 | `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if the entry still has children) |

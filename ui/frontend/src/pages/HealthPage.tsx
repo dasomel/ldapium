@@ -6,6 +6,9 @@ import { useT } from '@/context/LanguageContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 
+import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
+
 // Shared with ServerSettingsPage's DefinitionRow — kept local rather than
 // extracted, since the two pages' rows differ (numbers here, strings
 // there) and the duplication is three lines.
@@ -20,6 +23,34 @@ function StatRow({ label, value }: { label: string; value: string }) {
 
 function formatNumber(n: number): string {
   return n.toLocaleString()
+}
+
+function formatUptime(seconds: number): string {
+  if (seconds <= 0) return '0s'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+  const parts: string[] = []
+  if (d > 0) parts.push(`${d}d`)
+  if (h > 0) parts.push(`${h}h`)
+  if (m > 0) parts.push(`${m}m`)
+  if (s > 0 || parts.length === 0) parts.push(`${s}s`)
+  return parts.join(' ')
+}
+
+function opBadgeVariant(op: string): 'neutral' | 'accent' | 'success' | 'danger' {
+  switch (op) {
+    case 'add':
+      return 'success'
+    case 'modify':
+    case 'modrdn':
+      return 'accent'
+    case 'delete':
+      return 'danger'
+    default:
+      return 'neutral'
+  }
 }
 
 export function HealthPage() {
@@ -127,6 +158,19 @@ export function HealthPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>{t('health.uptime')} &amp; {t('health.waiters')}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="divide-y divide-border rounded-console border border-border">
+                <StatRow label={t('health.uptime')} value={`${formatUptime(stats.uptimeSeconds)} (${formatNumber(stats.uptimeSeconds)}s)`} />
+                <StatRow label={t('health.waitersRead')} value={formatNumber(stats.waitersRead)} />
+                <StatRow label={t('health.waitersWrite')} value={formatNumber(stats.waitersWrite)} />
+              </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>{t('health.database')}</CardTitle>
             </CardHeader>
             <CardContent>
@@ -138,6 +182,87 @@ export function HealthPage() {
               </dl>
             </CardContent>
           </Card>
+
+          {stats.replicationCsns && stats.replicationCsns.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('health.replication')}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableHeadCell>{t('health.replicationProvider')}</TableHeadCell>
+                      <TableHeadCell>{t('health.replicationCsn')}</TableHeadCell>
+                      <TableHeadCell>{t('health.replicationTimestamp')}</TableHeadCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {stats.replicationCsns.map((rcsn) => (
+                      <TableRow key={rcsn.serverId || rcsn.csn}>
+                        <TableCell className="font-mono text-xs">{rcsn.serverId}</TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{rcsn.csn}</TableCell>
+                        <TableCell className="font-mono text-xs">{rcsn.timestamp || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {stats.recentLogs && stats.recentLogs.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('health.logsTitle')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-[12.5px] text-muted-foreground">{t('health.logsSubtitle')}</p>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableHeadCell>{t('health.logTime')}</TableHeadCell>
+                      <TableHeadCell>{t('health.logOp')}</TableHeadCell>
+                      <TableHeadCell>{t('health.logActor')}</TableHeadCell>
+                      <TableHeadCell>{t('health.logTarget')}</TableHeadCell>
+                      <TableHeadCell>{t('health.logDetails')}</TableHeadCell>
+                      <TableHeadCell>{t('health.logResult')}</TableHeadCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {stats.recentLogs.map((log, idx) => (
+                      <TableRow key={log.correlationId || idx}>
+                        <TableCell className="font-mono text-xs whitespace-nowrap">{log.time || log.raw.reqStart || '—'}</TableCell>
+                        <TableCell>
+                          <Badge variant={opBadgeVariant(log.op)}>{log.op}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs max-w-[160px] truncate" title={log.actor}>
+                          {log.actor}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs max-w-[180px] truncate" title={log.target || ''}>
+                          {log.target || '—'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs max-w-[200px] truncate">
+                          {log.raw.filter ? (
+                            <span title={log.raw.filter}>{log.raw.filter}</span>
+                          ) : log.raw.changedAttrs && log.raw.changedAttrs.length > 0 ? (
+                            <span title={log.raw.changedAttrs.join(', ')}>{log.raw.changedAttrs.join(', ')}</span>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={log.result === 'success' ? 'success' : log.result === 'failure' ? 'danger' : 'neutral'}>
+                            {log.result}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
