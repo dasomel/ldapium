@@ -44,6 +44,10 @@ type Client interface {
 	// GetEntry returns the full attribute set of dn.
 	GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 
+	// MoveEntry moves the entry at dn under newParentDN without changing
+	// its RDN.
+	MoveEntry(ctx context.Context, dn, newParentDN string) error
+
 	// MonitorStats reads slapd's cn=Monitor subtree for the admin UI's
 	// health view. cn=Monitor's own ACL restricts it to a dedicated bind
 	// identity this app never holds (see the doc comment in monitor.go),

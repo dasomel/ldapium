@@ -458,6 +458,8 @@ jobs:
       # does not cover.
       - run: ./scripts/test/test-export-audit-log.sh
       - run: ./scripts/test/test-ship-audit-log.sh
+      # Fixture-based unit test for entry data drift detection (#121).
+      - run: ./scripts/test/test-detect-entry-drift.sh
 
   incident-evidence:
     name: Incident evidence bundle (fixtures)

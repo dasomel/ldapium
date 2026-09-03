@@ -711,6 +711,28 @@ bind password) is masked to a fixed placeholder rather than compared, so it
 never reaches the baseline file or a diff line, same principle as the
 `userPassword` denylist above.
 
+### Detecting entry-data drift
+
+Directory entries (identities, groups, organizational units) replicate across
+providers and change via administrative or self-service actions.
+`scripts/detect-entry-drift.sh` exports the subtree as LDIF, strips operational
+attributes (`entryCSN`, `entryUUID`, `modifyTimestamp`, `modifiersName`,
+`createTimestamp`, `creatorsName`, `contextCSN`, `structuralObjectClass`), redacts
+`userPassword` values to a fixed placeholder (`userPassword: <redacted>`),
+canonicalizes the LDIF (sorting attributes within each entry and sorting entries
+by DN), and diffs against a baseline file:
+
+```bash
+./scripts/detect-entry-drift.sh -n <namespace> -r <fullname> --baseline-out baseline.ldif
+# ... later, in CI, on a cron schedule, or before maintenance ...
+./scripts/detect-entry-drift.sh -n <namespace> -r <fullname> --check baseline.ldif
+```
+
+Exit codes:
+- `0`: no drift detected
+- `1`: drift detected (diff printed to stdout)
+- `2`: error (e.g. baseline file missing, connectivity/auth failure, invalid arguments)
+
 ## Observability
 
 `metrics.enabled=true` adds an exporter sidecar on port 9330. With Prometheus

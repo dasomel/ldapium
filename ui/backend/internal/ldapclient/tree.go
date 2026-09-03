@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
@@ -129,7 +130,14 @@ func (c *client) GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 	attrs := make(map[string][]string, len(e.Attributes))
 	for _, a := range e.Attributes {
-		if entryRedactedAttrs[strings.ToLower(a.Name)] {
+		// Attribute options ("userPassword;binary", "userPassword;lang-en",
+		// per RFC 4512) name a distinct attribute description from the bare
+		// type, so comparing a.Name verbatim against entryRedactedAttrs
+		// would let "userPassword;binary" straight through the denylist.
+		// Strip options before the lookup; the base type is what
+		// entryRedactedAttrs is keyed on.
+		baseName, _, _ := strings.Cut(a.Name, ";")
+		if entryRedactedAttrs[strings.ToLower(baseName)] {
 			continue
 		}
 		attrs[a.Name] = a.Values
@@ -139,6 +147,15 @@ func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 
 // rdnOf returns the leftmost RDN component of dn, e.g. "ou=people" from
 // "ou=people,dc=example,dc=com".
+//
+// It uses RelativeDN.String() rather than reassembling
+// "Type=Value" from the parsed attributes: ldap.ParseDN decodes escape
+// sequences (e.g. "\," "\+" "\=") into their literal characters, so a
+// naive Type+"="+Value join would emit an RDN with those separators
+// unescaped -- corrupting the DN syntax (a literal "," would be read as an
+// RDN boundary) or silently changing which value ModifyDN sends as newrdn.
+// RelativeDN.String() re-escapes and re-joins multi-valued RDNs
+// deterministically, so the result is always valid RFC 4514 DN syntax.
 func rdnOf(dn string) string {
 	parsed, err := ldap.ParseDN(dn)
 	if err != nil || len(parsed.RDNs) == 0 {
@@ -147,10 +164,44 @@ func rdnOf(dn string) string {
 		}
 		return dn
 	}
-	rdn := parsed.RDNs[0]
-	parts := make([]string, 0, len(rdn.Attributes))
-	for _, a := range rdn.Attributes {
-		parts = append(parts, a.Type+"="+a.Value)
+	return parsed.RDNs[0].String()
+}
+
+// buildMoveRequest constructs a ModifyDNRequest to move an entry under
+// newParentDN while preserving its current RDN and removing the old DN.
+func buildMoveRequest(dn, newParentDN string) (*ldap.ModifyDNRequest, error) {
+	if dn == "" || newParentDN == "" {
+		return nil, fmt.Errorf("%w: dn and newParentDN are required", domain.ErrInvalidInput)
 	}
-	return strings.Join(parts, "+")
+	if _, err := ldap.ParseDN(dn); err != nil {
+		return nil, fmt.Errorf("%w: invalid dn: %v", domain.ErrInvalidInput, err)
+	}
+	if _, err := ldap.ParseDN(newParentDN); err != nil {
+		return nil, fmt.Errorf("%w: invalid newParentDN: %v", domain.ErrInvalidInput, err)
+	}
+	rdn := rdnOf(dn)
+	if rdn == "" {
+		return nil, fmt.Errorf("%w: cannot extract RDN from dn %q", domain.ErrInvalidInput, dn)
+	}
+	return ldap.NewModifyDNRequest(dn, rdn, true, newParentDN), nil
+}
+
+// MoveEntry moves the entry at dn under newParentDN using the LDAP ModifyDN
+// operation (preserving the entry's current RDN and deleting the old DN).
+func (c *client) MoveEntry(ctx context.Context, dn, newParentDN string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req, err := buildMoveRequest(dn, newParentDN)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.ModifyDN(req); err != nil {
+		return mapErr("move entry", err)
+	}
+	return nil
 }

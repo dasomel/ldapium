@@ -87,6 +87,9 @@ func (f *fakeLoginClient) Tree(context.Context, string) ([]domain.TreeNode, erro
 func (f *fakeLoginClient) GetEntry(context.Context, string) (*domain.Entry, error) {
 	return nil, nil
 }
+func (f *fakeLoginClient) MoveEntry(context.Context, string, string) error {
+	return nil
+}
 func (f *fakeLoginClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
 	return nil, nil
 }

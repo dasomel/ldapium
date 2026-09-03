@@ -44,6 +44,7 @@ func TestRespondErr_MappedDomainErrorsPassThroughVerbatim(t *testing.T) {
 	}{
 		{"not found", domain.ErrNotFound, http.StatusNotFound},
 		{"already exists", domain.ErrAlreadyExists, http.StatusConflict},
+		{"conflict", domain.ErrConflict, http.StatusConflict},
 		{"invalid credentials", domain.ErrInvalidCredentials, http.StatusUnauthorized},
 		{"permission denied", domain.ErrPermissionDenied, http.StatusForbidden},
 		{"invalid input", domain.ErrInvalidInput, http.StatusBadRequest},
