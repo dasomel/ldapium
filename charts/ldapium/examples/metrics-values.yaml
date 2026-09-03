@@ -20,7 +20,7 @@ metrics:
     replicationLagFor: 5m
     replicationDivergenceThreshold: 300
     replicationDivergenceFor: 5m
-    peerUnreachableFor: 5m
+    exporterDownFor: 5m
     connectionSaturationPercent: 80
     backupMaxAgeSeconds: 93600
     backupFailureFor: 5m

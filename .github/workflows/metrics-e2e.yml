@@ -31,7 +31,10 @@ jobs:
           cluster_name: metrics
 
       - name: Load image
-        run: kind load docker-image ldapium:e2e --name metrics
+        run: |
+          docker pull prom/prometheus:v3.7.3
+          kind load docker-image ldapium:e2e --name metrics
+          kind load docker-image prom/prometheus:v3.7.3 --name metrics
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -43,6 +46,7 @@ jobs:
             --set image.repository=ldapium \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
+            --set replicaCount=2 \
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword='metrics-e2e-password' \
             --set ui.enabled=false \
@@ -63,6 +67,103 @@ jobs:
           kubectl -n directory run metrics-client --rm -i --restart=Never --image=curlimages/curl:8.16.0 -- \
             sh -ec 'curl -fsS http://directory-ldapium-metrics.directory.svc.cluster.local:9330/metrics | grep -E "openldap_(scrape|bind|dial|monitor_counter_object|monitored_object)"'
 
+      - name: Deploy Prometheus and alert rules
+        run: |
+          set -euo pipefail
+          # Render chart rules for the live release with fast evaluation window
+          helm template directory charts/ldapium \
+            --namespace directory \
+            --values charts/ldapium/examples/metrics-values.yaml \
+            --set metrics.prometheusRule.exporterDownFor=5s \
+            --set auth.adminPassword='metrics-e2e-password' \
+            --show-only templates/prometheusrule.yaml \
+            | sed -n '/^spec:/,$p' | tail -n +2 | sed 's/^  //' > /tmp/live-rules.yaml
+
+          kubectl -n directory create configmap prometheus-rules --from-file=rules.yaml=/tmp/live-rules.yaml
+
+          cat <<'EOF' | kubectl -n directory apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-config
+            namespace: directory
+          data:
+            prometheus.yml: |
+              global:
+                scrape_interval: 2s
+                evaluation_interval: 2s
+              rule_files:
+                - /etc/prometheus/rules/rules.yaml
+              scrape_configs:
+                - job_name: 'ldapium'
+                  static_configs:
+                    - targets:
+                        - 'directory-ldapium-0.directory-ldapium-headless.directory.svc.cluster.local:9330'
+                        - 'directory-ldapium-1.directory-ldapium-headless.directory.svc.cluster.local:9330'
+                      labels:
+                        service: 'directory-ldapium-metrics'
+                        namespace: 'directory'
+                        release: 'directory'
+          EOF
+
+          cat <<'EOF' | kubectl -n directory apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: prometheus
+            namespace: directory
+            labels:
+              app: prometheus
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: prometheus
+                image: prom/prometheus:v3.7.3
+                imagePullPolicy: Never
+                args:
+                  - "--config.file=/etc/prometheus/prometheus.yml"
+                  - "--storage.tsdb.path=/prometheus"
+                ports:
+                  - containerPort: 9090
+                volumeMounts:
+                  - name: config
+                    mountPath: /etc/prometheus
+                  - name: rules
+                    mountPath: /etc/prometheus/rules
+            volumes:
+              - name: config
+                configMap:
+                  name: prometheus-config
+              - name: rules
+                configMap:
+                  name: prometheus-rules
+          EOF
+
+          kubectl -n directory wait --for=condition=Ready pod/prometheus --timeout=60s
+
+      - name: Inject peer fault and assert alert fires via Prometheus API
+        run: |
+          set -euo pipefail
+          # Scale down from 2 to 1 replicas so provider 1 is shut down
+          kubectl -n directory scale statefulset directory-ldapium --replicas=1
+          kubectl -n directory wait --for=delete pod/directory-ldapium-1 --timeout=60s
+
+          # Poll Prometheus API until LDAPiumExporterDown is firing with release label
+          i=0
+          until kubectl -n directory exec prometheus -- wget -qO- http://localhost:9090/api/v1/alerts \
+            | grep -q '"alertname":"LDAPiumExporterDown".*"release":"directory".*"state":"firing"'; do
+            i=$((i + 1))
+            if [ "$i" -gt 30 ]; then
+              echo "::error::LDAPiumExporterDown alert did not fire with release: directory label within 60s"
+              kubectl -n directory exec prometheus -- wget -qO- http://localhost:9090/api/v1/alerts || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "PASS: LDAPiumExporterDown is firing with release label via Prometheus API:"
+          kubectl -n directory exec prometheus -- wget -qO- http://localhost:9090/api/v1/alerts
+
       - name: Verify Helm rendering with observability profile
         run: |
           helm template directory charts/ldapium \
@@ -74,7 +175,6 @@ jobs:
           grep -q 'kind: ServiceMonitor' /tmp/rendered-metrics.yaml
           grep -q 'kind: PrometheusRule' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumConnectionSaturation' /tmp/rendered-metrics.yaml
-          grep -q 'LDAPiumPeerUnreachable' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumContextCSNDivergence' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumBackupStale' /tmp/rendered-metrics.yaml
           grep -q 'LDAPiumMDBUsageHigh' /tmp/rendered-metrics.yaml

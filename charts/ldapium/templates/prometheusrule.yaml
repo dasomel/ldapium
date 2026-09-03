@@ -12,36 +12,30 @@ spec:
       rules:
         - alert: LDAPiumExporterDown
           expr: up{service="{{ include "ldapium.fullname" . }}-metrics"} == 0
-          for: 5m
+          for: {{ .Values.metrics.prometheusRule.exporterDownFor | default "5m" }}
           labels:
             severity: critical
+            release: {{ .Release.Name }}
           annotations:
             summary: "LDAPium metrics endpoint is down"
             description: "Prometheus cannot scrape the LDAPium metrics endpoint for 5 minutes."
 
         - alert: LDAPiumReplicationLag
-          expr: max by (replica) (openldap_replication_delta) > {{ .Values.metrics.prometheusRule.replicationLagThreshold }}
+          expr: max by (service, replica) (openldap_replication_delta{service="{{ include "ldapium.fullname" . }}-metrics"}) > {{ .Values.metrics.prometheusRule.replicationLagThreshold }}
           for: {{ .Values.metrics.prometheusRule.replicationLagFor }}
           labels:
             severity: warning
+            release: {{ .Release.Name }}
           annotations:
             summary: "LDAPium replication lag is high"
             description: "At least one replication peer is more than the configured threshold behind the local provider."
 
-        - alert: LDAPiumPeerUnreachable
-          expr: rate(openldap_dial{result="fail"}[5m]) > 0
-          for: {{ .Values.metrics.prometheusRule.peerUnreachableFor | default "5m" }}
-          labels:
-            severity: warning
-          annotations:
-            summary: "LDAPium peer or endpoint is unreachable"
-            description: "OpenLDAP exporter has encountered failed TCP dial attempts to a peer or local instance over the last 5 minutes."
-
         - alert: LDAPiumContextCSNDivergence
-          expr: max by (replica) (abs(openldap_replication_delta)) > {{ .Values.metrics.prometheusRule.replicationDivergenceThreshold | default 300 }}
+          expr: max by (service, replica) (abs(openldap_replication_delta{service="{{ include "ldapium.fullname" . }}-metrics"})) > {{ .Values.metrics.prometheusRule.replicationDivergenceThreshold | default 300 }}
           for: {{ .Values.metrics.prometheusRule.replicationDivergenceFor | default "5m" }}
           labels:
             severity: critical
+            release: {{ .Release.Name }}
           annotations:
             summary: "LDAPium contextCSN divergence is critical"
             description: "At least one replication peer contextCSN has diverged by more than the critical threshold from the local provider."
