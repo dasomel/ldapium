@@ -448,10 +448,15 @@ jobs:
       # as POSIX sh; the scripts/ helpers declare their own shebangs and are
       # checked against whatever each one asks for.
       - run: shellcheck -s sh image/entrypoint.sh
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh scripts/test/*.sh
       # The `helm test` script is a chart file, not an inline blob in a
       # template, precisely so it can be linted here and run by hand.
       - run: shellcheck charts/ldapium/files/tests/*.sh
+
+      # Pure fixture-based unit test for the audit export normalizer (#24) —
+      # no cluster needed, see the script's own header for what it does and
+      # does not cover.
+      - run: ./scripts/test/test-export-audit-log.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)

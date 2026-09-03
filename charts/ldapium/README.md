@@ -582,25 +582,28 @@ itself and would otherwise grow without bound the same way an unrotated
 `scripts/export-audit-log.sh` reads `auditlog` writes and raw replication
 diagnostics (container logs, every pod), plus `accesslog` reads/binds (an LDAP
 bind, every pod, skipped with a warning on any pod where it is not enabled),
-and prints one JSON object per line — one feed for a SIEM instead of separate
-manual procedures. The replication stream is deliberately undeduplicated:
-its `CSN too old, ignoring` lines mix genuine same-entry conflicts with
-harmless N-way relay duplicates, so no individual line is confirmed data loss.
+and prints one normalized identity-audit event per line — one feed for a
+SIEM instead of separate manual procedures. The replication stream is
+deliberately undeduplicated: its `CSN too old, ignoring` lines mix genuine
+same-entry conflicts with harmless N-way relay duplicates, so no individual
+line is confirmed data loss.
 
 ```bash
 ./scripts/export-audit-log.sh -n <namespace> -r <fullname>
-{"pod":"...","source":"auditlog","time":"1787500678","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org"}
-{"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0"}
-{"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
-{"pod":"...","source":"accesslog","time":"20260823155733.000004Z","actor":"cn=admin,dc=example,dc=org","op":"bind","target":"cn=admin,dc=example,dc=org","filter":"","result":"49"}
+{"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:57:32Z","actor":"cn=admin,dc=example,dc=org","target":"uid=alice,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:directory-ldapium-0:1787500652:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org","privileged":true,"raw":{"pod":"directory-ldapium-0","source":"auditlog","time":"1787500652","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}}
+{"schemaVersion":"1","source":"accesslog","seq":2,"time":"2026-08-23T15:57:32.000004Z","actor":"cn=admin,dc=example,dc=org","target":"dc=example,dc=org","op":"search","result":"success","objectId":null,"correlationId":"accesslog:directory-ldapium-0:118:20260823155732.000004Z","privileged":true,"raw":{"pod":"directory-ldapium-0","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0","reqSession":"118"}}
 ```
 
-`time` is not the same format between the two sources — `auditlog` is a raw
-Unix epoch, `accesslog` is LDAP `GeneralizedTime` — stated rather than
-reformatted, since reformatting one to match the other in POSIX shell means
-date arithmetic that behaves differently under GNU vs. BSD `date`. A SIEM's
-own ingest normalizes this with a real date library; guessing at it here
-risked silently producing a wrong time instead.
+Every record is wrapped in a common envelope — `schemaVersion`, `seq`,
+`time` (RFC3339 UTC, normalized from each source's own native format),
+`actor`, `target`, `op`, `result`, `objectId`, `correlationId`, and
+`privileged` — with the original per-source fields preserved (with search
+filters and changed-attribute lists redacted/sanitized where sensitive)
+under `raw`. Full field semantics, derivations, and their documented limits
+live in [`docs/audit-event-schema.md`](../../docs/audit-event-schema.md);
+`--legacy` reproduces the pre-envelope flat shape for scripts that want it,
+but is not a byte-for-byte compatibility guarantee — see that document
+before relying on it.
 
 On a replicated install this iterates every pod for the same reason the
 extraction procedure above does: each provider only has the events it

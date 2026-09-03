@@ -35,6 +35,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - auditlog write attribution
 - accesslog for reads and binds, including failed binds
 - unified NDJSON export across audit/access/replication-conflict sources
+- normalized identity audit event envelope (schemaVersion/seq/correlationId/privileged/objectId) over that same export, with deterministic replay coverage
 - rootdn vs ordinary-user actor distinction verified
 - HTTP 500 error redaction with request correlation
 - `userPassword` redaction from generic DIT browser responses
@@ -93,6 +94,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - `docs/air-gap.md`
 - `docs/encryption-at-rest.md`
 - `docs/scale-benchmarks.md`
+- `docs/audit-event-schema.md`
 - `.github/workflows/e2e.yml`
 - `.github/workflows/security-e2e.yml`
 - `.github/workflows/replication-chaos-e2e.yml`
