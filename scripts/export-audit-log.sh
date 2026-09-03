@@ -70,10 +70,11 @@ sts=""
 want_writes=1
 want_reads=1
 legacy=0
+chain=0
 
 usage() {
   cat <<'EOF'
-Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-only] [--legacy]
+Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-only] [--legacy] [--chain]
 
 Prints one normalized identity-audit event per line to stdout (see
 docs/audit-event-schema.md), e.g.:
@@ -102,6 +103,8 @@ envelope, no additive keys):
       --legacy      Skip envelope normalization; print the flat pre-#24
                     per-source shape instead (see above). Exits non-zero if
                     any input line could not be parsed.
+      --chain       Add cryptographic SHA-256 hash chaining (prevHash, hash)
+                    across records for tamper-evidence.
   -h, --help        This text.
 EOF
 }
@@ -113,6 +116,7 @@ while [ $# -gt 0 ]; do
     --writes-only) want_reads=0; shift ;;
     --reads-only) want_writes=0; shift ;;
     --legacy) legacy=1; shift ;;
+    --chain) chain=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -221,12 +225,18 @@ if [ "$want_writes" = 1 ]; then
   done
 fi
 
-if [ "$want_reads" = 1 ]; then
+password=""
+if [ "$want_reads" = 1 ] || [ "$want_writes" = 1 ]; then
   password=$("$(dirname "$0")/get-credentials.sh" -n "$ns" -r "$sts" --password-only 2>/dev/null) || {
-    echo "could not read the admin password via get-credentials.sh — skipping accesslog export" >&2
     password=""
   }
-  if [ -n "$password" ]; then
+fi
+export LDAP_ADMIN_PASSWORD="${password:-}"
+
+if [ "$want_reads" = 1 ]; then
+  if [ -z "$password" ]; then
+    echo "could not read the admin password via get-credentials.sh — skipping accesslog export" >&2
+  else
     for i in $(seq 0 $((replicas - 1))); do
       pod="${sts}-${i}"
       # auditBind alongside auditSearch: reqResult is what tells success
@@ -251,8 +261,17 @@ if [ "$want_reads" = 1 ]; then
 fi
 }
 
+norm_flags=(--admin-dn "$admin_dn")
+if [ "$chain" = 1 ]; then
+  norm_flags+=(--chain)
+fi
+
 if [ "$legacy" = 1 ]; then
-  run_export | python3 "${lib_dir}/audit-normalize.py" --legacy
+  run_export \
+    | python3 "${lib_dir}/resolve-conflict-objectid.py" --namespace "$ns" --statefulset "$sts" --admin-dn "$admin_dn" \
+    | python3 "${lib_dir}/audit-normalize.py" --legacy
 else
-  run_export | python3 "${lib_dir}/audit-normalize.py" --admin-dn "$admin_dn"
+  run_export \
+    | python3 "${lib_dir}/resolve-conflict-objectid.py" --namespace "$ns" --statefulset "$sts" --admin-dn "$admin_dn" \
+    | python3 "${lib_dir}/audit-normalize.py" "${norm_flags[@]}"
 fi

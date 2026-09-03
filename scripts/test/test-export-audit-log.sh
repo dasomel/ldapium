@@ -262,6 +262,60 @@ else
   bad "no stderr warning was printed for the impossible calendar date"
 fi
 
+# 14. Replication-conflict objectId resolution (issue #126):
+# Resolves entry DN to entryUUID with one ldapsearch per distinct DN (cached);
+# tested offline with a stubbed lookup map via LDAP_STUB_OBJECTID_MAP.
+cat <<'EOF' > "${work}/conflict-map.json"
+{
+  "uid=baseline,ou=chaos,dc=example,dc=org": "99999999-0000-0000-0000-111122223333"
+}
+EOF
+grep -E 'do_syncrep2: rid=[0-9]+ CSN too old, ignoring [^ ]+ \(.*\)$' "${fixtures}/replication-container.log" \
+  | awk -v pod=test-pod-0 -f "${lib_dir}/parse-replication-conflict.awk" \
+  | LDAP_STUB_OBJECTID_MAP="${work}/conflict-map.json" python3 "${lib_dir}/resolve-conflict-objectid.py" \
+  | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" \
+  > "${work}/conflict-resolved.ndjson" 2>"${work}/conflict-resolved.stderr"
+
+if grep -q '"target":"uid=baseline,ou=chaos,dc=example,dc=org".*"objectId":"99999999-0000-0000-0000-111122223333"' "${work}/conflict-resolved.ndjson"; then
+  ok "replication-conflict entry DN resolved to entryUUID as objectId via stub map"
+else
+  bad "replication-conflict entry DN was not resolved to objectId"
+  cat "${work}/conflict-resolved.ndjson" >&2
+fi
+if grep -q '"target":"uid=other,ou=chaos,dc=example,dc=org".*"objectId":null' "${work}/conflict-resolved.ndjson"; then
+  ok "unmapped replication-conflict entry DN leaves objectId as null"
+else
+  bad "unmapped replication-conflict entry DN did not leave objectId as null"
+fi
+
+# 15. Tamper-evident hash chaining (--chain and verify-audit-chain.py, issue #126):
+# A valid chain passes; mutating a middle record or deleting a record both fail.
+extract | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" --chain \
+  > "${work}/chained.ndjson" 2>"${work}/chained.stderr"
+
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained.ndjson" >"${work}/verify-valid.stdout" 2>&1; then
+  ok "valid audit chain passes verify-audit-chain.py"
+else
+  bad "valid audit chain failed verify-audit-chain.py"
+  cat "${work}/verify-valid.stdout" >&2
+fi
+
+# Mutate a middle record's payload (seq 3)
+sed '3s/"result":"unknown"/"result":"success"/' "${work}/chained.ndjson" > "${work}/chained-mutated.ndjson"
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained-mutated.ndjson" >/dev/null 2>&1; then
+  bad "verify-audit-chain.py unexpectedly passed on mutated middle record"
+else
+  ok "verify-audit-chain.py correctly rejects mutated middle record"
+fi
+
+# Delete a middle record (seq 3)
+sed '3d' "${work}/chained.ndjson" > "${work}/chained-deleted.ndjson"
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained-deleted.ndjson" >/dev/null 2>&1; then
+  bad "verify-audit-chain.py unexpectedly passed on deleted record"
+else
+  ok "verify-audit-chain.py correctly rejects deleted record"
+fi
+
 if [ "$fail" != 0 ]; then
   echo "one or more audit export normalizer checks FAILED" >&2
   exit 1
