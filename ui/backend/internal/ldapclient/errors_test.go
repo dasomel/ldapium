@@ -96,6 +96,38 @@ func TestMapErr_InputViolations(t *testing.T) {
 	}
 }
 
+func TestMapErr_NotAllowedOnNonLeaf(t *testing.T) {
+	// A ModifyDN (MoveEntry) target that still has children: the request
+	// is well-formed but conflicts with the directory's current state, so
+	// this maps to ErrConflict (-> HTTP 409), not ErrInvalidInput.
+	le := &ldap.Error{ResultCode: ldap.LDAPResultNotAllowedOnNonLeaf, Err: errors.New("entry has children")}
+
+	got := mapErr("move entry", le)
+
+	if !errors.Is(got, domain.ErrConflict) {
+		t.Errorf("mapErr(%v) = %v, want wrapping domain.ErrConflict", le, got)
+	}
+	if !strings.Contains(got.Error(), "entry has children") {
+		t.Errorf("mapErr(%v) = %v, want diagnostic text preserved", le, got)
+	}
+}
+
+func TestMapErr_AffectsMultipleDSAs(t *testing.T) {
+	// A ModifyDN newSuperior that would span naming contexts/backends:
+	// this deployment doesn't support that, so it's the caller's input
+	// that's invalid (-> HTTP 400), not a state conflict.
+	le := &ldap.Error{ResultCode: ldap.LDAPResultAffectsMultipleDSAs, Err: errors.New("would affect multiple DSAs")}
+
+	got := mapErr("move entry", le)
+
+	if !errors.Is(got, domain.ErrInvalidInput) {
+		t.Errorf("mapErr(%v) = %v, want wrapping domain.ErrInvalidInput", le, got)
+	}
+	if !strings.Contains(got.Error(), "would affect multiple DSAs") {
+		t.Errorf("mapErr(%v) = %v, want diagnostic text preserved", le, got)
+	}
+}
+
 func TestMapErr_UnmappedError(t *testing.T) {
 	raw := errors.New("connection timed out")
 

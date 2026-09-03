@@ -242,7 +242,7 @@ individual Keycloak user. See
 | `GET` | `/api/monitor` | Read `cn=Monitor` statistics | `200`, `401`, `403` |
 | `GET` | `/api/tree` | List child nodes of `?dn=` (or base DN if omitted) | `200`, `400`, `401` |
 | `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `404` |
-| `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `404`, `409` |
+| `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if the entry still has children) |
 | `GET` | `/api/password-policies` | List password policy entries under base | `200`, `401` |
 | `GET` | `/api/users` | List user entries under search base | `200`, `401` |
 | `POST` | `/api/users` | Create user under `LDAP_USER_CREATE_BASE` | `201`, `400`, `401`, `409` (conflict if uid exists) |
