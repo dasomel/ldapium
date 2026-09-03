@@ -386,20 +386,25 @@ while preserving the distinction between pull extraction and push ingestion:
     of the batch's canonical NDJSON), plus per-record `hash` fields when `--chain` was used during export.
     The downstream sink/adapter is expected to deduplicate on this batch idempotency key.
   - **Cursor (NOT seq)**: Maintains a cursor state file (`--cursor-file`, default `.audit-ship-cursor.json`)
-    tracking the last delivered `(time, hashes)` per source. `seq` is strictly invocation-scoped
+    tracking the last delivered `(time, hashes)` per `(source, pod)`. `seq` is strictly invocation-scoped
     (assigned 1..N after sorting within a single run) and resets to 1 on every export run; treating `seq`
-    as a persistent cursor causes complete data loss on subsequent runs. A record is considered already
-    delivered only if its timestamp is strictly older than the cursor timestamp, or equal to the cursor
+    as a persistent cursor causes complete data loss on subsequent runs. Keying per `(source, pod)` ensures
+    that an event from a pod whose log fetch failed in one export (`|| true` in `export-audit-log.sh`) and
+    appears later with an older time is not shadowed by another pod's newer events. A record is considered already
+    delivered only if its timestamp is strictly older than its pod's cursor timestamp, or equal to the cursor
     timestamp and its canonical record hash is in the set of hashes recorded at that timestamp.
+    *Limitation*: within a single pod, records are assumed to be fetched in time order; a pod whose fetch
+    fails is simply not advanced.
   - **Transport security**: HTTPS only by default (`--sink-url https://...`). Plaintext `http://`
     is rejected unless `--allow-insecure-http` is explicitly passed (strictly for CI/local test fixtures).
     Redirects are strictly forbidden via a custom redirect handler to prevent credential leakage.
     TLS certificate verification is never disabled. Optional Bearer authentication is strictly read
     from a file (`--token-file`, never as a CLI argument).
   - **Process locking & fatal persistence failure**: The shipper acquires an exclusive `flock` on
-    the state directory for the run (failing fast if locked). Dead-letter appends and replays are
-    serialized under this same lock. Cursor persistence failure after an acknowledged batch is fatal:
-    the shipper exits non-zero immediately and halts.
+    the state directory for the run (failing fast if locked), plus a second exclusive `flock` on
+    `<dead-letter-file>.lock` for every dead-letter read/append/rewrite operation (failing fast if held).
+    Cursor persistence failure after an acknowledged batch is fatal: the shipper exits non-zero
+    immediately and halts.
   - **Streaming & input validation**: The shipper streams NDJSON line-by-line and dead-letter records
     batch-by-batch without buffering entire logs in memory. Arguments are validated (`batch_size >= 1`,
     `max_retries >= 0`, `initial_backoff >= 0`, `max_backoff >= 0`).

@@ -13,6 +13,9 @@
 # 9. Overall delivery order and strict sequence.
 # 10. Cursor across invocations when seq restarts at 1 (D4 time+hash cursor).
 # 11. Fatal non-zero exit on cursor persistence failure with read-only state dir (D6).
+# 12. Float argument validation: non-finite values (nan, inf) rejected with exit 2 (D7).
+# 13. Per-(source, pod) cursor: late pod not shadowed by newer events from another pod (D4).
+# 14. Dead-letter file lock: concurrent invocations fail fast or serialize with no lost lines (D6).
 #
 # Run: ./scripts/test/test-ship-audit-log.sh
 set -euo pipefail
@@ -46,6 +49,7 @@ bad() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 python3 - "$server_port_file" "$server_ctl" "$server_received" "$server_ready" <<'PYEOF' > "$server_log" 2>&1 &
 import json
 import sys
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 port_file = sys.argv[1]
@@ -63,15 +67,22 @@ class MockSinkHandler(BaseHTTPRequestHandler):
 
         status_to_return = 200
         fail_remaining = 0
+        delay_sec = 0.0
         try:
             with open(ctl_file, "r") as f:
-                line = f.read().strip()
-                if line.startswith("fail:"):
-                    fail_remaining = int(line.split(":", 1)[1])
-                elif line.isdigit():
-                    status_to_return = int(line)
+                for line in f.read().splitlines():
+                    line = line.strip()
+                    if line.startswith("fail:"):
+                        fail_remaining = int(line.split(":", 1)[1])
+                    elif line.startswith("delay:"):
+                        delay_sec = float(line.split(":", 1)[1])
+                    elif line.isdigit():
+                        status_to_return = int(line)
         except Exception:
             pass
+
+        if delay_sec > 0:
+            time.sleep(delay_sec)
 
         if fail_remaining > 0:
             fail_remaining -= 1
@@ -354,6 +365,156 @@ else
   fi
 fi
 chmod 0755 "$ro_dir"
+
+# 12. CLI argument validation: reject non-finite floats (nan, inf) with exit 2 (D7)
+status_nan=0
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --max-backoff nan > "${work}/nan.stdout" 2> "${work}/nan.stderr" || status_nan=$?
+
+if [ "$status_nan" -eq 2 ] && grep -q "must be a finite float" "${work}/nan.stderr"; then
+  ok "shipper rejects --max-backoff nan with exit 2"
+else
+  bad "shipper failed to reject --max-backoff nan with exit 2 (got ${status_nan})"
+  cat "${work}/nan.stderr" >&2
+fi
+
+status_inf=0
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --backoff inf > "${work}/inf.stdout" 2> "${work}/inf.stderr" || status_inf=$?
+
+if [ "$status_inf" -eq 2 ] && grep -q "must be a finite float" "${work}/inf.stderr"; then
+  ok "shipper rejects --backoff inf with exit 2"
+else
+  bad "shipper failed to reject --backoff inf with exit 2 (got ${status_inf})"
+  cat "${work}/inf.stderr" >&2
+fi
+
+# 13. Per-(source, pod) cursor: late pod not shadowed by newer events of another pod (D4)
+# Export 1 has pod-0 events at 15:00 only.
+# Export 2 adds pod-1 events at 14:00 (older time) alongside already-delivered pod-0 events at 15:00.
+# Because the cursor is keyed per (source, pod), pod-1 events must be delivered.
+pod_cursor_file="${work}/cursor-pod.json"
+pod_dl_file="${work}/dead-letter-pod.ndjson"
+input_pod_exp1="${work}/events-pod-exp1.ndjson"
+cat <<'EOF' > "$input_pod_exp1"
+{"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:00:00Z","actor":"cn=admin,dc=example,dc=org","target":"uid=pod0-user,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:1:uid=pod0-user:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}
+EOF
+
+before_pod_count=$(wc -l < "$server_received" | tr -d ' ')
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --token-file "$token_file" \
+  --cursor-file "$pod_cursor_file" \
+  --dead-letter-file "$pod_dl_file" \
+  --file "$input_pod_exp1" > "${work}/ship-pod1.stdout" 2> "${work}/ship-pod1.stderr"
+
+mid_pod_count=$(wc -l < "$server_received" | tr -d ' ')
+if [ "$mid_pod_count" -eq "$((before_pod_count + 1))" ]; then
+  ok "export 1 delivered pod-0 event at 15:00"
+else
+  bad "export 1 failed to deliver pod-0 event"
+fi
+
+input_pod_exp2="${work}/events-pod-exp2.ndjson"
+cat <<'EOF' > "$input_pod_exp2"
+{"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:00:00Z","actor":"cn=admin,dc=example,dc=org","target":"uid=pod0-user,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:1:uid=pod0-user:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}
+{"schemaVersion":"1","source":"auditlog","seq":2,"time":"2026-08-23T14:00:00Z","actor":"cn=admin,dc=example,dc=org","target":"uid=pod1-user,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-1:1:uid=pod1-user:cn=admin","privileged":true,"raw":{"pod":"pod-1"}}
+EOF
+
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --token-file "$token_file" \
+  --cursor-file "$pod_cursor_file" \
+  --dead-letter-file "$pod_dl_file" \
+  --file "$input_pod_exp2" > "${work}/ship-pod2.stdout" 2> "${work}/ship-pod2.stderr"
+
+after_pod_count=$(wc -l < "$server_received" | tr -d ' ')
+if [ "$after_pod_count" -eq "$((mid_pod_count + 1))" ] && grep -q "uid=pod1-user" "$server_received"; then
+  ok "export 2 delivered late pod-1 event at 14:00 without being shadowed by pod-0 event at 15:00 (D4)"
+else
+  bad "export 2 failed to deliver late pod-1 event at 14:00"
+  cat "${work}/ship-pod2.stderr" >&2
+fi
+
+# 14. Dead-letter locking: concurrent invocations sharing dead-letter file fail fast or serialize without lost lines (D6)
+shared_dl="${work}/shared-dead-letter.ndjson"
+dir_conc_a="${work}/state-conc-a"
+dir_conc_b="${work}/state-conc-b"
+mkdir -p "$dir_conc_a" "$dir_conc_b"
+
+# Pre-populate shared dead-letter queue with records to replay
+cat <<'EOF' > "$shared_dl"
+{"error":"HTTP 500","failedAt":"2026-08-23T15:10:00Z","record":{"schemaVersion":"1","source":"auditlog","seq":10,"time":"2026-08-23T15:10:00Z","actor":"cn=admin,dc=example,dc=org","target":"uid=dl-user1,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:10:uid=dl-user1:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}}
+{"error":"HTTP 500","failedAt":"2026-08-23T15:10:01Z","record":{"schemaVersion":"1","source":"auditlog","seq":11,"time":"2026-08-23T15:10:01Z","actor":"cn=admin,dc=example,dc=org","target":"uid=dl-user2,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:11:uid=dl-user2:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}}
+{"error":"HTTP 500","failedAt":"2026-08-23T15:10:02Z","record":{"schemaVersion":"1","source":"auditlog","seq":12,"time":"2026-08-23T15:10:02Z","actor":"cn=admin,dc=example,dc=org","target":"uid=dl-user3,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:12:uid=dl-user3:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}}
+{"error":"HTTP 500","failedAt":"2026-08-23T15:10:03Z","record":{"schemaVersion":"1","source":"auditlog","seq":13,"time":"2026-08-23T15:10:03Z","actor":"cn=admin,dc=example,dc=org","target":"uid=dl-user4,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:pod-0:13:uid=dl-user4:cn=admin","privileged":true,"raw":{"pod":"pod-0"}}}
+EOF
+
+# Instruct mock server to delay responses slightly (0.3s) so invocation A holds the lock during replay
+printf 'delay:0.3\n200\n' > "$server_ctl"
+
+empty_input="${work}/empty.ndjson"
+touch "$empty_input"
+
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --token-file "$token_file" \
+  --cursor-file "${dir_conc_a}/cursor.json" \
+  --dead-letter-file "$shared_dl" \
+  --batch-size 2 \
+  --file "$empty_input" > "${work}/conc-a.stdout" 2> "${work}/conc-a.stderr" &
+pid_conc_a=$!
+
+# Brief pause to let invocation A acquire the dead-letter lock and begin replay
+sleep 0.05
+
+status_conc_b=0
+"${top}/scripts/ship-audit-log.sh" \
+  --sink-url "$sink_url" \
+  --allow-insecure-http \
+  --token-file "$token_file" \
+  --cursor-file "${dir_conc_b}/cursor.json" \
+  --dead-letter-file "$shared_dl" \
+  --batch-size 2 \
+  --file "$empty_input" > "${work}/conc-b.stdout" 2> "${work}/conc-b.stderr" || status_conc_b=$?
+
+status_conc_a=0
+wait "$pid_conc_a" || status_conc_a=$?
+
+# Reset server_ctl back to standard 200 with no delay
+printf '200\n' > "$server_ctl"
+
+if [ "$status_conc_a" -eq 0 ] && [ "$status_conc_b" -ne 0 ]; then
+  if grep -q "dead-letter.*locked by another running shipper process (fail fast)" "${work}/conc-b.stderr" || grep -q "dead-letter lock.*is held by another running shipper process (fail fast)" "${work}/conc-b.stderr"; then
+    ok "concurrent shipper on shared dead-letter failed fast with lock error"
+  else
+    bad "concurrent shipper failed but without expected dead-letter lock message"
+    cat "${work}/conc-b.stderr" >&2
+  fi
+elif [ "$status_conc_a" -eq 0 ] && [ "$status_conc_b" -eq 0 ]; then
+  ok "concurrent shippers serialized successfully on shared dead-letter file"
+else
+  bad "unexpected failure in concurrent shipper run (status A: ${status_conc_a}, status B: ${status_conc_b})"
+  cat "${work}/conc-a.stderr" >&2
+  cat "${work}/conc-b.stderr" >&2
+fi
+
+# Verify that all 4 dead-letter records were delivered to the server with no lost lines
+if grep -q "uid=dl-user1" "$server_received" && \
+   grep -q "uid=dl-user2" "$server_received" && \
+   grep -q "uid=dl-user3" "$server_received" && \
+   grep -q "uid=dl-user4" "$server_received"; then
+  ok "all records from shared dead-letter queue delivered with zero lost lines (D6)"
+else
+  bad "one or more records lost during concurrent dead-letter access"
+fi
 
 if [ "$fail" != 0 ]; then
   echo "one or more audit shipper tests FAILED" >&2
