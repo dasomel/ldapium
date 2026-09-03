@@ -1,0 +1,47 @@
+dn: cn=John Doe,ou=users,dc=example,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: user
+cn: John Doe
+sn: Doe
+givenName: John
+sAMAccountName: jdoe
+userPrincipalName: jdoe@corp.example.com
+objectGUID:: MTIzNDU2Nzg5MEFCQ0RFRjEyMzQ=
+mail: duplicate-mail@example.org
+userPassword: PlaintextADSecretPassword!
+
+dn: cn=Jane Smith,ou=users,dc=example,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: user
+cn: Jane Smith
+sn: Smith
+givenName: Jane
+sAMAccountName: jsmith
+userPrincipalName: jsmith@corp.example.com
+objectGUID:: QTFCMkMzRDRFNUY2QTdCOEM5RDA=
+mail: duplicate-mail@example.org
+userPassword: AnotherSecretPassword!
+
+dn: cn=External Admin,ou=users,dc=foreign,dc=domain
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: External Admin
+sn: Admin
+uid: extadmin
+mail: extadmin@foreign.domain
+
+dn: cn=Orphan Auxiliary,ou=users,dc=example,dc=org
+objectClass: top
+objectClass: posixAccount
+cn: Orphan Auxiliary
+uid: orphanaux
+uidNumber: 10050
+gidNumber: 10050
+homeDirectory: /home/orphanaux
+loginShell: /bin/bash

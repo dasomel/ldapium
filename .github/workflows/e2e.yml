@@ -25,6 +25,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  migration-dryrun:
+    name: migration dry-run (live image validation)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Validate clean LDIF fixture (expect exit 0)
+        run: |
+          set -euo pipefail
+          ./scripts/migration-dryrun.sh \
+            scripts/testdata/migration/clean-inetorgperson.ldif \
+            --base-dn dc=example,dc=org \
+            -o /tmp/clean-report.json
+          python3 - <<'PYCHECK'
+          import json
+          with open('/tmp/clean-report.json') as f:
+              data = json.load(f)
+          assert data['summary']['clean'] is True, "Clean fixture should report clean"
+          assert data['summary']['findings_count'] == 0, "Clean fixture findings count should be 0"
+          PYCHECK
+
+      - name: Validate AD-style LDIF fixture (expect exit 1 with findings)
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/migration-dryrun.sh \
+            scripts/testdata/migration/ad-export.ldif \
+            --base-dn dc=example,dc=org \
+            -o /tmp/ad-report.json
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 1
+          python3 - <<'PYCHECK'
+          import json
+          with open('/tmp/ad-report.json') as f:
+              data = json.load(f)
+          assert data['summary']['clean'] is False, "AD fixture should have findings"
+          assert "user" in data['unknown_object_classes'], "Unknown class 'user' expected"
+          assert "sAMAccountName" in data['unknown_attributes'], "Unknown attribute 'sAMAccountName' expected"
+          assert any(c['value'] == 'duplicate-mail@example.org' for c in data['duplicate_collisions']['mail']), "Mail collision expected"
+          assert len(data['entries_outside_base_dn']) > 0, "Entries outside base-dn expected"
+          assert len(data['entries_with_no_structural_object_class']) > 0, "No structural class entries expected"
+          assert len(data['errors']) > 0, "Errors expected"
+          raw = open('/tmp/ad-report.json').read()
+          assert "PlaintextADSecretPassword!" not in raw, "Password should be redacted"
+          assert "AnotherSecretPassword!" not in raw, "Password should be redacted"
+          PYCHECK
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04

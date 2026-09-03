@@ -174,9 +174,10 @@ Where this genuinely interoperates with a Windows-adjacent workflow:
   StartTLS.
 - **Migrating identities *from* AD** — exporting AD's LDIF and re-importing
   it here needs schema reconciliation (AD's `objectClass`/attribute set
-  differs from what is loaded — see the schema list above) and is a
-  migration project, not a compatibility mode. Not covered here; would be its
-  own issue if wanted.
+  differs from what is loaded — see the schema list above). Use
+  `scripts/migration-dryrun.sh` to validate AD exports offline against ldapium's
+  schema, and follow the staged cutover and rollback runbook in
+  [docs/migration.md](migration.md).
 
 ### Active Directory coexistence and "where applicable" boundary
 
