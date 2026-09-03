@@ -258,6 +258,8 @@ including why the Debian base's GPL packages do not reach this project's code.
 - [SECURITY.md](SECURITY.md) / [한국어](SECURITY_ko.md) — vulnerability reporting and security scope
 - [CHANGELOG.md](CHANGELOG.md) / [한국어](CHANGELOG_ko.md) — changes and known gaps
 - [RELEASING.md](RELEASING.md) / [한국어](RELEASING_ko.md) — release procedure
+- [docs/product-boundary.md](docs/product-boundary.md) — product scope, non-goals, and boundary obligations
+- [docs/pam-boundary.md](docs/pam-boundary.md) — privileged access management and credential vault boundary
 
 ## License
 

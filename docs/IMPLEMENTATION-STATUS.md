@@ -78,11 +78,17 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - The published image is not claimed to be FIPS validated.
 - mTLS client-certificate trust requires careful CA scoping because an unmapped but CA-trusted certificate can still authenticate as a raw certificate subject.
 - Multi-provider conflict resolution is observable but still follows OpenLDAP's last-write/CSN behavior; ldapium does not invent a distributed consensus layer on top of it.
+- The SIEM and audit integration boundary is pull-only: newline-delimited JSON (NDJSON) produced by `scripts/export-audit-log.sh` is the integration contract. There is no push-based streaming daemon, retry loop, dead-letter queue, or direct SIEM connector.
+- Audit retention is bifurcated: `cn=accesslog` purge age is configurable via `LDAP_ACCESSLOG_PURGE_DAYS` (default 30 days) in `image/entrypoint.sh` (with a fixed 1-hour purge cycle in `olcAccessLogPurge`), whereas `auditlog` writes to `LDAP_AUDIT_FILE` (default `/dev/stdout`) with no OpenLDAP-native retention or log rotation mechanism, leaving file management to container/host log shippers.
+- The management REST API (`ui/backend`) has no internal role-based access engine: requests are gated by session cookie validation (`requireSession` in `ui/backend/internal/httpapi/middleware.go` and `server.go`). In default LDAP login mode, operations execute over the user's bound LDAP connection and are authorized by OpenLDAP's own ACLs; in SSO mode, the backend binds using `LDAP_SERVICE_ACCOUNT_DN`, meaning all authenticated Keycloak users with `SSO_ADMIN_ROLE` share the service account's directory permissions (see `ui/README.md`).
+- The Helm chart is completely cloud-provider agnostic: defaults in `charts/ldapium/values.yaml` specify `service.type: ClusterIP` and default `storageClassName: ""` with no cloud-specific annotations, validated by continuous Kind-based CI (`.github/workflows/e2e.yml`) and air-gapped bundle installations using `imagePullPolicy=Never` (`scripts/offline-install.sh`).
 
 ## Related evidence
 
 - `README.md`
 - `charts/ldapium/README.md`
+- `docs/product-boundary.md`
+- `docs/pam-boundary.md`
 - `docs/client-compatibility.md`
 - `docs/air-gap.md`
 - `docs/encryption-at-rest.md`
