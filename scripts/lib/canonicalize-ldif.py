@@ -11,8 +11,14 @@ Transformations:
      lines between entries.
   3. Strip operational attributes: entryCSN, entryUUID, modifyTimestamp,
      modifiersName, createTimestamp, creatorsName, contextCSN,
-     structuralObjectClass.
-  4. Redact userPassword values to a fixed placeholder: 'userpassword: <redacted>'.
+     structuralObjectClass. Matched on the base attribute type (an
+     "attr;option" description, per RFC 4512, is stripped the same as
+     bare "attr").
+  4. Redact userPassword values to a fixed placeholder ('<redacted>'),
+     again matched on the base attribute type so "userPassword;binary" and
+     "userPassword;lang-en" are redacted exactly like plain "userPassword"
+     -- the options are kept in the emitted attribute name, only the value
+     is replaced, e.g. 'userpassword;binary: <redacted>'.
   5. Lowercase attribute names (LDAP attribute *types* are case-insensitive,
      so "CN" and "cn" from two different dumps of the same entry must not
      read as drift). Attribute *values* are never case-folded here: value
@@ -143,9 +149,19 @@ def parse_dn(line):
         rest = rest[1:]
     if is_b64:
         try:
-            val = base64.b64decode(rest).decode("utf-8", errors="replace")
-        except Exception:
-            val = rest
+            val = base64.b64decode(rest).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as e:
+            # A base64 DN value that isn't valid base64 or doesn't decode
+            # as UTF-8 is a malformed/corrupted dump, not something to
+            # paper over: silently falling back to the raw base64 text (or
+            # replacing bad bytes) would make this the same DN as a
+            # completely different, valid entry, corrupting drift
+            # detection instead of failing loudly.
+            sys.stderr.write(
+                f"canonicalize-ldif: invalid base64/UTF-8 in dn:: value "
+                f"({rest!r}): {e}\n"
+            )
+            sys.exit(2)
     else:
         val = rest
     display_dn = normalize_dn_case(val)
@@ -198,8 +214,14 @@ def canonicalize_entry(record_lines):
 
         attr_name, _, rest = line.partition(":")
         attr_name_lower = attr_name.lower()
+        # Attribute options (e.g. "userPassword;binary", "cn;lang-en") are
+        # a distinct attribute description from the bare type per RFC 4512,
+        # but STRIP_ATTRS/redaction must key off the *base* attribute type
+        # only -- otherwise "userPassword;binary" would compare unequal to
+        # "userpassword" and a real hash would sail through unredacted.
+        attr_base_lower = attr_name_lower.split(";", 1)[0]
 
-        if attr_name_lower in STRIP_ATTRS:
+        if attr_base_lower in STRIP_ATTRS:
             continue
 
         is_b64 = rest.startswith(":")
@@ -208,8 +230,8 @@ def canonicalize_entry(record_lines):
         if rest.startswith(" "):
             rest = rest[1:]
 
-        if attr_name_lower == "userpassword":
-            attr_lines.append("userpassword: <redacted>")
+        if attr_base_lower == "userpassword":
+            attr_lines.append(f"{attr_name_lower}: <redacted>")
             continue
 
         if is_b64:
@@ -269,20 +291,57 @@ def process_ldif(input_stream):
     return "\n\n".join(blocks) + "\n"
 
 
-def main():
-    source = sys.stdin
-    if len(sys.argv) > 1 and sys.argv[1] != "-":
+def _decode_lines_strict(byte_stream, source_label):
+    """Read raw bytes from byte_stream and yield each physical line decoded
+    as strict UTF-8, applied identically whether the source is a file or
+    stdin (both are read as bytes here; a file opened in text mode and
+    stdin's own text wrapper can silently pick different default error
+    handling for invalid bytes).
+
+    RFC 2849 requires any non-ASCII attribute value to be base64-encoded,
+    so a line here that isn't valid UTF-8 signals a malformed/corrupted
+    dump. Rather than silently replacing the bad bytes (which could quietly
+    change or hide real directory content), this fails loudly: exit 2 with
+    a message naming the line number, the most recently seen "dn:" line for
+    context, and the underlying decode error.
+    """
+    current_dn = None
+    for lineno, raw_bytes_line in enumerate(byte_stream, start=1):
         try:
-            source = open(sys.argv[1], "r", encoding="utf-8", errors="replace")
-        except OSError as e:
-            sys.stderr.write(f"canonicalize-ldif: could not read {sys.argv[1]}: {e}\n")
+            line = raw_bytes_line.decode("utf-8")
+        except UnicodeDecodeError as e:
+            context = f" in entry {current_dn!r}" if current_dn else ""
+            sys.stderr.write(
+                f"canonicalize-ldif: {source_label}:{lineno}: invalid UTF-8"
+                f"{context}: {e}\n"
+            )
             sys.exit(2)
+        stripped = line.rstrip("\r\n")
+        if stripped == "":
+            current_dn = None
+        elif stripped.lower().startswith("dn:"):
+            current_dn = stripped
+        yield line
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] != "-":
+        path = sys.argv[1]
+        try:
+            byte_stream = open(path, "rb")
+        except OSError as e:
+            sys.stderr.write(f"canonicalize-ldif: could not read {path}: {e}\n")
+            sys.exit(2)
+        source_label = path
+    else:
+        byte_stream = sys.stdin.buffer
+        source_label = "<stdin>"
 
     try:
-        output = process_ldif(source)
+        output = process_ldif(_decode_lines_strict(byte_stream, source_label))
     finally:
-        if source is not sys.stdin:
-            source.close()
+        if byte_stream is not sys.stdin.buffer:
+            byte_stream.close()
 
     sys.stdout.write(output)
 

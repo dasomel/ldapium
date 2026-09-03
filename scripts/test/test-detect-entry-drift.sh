@@ -284,6 +284,33 @@ fi
 # (Real drift on differing values, as opposed to case-only differences,
 # is already exercised by sections 5-6 above.)
 
+# 11. Attribute options must not bypass redaction/stripping (regression for
+# a real userPassword;binary/userPassword;lang-en hash surviving into a
+# --check diff because it compared unequal to the bare "userpassword").
+printf 'dn: uid=optiontest,dc=example,dc=org\nuserPassword;binary:: aGFzaDEyMw==\ncn: Option Test\n\n' > "${work}/attr-options-baseline.ldif"
+printf 'dn: uid=optiontest,dc=example,dc=org\nuserPassword;binary:: aGFzaDEyMw==\ncn: Option Test Changed\n\n' > "${work}/attr-options-current.ldif"
+attr_options_check_out="${work}/attr-options-check.out"
+set +e
+"${scripts_dir}/detect-entry-drift.sh" --input "${work}/attr-options-current.ldif" --check "${work}/attr-options-baseline.ldif" >"$attr_options_check_out" 2>&1
+attr_options_code=$?
+set -eu
+if [ "$attr_options_code" -eq 1 ]; then
+  ok "userPassword;binary entries still detect real (non-password) drift"
+else
+  bad "userPassword;binary --check returned $attr_options_code, want 1 (a real cn change)"
+fi
+if grep -qF 'hash123' "$attr_options_check_out"; then
+  bad "userPassword;binary hash leaked into --check output"
+else
+  ok "userPassword;binary hash never appears in --check output"
+fi
+if grep -qF 'userpassword;binary: <redacted>' "$attr_options_check_out" || \
+   python3 "$canonicalizer" "${work}/attr-options-baseline.ldif" | grep -qF 'userpassword;binary: <redacted>'; then
+  ok "userPassword;binary is redacted like bare userPassword, options preserved in the name"
+else
+  bad "userPassword;binary was not redacted to the expected placeholder"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "scripts/test/test-detect-entry-drift.sh failed" >&2
   exit 1

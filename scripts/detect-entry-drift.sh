@@ -179,18 +179,29 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 current_canonical="${work}/current.ldif"
+raw_dump="${work}/raw-dump.ldif"
 
+# The dump is captured to a temp file first, as its own distinct step,
+# rather than piped straight into the canonicalizer: dump_ldif and
+# dump_cluster_ldif already print their own specific error and exit 2 on
+# failure, but each is the left side of what would otherwise be a pipeline,
+# and under `set -o pipefail` (set at the top of this script) that failure
+# would surface through the generic `|| { canonicalization failed }`
+# handler below regardless of which side actually failed -- misreporting
+# an ldapsearch/kubectl failure as a canonicalization failure. Calling them
+# directly (not through a pipe) also means their internal `exit 2` ends
+# the whole script immediately, as intended, instead of only the subshell
+# a pipeline component runs in.
 if [ -n "$input_file" ]; then
-  dump_ldif | python3 "$canonicalizer" > "$current_canonical" || {
-    echo "error: canonicalization failed" >&2
-    exit 2
-  }
+  dump_ldif > "$raw_dump"
 else
-  dump_cluster_ldif | python3 "$canonicalizer" > "$current_canonical" || {
-    echo "error: canonicalization failed" >&2
-    exit 2
-  }
+  dump_cluster_ldif > "$raw_dump"
 fi
+
+python3 "$canonicalizer" "$raw_dump" > "$current_canonical" || {
+  echo "error: canonicalization failed" >&2
+  exit 2
+}
 
 case "$mode" in
   baseline-out)
