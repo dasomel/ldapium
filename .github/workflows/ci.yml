@@ -457,6 +457,8 @@ jobs:
       # no cluster needed, see the script's own header for what it does and
       # does not cover.
       - run: ./scripts/test/test-export-audit-log.sh
+      - run: ./scripts/test/test-ship-audit-log.sh
+
   incident-evidence:
     name: Incident evidence bundle (fixtures)
     runs-on: ubuntu-24.04

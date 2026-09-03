@@ -59,6 +59,8 @@ One JSON object per line, in this field order:
 | `correlationId` | string | Deterministic, derived only from fields already in the record — see "correlationId" below. |
 | `privileged` | boolean | `true` when `actor` matches the release's rootdn (`LDAP_ADMIN_DN`, or `cn=admin,<LDAP_ROOT_DN>` if unset) — see "privileged" below. |
 | `raw` | object | The extraction record this envelope was built from — every field the pre-#24 export emitted for that source, plus a few additive ones (`entryDn`, `entryUUID`, `changedAttrs` for auditlog; `reqSession` for accesslog) — with `filter` (accesslog) and `changedAttrs` (auditlog) sanitized in place, see "Filter redaction" and "changedAttrs" below. Nothing is silently lost; two fields are deliberately cleaned. |
+| `prevHash` | string (optional) | Present when `--chain` is passed. SHA-256 hash of previous record in chain, or sha256 of export manifest line for the genesis record. |
+| `hash` | string (optional) | Present when `--chain` is passed. SHA-256 hash of the canonical JSON of this record (without the `hash` field itself). |
 
 ### seq
 
@@ -168,11 +170,21 @@ answer for most records, not a parsing failure.
 
 `replication-conflict-raw`'s own log line
 (`do_syncrep2: rid=002 CSN too old, ignoring <CSN> (<entry DN>)`) carries
-only the entry's DN, never its `entryUUID` — `objectId` is always `null` for
-this source. `accesslog`'s `auditSearch`/`auditBind` records likewise carry
-no `entryUUID`-equivalent attribute (`reqDN`/`reqFilter` describe what was
-requested, not a resolved object identity) — `objectId` is always `null` for
-this source too.
+only the entry's DN, not `entryUUID`. As of issue #126, at export time
+`scripts/export-audit-log.sh` passes raw records through
+`scripts/lib/resolve-conflict-objectid.py`, which resolves each distinct entry DN
+to its `entryUUID` via a base-scoped `ldapsearch` (cached once per distinct DN
+across all pods). When the entry exists in the directory, `objectId` (and
+`raw.entryUUID`) is populated; if the entry was deleted or cannot be resolved,
+`objectId` remains `null`. For offline tests and CI, `LDAP_STUB_OBJECTID_MAP`
+provides a deterministic stub mapping. (Note: `.github/workflows/security-e2e.yml`
+deploys a single-node replica where syncrepl replication does not run, so conflict
+records are not generated in that workflow; conflict `objectId` resolution is
+verified fixture-only via `scripts/test/test-export-audit-log.sh`).
+
+`accesslog`'s `auditSearch`/`auditBind` records carry no `entryUUID`-equivalent
+attribute (`reqDN`/`reqFilter` describe what was requested, not a resolved
+object identity) — `objectId` is always `null` for this source.
 
 ### changedAttrs and password redaction (raw.changedAttrs)
 
@@ -358,34 +370,109 @@ guarantees stated here.
 
 ## Retention, loss, and the SIEM adapter boundary
 
-- **This is a pull-only export**, run by hand or by whatever schedules
-  `scripts/export-audit-log.sh`. There is no push exporter, no daemon, and
-  no persistent queue — this issue does not add one. Nothing here changes
-  that boundary.
-- **No sequence numbering across runs.** `seq` is per-invocation only (see
-  above). A SIEM ingesting this feed cannot use `seq` to detect a gap
-  between two separate export runs; that requires the SIEM's own ingestion
-  bookkeeping (e.g. tracking the highest `time` it has already ingested per
-  source per pod).
-- **No dead-letter queue.** If a pod is unreachable, or `accesslog` is
-  disabled, or the accesslog bind credential is stale (see
-  `scripts/export-audit-log.sh`'s own header comment on rotated admin
-  passwords), that pod's records for that run are simply absent from the
-  output — `export-audit-log.sh` warns to stderr and continues, it does not
-  fail the whole run, and it does not track "I owe you these records later."
-- **The exporter is a script, not a service.** It has no retry policy beyond
-  what `kubectl`/`ldapsearch` themselves do, no backoff, and no persistent
-  state between invocations.
-- **The SIEM adapter boundary**: a consumer is expected to run this script
-  (or a wrapper around it) and feed its stdout, line by line, into whatever
-  NDJSON/file/stdin ingestion its SIEM offers. This project does not ship or
-  plan to ship a push-based exporter, an agent, or a long-running daemon —
-  "run the script, pipe the output" is the entire integration surface.
-- **`replication-conflict-raw` is still not a conflict detector** (unchanged
-  from before #24 — see `scripts/export-audit-log.sh`'s own header comment):
-  it mixes genuine same-entry conflicts with harmless duplicate delivery
-  over N-way relay paths. A SIEM correlating this source with directory
-  state must not treat every record as confirmed data loss.
+Issue #126 delivers the "tested" half of the SIEM adapter boundary via `scripts/ship-audit-log.sh`
+while preserving the distinction between pull extraction and push ingestion:
+
+- **The extraction exporter (`scripts/export-audit-log.sh`) remains pull-based**:
+  It runs on-demand or on a cron schedule, pulling from container logs and `cn=accesslog`.
+- **The push shipper (`scripts/ship-audit-log.sh`)**:
+  Takes the normalized NDJSON stream (piped from `scripts/export-audit-log.sh` or read from a file)
+  and ships it to a generic HTTPS endpoint:
+  - **Delivery semantics (at-least-once)**: The shipper guarantees at-least-once delivery.
+    If network connectivity drops after the sink receives a batch but before acknowledgment reaches
+    the shipper, or if the shipper retries a transient error or replays from dead-letter, batches may
+    be delivered again. There is no client-side "zero duplicate" guarantee.
+  - **Idempotency keys**: Each POST batch includes an `X-Ldapium-Batch-Id` header (the SHA-256 digest
+    of the batch's canonical NDJSON), plus per-record `hash` fields when `--chain` was used during export.
+    The downstream sink/adapter is expected to deduplicate on this batch idempotency key.
+  - **Cursor (NOT seq)**: Maintains a cursor state file (`--cursor-file`, default `.audit-ship-cursor.json`)
+    tracking the last delivered `(time, hashes)` per `(source, pod)`. `seq` is strictly invocation-scoped
+    (assigned 1..N after sorting within a single run) and resets to 1 on every export run; treating `seq`
+    as a persistent cursor causes complete data loss on subsequent runs. Keying per `(source, pod)` ensures
+    that an event from a pod whose log fetch failed in one export (`|| true` in `export-audit-log.sh`) and
+    appears later with an older time is not shadowed by another pod's newer events. A record is considered already
+    delivered only if its timestamp is strictly older than its pod's cursor timestamp, or equal to the cursor
+    timestamp and its canonical record hash is in the set of hashes recorded at that timestamp.
+    *Limitation*: within a single pod, records are assumed to be fetched in time order; a pod whose fetch
+    fails is simply not advanced.
+  - **Transport security**: HTTPS only by default (`--sink-url https://...`). Plaintext `http://`
+    is rejected unless `--allow-insecure-http` is explicitly passed (strictly for CI/local test fixtures).
+    Redirects are strictly forbidden via a custom redirect handler to prevent credential leakage.
+    TLS certificate verification is never disabled. Optional Bearer authentication is strictly read
+    from a file (`--token-file`, never as a CLI argument).
+  - **Process locking & fatal persistence failure**: The shipper acquires an exclusive `flock` on
+    the state directory for the run (failing fast if locked), plus a second exclusive `flock` on
+    `<dead-letter-file>.lock` for every dead-letter read/append/rewrite operation (failing fast if held).
+    Cursor persistence failure after an acknowledged batch is fatal: the shipper exits non-zero
+    immediately and halts.
+  - **Streaming & input validation**: The shipper streams NDJSON line-by-line and dead-letter records
+    batch-by-batch without buffering entire logs in memory. Arguments are validated (`batch_size >= 1`,
+    `max_retries >= 0`, `initial_backoff >= 0`, `max_backoff >= 0`).
+  - **Bounded exponential backoff retry**: Network errors, timeouts, HTTP 5xx responses, and HTTP 429
+    trigger retries with bounded exponential backoff (`--max-retries`, `--initial-backoff`, `--max-backoff`).
+  - **Dead-letter queue & replay**: Undeliverable batches upon retry exhaustion are written to a
+    dead-letter NDJSON file (`--dead-letter-file`, default `.audit-dead-letter.ndjson`) with failure
+    details. On subsequent invocations, the shipper replays dead-letter records first before
+    processing new events, preserving chronological delivery order.
+- **What is NOT covered (out of scope)**:
+  - No vendor-specific adapters (Splunk HEC, Datadog Logs API, Elastic Beats, Microsoft Sentinel, etc.).
+  - No persistent background daemon or resident message queue process (standard CLI script invocation model).
+- **`replication-conflict-raw` is still not a conflict detector** (unchanged from before #24):
+  it mixes genuine same-entry conflicts with harmless duplicate delivery over N-way relay paths.
+  While distinct DNs are resolved to `objectId` (entryUUID) at export time by querying provider pods
+  in ordinal order (`pod-0`, `pod-1`, ...) and caching by exact DN string (case preserved to avoid
+  collisions across case-exact schemas), consumers must correlate with directory state rather than
+  treating every discard record as data loss.
+
+## Tamper-evident chain option (`--chain`)
+
+`scripts/export-audit-log.sh --chain` and `scripts/lib/audit-normalize.py --chain` add cryptographic
+SHA-256 hash chaining to each envelope record for tamper-evidence (issue #126):
+
+- **Fields added**:
+  - `prevHash`: For the genesis (first) record in the export, `prevHash = sha256(export manifest line)`.
+    For subsequent records, `prevHash` equals the `hash` of the immediately preceding record.
+  - `hash`: SHA-256 digest of the canonical JSON representation (keys sorted, compact separators)
+    of the record excluding the `hash` field itself.
+- **Verification (`scripts/verify-audit-chain.py`)**:
+  `python3 scripts/verify-audit-chain.py <file.ndjson> [--expected-head <hash>]`
+  Verifies every record in sequence. Fails and exits non-zero if:
+  - Any record has missing or malformed hash fields.
+  - The genesis `prevHash` does not match the expected manifest line.
+  - A record's payload was modified (content hash mismatch).
+  - An interior record was deleted or reordered (`prevHash` mismatch).
+  - The final record's hash does not match `--expected-head` (when provided).
+- **Evidence integrity limits**:
+  Tamper evidence guarantees that any alteration, reordering, or interior deletion of exported records
+  after the fact is detectable. However, **without `--expected-head`, tail truncation (deleting the most
+  recent records from the end of the log) is undetectable from the log file alone**, because the remaining
+  prefix forms a cryptographically valid chain starting from genesis. Detecting tail truncation strictly
+  requires storing the chain head hash out-of-band (e.g. in a signed backup manifest or external SIEM)
+  and asserting it with `--expected-head`. Furthermore, **this is still NOT immutable storage**:
+  raw container logs and local database rows prior to export can still be truncated or altered by
+  a container-level root adversary before export. Non-repudiation requires immediate off-cluster transmission.
+
+## Audit coverage matrix
+
+In accordance with product boundary D1 (`docs/product-boundary.md`), ldapium provides directory-level
+identity and operation auditing. The table below delineates current audit coverage and explicit gaps:
+
+| Category | Event Type | Covered? | Source | Notes / Gaps |
+| --- | --- | :---: | --- | --- |
+| **Security / Auth** | Successful binds | Yes | `accesslog` | `auditBind` records `reqAuthzID`, client IP, GeneralizedTime. |
+| **Security / Auth** | Failed binds | Yes | `accesslog` | Captured with `reqResult: 49` (Invalid credentials) and target DN. |
+| **Security / Auth** | `cn=config` binds | Partial | Container log | Local domain socket (`ldapi://`) administrative operations bypass accesslog. |
+| **Security / Auth** | Read ACL denials | No | None | OpenLDAP does not log denied attribute read attempts within searches. |
+| **Security / Auth** | Write ACL denials | No | None | `auditlog` only logs completed writes; rejected writes (result 50) are dropped. |
+| **Operations** | User / group adds | Yes | `auditlog` | Full entry DN, actor DN, changed attribute names recorded. |
+| **Operations** | Modifications | Yes | `auditlog` | `raw.changedAttrs` sanitized to attribute names (passwords redacted). |
+| **Operations** | Deletions | Yes | `auditlog` | Target DN and actor DN recorded. |
+| **HA / DR** | Replication conflicts | Yes | `replication-conflict-raw` | CSN discard diagnostic; entry DN resolved to `objectId` (entryUUID) at export time. |
+| **HA / DR** | Syncrepl relay dups | Yes | `replication-conflict-raw` | Emitted alongside conflicts; harmless relay duplicates not filtered out. |
+| **HA / DR** | Backup creation | Partial | Backup manifest / Pod log | Logged to Kubernetes CronJob logs and LDAP `applicationProcess`; not in audit stream. |
+| **HA / DR** | Directory restore | Partial | Restore job log | Executed via offline `slapadd` or `restore.sh`; not captured in online audit stream. |
+| **Lifecycle** | Federation events | Out of Scope | None | Product boundary D1 excludes federation engines and IdP broker suites. |
+| **Lifecycle** | Machine identity vault | Out of Scope | None | Product boundary D1 excludes PAM/secret vaults and dynamic token injectors. |
 
 ## Testing
 

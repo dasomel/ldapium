@@ -262,6 +262,122 @@ else
   bad "no stderr warning was printed for the impossible calendar date"
 fi
 
+# 14. Replication-conflict objectId resolution (issue #126):
+# Resolves entry DN to entryUUID with one ldapsearch per distinct DN (cached);
+# tested offline with a stubbed lookup map via LDAP_STUB_OBJECTID_MAP.
+cat <<'EOF' > "${work}/conflict-map.json"
+{
+  "uid=baseline,ou=chaos,dc=example,dc=org": "99999999-0000-0000-0000-111122223333"
+}
+EOF
+grep -E 'do_syncrep2: rid=[0-9]+ CSN too old, ignoring [^ ]+ \(.*\)$' "${fixtures}/replication-container.log" \
+  | awk -v pod=test-pod-0 -f "${lib_dir}/parse-replication-conflict.awk" \
+  | LDAP_STUB_OBJECTID_MAP="${work}/conflict-map.json" python3 "${lib_dir}/resolve-conflict-objectid.py" \
+  | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" \
+  > "${work}/conflict-resolved.ndjson" 2>"${work}/conflict-resolved.stderr"
+
+if grep -q '"target":"uid=baseline,ou=chaos,dc=example,dc=org".*"objectId":"99999999-0000-0000-0000-111122223333"' "${work}/conflict-resolved.ndjson"; then
+  ok "replication-conflict entry DN resolved to entryUUID as objectId via stub map"
+else
+  bad "replication-conflict entry DN was not resolved to objectId"
+  cat "${work}/conflict-resolved.ndjson" >&2
+fi
+if grep -q '"target":"uid=other,ou=chaos,dc=example,dc=org".*"objectId":null' "${work}/conflict-resolved.ndjson"; then
+  ok "unmapped replication-conflict entry DN leaves objectId as null"
+else
+  bad "unmapped replication-conflict entry DN did not leave objectId as null"
+fi
+
+# 15. Tamper-evident hash chaining (--chain and verify-audit-chain.py, issue #126):
+# A valid chain passes; mutating a middle record or deleting a record both fail.
+extract | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" --chain \
+  > "${work}/chained.ndjson" 2>"${work}/chained.stderr"
+
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained.ndjson" >"${work}/verify-valid.stdout" 2>&1; then
+  ok "valid audit chain passes verify-audit-chain.py"
+else
+  bad "valid audit chain failed verify-audit-chain.py"
+  cat "${work}/verify-valid.stdout" >&2
+fi
+
+# Mutate a middle record's payload (seq 3)
+sed '3s/"result":"unknown"/"result":"success"/' "${work}/chained.ndjson" > "${work}/chained-mutated.ndjson"
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained-mutated.ndjson" >/dev/null 2>&1; then
+  bad "verify-audit-chain.py unexpectedly passed on mutated middle record"
+else
+  ok "verify-audit-chain.py correctly rejects mutated middle record"
+fi
+
+# Delete a middle record (seq 3)
+sed '3d' "${work}/chained.ndjson" > "${work}/chained-deleted.ndjson"
+if python3 "${here}/../verify-audit-chain.py" "${work}/chained-deleted.ndjson" >/dev/null 2>&1; then
+  bad "verify-audit-chain.py unexpectedly passed on deleted record"
+else
+  ok "verify-audit-chain.py correctly rejects deleted record"
+fi
+
+# 16. Mutual exclusion of --legacy and --chain (D9):
+# The combination must be rejected with exit code 2 and a clear error message
+# in both export-audit-log.sh wrapper and audit-normalize.py.
+if python3 "${lib_dir}/audit-normalize.py" --legacy --chain < /dev/null >"${work}/norm-legacy-chain.out" 2>"${work}/norm-legacy-chain.err"; then
+  bad "audit-normalize.py accepted --legacy --chain (should reject with exit 2)"
+else
+  if grep -q -- '--chain cannot be used with --legacy' "${work}/norm-legacy-chain.err"; then
+    ok "audit-normalize.py rejects --legacy --chain combination with documented error"
+  else
+    bad "audit-normalize.py rejected --legacy --chain but with unexpected error message"
+    cat "${work}/norm-legacy-chain.err" >&2
+  fi
+fi
+
+if "${here}/../export-audit-log.sh" --legacy --chain >"${work}/export-legacy-chain.out" 2>"${work}/export-legacy-chain.err"; then
+  bad "export-audit-log.sh accepted --legacy --chain (should reject with exit 2)"
+else
+  if grep -q -- '--chain cannot be used with --legacy' "${work}/export-legacy-chain.err"; then
+    ok "export-audit-log.sh wrapper rejects --legacy --chain combination with documented error"
+  else
+    bad "export-audit-log.sh rejected --legacy --chain but with unexpected error message"
+    cat "${work}/export-legacy-chain.err" >&2
+  fi
+fi
+
+# 17. Tail truncation detection requires --expected-head (D10):
+# Without --expected-head, tail truncation is undetectable because the remaining
+# prefix forms a valid chain from genesis. With --expected-head, tail truncation fails.
+expected_head=$(tail -n 1 "${work}/chained.ndjson" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["hash"])')
+if [ -z "$expected_head" ]; then
+  bad "could not extract expected head hash from chained.ndjson"
+else
+  # Assert valid chain passes with --expected-head
+  if python3 "${here}/../verify-audit-chain.py" --expected-head "$expected_head" "${work}/chained.ndjson" >/dev/null 2>&1; then
+    ok "verify-audit-chain.py passes valid chain when --expected-head matches"
+  else
+    bad "verify-audit-chain.py failed valid chain with matching --expected-head"
+  fi
+
+  # Delete the tail (last) record
+  sed '$d' "${work}/chained.ndjson" > "${work}/chained-tail-truncated.ndjson"
+
+  # Without --expected-head, tail deletion passes (undetectable from stream alone)
+  if python3 "${here}/../verify-audit-chain.py" "${work}/chained-tail-truncated.ndjson" >/dev/null 2>&1; then
+    ok "tail truncation passes verify-audit-chain.py without --expected-head (as documented)"
+  else
+    bad "tail truncation unexpectedly failed verify-audit-chain.py without --expected-head"
+  fi
+
+  # With --expected-head, tail deletion fails
+  if python3 "${here}/../verify-audit-chain.py" --expected-head "$expected_head" "${work}/chained-tail-truncated.ndjson" >"${work}/verify-tail-truncated.err" 2>&1; then
+    bad "verify-audit-chain.py unexpectedly passed on tail-truncated chain with --expected-head"
+  else
+    if grep -q "chain head hash mismatch" "${work}/verify-tail-truncated.err"; then
+      ok "verify-audit-chain.py rejects tail truncation when --expected-head is asserted"
+    else
+      bad "verify-audit-chain.py rejected tail-truncated chain but without expected error message"
+      cat "${work}/verify-tail-truncated.err" >&2
+    fi
+  fi
+fi
+
 if [ "$fail" != 0 ]; then
   echo "one or more audit export normalizer checks FAILED" >&2
   exit 1

@@ -291,8 +291,9 @@ def build_envelope(rec: dict, admin_dn_key: str | None, warn) -> dict:
         actor = "system"
         target = rec.get("entry") or None
         # slapd's "CSN too old, ignoring" diagnostic carries only the entry
-        # DN, never entryUUID — documented limitation, not an omission.
-        object_id = None
+        # DN; entryUUID is resolved at export time (or via stub map in tests)
+        # when available.
+        object_id = rec.get("entryUUID") or rec.get("objectId") or None
     else:
         raw_time = rec.get("time")
         time_iso = None
@@ -403,7 +404,27 @@ def main(argv: list[str]) -> int:
         "— see docs/audit-event-schema.md's '--legacy is not a compatibility "
         "guarantee' section.",
     )
+    parser.add_argument(
+        "--chain",
+        action="store_true",
+        help="Add cryptographic SHA-256 hash chaining (prevHash, hash) across "
+        "records for tamper-evidence (docs/audit-event-schema.md, issue #126).",
+    )
+    parser.add_argument(
+        "--manifest-line",
+        default="export-audit-log:v1",
+        help="Genesis export manifest line used for the initial prevHash "
+        "(default: 'export-audit-log:v1').",
+    )
     args = parser.parse_args(argv)
+
+    if args.legacy and args.chain:
+        print(
+            "audit-normalize.py: --chain cannot be used with --legacy "
+            "(the legacy flat shape does not support envelope hash chaining)",
+            file=sys.stderr,
+        )
+        return 2
 
     admin_dn_key = dn_key(args.admin_dn) if (args.admin_dn and not args.legacy) else None
     if admin_dn_key is None and not args.legacy:
@@ -456,6 +477,20 @@ def main(argv: list[str]) -> int:
         envelope["seq"] = i
     if dropped:
         envelopes.append(summary_record(dropped, emitted, len(envelopes) + 1))
+
+    if args.chain:
+        genesis_line = args.manifest_line or "export-audit-log:v1"
+        prev_h = hashlib.sha256(genesis_line.encode("utf-8")).hexdigest()
+        for envelope in envelopes:
+            envelope["prevHash"] = prev_h
+            canonical = json.dumps(
+                {k: v for k, v in envelope.items() if k != "hash"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            curr_h = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            envelope["hash"] = curr_h
+            prev_h = curr_h
 
     for envelope in envelopes:
         # Compact separators to match the rest of this export's NDJSON style
