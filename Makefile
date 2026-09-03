@@ -78,6 +78,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/test/test-export-audit-log.sh
 	@./scripts/test/test-ship-audit-log.sh
 	@./scripts/test/test-migration-dryrun.sh
+	@./scripts/test/test-detect-entry-drift.sh
 	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree

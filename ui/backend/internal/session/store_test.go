@@ -23,6 +23,7 @@ func (f *fakeClient) ResolveUID(context.Context, string) (string, error)      { 
 func (f *fakeClient) ServerVersion(context.Context) (string, error)           { return "", nil }
 func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error) { return nil, nil }
 func (f *fakeClient) GetEntry(context.Context, string) (*domain.Entry, error) { return nil, nil }
+func (f *fakeClient) MoveEntry(context.Context, string, string) error         { return nil }
 func (f *fakeClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
 	return nil, nil
 }

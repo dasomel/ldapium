@@ -113,6 +113,11 @@ type memberRequest struct {
 	MemberDN string `json:"memberDn"`
 }
 
+type moveEntryRequest struct {
+	DN          string `json:"dn"`
+	NewParentDN string `json:"newParentDn"`
+}
+
 type setPasswordResponse struct {
 	GeneratedPassword string `json:"generatedPassword,omitempty"`
 }

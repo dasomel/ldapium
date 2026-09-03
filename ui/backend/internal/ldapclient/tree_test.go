@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // The tree browser probes for children with a one-entry search, so a node
@@ -88,5 +90,53 @@ func TestEntryToDomainEntry_RedactionIsCaseInsensitive(t *testing.T) {
 	}
 	if _, present := got.Attributes["uid"]; !present {
 		t.Error("Attributes missing uid, want it preserved")
+	}
+}
+
+func TestBuildMoveRequest_Valid(t *testing.T) {
+	dn := "uid=jdoe,ou=people,dc=example,dc=org"
+	newParent := "ou=engineering,dc=example,dc=org"
+
+	req, err := buildMoveRequest(dn, newParent)
+	if err != nil {
+		t.Fatalf("buildMoveRequest(%q, %q) unexpected error: %v", dn, newParent, err)
+	}
+
+	if req.DN != dn {
+		t.Errorf("req.DN = %q, want %q", req.DN, dn)
+	}
+	if req.NewRDN != "uid=jdoe" {
+		t.Errorf("req.NewRDN = %q, want %q", req.NewRDN, "uid=jdoe")
+	}
+	if !req.DeleteOldRDN {
+		t.Errorf("req.DeleteOldRDN = %v, want true", req.DeleteOldRDN)
+	}
+	if req.NewSuperior != newParent {
+		t.Errorf("req.NewSuperior = %q, want %q", req.NewSuperior, newParent)
+	}
+}
+
+func TestBuildMoveRequest_RejectsInvalidInput(t *testing.T) {
+	cases := []struct {
+		name      string
+		dn        string
+		newParent string
+	}{
+		{"empty dn", "", "ou=engineering,dc=example,dc=org"},
+		{"empty new parent", "uid=jdoe,ou=people,dc=example,dc=org", ""},
+		{"malformed dn", "not-a-dn", "ou=engineering,dc=example,dc=org"},
+		{"malformed new parent", "uid=jdoe,ou=people,dc=example,dc=org", "not-a-dn"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildMoveRequest(tc.dn, tc.newParent)
+			if err == nil {
+				t.Fatalf("buildMoveRequest(%q, %q) expected error, got nil", tc.dn, tc.newParent)
+			}
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("err = %v, want wrapping domain.ErrInvalidInput", err)
+			}
+		})
 	}
 }

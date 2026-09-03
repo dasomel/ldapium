@@ -152,6 +152,112 @@ jobs:
           [ "$code" = 200 ] || { echo "::error::after the window slid past: expected 200, got $code"; exit 1; }
           echo "PASS: 3 failures -> 429 with Retry-After, correct password blocked meanwhile, block lifts after the window"
 
+      - name: Verify identity lifecycle idempotency and move (#121)
+        env:
+          E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
+        run: |
+          set -euo pipefail
+
+          # Authenticate and get a session cookie
+          curl -s -c /tmp/session-cookie -H 'Content-Type: application/json' \
+            -d "{\"identity\":\"cn=admin,dc=example,dc=org\",\"password\":\"$E2E_ADMIN_PASSWORD\"}" \
+            http://127.0.0.1:8080/api/login >/dev/null
+
+          # Part 1: Idempotency assertions
+          echo "=== Verifying CreateUser idempotency (duplicate uid returns 409) ==="
+          create_code=$(curl -s -b /tmp/session-cookie -o /tmp/create-resp.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"uid":"idem-user","cn":"Idem User","sn":"User","password":"Password123!"}' \
+            http://127.0.0.1:8080/api/users)
+          [ "$create_code" = 201 ] || { echo "::error::initial create: expected 201, got $create_code"; cat /tmp/create-resp.json; exit 1; }
+          grep -q '"dn":"uid=idem-user,dc=example,dc=org"' /tmp/create-resp.json
+
+          dup_code=$(curl -s -b /tmp/session-cookie -o /tmp/dup-resp.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"uid":"idem-user","cn":"Idem User","sn":"User","password":"Password123!"}' \
+            http://127.0.0.1:8080/api/users)
+          [ "$dup_code" = 409 ] || { echo "::error::duplicate create: expected 409, got $dup_code"; cat /tmp/dup-resp.json; exit 1; }
+          grep -q 'entry already exists' /tmp/dup-resp.json
+          echo "PASS: duplicate user creation returns 409 Conflict"
+
+          echo "=== Verifying DeleteUser idempotency (repeated delete returns 404) ==="
+          del_code1=$(curl -s -b /tmp/session-cookie -o /dev/null -w '%{http_code}' \
+            -X DELETE 'http://127.0.0.1:8080/api/users?dn=uid=idem-user,dc=example,dc=org')
+          [ "$del_code1" = 204 ] || { echo "::error::first delete: expected 204, got $del_code1"; exit 1; }
+
+          del_code2=$(curl -s -b /tmp/session-cookie -o /tmp/del2-resp.json -w '%{http_code}' \
+            -X DELETE 'http://127.0.0.1:8080/api/users?dn=uid=idem-user,dc=example,dc=org')
+          [ "$del_code2" = 404 ] || { echo "::error::second delete: expected 404, got $del_code2"; cat /tmp/del2-resp.json; exit 1; }
+          grep -q 'entry not found' /tmp/del2-resp.json
+          echo "PASS: deleting already-deleted user returns 404 Not Found"
+
+          # Part 2: Move (ModifyDN) and refint / memberOf consistency assertions
+          echo "=== Verifying ModifyDN Move and refint consistency ==="
+          kubectl -n directory exec -i directory-ldapium-0 -c openldap -- sh -c \
+            'ldapadd -x -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD"' <<'EOF'
+          dn: ou=engineering,dc=example,dc=org
+          objectClass: top
+          objectClass: organizationalUnit
+          ou: engineering
+
+          dn: ou=operations,dc=example,dc=org
+          objectClass: top
+          objectClass: organizationalUnit
+          ou: operations
+
+          dn: uid=move-user,ou=engineering,dc=example,dc=org
+          objectClass: top
+          objectClass: person
+          objectClass: organizationalPerson
+          objectClass: inetOrgPerson
+          uid: move-user
+          cn: Move User
+          sn: User
+
+          dn: cn=ops-team,ou=operations,dc=example,dc=org
+          objectClass: top
+          objectClass: groupOfNames
+          cn: ops-team
+          member: uid=move-user,ou=engineering,dc=example,dc=org
+          EOF
+
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "cn=ops-team,ou=operations,dc=example,dc=org" member' \
+            | grep -q 'member: uid=move-user,ou=engineering,dc=example,dc=org'
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=move-user,ou=engineering,dc=example,dc=org" memberOf' \
+            | grep -q 'memberOf: cn=ops-team,ou=operations,dc=example,dc=org'
+
+          move_code=$(curl -s -b /tmp/session-cookie -o /tmp/move-resp.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"dn":"uid=move-user,ou=engineering,dc=example,dc=org","newParentDn":"ou=operations,dc=example,dc=org"}' \
+            http://127.0.0.1:8080/api/entry/move)
+          [ "$move_code" = 204 ] || { echo "::error::move entry: expected 204, got $move_code"; cat /tmp/move-resp.json; exit 1; }
+
+          old_code=$(curl -s -b /tmp/session-cookie -o /dev/null -w '%{http_code}' \
+            'http://127.0.0.1:8080/api/entry?dn=uid=move-user,ou=engineering,dc=example,dc=org')
+          [ "$old_code" = 404 ] || { echo "::error::old DN still exists: expected 404, got $old_code"; exit 1; }
+
+          new_code=$(curl -s -b /tmp/session-cookie -o /tmp/new-entry.json -w '%{http_code}' \
+            'http://127.0.0.1:8080/api/entry?dn=uid=move-user,ou=operations,dc=example,dc=org')
+          [ "$new_code" = 200 ] || { echo "::error::new DN not found: expected 200, got $new_code"; cat /tmp/new-entry.json; exit 1; }
+
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "cn=ops-team,ou=operations,dc=example,dc=org" member' \
+            | tee /tmp/group-members.txt
+          grep -q 'member: uid=move-user,ou=operations,dc=example,dc=org' /tmp/group-members.txt
+          if grep -q 'member: uid=move-user,ou=engineering,dc=example,dc=org' /tmp/group-members.txt; then
+            echo "::error::refint did not remove old member DN from group"
+            exit 1
+          fi
+
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            'ldapsearch -x -LLL -D "cn=admin,dc=example,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "uid=move-user,ou=operations,dc=example,dc=org" memberOf' \
+            | tee /tmp/user-memberof.txt
+          grep -q 'memberOf: cn=ops-team,ou=operations,dc=example,dc=org' /tmp/user-memberof.txt
+
+          echo "PASS: move entry succeeded, new DN confirmed, and refint rewrote group membership"
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

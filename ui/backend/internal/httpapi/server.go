@@ -100,6 +100,7 @@ func (s *Server) routes(spa fs.FS) {
 
 	authed.GET("/tree", s.handleTreeChildren)
 	authed.GET("/entry", s.handleGetEntry)
+	authed.POST("/entry/move", s.handleMoveEntry)
 
 	authed.GET("/password-policies", s.handleListPasswordPolicies)
 

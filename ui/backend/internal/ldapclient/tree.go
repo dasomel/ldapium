@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
@@ -153,4 +154,43 @@ func rdnOf(dn string) string {
 		parts = append(parts, a.Type+"="+a.Value)
 	}
 	return strings.Join(parts, "+")
+}
+
+// buildMoveRequest constructs a ModifyDNRequest to move an entry under
+// newParentDN while preserving its current RDN and removing the old DN.
+func buildMoveRequest(dn, newParentDN string) (*ldap.ModifyDNRequest, error) {
+	if dn == "" || newParentDN == "" {
+		return nil, fmt.Errorf("%w: dn and newParentDN are required", domain.ErrInvalidInput)
+	}
+	if _, err := ldap.ParseDN(dn); err != nil {
+		return nil, fmt.Errorf("%w: invalid dn: %v", domain.ErrInvalidInput, err)
+	}
+	if _, err := ldap.ParseDN(newParentDN); err != nil {
+		return nil, fmt.Errorf("%w: invalid newParentDN: %v", domain.ErrInvalidInput, err)
+	}
+	rdn := rdnOf(dn)
+	if rdn == "" {
+		return nil, fmt.Errorf("%w: cannot extract RDN from dn %q", domain.ErrInvalidInput, dn)
+	}
+	return ldap.NewModifyDNRequest(dn, rdn, true, newParentDN), nil
+}
+
+// MoveEntry moves the entry at dn under newParentDN using the LDAP ModifyDN
+// operation (preserving the entry's current RDN and deleting the old DN).
+func (c *client) MoveEntry(ctx context.Context, dn, newParentDN string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req, err := buildMoveRequest(dn, newParentDN)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.ModifyDN(req); err != nil {
+		return mapErr("move entry", err)
+	}
+	return nil
 }
