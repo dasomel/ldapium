@@ -725,12 +725,20 @@ build_audit() {
   tail -n "$audit_lines" "$full" > "$out" 2>/dev/null || : > "$out"
   write_section audit audit-tail.ndjson
 
-  # auth-failure-burst: bind records (accesslog "op":"bind" or auditlog
-  # "op":"bind") whose result is not LDAP_SUCCESS ("0"), clustered within
+  # auth-failure-burst: bind records ("op":"bind" — only accesslog ever
+  # emits this op) with a failing result, clustered within
   # --auth-failure-window-seconds of the newest such record in the tail.
-  # LDAP GeneralizedTime for accesslog, raw epoch for auditlog — both are
-  # what export-audit-log.sh itself documents as the two time formats this
-  # stream carries; each is parsed on its own terms rather than reformatted.
+  #
+  # scripts/export-audit-log.sh's default output is now the normalized
+  # envelope from issue #24 (docs/audit-event-schema.md): a top-level
+  # "result" of "success"/"failure"/"unknown" (not the raw LDAP result
+  # code — that still lives at raw.result), a top-level "time" already
+  # normalized to RFC3339 (raw.time keeps the source's native format), and
+  # a trailing "source":"exporter"/"op":"summary" integrity record that is
+  # not an audit event at all and must never be counted here. --legacy
+  # mode's older flat shape (raw LDAP result code as "result", no "raw"
+  # wrapper, GeneralizedTime/epoch "time") is also still accepted, since a
+  # caller may hand this script an older capture via --audit-log-file.
   python3 - "$out" "$auth_fail_window" "$auth_fail_threshold" >> "$findings_file" <<'PY'
 import sys, json, re
 from datetime import datetime, timezone
@@ -738,14 +746,35 @@ from datetime import datetime, timezone
 path, window, threshold = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
 
 def to_epoch(rec):
-    t = rec.get("time", "")
-    if re.match(r'^\d{14}(\.\d+)?Z$', t):
-        m = re.match(r'^(\d{14})', t)
+    t = rec.get("time")
+    if not t:
+        return None
+    # Envelope (default) mode: RFC3339, optionally with fractional seconds.
+    try:
+        return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        pass
+    # --legacy mode: LDAP GeneralizedTime (accesslog) or a raw epoch string
+    # (auditlog) — the two native formats export-audit-log.sh's own history
+    # documents, each parsed on its own terms rather than reformatted.
+    m = re.match(r'^(\d{14})(?:\.\d+)?Z$', t)
+    if m:
         return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).timestamp()
     try:
         return float(t)
     except ValueError:
         return None
+
+def is_failed_bind(rec):
+    if rec.get("source") == "exporter" or rec.get("op") != "bind":
+        return False
+    result = rec.get("result")
+    # Envelope mode: "failure" is the only failing value ("success"/
+    # "unknown" are not). --legacy mode: any raw LDAP result code other
+    # than "0"/None is a failure — accesslog bind records never carry the
+    # string "success"/"unknown"/"failure" themselves in that shape, so
+    # this one check is unambiguous across both.
+    return result not in ("success", "unknown", "0", None)
 
 fails = []
 for line in open(path, encoding="utf-8", errors="replace"):
@@ -756,9 +785,7 @@ for line in open(path, encoding="utf-8", errors="replace"):
         rec = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if rec.get("op") != "bind":
-        continue
-    if rec.get("result") in (None, "0"):
+    if not is_failed_bind(rec):
         continue
     epoch = to_epoch(rec)
     if epoch is not None:

@@ -128,6 +128,16 @@ run auth-failure-burst "${work}/auth-burst" \
   --cert-file "${work}/cert-healthy.pem"
 if has_finding "${work}/auth-burst" auth-failure-burst; then ok "auth-failure-burst fixture yields auth-failure-burst finding"; else bad "auth-failure-burst fixture missing auth-failure-burst finding"; fi
 
+# audit-auth-failure-burst.ndjson's trailing "source":"exporter"/"op":"summary"
+# record must not be miscounted as a 6th failed bind — the finding text
+# names the exact count, so an off-by-one here would show up as "6 failed
+# bind(s)" instead of "5 failed bind(s)".
+burst_detail=$(jq -r '.findings[] | select(.id == "auth-failure-burst") | .detail' "${work}/auth-burst/manifest.json")
+case "$burst_detail" in
+  "5 failed bind"*) ok "exporter summary record excluded from the auth-failure-burst count" ;;
+  *) bad "auth-failure-burst count is wrong (exporter summary record likely miscounted): ${burst_detail}" ;;
+esac
+
 run audit-healthy "${work}/audit-healthy" \
   --replication-ldif "${fixtures}/replication-healthy.ldif" \
   --audit-log-file "${fixtures}/audit-healthy.ndjson" \
