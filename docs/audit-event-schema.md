@@ -18,10 +18,11 @@ export script" step.
 
 This envelope **replaces** the flat per-source shape `export-audit-log.sh`
 emitted before issue #24 (`{"pod":...,"source":...,"time":...,"actor":...}`,
-one shape per source). That old shape is still reachable with `--legacy`,
-but not as a compatibility promise — see "`--legacy` is not a compatibility
-guarantee" below. Every existing consumer that read the old shape needs to
-either move to the envelope or pin `--legacy` and read that section first.
+one shape per source) as the *default*. That old shape is still reachable
+with `--legacy`, matched field-for-field — see "`--legacy` mode" below for
+the one deliberate exception (filter redaction, which applies regardless of
+mode). Every existing consumer that read the old shape needs to either move
+to the envelope or pin `--legacy` and read that section first.
 
 ## The envelope
 
@@ -38,42 +39,81 @@ One JSON object per line, in this field order:
   "op": "modify",
   "result": "unknown",
   "objectId": null,
-  "correlationId": "auditlog:1787500453:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org",
+  "correlationId": "auditlog:directory-ldapium-0:1787500453:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org",
   "privileged": true,
-  "raw": { "...": "source-specific fields, verbatim — see below" }
+  "raw": { "...": "source-specific fields, sanitized/redacted where noted below — see below" }
 }
 ```
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `schemaVersion` | string | Always `"1"` for this format. Bump this document and the constant in `scripts/lib/audit-normalize.py` together if the envelope shape ever changes again. |
-| `source` | string | `auditlog`, `accesslog`, or `replication-conflict-raw`. |
-| `seq` | integer | 1-based, monotonic, contiguous within one export run — see "seq" below. Not stable across runs and not a cross-run event id. |
-| `time` | string or null | RFC3339 UTC. `null` if the source's own time value could not be parsed (fails soft — see "Time normalization"). |
-| `actor` | string | A bind DN, `"anonymous"` (accesslog record with no bind identity — see the "anonymous" note below), or `"system"` (`replication-conflict-raw` — no bind identity exists for a sync-consumer discard event). |
+| `source` | string | `auditlog`, `accesslog`, `replication-conflict-raw`, or `exporter` (the run's own integrity summary — see "Malformed input handling" below). |
+| `seq` | integer | 1-based, contiguous within one export run — see "seq" below. Not stable across runs and not a cross-run event id. |
+| `time` | string or null | RFC3339 UTC. `null` if the source's own time value could not be parsed, or is not applicable (the `exporter` summary record) — see "Time normalization". |
+| `actor` | string | A bind DN, `"anonymous"` (accesslog record with no bind identity — see the "anonymous" note below), `"system"` (`replication-conflict-raw` — no bind identity exists for a sync-consumer discard event), or `"exporter"` (the summary record — see below). |
 | `target` | string or null | A DN when the source has one. For `auditlog`, this is the entry actually modified (parsed from the LDIF body's own `dn:` line), not the database suffix the header line's own accounting names the same position with — see "auditlog's target" below. |
-| `op` | string | `add`/`modify`/`modrdn`/`delete` (auditlog), `search`/`bind` (accesslog), or `replication-conflict` (the fixed value for `replication-conflict-raw`, which has no real "operation"). |
+| `op` | string | `add`/`modify`/`modrdn`/`delete` (auditlog), `search`/`bind` (accesslog), `replication-conflict` (the fixed value for `replication-conflict-raw`, which has no real "operation"), or `summary` (the `exporter` record). |
 | `result` | string | `success`, `failure`, or `unknown` — see "result" below. |
 | `objectId` | string or null | `entryUUID` where the source data actually contains it. `null` otherwise — see "objectId" below; this is usually `null` and that is expected, not a bug. |
 | `correlationId` | string | Deterministic, derived only from fields already in the record — see "correlationId" below. |
 | `privileged` | boolean | `true` when `actor` matches the release's rootdn (`LDAP_ADMIN_DN`, or `cn=admin,<LDAP_ROOT_DN>` if unset) — see "privileged" below. |
-| `raw` | object | The complete, unmodified extraction record this envelope was built from — every field the pre-#24 export emitted for that source, plus a few additive ones (`entryDn`, `entryUUID`, `changedAttrs` for auditlog; `reqSession` for accesslog). Nothing is lost, only wrapped. |
+| `raw` | object | The extraction record this envelope was built from — every field the pre-#24 export emitted for that source, plus a few additive ones (`entryDn`, `entryUUID`, `changedAttrs` for auditlog; `reqSession` for accesslog) — with `filter` (accesslog) and `changedAttrs` (auditlog) sanitized in place, see "Filter redaction" and "changedAttrs" below. Nothing is silently lost; two fields are deliberately cleaned. |
 
 ### seq
 
-Assigned by `scripts/lib/audit-normalize.py` as records arrive on its stdin,
-in the exact order `scripts/export-audit-log.sh`'s `run_export` function
-produces them: per pod (`0..replicas-1`), auditlog then
-replication-conflict-raw, then — once every pod's writes are done — accesslog
-per pod. That order is fixed and deterministic for a given set of container
-logs / accesslog contents, which is what makes two runs against unchanged
-underlying data byte-identical (`scripts/test/test-export-audit-log.sh`
-proves this against fixtures; a live cluster's logs are of course not
-unchanged between two runs of the real script).
+**Determinism holds for a given set of underlying data, regardless of the
+order it happened to be retrieved in** — not because retrieval order is
+guaranteed stable (it is not: accesslog's `ldapsearch` in particular has no
+`ORDER BY` equivalent, and a live cluster gives no ordering promise across
+two separate runs either). Before assigning `seq`,
+`scripts/lib/audit-normalize.py` sorts every record it read from stdin by:
+
+1. `time` (nulls last — see "Time normalization");
+2. `pod` (`raw.pod`);
+3. `correlationId`;
+4. a SHA-256 hash of the sanitized `raw` object, as a final tiebreaker for
+   two records that are otherwise identical.
+
+`seq` is then assigned 1-based over that sorted order. This is what makes
+two runs over the same underlying data byte-identical even if
+`export-audit-log.sh`'s own fetch order differed between them —
+`scripts/test/test-export-audit-log.sh` proves this by reversing the raw
+extraction stream's line order and asserting the normalized output is
+unchanged.
 
 `seq` is **not** an event id that survives across export runs — it is purely
-"the Nth line of this particular invocation's output". Two separate
+"the Nth line of this particular invocation's sorted output". Two separate
 `export-audit-log.sh` invocations both start at `seq: 1`.
+
+### Malformed input handling
+
+A line on `audit-normalize.py`'s stdin that fails to parse as JSON (should
+not happen against this project's own extraction, but the normalizer does
+not trust its own input — "contractual distrust") is counted and dropped,
+**never silently**:
+
+- **Default (envelope) mode** appends one final record, as the last `seq`,
+  naming the drop and emit counts:
+  ```json
+  {"schemaVersion":"1","source":"exporter","seq":9,"time":null,"actor":"exporter","target":null,"op":"summary","result":"unknown","objectId":null,"correlationId":"exporter:summary:1:8","privileged":false,"raw":{"dropped":1,"emitted":8}}
+  ```
+  The process still exits `0` — this record is what makes the loss visible
+  to a consumer reading only the NDJSON stream itself (a file, a SIEM's
+  ingest), which is treated as more reliable than trusting every caller to
+  check an exit code. `time` is deliberately `null` (this record describes
+  the run's own integrity, not a directory event with a timestamp), which
+  keeps the record itself reproducible across replay: `correlationId` is
+  built only from the dropped/emitted counts, not a wall-clock value.
+- **`--legacy` mode** has no field in the flat shape to carry this
+  information without adding a key (which would violate the "no additive
+  keys" guarantee below), so it instead **exits non-zero** when anything was
+  dropped, with a message to stderr. It emits every record it could parse
+  either way; the non-zero exit is the only signal.
+
+One behavior per mode, chosen so neither can report success while quietly
+under-counting events. See `scripts/test/test-export-audit-log.sh`'s
+corrupted-input checks.
 
 ### Time normalization
 
@@ -90,12 +130,18 @@ leaving the original string untouched in `raw.time`:
   (`20260823155413.000004Z`). This is already UTC (the trailing `Z`), so
   normalizing it is pure string reformatting
   (`YYYYMMDDHHMMSS[.ffffff]Z` → `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`) — no `date`
-  binary, no portability risk.
+  binary, no portability risk. The digits are also checked for calendar
+  validity (via a `datetime(...)` construction) before being reformatted —
+  a regex only confirms digit *shape*; month `13` or February `30` has the
+  right shape and the wrong meaning, and reformatting it anyway would hand a
+  SIEM an equally-impossible RFC3339 string instead of catching the problem
+  here.
 
-If a record's own time value fails to parse (should not happen against a
-real server, but the normalizer does not trust its own input — "contractual
-distrust"), `time` is `null` rather than the whole run aborting; a warning is
-printed once to stderr per malformed pattern.
+If a record's own time value fails to parse OR fails calendar validation
+(should not happen against a real server, but the normalizer does not trust
+its own input — "contractual distrust"), `time` is `null` rather than the
+whole run aborting; a warning naming the bad value is printed once to
+stderr per distinct value.
 
 ### auditlog's target
 
@@ -141,20 +187,34 @@ password out of the export without needing to enumerate every
 password-like attribute name in advance — the redaction is structural, not
 a denylist filter applied after the fact.
 
-`scripts/lib/audit-normalize.py` additionally has a belt-and-suspenders
-check (`check_changed_attrs_are_names_only`) that warns to stderr — without
-failing the run — if a `changedAttrs` entry ever looks like more than a bare
-attribute name (contains a space, `::`, or is implausibly long). This is a
-safety net for a future change to the extraction side, not the primary
-control.
+**This is enforced twice, independently, not just checked once:**
 
-The one attribute this codebase treats as sensitive is `userPassword` —
-same convention as `entryRedactedAttrs` in
+1. `scripts/lib/parse-auditlog.awk` is the primary control — its
+   `add_changed()` truncates anything at the first whitespace and validates
+   what remains against a strict attribute-name shape
+   (`^[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*$`) before accepting it, so even
+   a malformed or adversarial single-line record like
+   `replace: userPassword hunter2` cannot smuggle the trailing text through
+   — the value is stripped, `userPassword` (the name) is kept. Something
+   that still doesn't look like a bare name after truncation (e.g. a name
+   starting with a digit) is dropped entirely, not merely truncated, with a
+   warning to stderr.
+2. `scripts/lib/audit-normalize.py`'s `sanitize_changed_attrs()` re-applies
+   the identical check to whatever it received, and *rewrites* `raw.changedAttrs`
+   to the cleaned list — an enforcement layer, not a warning-only
+   belt-and-suspenders note, so a future bug in the awk layer alone cannot
+   leak a value through this field.
+
+The one attribute this codebase names explicitly elsewhere is `userPassword`
+— same convention as `entryRedactedAttrs` in
 `ui/backend/internal/ldapclient/tree.go` (see `AGENTS.md`'s "Attribute
-exposure" section). `delete` and `modrdn` records carry no `changedAttrs` at
-all — `delete` has no per-attribute change list to parse, and `modrdn`'s
-body (`newrdn`/`deleteoldrdn`/`newsuperior`) is not "changed attributes" in
-the entry-content sense.
+exposure" section) — but the enforcement above is name-*shape*-based, not a
+denylist: it accepts any syntactically valid bare attribute name and rejects
+everything else, which is what keeps a value from ever qualifying as a
+"name" in the first place. `delete` and `modrdn` records carry no
+`changedAttrs` at all — `delete` has no per-attribute change list to parse,
+and `modrdn`'s body (`newrdn`/`deleteoldrdn`/`newsuperior`) is not "changed
+attributes" in the entry-content sense.
 
 Separately: the raw container log (`kubectl logs`) that `auditlog` writes to
 **does** contain the actual `userPassword` value for a password change —
@@ -164,6 +224,29 @@ in the audit log" step proves and documents it at the LDAP/log level). This
 export's own redaction guarantee is about what *this NDJSON stream* carries,
 not about the underlying container log, which a SIEM operator with
 `kubectl logs` access can still read directly.
+
+### Filter redaction (raw.filter)
+
+`accesslog`'s `reqFilter` is an LDAP search filter, and a filter can itself
+carry a secret as a literal assertion value — `(userPassword=hunter2)`,
+`(authToken=abc123XYZ)` — which the pre-#24 export, and this export until
+this was found in review, passed straight through into `raw.filter`
+unredacted. `scripts/lib/audit-normalize.py`'s `redact_filter()` is now the
+single, sole implementation (used by both output modes — see "`--legacy`"
+below) that scans a filter for `(attr<op>value)` assertions and replaces
+`value` with the literal string `<redacted>` whenever `attr` matches
+`password|secret|credential|token|pwd` case-insensitively — a substring
+match against a shape, not a fixed attribute allowlist, since a deployment's
+schema can name a sensitive attribute anything. The attribute name and
+operator are preserved; a benign filter (`(uid=alice)`) is left untouched.
+Compound filters (`(&(uid=alice)(userPassword=hunter2))`) are handled —
+each parenthesized assertion is considered independently.
+
+**Known limits**: LDAP filter escaping (`\28`/`\29` for a literal paren
+*inside* a value) and extensible-match filters (`attr:dn:=value`) are out of
+scope — the same boundary this export already draws around filter parsing
+elsewhere. A sensitive value hidden behind escaped parens would not be
+matched by the redaction regex; this is a known gap, not a silent one.
 
 ### result
 
@@ -180,21 +263,30 @@ No cross-system, cross-source correlation ID exists anywhere in this data —
 these are three independently-generated log streams with no shared request
 id. `correlationId` is instead a deterministic string built only from
 fields already in the same record, so the same underlying event always
-produces the same id and two different events essentially never collide:
+produces the same id and two different events essentially never collide.
 
-- **auditlog**: `auditlog:<raw epoch time>:<target DN>:<actor>`. Two writes
-  to the same entry by the same actor within the same second collide —
-  auditlog's one-line-per-record format has nothing finer-grained to key on.
-- **accesslog**: `accesslog:<reqSession>:<raw GeneralizedTime>`.
+**The pod is always the second segment**, for every source: two different
+pods can legitimately produce the same rid/CSN pair, or the same
+actor+target+timestamp-second write — multi-provider replication routinely
+does exactly the latter, with the same logical write landing in more than
+one provider's own `auditlog` — and without the pod those look like the
+same event.
+
+- **auditlog**: `auditlog:<pod>:<raw epoch time>:<target DN>:<actor>`. Two
+  writes to the same entry by the same actor, on the same pod, within the
+  same second, collide — auditlog's one-line-per-record format has nothing
+  finer-grained to key on.
+- **accesslog**: `accesslog:<pod>:<reqSession>:<raw GeneralizedTime>`.
   `reqSession` is slapo-accesslog's own per-connection counter (added to the
   ldapsearch attribute list specifically for this); it resets across a
   slapd restart, so it is not cross-restart-unique on its own — pairing it
   with `reqStart` is what keeps the id meaningful across a restart.
-- **replication-conflict-raw**: `replication-conflict-raw:<rid>:<discardedCSN>`.
+- **replication-conflict-raw**: `replication-conflict-raw:<pod>:<rid>:<discardedCSN>`.
   `discardedCSN` already encodes a server-assigned, effectively-unique
-  timestamp+counter+server-id+mod-count; `rid` is included because two
-  different consumers can each independently discard the same delivered
-  CSN, which is two distinct discard events, not one.
+  timestamp+counter+server-id+mod-count; `rid` and `pod` are included
+  because two different consumers — on two different pods — can each
+  independently discard the same delivered CSN, which is two distinct
+  discard events, not one.
 
 **Limit**: there is no way to tell, from this data alone, that an auditlog
 write and an accesslog read (or a replication-conflict-raw discard) are "the
@@ -227,18 +319,42 @@ If the rootdn cannot be determined (StatefulSet not found, or neither
 `scripts/export-audit-log.sh` prints a warning to stderr and every record is
 exported as `privileged: false` rather than guessing.
 
-## `--legacy` is not a compatibility guarantee
+## `--legacy` mode
 
-`./scripts/export-audit-log.sh --legacy` skips envelope normalization and
-prints the flat per-source records `scripts/lib/audit-normalize.py` would
-otherwise consume — the same shape the pre-#24 script emitted, **plus** the
-additive fields this work introduced at the extraction layer regardless of
-`--legacy` (`entryDn`, `entryUUID`, `changedAttrs` for auditlog;
-`reqSession` for accesslog). A consumer that only reads the fields it
-already knew about is unaffected; a consumer that asserts on the *complete*
-set of keys in a record will see new ones. `--legacy` exists for scripts
-that want the simple flat shape without the envelope getting in the way, not
-as a frozen historical format.
+`./scripts/export-audit-log.sh --legacy` skips envelope normalization.
+`scripts/lib/audit-normalize.py --legacy` receives the exact same extended
+extraction records the default mode does (including `entryDn`, `entryUUID`,
+`changedAttrs`, `reqSession`), but **projects each one down to exactly the
+field set the pre-#24 script emitted for that source** —
+`{"pod","source","time","actor","op","target"}` for auditlog,
+`{"pod","source","time","actor","op","target","filter","result"}` for
+accesslog, `{"pod","source","time","entry","discardedCSN","rid"}` for
+replication-conflict-raw — with no additive keys. This is verified, not
+merely claimed: `scripts/test/test-export-audit-log.sh` diffs `--legacy`'s
+output against a golden fixture
+(`scripts/test/fixtures/expected-legacy.ndjson`) captured by running the
+actual pre-#24 extraction logic (`git show origin/main:scripts/export-audit-log.sh`)
+against the same fixtures, and asserts it is byte-for-byte identical.
+
+**The one guarantee that is not optional, even in `--legacy`: filter
+redaction.** `redact_filter()` (see "Filter redaction" above) is applied to
+`filter` in both modes — there is exactly one implementation, and
+`export-audit-log.sh` pipes through it unconditionally regardless of which
+mode was requested. A fixture with a sensitive filter value therefore
+produces output that differs from a literal pre-#24 replay for that one
+field; the byte-identity claim above holds for the *shape* (no additive
+keys) and for fixtures with no sensitive filter content, not for the value
+of an attribute this project has decided must never leak. `--legacy` is a
+shape-compatibility mode, not a "disable the security fix" switch.
+
+Malformed input is handled differently between the two modes too — see
+"Malformed input handling" above: default mode appends a summary record and
+exits 0, `--legacy` exits non-zero instead (it has nowhere to put a summary
+record in the flat shape without adding a key).
+
+`--legacy` exists for scripts that want the simple flat shape without the
+envelope getting in the way. It is not a frozen historical format beyond the
+guarantees stated here.
 
 ## Retention, loss, and the SIEM adapter boundary
 
@@ -274,12 +390,13 @@ as a frozen historical format.
 ## Testing
 
 `scripts/test/test-export-audit-log.sh` runs the normalizer against fixture
-input in `scripts/test/fixtures/` (`auditlog-container.log`,
-`replication-container.log`, `accesslog.ldif`) with no cluster involved,
-and checks:
+input in `scripts/test/fixtures/` with no cluster involved, and checks:
 
 - two runs against the same fixture input produce byte-identical output
-  (deterministic replay);
+  (deterministic replay), including after **reversing the raw extraction
+  stream's line order** — proving `seq` is assigned from a sort, not from
+  arrival order (`auditlog-container.log`, `replication-container.log`,
+  `accesslog.ldif`);
 - output matches the checked-in golden fixture
   (`scripts/test/fixtures/expected-normalized.ndjson`);
 - every record parses as JSON, carries the full envelope, and `seq` is
@@ -287,7 +404,28 @@ and checks:
 - no `userPassword` *value* appears anywhere in the output, while the
   attribute *name* still appears in `changedAttrs`;
 - rootdn vs. non-rootdn actors are classified `privileged` correctly;
-- `objectId` is populated from a fixture `entryUUID` where present.
+- `objectId` is populated from a fixture `entryUUID` where present;
+- `correlationId` includes the pod;
+- `--legacy` output is byte-identical to a golden fixture captured from the
+  pre-#24 script's own logic (`expected-legacy.ndjson`), and carries no
+  envelope fields;
+- a filter with `userPassword`/`authToken`-like assertions
+  (`accesslog-sensitive-filter.ldif`) has those values redacted — not a
+  benign filter alongside them — in both default and `--legacy` output,
+  matching dedicated golden fixtures
+  (`expected-sensitive-filter-normalized.ndjson`,
+  `expected-sensitive-filter-legacy.ndjson`);
+- a malformed `changedAttrs`-producing line
+  (`auditlog-malformed.log` — a value smuggled onto the same line as the
+  attribute name, and a garbage attribute name) is sanitized to match
+  `expected-malformed-normalized.ndjson`, with a stderr warning and no
+  leaked value or invalid name in the output;
+- a corrupted, unparseable input line (`raw-with-corrupted-line.ndjson`)
+  produces the `exporter`/`summary` record with correct counts in default
+  mode (exit 0), and a non-zero exit in `--legacy` mode;
+- an impossible calendar date (`accesslog-invalid-time.ldif`, month 13)
+  normalizes to `time: null` with a stderr warning instead of a bogus
+  RFC3339 string.
 
 `.github/workflows/security-e2e.yml`'s "Verify the audit export script" step
 additionally runs the real script against a live cluster and asserts every

@@ -23,10 +23,10 @@ fail=0
 ok() { printf 'PASS: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 
-# One pod's worth of the three sources, in the exact order
-# export-audit-log.sh's own run_export emits them in (auditlog, then
-# replication-conflict-raw, then accesslog) — order is what makes `seq`
-# meaningful to assert on.
+# One pod's worth of the three sources. Order here is deliberately NOT
+# significant — audit-normalize.py sorts before assigning `seq` (see its own
+# module docstring and check 8 below) — this is just the order
+# export-audit-log.sh's run_export happens to fetch things in.
 extract() {
   awk -v pod=test-pod-0 -f "${lib_dir}/parse-auditlog.awk" "${fixtures}/auditlog-container.log"
   grep -E 'do_syncrep2: rid=[0-9]+ CSN too old, ignoring [^ ]+ \(.*\)$' "${fixtures}/replication-container.log" \
@@ -127,13 +127,139 @@ else
   bad "objectId was not populated from the fixture's entryUUID"
 fi
 
-# 7. --legacy still produces the flat, pre-envelope shape (no "schemaVersion"
-# top-level key), proving the flag genuinely bypasses normalization rather
-# than just relabeling it.
-if extract | grep -q '"schemaVersion"'; then
-  bad "--legacy-equivalent flat extraction unexpectedly contains envelope fields"
+# 7. correlationId includes the pod (MED-2): two different pods must not
+# collide even with the same rid/CSN or the same second/actor/target.
+if grep -q '"correlationId":"auditlog:test-pod-0:' "${work}/run1.ndjson"; then
+  ok "correlationId includes the pod"
 else
-  ok "flat extraction (what --legacy emits) carries no envelope fields"
+  bad "correlationId does not include the pod"
+fi
+
+# 8. Deterministic regardless of retrieval order (MED-3): reversing the raw
+# extraction stream's line order must not change the normalized output —
+# the normalizer sorts by time/pod/correlationId/raw-hash itself. `sed
+# '1!G;h;$!d'` reverses line order portably (no `tac` on macOS).
+extract | sed '1!G;h;$!d' | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" > "${work}/shuffled.ndjson" 2>/dev/null
+if diff -u "${work}/run1.ndjson" "${work}/shuffled.ndjson" >"${work}/shuffle.diff"; then
+  ok "normalizer output is unchanged when the raw extraction stream is reversed"
+else
+  bad "normalizer output changed when input order was reversed — sorting is not fully deterministic"
+  cat "${work}/shuffle.diff" >&2
+fi
+
+# 9. --legacy matches a golden byte-for-byte captured from the pre-#24
+# script's own extraction logic run against the same fixtures (MED-4) — see
+# docs/audit-event-schema.md's "Legacy mode" section. No additive keys, no
+# envelope.
+extract | python3 "${lib_dir}/audit-normalize.py" --legacy > "${work}/legacy.ndjson" 2>"${work}/legacy.stderr"
+if diff -u "${fixtures}/expected-legacy.ndjson" "${work}/legacy.ndjson" >"${work}/legacy.diff"; then
+  ok "--legacy output matches the pre-#24 golden fixture byte-for-byte"
+else
+  bad "--legacy output does not match the pre-#24 golden fixture"
+  cat "${work}/legacy.diff" >&2
+fi
+if grep -q '"schemaVersion"' "${work}/legacy.ndjson"; then
+  bad "--legacy output unexpectedly contains envelope fields"
+else
+  ok "--legacy output carries no envelope fields"
+fi
+
+# 10. Filter redaction (HIGH-1): a search filter containing a userPassword
+# or token-like assertion has the VALUE redacted, attribute name kept, in
+# both default and --legacy output. Exercised against a dedicated fixture
+# with two sensitive filters and one benign one, so the benign filter's
+# unredacted survival is checked too.
+sens_extract() {
+  awk -v pod=test-pod-0 -f "${lib_dir}/parse-accesslog.awk" "${fixtures}/accesslog-sensitive-filter.ldif"
+}
+sens_extract | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" > "${work}/sens-normalized.ndjson" 2>/dev/null
+sens_extract | python3 "${lib_dir}/audit-normalize.py" --legacy > "${work}/sens-legacy.ndjson" 2>/dev/null
+if diff -u "${fixtures}/expected-sensitive-filter-normalized.ndjson" "${work}/sens-normalized.ndjson" >"${work}/sens-normalized.diff"; then
+  ok "sensitive filter values are redacted in default mode (matches golden)"
+else
+  bad "sensitive filter redaction (default mode) does not match golden"
+  cat "${work}/sens-normalized.diff" >&2
+fi
+if diff -u "${fixtures}/expected-sensitive-filter-legacy.ndjson" "${work}/sens-legacy.ndjson" >"${work}/sens-legacy.diff"; then
+  ok "sensitive filter values are redacted in --legacy mode (matches golden)"
+else
+  bad "sensitive filter redaction (--legacy mode) does not match golden"
+  cat "${work}/sens-legacy.diff" >&2
+fi
+if grep -q 'hunter2\|abc123XYZ' "${work}/sens-normalized.ndjson" "${work}/sens-legacy.ndjson"; then
+  bad "a sensitive filter assertion value leaked into output"
+else
+  ok "no sensitive filter assertion value leaks into either output mode"
+fi
+if grep -q '"filter":"(uid=alice)"' "${work}/sens-normalized.ndjson"; then
+  ok "a benign filter is left unredacted"
+else
+  bad "a benign filter was unexpectedly altered"
+fi
+
+# 11. changedAttrs enforcement (MED-1): a malformed modify line
+# ("replace: userPassword <value>" on one line, and a garbage attribute
+# name) has its value stripped / the entry dropped, not merely flagged.
+awk -v pod=test-pod-0 -f "${lib_dir}/parse-auditlog.awk" "${fixtures}/auditlog-malformed.log" \
+  2>"${work}/malformed.stderr" | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" \
+  > "${work}/malformed-normalized.ndjson" 2>>"${work}/malformed.stderr"
+if diff -u "${fixtures}/expected-malformed-normalized.ndjson" "${work}/malformed-normalized.ndjson" >"${work}/malformed.diff"; then
+  ok "malformed changedAttrs input is sanitized to match golden"
+else
+  bad "malformed changedAttrs handling does not match golden"
+  cat "${work}/malformed.diff" >&2
+fi
+if grep -q 'hunter2\|leaked-on-one-line\|123bad' "${work}/malformed-normalized.ndjson"; then
+  bad "a value or a malformed attribute name leaked through changedAttrs"
+else
+  ok "no leaked value or malformed attribute name in changedAttrs output"
+fi
+if grep -q 'dropping malformed changedAttrs entry' "${work}/malformed.stderr"; then
+  ok "malformed changedAttrs entries are flagged to stderr"
+else
+  bad "no stderr warning was printed for the malformed changedAttrs entry"
+fi
+
+# 12. Malformed JSON input (HIGH-2): a corrupted line is counted, not
+# silently dropped. Default mode appends an "exporter"/"summary" record
+# naming the drop/emit counts and still exits 0; --legacy has no in-stream
+# way to say this without adding a key, so it exits non-zero instead — one
+# behavior per mode, both exercised here.
+if python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" \
+     < "${fixtures}/raw-with-corrupted-line.ndjson" > "${work}/corrupted-normalized.ndjson" 2>"${work}/corrupted.stderr"; then
+  ok "default mode exits 0 even with a dropped input line"
+else
+  bad "default mode exited non-zero on a dropped input line (should exit 0; see summary record)"
+fi
+if grep -q '"source":"exporter","seq":3,.*"op":"summary".*"dropped":1,"emitted":2' "${work}/corrupted-normalized.ndjson"; then
+  ok "a corrupted input line produces an exporter summary record with correct counts"
+else
+  bad "no correct exporter summary record was produced for the corrupted input line"
+  cat "${work}/corrupted-normalized.ndjson" >&2
+fi
+if python3 "${lib_dir}/audit-normalize.py" --legacy \
+     < "${fixtures}/raw-with-corrupted-line.ndjson" > "${work}/corrupted-legacy.ndjson" 2>"${work}/corrupted-legacy.stderr"; then
+  bad "--legacy exited 0 despite a dropped input line (should exit non-zero)"
+else
+  ok "--legacy exits non-zero when an input line is dropped"
+fi
+
+# 13. Invalid GeneralizedTime (LOW-1): a calendar-impossible timestamp
+# (month 13) is rejected — time becomes null with a warning — rather than
+# silently reformatted into an equally-impossible RFC3339 string.
+awk -v pod=test-pod-0 -f "${lib_dir}/parse-accesslog.awk" "${fixtures}/accesslog-invalid-time.ldif" \
+  | python3 "${lib_dir}/audit-normalize.py" --admin-dn "cn=admin,dc=example,dc=org" \
+  > "${work}/invalid-time.ndjson" 2>"${work}/invalid-time.stderr"
+if grep -q '"time":null' "${work}/invalid-time.ndjson"; then
+  ok "an impossible calendar date normalizes to time:null instead of a bogus RFC3339 string"
+else
+  bad "an impossible calendar date was not rejected"
+  cat "${work}/invalid-time.ndjson" >&2
+fi
+if grep -q 'could not parse time value' "${work}/invalid-time.stderr"; then
+  ok "an impossible calendar date is flagged to stderr, as documented"
+else
+  bad "no stderr warning was printed for the impossible calendar date"
 fi
 
 if [ "$fail" != 0 ]; then

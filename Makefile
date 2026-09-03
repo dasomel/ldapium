@@ -65,10 +65,16 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/check-versions.sh
 	@./scripts/check-modules.sh
 	@shellcheck -s sh image/entrypoint.sh
-	@shellcheck scripts/*.sh
+	@shellcheck scripts/*.sh scripts/test/*.sh
 	@shellcheck charts/ldapium/files/tests/*.sh
 	@./scripts/licenses.sh --check
 	@./scripts/check-make-parity.sh
+	@# check-make-parity.sh's own comparison regex only matches top-level
+	@# scripts/*.sh invocations in ci.yml, so it cannot see this one — a
+	@# script living in a subdirectory (scripts/test/) is outside what that
+	@# tool was written to compare. Listed here by hand instead of teaching
+	@# the parity checker a new path shape for a single caller.
+	@./scripts/test/test-export-audit-log.sh
 	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree

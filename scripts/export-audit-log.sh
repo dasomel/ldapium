@@ -25,25 +25,34 @@
 # Every record is normalized into the common identity-audit envelope
 # documented in docs/audit-event-schema.md (issue #24): schemaVersion,
 # source, seq, time, actor, target, op, result, objectId, correlationId,
-# privileged, plus the original source-specific fields verbatim under "raw"
-# so nothing this script has always emitted is lost, only moved. The actual
-# transform lives in scripts/lib/audit-normalize.py — a pure stdin/stdout
-# filter, unit-tested with fixtures in scripts/test/ — this script's own job
-# is only to fetch and flatten the three raw sources in a deterministic
-# order.
+# privileged, plus the original source-specific fields (redacted/sanitized
+# where noted in the schema doc) verbatim under "raw" so nothing this script
+# has always emitted is lost, only moved. The actual transform lives in
+# scripts/lib/audit-normalize.py — a pure stdin/stdout filter, unit-tested
+# with fixtures in scripts/test/ — this script's own job is only to fetch
+# and flatten the three raw sources; retrieval order is NOT relied on for
+# determinism (see that file's own module docstring for why and how it
+# sorts before assigning `seq`).
+#
+# If any input line could not be parsed, the normalizer appends a final
+# "exporter"/"summary" record naming the drop count rather than silently
+# reporting fewer events than actually happened — see
+# docs/audit-event-schema.md.
 #
 #   ./scripts/export-audit-log.sh                    # auto-discover, both overlays
 #   ./scripts/export-audit-log.sh -n ldapium -r prod
 #   ./scripts/export-audit-log.sh --writes-only       # skip accesslog reads; keep container-log diagnostics
 #   ./scripts/export-audit-log.sh --reads-only        # skip the container-log writes
-#   ./scripts/export-audit-log.sh --legacy            # skip the envelope; flat per-source records
+#   ./scripts/export-audit-log.sh --legacy            # flat pre-#24 per-source shape, no envelope
 #
-# --legacy is NOT byte-identical to this script's pre-#24 output: the
-# underlying extraction now also captures entryUUID/changedAttrs/entryDn
-# (auditlog) and reqSession (accesslog), which are additive fields old
-# consumers never looked for. It exists for scripts that want the simple
-# flat shape without those extras getting in the way, not as a compatibility
-# guarantee — see docs/audit-event-schema.md.
+# --legacy matches the pre-#24 field set exactly (no entryDn/entryUUID/
+# changedAttrs/reqSession) and applies the same filter redaction as the
+# default mode — the one guarantee that is not optional in either mode. It
+# is not a general compatibility promise beyond that field-set match — see
+# docs/audit-event-schema.md. Unlike default mode, --legacy has no
+# in-stream way to report a dropped/unparseable input line without adding a
+# key to that flat shape, so it instead exits non-zero when anything was
+# dropped.
 #
 # Known limitation: cn=accesslog's bind credential (like cn=Monitor's and
 # {1}mdb's own rootdn) is rendered once, at bootstrap, from the admin
@@ -68,12 +77,16 @@ Usage: export-audit-log.sh [-n NAMESPACE] [-r RELEASE] [--writes-only|--reads-on
 
 Prints one normalized identity-audit event per line to stdout (see
 docs/audit-event-schema.md), e.g.:
-  {"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:54:13Z","actor":"cn=admin,dc=example,dc=org","target":"uid=alice,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:1787500453:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org","privileged":true,"raw":{"pod":"...","source":"auditlog","time":"1787500453","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}}
+  {"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:54:13Z","actor":"cn=admin,dc=example,dc=org","target":"uid=alice,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:directory-ldapium-0:1787500453:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org","privileged":true,"raw":{"pod":"directory-ldapium-0","source":"auditlog","time":"1787500453","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}}
 
-With --legacy, prints the flat per-source records instead (no envelope):
-  {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"...","entryDn":"...","entryUUID":"...","changedAttrs":[...]}
-  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0","reqSession":"..."}
-  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49","reqSession":"..."}
+If any input line failed to parse, one more line is appended:
+  {"schemaVersion":"1","source":"exporter","seq":9,"time":null,"actor":"exporter","target":null,"op":"summary","result":"unknown","objectId":null,"correlationId":"exporter:summary:1:8","privileged":false,"raw":{"dropped":1,"emitted":8}}
+
+With --legacy, prints the flat pre-#24 per-source shape instead (no
+envelope, no additive keys):
+  {"pod":"...","source":"auditlog","time":"...","actor":"...","op":"modify","target":"..."}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"search","target":"...","filter":"...","result":"0"}
+  {"pod":"...","source":"accesslog","time":"...","actor":"...","op":"bind","target":"...","filter":"","result":"49"}
   {"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
 
   -n, --namespace   Kubernetes namespace (default: current kubectl context's)
@@ -86,8 +99,9 @@ With --legacy, prints the flat per-source records instead (no envelope):
       --reads-only  Export only accesslog (read) events — fails per pod with a
                     warning on stderr if that pod does not have
                     audit.accessLog.enabled, rather than failing the run.
-      --legacy      Skip envelope normalization; print the flat per-source
-                    records the normalizer would otherwise wrap (see above).
+      --legacy      Skip envelope normalization; print the flat pre-#24
+                    per-source shape instead (see above). Exits non-zero if
+                    any input line could not be parsed.
   -h, --help        This text.
 EOF
 }
@@ -155,13 +169,18 @@ fi
 
 lib_dir="$(cd "$(dirname "$0")/lib" && pwd)"
 
-# Everything below fetches and flattens the three raw sources, in a fixed,
-# deterministic order (writes then reads, pod 0..N-1 within each) — that
-# order is what makes `seq` in the normalized envelope both monotonic and
-# reproducible across two runs against the same unchanged logs. Wrapped in a
-# function so the pipe to the normalizer below is the ONLY place deciding
-# whether this run gets the envelope or the flat --legacy shape; the
-# extraction logic itself does not know or care which.
+# Everything below fetches and flattens the three raw sources. Retrieval
+# order here is NOT relied on for determinism — accesslog's ldapsearch in
+# particular has no ordering guarantee across runs — scripts/lib/
+# audit-normalize.py sorts records itself (by time, then pod, then
+# correlationId, then a stable hash) before assigning `seq`, so two runs
+# over the same underlying data are byte-identical regardless of what order
+# this function happened to emit them in. Wrapped in a function so the pipe
+# to the normalizer below is the ONLY place deciding whether this run gets
+# the envelope or the flat --legacy shape; the extraction logic itself does
+# not know or care which — and it always goes through the normalizer either
+# way, because filter redaction (docs/audit-event-schema.md) has exactly one
+# implementation and it lives there, not duplicated per output mode.
 run_export() {
 if [ "$want_writes" = 1 ]; then
   for i in $(seq 0 $((replicas - 1))); do
@@ -233,7 +252,7 @@ fi
 }
 
 if [ "$legacy" = 1 ]; then
-  run_export
+  run_export | python3 "${lib_dir}/audit-normalize.py" --legacy
 else
   run_export | python3 "${lib_dir}/audit-normalize.py" --admin-dn "$admin_dn"
 fi

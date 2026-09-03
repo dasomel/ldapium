@@ -14,6 +14,15 @@
 # password out of this export without needing to know every password-like
 # attribute name in advance).
 #
+# changedAttrs enforcement (not just a name-token grab): add_changed() below
+# truncates at the first whitespace and validates what remains against a
+# strict attribute-name shape before accepting it, so a malformed or
+# adversarial line like "replace: userPassword <value>" on one line (real
+# LDIF never does this — a modify's changed value is always its own
+# following line) cannot smuggle a value past the "names only" guarantee.
+# scripts/lib/audit-normalize.py applies the same check again downstream as
+# a second, independent layer.
+#
 # Kept as its own file (rather than inline in export-audit-log.sh) so
 # scripts/test/test-export-audit-log.sh can run this exact code path against
 # fixture input without a live cluster.
@@ -31,6 +40,22 @@ function b64dec(enc,    cmd, decoded) {
   cmd | getline decoded
   close(cmd)
   return decoded
+}
+# Attribute descriptions look like "cn" or "userPassword;lang-en" — a
+# leading letter, then letters/digits/hyphens, optionally followed by one or
+# more ";"-separated options with the same shape. Nothing else is a valid
+# bare attribute name, which is exactly the property this guarantee needs.
+function valid_attr_name(name) {
+  return name ~ /^[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*$/
+}
+function add_changed(name) {
+  sub(/[ \t].*/, "", name)
+  if (!valid_attr_name(name)) {
+    if (name != "")
+      print "parse-auditlog.awk: dropping malformed changedAttrs entry: " name > "/dev/stderr"
+    return
+  }
+  if (index("\037" changed "\037", "\037" name "\037") == 0) changed = changed "\037" name
 }
 function flush(    n, i, attrs_json) {
   if (op == "") return
@@ -58,17 +83,17 @@ entrydn == "" && /^dn:: / { entrydn = b64dec(substr($0, 6)); next }
 op == "modify" && /^(add|delete|replace): / {
   name = $0
   sub(/^(add|delete|replace): /, "", name)
-  if (index("\037" changed "\037", "\037" name "\037") == 0) changed = changed "\037" name
+  add_changed(name)
   next
 }
 op == "add" && /^[A-Za-z][A-Za-z0-9;-]*:: ?/ {
   name = $0; sub(/::.*/, "", name)
-  if (name != "dn" && index("\037" changed "\037", "\037" name "\037") == 0) changed = changed "\037" name
+  if (name != "dn") add_changed(name)
   next
 }
 op == "add" && /^[A-Za-z][A-Za-z0-9;-]*: / {
   name = $0; sub(/:.*/, "", name)
-  if (name != "dn" && name != "changetype" && index("\037" changed "\037", "\037" name "\037") == 0) changed = changed "\037" name
+  if (name != "dn" && name != "changetype") add_changed(name)
   next
 }
 END { flush() }

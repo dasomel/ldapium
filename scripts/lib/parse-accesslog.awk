@@ -9,6 +9,14 @@
 # slapd restart so it is not cross-restart-unique on its own (the
 # correlationId derivation pairs it with reqStart).
 #
+# `filt` (reqFilter) is emitted here verbatim, assertion values included —
+# a search filter like "(userPassword=<secret>)" is otherwise a real leak.
+# Redaction happens downstream in scripts/lib/audit-normalize.py, which is
+# the ONLY place this project's export ever ships raw extraction records
+# from (export-audit-log.sh always pipes through it, --legacy included), so
+# that is where the single, testable implementation lives rather than
+# duplicated here in awk.
+#
 # Kept as its own file (rather than inline in export-audit-log.sh) so
 # scripts/test/test-export-audit-log.sh can run this exact code path against
 # fixture input without a live cluster.
