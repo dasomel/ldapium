@@ -67,6 +67,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@shellcheck -s sh image/entrypoint.sh
 	@shellcheck scripts/*.sh scripts/test/*.sh
 	@shellcheck charts/ldapium/files/tests/*.sh
+	@./scripts/test-incident-evidence.sh
 	@./scripts/licenses.sh --check
 	@./scripts/check-make-parity.sh
 	@# check-make-parity.sh's own comparison regex only matches top-level

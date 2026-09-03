@@ -81,6 +81,59 @@ jobs:
           # Matching a per-check PASS instead would be satisfied by the first
           # one, which is not the question being asked here.
           grep -q 'all checks passed' /tmp/helm-test.log
+      # Live counterpart to ci.yml's fixture-only "Incident evidence bundle"
+      # job: proves the script actually produces a valid, redacted,
+      # self-consistent bundle against a real (if minimally configured) kind
+      # deployment, not just against synthetic fixtures. cn=Monitor is
+      # expected to come back "unavailable" here (see monitor.go's own
+      # comment: the default ACL denies read to everyone but the metrics
+      # exporter's own bind identity) — that is this chart's real default
+      # behavior, not a broken test.
+      #
+      # A separate step (not folded into "Export incident evidence" below):
+      # every other ldapwhoami/ldapsearch call in this workflow runs inside
+      # the server container via `kubectl exec` (image ldap-utils); this is
+      # the first one this repo ever runs directly on the GitHub-hosted
+      # runner. Keeping the install as its own step means a runner-image
+      # regression (ldap-utils becoming unavailable/unpackaged) fails here,
+      # distinctly from the export step itself failing.
+      - name: Install ldap-utils on the runner
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ldap-utils
+      - name: Export incident evidence
+        run: |
+          set -euo pipefail
+          # umask 077 + mktemp: the admin password never lands at a
+          # predictable, world-readable path, and the trap removes it
+          # whether this step succeeds or fails — a fixed /tmp path left
+          # behind on the runner is exactly the kind of thing this script's
+          # own redaction guarantee exists to prevent from happening to the
+          # *bundle*; the same care applies to the credential used to build it.
+          umask 077
+          pwfile=$(mktemp)
+          pf_pid=""
+          cleanup() {
+            [ -z "$pf_pid" ] || kill "$pf_pid" 2>/dev/null || true
+            rm -f "$pwfile"
+          }
+          trap cleanup EXIT
+          kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' \
+            | base64 -d > "$pwfile"
+          kubectl -n directory port-forward svc/directory-ldapium 3389:389 >/tmp/incident-port-forward.log 2>&1 &
+          pf_pid=$!
+          for _ in $(seq 1 30); do
+            ldapwhoami -x -H ldap://localhost:3389 >/dev/null 2>&1 && break
+            sleep 1
+          done
+          ./scripts/export-incident-evidence.sh \
+            -b dc=example,dc=org \
+            -H ldap://localhost:3389 \
+            --password-file "$pwfile" \
+            --k8s-namespace directory \
+            -o /tmp/incident-evidence
+          echo "::group::manifest.json"
+          cat /tmp/incident-evidence/manifest.json
+          echo "::endgroup::"
+          jq -e '.schemaVersion == "1"' /tmp/incident-evidence/manifest.json >/dev/null
       - name: Diagnostics
         if: failure()
         run: |

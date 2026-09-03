@@ -457,6 +457,19 @@ jobs:
       # no cluster needed, see the script's own header for what it does and
       # does not cover.
       - run: ./scripts/test/test-export-audit-log.sh
+  incident-evidence:
+    name: Incident evidence bundle (fixtures)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fully offline: fixtures under scripts/testdata/incident/ stand in for
+      # a live directory, so this needs no Docker/kind — determinism,
+      # redaction, and the findings rule set are exercised on every PR, not
+      # only when Docker happens to be available (see e2e.yml's own
+      # "install + helm test" job for the live-bundle check against a real
+      # kind-deployed directory).
+      - run: ./scripts/test-incident-evidence.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)
