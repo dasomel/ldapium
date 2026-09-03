@@ -95,6 +95,10 @@ the boolean and the status code — the same redaction `respondErr`
 (`internal/httpapi/errors.go`) applies to every other unmapped internal
 error, applied here too since this endpoint has no session to gate it.
 
+See [`docs/auth-provider-policy.md`](../docs/auth-provider-policy.md) for
+the full provider priority, failure, audit, and CAS/SAML boundary policy,
+including the structured `auth` event line emitted on every login outcome.
+
 ## Configuration (environment variables)
 
 No security-relevant setting has a hardcoded default — you must set the
