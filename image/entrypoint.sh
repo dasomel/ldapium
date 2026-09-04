@@ -700,6 +700,12 @@ d}" "$cn_config"
       # target and filter is exactly what an audit trail should not hand to
       # anyone who can reach the LDAP port.
       printf 'olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by * none\n'
+      # Attach sssvlv overlay to cn=accesslog so server-side sorting (RFC 2891)
+      # and bounded pagination are supported without loading the whole log.
+      printf '\ndn: olcOverlay=sssvlv,olcDatabase={2}mdb,cn=config\n'
+      printf 'objectClass: olcOverlayConfig\n'
+      printf 'objectClass: olcSssVlvConfig\n'
+      printf 'olcOverlay: sssvlv\n'
     } > "$accesslog_db"
     sed -i "/^#__ACCESSLOG_DB__$/{r ${accesslog_db}
 d}" "$cn_config"

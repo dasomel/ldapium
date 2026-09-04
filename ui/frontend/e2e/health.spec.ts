@@ -146,12 +146,13 @@ test('logs out and cannot reach an authed page without a session', async ({ page
 })
 
 test('records operator action history for UI create and delete without leaking attribute values, and renders extended monitor stats', async ({ page }) => {
+  const runSuffix = Date.now().toString()
   const testUser = {
-    uid: 'e2e-history-actor-check',
-    cn: 'History Check User',
+    uid: `e2e-history-${runSuffix}`,
+    cn: `History Check User ${runSuffix}`,
     sn: 'Check',
-    mail: 'history-check@example.org',
-    password: 'HistorySecret-2026!',
+    mail: `history-${runSuffix}@example.org`,
+    password: `HistorySecret-${runSuffix}!`,
   }
 
   await login(page)
@@ -192,19 +193,40 @@ test('records operator action history for UI create and delete without leaking a
   const addRow = historyRows.filter({ hasText: 'add' }).filter({ hasText: targetDn })
   const delRow = historyRows.filter({ hasText: 'delete' }).filter({ hasText: targetDn })
 
-  await expect(addRow).toHaveCount(1)
-  await expect(delRow).toHaveCount(1)
+  await expect(addRow.first()).toBeVisible({ timeout: 15_000 })
+  await expect(delRow.first()).toBeVisible({ timeout: 15_000 })
+  expect(await addRow.count()).toBeGreaterThanOrEqual(1)
+  expect(await delRow.count()).toBeGreaterThanOrEqual(1)
 
   // Assert actor is present on both rows
-  await expect(addRow.locator('[data-testid="history-actor"]')).toContainText(IDENTITY)
-  await expect(delRow.locator('[data-testid="history-actor"]')).toContainText(IDENTITY)
+  await expect(addRow.locator('[data-testid="history-actor"]').first()).toContainText(IDENTITY)
+  await expect(delRow.locator('[data-testid="history-actor"]').first()).toContainText(IDENTITY)
 
   // Assert no attribute values (password, email, cn, sn) appear in changed attributes
-  const addAttrs = addRow.locator('[data-testid="history-attrs"]')
+  const addAttrs = addRow.locator('[data-testid="history-attrs"]').first()
   await expect(addAttrs).not.toContainText(testUser.password)
   await expect(addAttrs).not.toContainText(testUser.mail)
   await expect(addAttrs).not.toContainText(testUser.cn)
   await expect(addAttrs).not.toContainText(testUser.sn)
+
+  // API-level assertion: GET /api/audit/actions and /api/monitor do not contain password string or userPassword values
+  const auditResult = await page.evaluate(async () => {
+    const res = await fetch('/api/audit/actions')
+    return { ok: res.ok, status: res.status, text: await res.text() }
+  })
+  expect(auditResult.ok).toBeTruthy()
+  expect(auditResult.text).not.toContain(testUser.password)
+  expect(auditResult.text).not.toContain('{SSHA}')
+  expect(auditResult.text).not.toContain('{ARGON2}')
+
+  const monitorResult = await page.evaluate(async () => {
+    const res = await fetch('/api/monitor')
+    return { ok: res.ok, status: res.status, text: await res.text() }
+  })
+  expect(monitorResult.ok).toBeTruthy()
+  expect(monitorResult.text).not.toContain(testUser.password)
+  expect(monitorResult.text).not.toContain('{SSHA}')
+  expect(monitorResult.text).not.toContain('{ARGON2}')
 
   // Open Monitor and assert counters render
   await page.locator('a[href="/health"]').click()

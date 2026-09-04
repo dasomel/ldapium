@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +17,6 @@ var (
 	// sensitiveAttrRe matches attribute names containing sensitive credentials
 	// case-insensitively, following docs/audit-event-schema.md.
 	sensitiveAttrRe = regexp.MustCompile(`(?i)password|secret|credential|token|pwd`)
-
-	// filterAssertionRe matches simple LDAP assertions (attr<op>value).
-	filterAssertionRe = regexp.MustCompile(`\(([A-Za-z][A-Za-z0-9;_-]*)(=|>=|<=|~=)([^()]*)\)`)
 
 	// attrNameRe matches valid bare LDAP attribute names per RFC 4512 §2.5.
 	attrNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*$`)
@@ -47,23 +45,108 @@ func extractChangedAttrs(reqMods []string) []string {
 	return attrs
 }
 
-// redactFilter scans an LDAP search filter and replaces sensitive assertion
-// values with <redacted>, preserving the attribute name and operator.
+// redactAssertion tokenizes a leaf LDAP assertion into (prefix, operator, value)
+// and redacts the value if the attribute name matches sensitiveAttrRe.
+// Handles extensible matches (attr:rule:=val, attr:dn:=val), substring, approx (~=),
+// and range comparisons (>=, <=).
+func redactAssertion(assertion string) string {
+	eqIdx := strings.IndexByte(assertion, '=')
+	if eqIdx == -1 {
+		return assertion
+	}
+
+	var prefix string
+	var op string
+
+	if eqIdx > 0 {
+		switch assertion[eqIdx-1] {
+		case ':':
+			prefix = assertion[:eqIdx-1]
+			op = ":="
+		case '>':
+			prefix = assertion[:eqIdx-1]
+			op = ">="
+		case '<':
+			prefix = assertion[:eqIdx-1]
+			op = "<="
+		case '~':
+			prefix = assertion[:eqIdx-1]
+			op = "~="
+		default:
+			prefix = assertion[:eqIdx]
+			op = "="
+		}
+	} else {
+		prefix = ""
+		op = "="
+	}
+
+	attr := strings.TrimSpace(prefix)
+	if colonIdx := strings.IndexAny(attr, ":;"); colonIdx >= 0 {
+		attr = attr[:colonIdx]
+	}
+
+	if attr != "" && sensitiveAttrRe.MatchString(attr) {
+		return prefix + op + "<redacted>"
+	}
+	return assertion
+}
+
+// redactFilter scans an LDAP search filter using a tokenizer and replaces
+// sensitive assertion values with <redacted>, preserving the attribute name,
+// extensible match rules, and operators.
 func redactFilter(filter string) string {
 	if filter == "" {
 		return ""
 	}
-	return filterAssertionRe.ReplaceAllStringFunc(filter, func(match string) string {
-		submatches := filterAssertionRe.FindStringSubmatch(match)
-		if len(submatches) == 4 {
-			attr := submatches[1]
-			op := submatches[2]
-			if sensitiveAttrRe.MatchString(attr) {
-				return fmt.Sprintf("(%s%s<redacted>)", attr, op)
+
+	var sb strings.Builder
+	n := len(filter)
+	i := 0
+	for i < n {
+		if filter[i] != '(' {
+			sb.WriteByte(filter[i])
+			i++
+			continue
+		}
+
+		// Check if this begins a compound filter: (&, (|, (!
+		j := i + 1
+		for j < n && (filter[j] == ' ' || filter[j] == '\t' || filter[j] == '\r' || filter[j] == '\n') {
+			j++
+		}
+		if j < n && (filter[j] == '&' || filter[j] == '|' || filter[j] == '!') {
+			sb.WriteByte('(')
+			i++
+			continue
+		}
+
+		// Find matching ')' for this leaf assertion.
+		end := -1
+		for k := i + 1; k < n; k++ {
+			if filter[k] == '(' {
+				break
+			}
+			if filter[k] == ')' {
+				end = k
+				break
 			}
 		}
-		return match
-	})
+
+		if end == -1 {
+			sb.WriteByte('(')
+			i++
+			continue
+		}
+
+		assertion := filter[i+1 : end]
+		sb.WriteByte('(')
+		sb.WriteString(redactAssertion(assertion))
+		sb.WriteByte(')')
+		i = end + 1
+	}
+
+	return sb.String()
 }
 
 // parseGeneralizedTime parses LDAP GeneralizedTime with or without fractional seconds.
@@ -193,4 +276,117 @@ func parseContextCSN(val string) domain.ReplicationCSN {
 		}
 	}
 	return res
+}
+
+// formatCursor serializes an AuditEvent's reqStart and reqSession into a pagination cursor.
+func formatCursor(e domain.AuditEvent) string {
+	if e.Raw.ReqSession != "" {
+		return fmt.Sprintf("%s:%s", e.Raw.ReqStart, e.Raw.ReqSession)
+	}
+	return e.Raw.ReqStart
+}
+
+// parseCursor splits a pagination cursor into reqStart and reqSession components.
+func parseCursor(cursor string) (reqStart, reqSession string) {
+	if cursor == "" {
+		return "", ""
+	}
+	if idx := strings.Index(cursor, ":"); idx >= 0 {
+		return cursor[:idx], cursor[idx+1:]
+	}
+	return cursor, ""
+}
+
+// compareSessions compares two reqSession identifiers numerically when possible,
+// falling back to string comparison.
+func compareSessions(a, b string) int {
+	na, erra := strconv.ParseInt(a, 10, 64)
+	nb, errb := strconv.ParseInt(b, 10, 64)
+	if erra == nil && errb == nil {
+		if na > nb {
+			return 1
+		} else if na < nb {
+			return -1
+		}
+		return 0
+	}
+	return strings.Compare(a, b)
+}
+
+// compareAuditEvents orders audit events newest-first, breaking equal timestamps
+// with reqSession descending so pagination cursors do not skip events.
+func compareAuditEvents(a, b *domain.AuditEvent) int {
+	aStart := toGeneralizedTime(a.Raw.ReqStart)
+	bStart := toGeneralizedTime(b.Raw.ReqStart)
+	if aStart != bStart {
+		if aStart > bStart {
+			return -1 // a is newer (comes first)
+		}
+		return 1
+	}
+	sessCmp := compareSessions(a.Raw.ReqSession, b.Raw.ReqSession)
+	if sessCmp != 0 {
+		return -sessCmp // higher session comes first
+	}
+	targetA := ""
+	if a.Target != nil {
+		targetA = *a.Target
+	}
+	targetB := ""
+	if b.Target != nil {
+		targetB = *b.Target
+	}
+	return strings.Compare(targetB, targetA)
+}
+
+// filterAndPaginateEvents sorts and paginates audit events, filtering out events
+// at or before the given cursor so events sharing the same reqStart are not lost.
+func filterAndPaginateEvents(events []domain.AuditEvent, limit int, before string) ([]domain.AuditEvent, string, bool) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	cursorStart, cursorSession := parseCursor(before)
+	cursorStartGen := toGeneralizedTime(cursorStart)
+
+	sort.Slice(events, func(i, j int) bool {
+		return compareAuditEvents(&events[i], &events[j]) < 0
+	})
+
+	filtered := make([]domain.AuditEvent, 0, len(events))
+	for _, e := range events {
+		if before != "" {
+			eStartGen := toGeneralizedTime(e.Raw.ReqStart)
+			if eStartGen > cursorStartGen {
+				continue
+			}
+			if eStartGen == cursorStartGen {
+				if cursorSession != "" {
+					if compareSessions(e.Raw.ReqSession, cursorSession) >= 0 {
+						continue
+					}
+				} else {
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, e)
+	}
+
+	hasMore := false
+	nextBefore := ""
+	if len(filtered) > limit {
+		hasMore = true
+		filtered = filtered[:limit]
+		nextBefore = formatCursor(filtered[limit-1])
+	}
+
+	for i := range filtered {
+		filtered[i].Seq = i + 1
+	}
+
+	return filtered, nextBefore, hasMore
 }

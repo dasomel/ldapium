@@ -84,12 +84,10 @@ SENSITIVE_ATTR_RE = re.compile(r"password|secret|credential|token|pwd", re.IGNOR
 # else is a valid bare LDAP attribute description.
 ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*$")
 
-# (attr<op>value) — value runs up to the next unescaped "(" or ")", which is
-# good enough for the simple, non-nested-value filters an audit correlation
-# search actually uses; LDAP filter escaping (\28/\29 for literal parens
-# inside a value) and extensible-match (":=") filters are out of scope, same
-# boundary the rest of this export already draws around filter parsing.
-_FILTER_ASSERTION_RE = re.compile(r"\(([A-Za-z][A-Za-z0-9;_-]*)(=|>=|<=|~=)([^()]*)\)")
+# (attr<op>value) — value runs up to the next unescaped "(" or ")".
+# Supports standard operators (=, >=, <=, ~=) and extensible match (:=)
+# with attribute rules/options (:dn, :caseExactMatch, etc.).
+_FILTER_ASSERTION_RE = re.compile(r"\(([A-Za-z][A-Za-z0-9;_:-]*)(=|>=|<=|~=|:=)([^()]*)\)")
 
 _GENERALIZED_TIME_RE = re.compile(
     r"^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\.\d+)?Z$"
@@ -109,18 +107,19 @@ def dn_key(dn: str) -> str:
 
 def redact_filter(filt) -> str:
     """Redact password/secret/credential/token/pwd-like assertion VALUES in
-    an LDAP search filter, keeping the attribute name and operator. Applied
-    unconditionally in both output modes — this is the one place a
+    an LDAP search filter, keeping the attribute name, rule, and operator.
+    Applied unconditionally in both output modes — this is the one place a
     plaintext-in-a-search-filter secret (e.g. an authentication attempt
-    logged via "(userPassword=hunter2)", or a bearer token filtered on
-    directly) could otherwise reach this export untouched.
+    logged via "(userPassword=hunter2)", extensible match, or a bearer token
+    filtered on directly) could otherwise reach this export untouched.
     """
     if not isinstance(filt, str) or not filt:
         return filt
 
     def _redact_one(m: re.Match) -> str:
         name, op, _value = m.group(1), m.group(2), m.group(3)
-        if SENSITIVE_ATTR_RE.search(name):
+        attr_name = re.split(r"[:;]", name)[0]
+        if SENSITIVE_ATTR_RE.search(attr_name):
             return f"({name}{op}<redacted>)"
         return m.group(0)
 

@@ -15,9 +15,11 @@ import (
 func (s *Server) handleGetAuditActions(c echo.Context) error {
 	limit := 50
 	if l := c.QueryParam("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed <= 0 || parsed > 200 {
+			return respondErr(c, domain.ErrInvalidInput)
 		}
+		limit = parsed
 	}
 	before := c.QueryParam("before")
 

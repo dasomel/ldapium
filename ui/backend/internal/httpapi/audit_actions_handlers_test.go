@@ -135,3 +135,36 @@ func TestHandleGetAuditActions_PermissionDenied(t *testing.T) {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
+
+func TestHandleGetAuditActions_LimitValidation(t *testing.T) {
+	e := echo.New()
+	s := &Server{cfg: config.Config{BaseDN: "dc=example,dc=org"}}
+	client := &fakeAuditActionsClient{fakeLoginClient: &fakeLoginClient{}}
+
+	// limit > 200 must return 400 Bad Request
+	c, rec := auditTestContext(e, "?limit=201", client)
+	if err := s.handleGetAuditActions(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status for limit=201 = %d, want 400", rec.Code)
+	}
+
+	// invalid limit string must return 400 Bad Request
+	c2, rec2 := auditTestContext(e, "?limit=invalid", client)
+	if err := s.handleGetAuditActions(c2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("status for limit=invalid = %d, want 400", rec2.Code)
+	}
+
+	// zero/negative limit must return 400 Bad Request
+	c3, rec3 := auditTestContext(e, "?limit=0", client)
+	if err := s.handleGetAuditActions(c3); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec3.Code != http.StatusBadRequest {
+		t.Errorf("status for limit=0 = %d, want 400", rec3.Code)
+	}
+}
