@@ -57,10 +57,17 @@ maintainers to resolve architectural scope questions regarding OpenLDAP HA:
       yielding an RPO of up to **24 hours**. Operators requiring tighter RPOs (e.g., 1 hour)
       must configure a tighter CronJob schedule. Point-in-time LDIF snapshots define the
       recovery boundary.
-    - *Single-node loss under Active-Active*: **RPO ≈ replication lag (< 1 second)**.
-      Replication deltas between healthy peers on reference hardware are sub-second,
-      verified in `.github/workflows/replication-chaos-e2e.yml`. Unsynced writes on a
-      suddenly destroyed node that never reached peers represent the upper bound.
+    - *Single-node loss under Active-Active*: **RPO ≈ replication lag, bounded but not
+      measured in sub-second terms**. `.github/workflows/replication-chaos-e2e.yml` proves
+      convergence, not lag magnitude: after a write, it polls each surviving provider's
+      `contextCSN` over its `ldapi://` socket every 2 seconds (up to 60 iterations / 120
+      seconds) until all providers agree, which shows replication *catches up* but does not
+      time how far behind a peer fell while catching up. Unsynced writes on a suddenly
+      destroyed node that never reached peers represent the upper bound. Operators who need
+      an actual lag measurement under their own write load should alert on
+      `LDAPiumReplicationLag` (`charts/ldapium/templates/prometheusrule.yaml`), which is
+      sourced from the `openldap_replication_delta` metric and is the supported way to
+      observe real replication lag in a running deployment.
   - **RTO (Recovery Time Objective)**:
     - *Full disaster recovery restore*: Reference measurement from run
       [#33817366039](https://github.com/dasomel/ldapium/actions/runs/33817366039) = **47 seconds** on GitHub-hosted kind

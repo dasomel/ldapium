@@ -165,6 +165,7 @@ jobs:
 
       - name: Start continuous write probe during pod deletion
         run: |
+          set -euo pipefail
           kubectl -n directory apply -f - <<'EOF'
           apiVersion: v1
           kind: Pod
@@ -183,26 +184,46 @@ jobs:
                     seq=0
                     while [ ! -f /tmp/stop ]; do
                       seq=$((seq + 1))
+                      ts=$(date +%s)
                       if printf 'dn: uid=probe-target,ou=chaos,dc=example,dc=org\nchangetype: modify\nreplace: description\ndescription: probe-%s\n' "$seq" | \
                         ldapmodify -x -o nettimeout=2 -H ldap://directory-ldapium:389 \
                           -D "cn=admin,dc=example,dc=org" -w "chaos-e2e-password" >/dev/null 2>&1; then
-                        echo OK
+                        echo "${ts} OK"
+                        touch /tmp/ready
                       else
-                        echo FAIL
+                        echo "${ts} FAIL"
                       fi
                       sleep 1
                     done
+                # A bare `Ready` condition only proves the container started,
+                # not that a write ever landed. Gate it on a real success
+                # instead: the probe touches /tmp/ready after its first
+                # successful ldapmodify, and readinessProbe polls for that
+                # file, so `kubectl wait --for=condition=Ready` below blocks
+                # until one real modify has completed.
+                readinessProbe:
+                  exec:
+                    command: ["test", "-f", "/tmp/ready"]
+                  periodSeconds: 1
+                  failureThreshold: 60
           EOF
-          kubectl -n directory wait --for=condition=Ready pod/write-availability-probe --timeout=60s
+          kubectl -n directory wait --for=condition=Ready pod/write-availability-probe --timeout=90s
+          echo "PASS: continuous write probe completed a real modify before pod deletion" | tee -a /tmp/chaos-evidence.txt
 
       - name: Delete one provider
         run: |
+          set -euo pipefail
+          # Recorded on the runner, not inside a pod: the probe's log lines
+          # use the same `date +%s` clock, so these bound the sample window
+          # the availability evaluation below filters against.
+          date +%s > /tmp/deletion-window-start.txt
           kubectl -n directory delete pod directory-ldapium-1 --wait=true
           kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-0 --timeout=180s
           kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-2 --timeout=180s
 
       - name: Continue writes while one provider is down
         run: |
+          set -euo pipefail
           kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:chaos -- \
             sh -ec '
               for i in 1 2 3 4 5; do
@@ -215,6 +236,10 @@ jobs:
           EOF
               done
             '
+          # End of the window the deletion-window evidence covers: the
+          # provider is still down for the whole of this step (its own name
+          # says so), so this is the last point still inside the outage.
+          date +%s > /tmp/deletion-window-end.txt
 
       - name: Stop continuous write probe and evaluate availability
         run: |
@@ -225,14 +250,37 @@ jobs:
           kubectl -n directory logs write-availability-probe > "$log"
           kubectl -n directory delete pod write-availability-probe --ignore-not-found
 
-          total=$(grep -cE '^(OK|FAIL)$' "$log" || true)
-          ok=$(grep -c '^OK$' "$log" || true)
-          streak=$(awk '/^FAIL$/ { n++; if (n > m) m = n; next } { n = 0 } END { print m + 0 }' "$log")
-          echo "write availability during pod deletion: ${ok}/${total}, longest consecutive failure run: ${streak}" | tee -a /tmp/chaos-evidence.txt
-          printf 'write_attempts=%s\nwrite_succeeded=%s\nlongest_write_failure_run=%s\n' "$total" "$ok" "$streak" \
+          window_start=$(cat /tmp/deletion-window-start.txt)
+          window_end=$(cat /tmp/deletion-window-end.txt)
+          in_window="$log.in-window"
+          # Every raw sample the probe recorded, tagged against the deletion
+          # window computed above, so a reviewer can see exactly which
+          # samples the assertions below are (and are not) counting.
+          awk -v start="$window_start" -v end="$window_end" \
+            '{ w = ($1 >= start && $1 <= end) ? "in-window" : "outside"; print $1, $2, w }' \
+            "$log" > "$in_window"
+
+          echo "pod deletion window: start=${window_start} end=${window_end} (unix seconds)" | tee -a /tmp/chaos-evidence.txt
+          echo "timestamp status window" | tee -a /tmp/chaos-evidence.txt
+          tee -a /tmp/chaos-evidence.txt < "$in_window"
+
+          total=$(awk '$3 == "in-window"' "$in_window" | wc -l | tr -d ' ')
+          ok=$(awk '$3 == "in-window" && $2 == "OK"' "$in_window" | wc -l | tr -d ' ')
+          streak=$(awk '
+            $3 == "in-window" {
+              if ($2 == "FAIL") { n++; if (n > m) m = n } else { n = 0 }
+            }
+            END { print m + 0 }
+          ' "$in_window")
+          echo "write availability inside the pod deletion window: ${ok}/${total} in-window samples, longest consecutive in-window failure run: ${streak}" | tee -a /tmp/chaos-evidence.txt
+          printf 'write_attempts_in_window=%s\nwrite_succeeded_in_window=%s\nlongest_write_failure_run_in_window=%s\n' "$total" "$ok" "$streak" \
             > /tmp/write-availability-summary.txt
 
-          test "$total" -ge 5
+          # The window must actually contain probe samples and at least one
+          # of them must have succeeded, or the streak/total numbers below are
+          # vacuous (e.g. a window that raced past the probe's 1s cadence).
+          test "$total" -ge 1
+          test "$ok" -ge 1
           test "$streak" -le 5
 
       - name: Wait for failed provider to rejoin
