@@ -183,14 +183,9 @@ jobs:
                     seq=0
                     while [ ! -f /tmp/stop ]; do
                       seq=$((seq + 1))
-                      if ldapmodify -x -o nettimeout=2 -H ldap://directory-ldapium:389 \
-                        -D "cn=admin,dc=example,dc=org" -w "chaos-e2e-password" >/dev/null 2>&1 <<MOD
-          dn: uid=probe-target,ou=chaos,dc=example,dc=org
-          changetype: modify
-          replace: description
-          description: probe-${seq}
-          MOD
-                      then
+                      if printf 'dn: uid=probe-target,ou=chaos,dc=example,dc=org\nchangetype: modify\nreplace: description\ndescription: probe-%s\n' "$seq" | \
+                        ldapmodify -x -o nettimeout=2 -H ldap://directory-ldapium:389 \
+                          -D "cn=admin,dc=example,dc=org" -w "chaos-e2e-password" >/dev/null 2>&1; then
                         echo OK
                       else
                         echo FAIL
