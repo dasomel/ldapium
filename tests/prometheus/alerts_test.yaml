@@ -58,6 +58,37 @@ tests:
         exp_alerts: []
 
   - interval: 1m
+    name: an identically-named replica lagging in another namespace does not merge with or mask this one
+    input_series:
+      # Same service AND replica name in both namespaces, both lagging at
+      # once. This rule's own expr selector only ever matches its own
+      # namespace, so `other-directory`'s series can never reach the `max`
+      # aggregation in the first place — but that only holds because the
+      # selector carries the namespace matcher. This proves the surviving
+      # alert is the one from OUR namespace, and that `by (namespace, ...)`
+      # keeps that namespace on the fired alert's own label set rather than
+      # dropping it, so two real installs sharing this fullname would never
+      # produce indistinguishable alerts in Alertmanager even if their
+      # replica names happened to collide too.
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+      - series: 'openldap_replication_delta{namespace="other-directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LDAPiumReplicationLag
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: directory
+              service: alerts-ldapium-metrics
+              replica: ldapium-1
+              release: alerts
+            exp_annotations:
+              summary: "LDAPium replication lag is high"
+              description: "At least one replication peer is more than the configured threshold behind the local provider."
+
+  - interval: 1m
     name: a replica falls behind
     input_series:
       - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
@@ -75,6 +106,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              namespace: directory
               service: alerts-ldapium-metrics
               replica: ldapium-1
               release: alerts
@@ -134,6 +166,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              namespace: directory
               service: alerts-ldapium-metrics
               replica: ldapium-1
               release: alerts
@@ -152,6 +185,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              namespace: directory
               service: alerts-ldapium-metrics
               replica: ldapium-1
               release: alerts

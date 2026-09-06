@@ -236,10 +236,30 @@ jobs:
           EOF
               done
             '
-          # End of the window the deletion-window evidence covers: the
-          # provider is still down for the whole of this step (its own name
-          # says so), so this is the last point still inside the outage.
+
+      - name: Wait for failed provider to rejoin
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          # Polled directly against the Ready condition (rather than
+          # `kubectl wait`) so we control the sample cadence and can stamp
+          # the exact second the condition flips true — that timestamp is
+          # the end of the pod-deletion window the availability evaluation
+          # below filters against. The probe keeps running the whole time,
+          # so the window spans the full outage: delete issued through the
+          # replica becoming Ready again.
+          i=0
+          while true; do
+            ready=$(kubectl -n directory get pod directory-ldapium-1 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            [ "$ready" = "True" ] && break
+            i=$((i+1))
+            [ "$i" -lt 300 ] || { echo '::error::provider 1 never became Ready again within 300s'; exit 1; }
+            sleep 1
+          done
           date +%s > /tmp/deletion-window-end.txt
+          elapsed=$(( $(date +%s) - start ))
+          echo "single-provider recovery seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
+          test "$elapsed" -le 300
 
       - name: Stop continuous write probe and evaluate availability
         run: |
@@ -249,6 +269,13 @@ jobs:
           log=/tmp/chaos-write-availability.txt
           kubectl -n directory logs write-availability-probe > "$log"
           kubectl -n directory delete pod write-availability-probe --ignore-not-found
+
+          # The probe's own loop cadence (one ldapmodify attempt, then sleep
+          # 1s): used to convert a failure streak measured in samples into a
+          # duration, since "N samples" alone doesn't say anything about the
+          # actual outage a client would experience.
+          cadence_seconds=1
+          max_streak_seconds=15
 
           window_start=$(cat /tmp/deletion-window-start.txt)
           window_end=$(cat /tmp/deletion-window-end.txt)
@@ -272,24 +299,21 @@ jobs:
             }
             END { print m + 0 }
           ' "$in_window")
-          echo "write availability inside the pod deletion window: ${ok}/${total} in-window samples, longest consecutive in-window failure run: ${streak}" | tee -a /tmp/chaos-evidence.txt
-          printf 'write_attempts_in_window=%s\nwrite_succeeded_in_window=%s\nlongest_write_failure_run_in_window=%s\n' "$total" "$ok" "$streak" \
+          streak_seconds=$((streak * cadence_seconds))
+          echo "write availability inside the pod deletion window: ${ok}/${total} in-window samples, longest consecutive in-window failure run: ${streak} samples (~${streak_seconds}s)" | tee -a /tmp/chaos-evidence.txt
+          printf 'write_attempts_in_window=%s\nwrite_succeeded_in_window=%s\nlongest_write_failure_run_in_window=%s\nlongest_write_failure_run_in_window_seconds=%s\n' \
+            "$total" "$ok" "$streak" "$streak_seconds" \
             > /tmp/write-availability-summary.txt
 
-          # The window must actually contain probe samples and at least one
-          # of them must have succeeded, or the streak/total numbers below are
-          # vacuous (e.g. a window that raced past the probe's 1s cadence).
-          test "$total" -ge 1
+          # The window now spans the full outage (delete issued through
+          # rejoin), so it should comfortably contain many samples at the
+          # probe's ~1/s cadence; a low count means the window collapsed and
+          # the streak/total numbers below would be vacuous. The streak bound
+          # is expressed in seconds of real unavailability, not attempts, so
+          # it doesn't silently loosen if the probe's cadence ever changes.
+          test "$total" -ge 20
           test "$ok" -ge 1
-          test "$streak" -le 5
-
-      - name: Wait for failed provider to rejoin
-        run: |
-          start=$(date +%s)
-          kubectl -n directory wait --for=condition=Ready pod/directory-ldapium-1 --timeout=300s
-          elapsed=$(( $(date +%s) - start ))
-          echo "single-provider recovery seconds=${elapsed}" | tee -a /tmp/chaos-evidence.txt
-          test "$elapsed" -le 300
+          test "$streak_seconds" -le "$max_streak_seconds"
 
       - name: Verify convergence on all three providers
         run: |

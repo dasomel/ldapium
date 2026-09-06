@@ -76,11 +76,13 @@ maintainers to resolve architectural scope questions regarding OpenLDAP HA:
       The workflow is the acceptance test; thresholds are the operator's. RTO is dominated by `slapadd` database rebuild
       and index generation, which scales with total entry and attribute index volume (see [docs/scale-benchmarks.md](scale-benchmarks.md)).
     - *Single-node failure under Active-Active*: Measured via continuous write probing (1-second `ldapmodify` writes to the
-      Service endpoint) during pod deletion in `.github/workflows/replication-chaos-e2e.yml` (reusing the consecutive-failure
-      measurement pattern from TLS rotation in `scripts/e2e-ldaps-probe.sh`). The chaos workflow proves that writes continue
-      during pod deletion with a bounded consecutive failure run (typically 0–1s due to Kubernetes Service endpoint deregistration,
-      rather than an unmeasured "0s" claim), followed by successful batch writes while degraded, and full multi-node convergence
-      upon pod restart.
+      Service endpoint) in `.github/workflows/replication-chaos-e2e.yml`, running for the full window from the moment the pod
+      delete is issued until the replaced pod reports Ready again (not just the few seconds of the follow-up batch-write step,
+      which alone is too short a sample to bound anything). The workflow asserts at least 20 in-window write attempts and a
+      longest consecutive in-window failure run of no more than 15 seconds, printing the full timestamped sample table as
+      evidence; see `write-availability-summary.txt` in the workflow's own run logs for the exact numbers of any given run
+      rather than relying on a fixed figure here, since sample count and streak length both depend on how long that run's pod
+      replacement took.
 - **Acceptance Test Requirement**: Operators verifying SLA compliance must run the
   CI-equivalent scripts (`scripts/backup.sh`, `scripts/restore.sh`, and the chaos
   partition cases in `.github/workflows/replication-chaos-e2e.yml`) against their target
@@ -129,7 +131,7 @@ an operational boundary.
 
 | Failure Mode | Detection Mechanism | Automated / Operational Recovery | Verification Status |
 |---|---|---|---|
-| **Single provider pod crash / deletion** | Kubernetes pod startup/liveness/readiness exec probe failure (`ldapwhoami` over `ldapi://`); `up{service=...-metrics} == 0` on crashed pod; endpoint removed from Service. | StatefulSet automatically recreates pod; `syncrepl` automatically reconnects to peers and replicates changes missed during downtime. Writes continue without interruption on surviving pods. | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: continuous write probe during pod deletion confirms bounded consecutive failure streak <= 5s; writes succeed while degraded; full convergence upon restart). |
+| **Single provider pod crash / deletion** | Kubernetes pod startup/liveness/readiness exec probe failure (`ldapwhoami` over `ldapi://`); `up{namespace=...,service=...-metrics} == 0` on crashed pod; endpoint removed from Service. | StatefulSet automatically recreates pod; `syncrepl` automatically reconnects to peers and replicates changes missed during downtime. Writes continue without interruption on surviving pods. | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: continuous write probe running for the full pod-delete-to-Ready-again window confirms at least 20 in-window write attempts and a longest consecutive in-window failure streak of <= 15s; writes succeed while degraded; full convergence upon restart). |
 | **Network partition (split-brain isolation)** | `LDAPiumReplicationLag` / `LDAPiumContextCSNDivergence` alerts; syncrepl connection timeout in slapd logs. | Each partition accepts local writes. Upon network healing, syncrepl exchanges CSNs; conflicting updates to identical entries resolve silently via timestamp last-write-wins without error records. Discarded update CSNs are observable in raw accesslog export (see [docs/audit-event-schema.md](audit-event-schema.md)). | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: iptables DROP on FORWARD chain isolates node; writes accepted on both sides; full convergence and silent same-entry conflict resolution verified after unpartition). |
 | **Single-provider storage corruption** | Pod fails startup with MDB initialization error; `CrashLoopBackOff`; exporter scrape failure. | Delete the corrupted PVC (`data-<fullname>-<ordinal>`); restart the pod. The pod starts with a clean empty PVC and performs an initial syncrepl refresh from peer providers to fully rebuild state. | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: expansion from 1 to 3 pods proves empty PVCs hydrate cleanly via initial syncrepl refresh). |
 | **Catastrophic cluster data loss / accidental deletion** | Applications report missing entries; empty search results; directory audit log records unintended mass delete operations. | Disaster recovery execution: scale StatefulSet to 0, wipe PVCs on ordinals 1..N-1, execute offline `slapadd` restore on ordinal `-0` via throwaway pod mounting PVCs, scale StatefulSet back to target replica count. | **Verified** (`.github/workflows/backup-restore.yml`: 3-node backup, mass delete, offline restore into `-0`, and resync completed in reference run #33817366039 in 47 seconds). |
@@ -189,14 +191,20 @@ scraping operational attributes from both local slapd and peer instances.
 
 #### Replication Alert Rules (`charts/ldapium/templates/prometheusrule.yaml`)
 
-The chart provides production alert rules covering replication degradation, scoped by `service`
-and labelled with `release`:
+The chart provides production alert rules covering replication degradation, scoped by
+`namespace` AND `service` (an install's `service` label alone is only unique within its own
+namespace) and labelled with `release`. The rendered expressions below are the exact output of
+`helm template alerts charts/ldapium --namespace directory -f charts/ldapium/examples/metrics-values.yaml`
+(`<namespace>` = `directory`, `<fullname>` = `alerts-ldapium` in that render):
 
 - **`LDAPiumReplicationLag`** (`severity: warning`):
-  Fires when `max by (service, replica) (openldap_replication_delta{service="<fullname>-metrics"}) > 30`
+  Fires when `max by (namespace, service, replica) (openldap_replication_delta{namespace="<namespace>",service="<fullname>-metrics"}) > 30`
   persists for 5 minutes. Indicates that a replication peer has fallen behind normal propagation latency.
+  `namespace` stays in the `by` clause so the fired alert's own label set keeps distinguishing two
+  same-fullname installs in different namespaces, rather than the aggregation quietly dropping the
+  one label that tells them apart.
 - **`LDAPiumContextCSNDivergence`** (`severity: critical`):
-  Fires when `max by (service, replica) (abs(openldap_replication_delta{service="<fullname>-metrics"})) > 300`
+  Fires when `max by (namespace, service, replica) (abs(openldap_replication_delta{namespace="<namespace>",service="<fullname>-metrics"})) > 300`
   persists for 5 minutes. Indicates severe multi-minute contextCSN desynchronization in either direction,
   signaling a stalled replication consumer or persistent divergence.
 

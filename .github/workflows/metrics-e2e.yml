@@ -148,10 +148,14 @@ jobs:
           kubectl -n directory scale statefulset directory-ldapium --replicas=1
           kubectl -n directory wait --for=delete pod/directory-ldapium-1 --timeout=60s
 
-          # Poll Prometheus API until LDAPiumExporterDown is firing with release label
+          # Poll Prometheus API until LDAPiumExporterDown is firing with release label.
+          # A field-aware jq selector, not a `.*` grep across the minified JSON line:
+          # JSON key order isn't guaranteed, and a positional regex could just as
+          # easily match labels from one alert object glued to the state of another.
           i=0
           until kubectl -n directory exec prometheus -- wget -qO- http://localhost:9090/api/v1/alerts \
-            | grep -q '"alertname":"LDAPiumExporterDown".*"release":"directory".*"state":"firing"'; do
+            | jq -e '.data.alerts[] | select(.labels.alertname == "LDAPiumExporterDown" and .labels.release == "directory" and .state == "firing")' \
+              >/dev/null; do
             i=$((i + 1))
             if [ "$i" -gt 30 ]; then
               echo "::error::LDAPiumExporterDown alert did not fire with release: directory label within 60s"

@@ -26,7 +26,11 @@ spec:
             description: "Prometheus cannot scrape the LDAPium metrics endpoint for {{ .Values.metrics.prometheusRule.exporterDownFor | default "5m" }}."
 
         - alert: LDAPiumReplicationLag
-          expr: max by (service, replica) (openldap_replication_delta{namespace="{{ .Release.Namespace }}",service="{{ include "ldapium.fullname" . }}-metrics"}) > {{ .Values.metrics.prometheusRule.replicationLagThreshold }}
+          # `by (namespace, service, replica)`: without namespace here, two
+          # same-fullname installs in different namespaces would have this
+          # `max` aggregation merge their series and their alerts would be
+          # indistinguishable from one another.
+          expr: max by (namespace, service, replica) (openldap_replication_delta{namespace="{{ .Release.Namespace }}",service="{{ include "ldapium.fullname" . }}-metrics"}) > {{ .Values.metrics.prometheusRule.replicationLagThreshold }}
           for: {{ .Values.metrics.prometheusRule.replicationLagFor }}
           labels:
             severity: warning
@@ -36,7 +40,7 @@ spec:
             description: "At least one replication peer is more than the configured threshold behind the local provider."
 
         - alert: LDAPiumContextCSNDivergence
-          expr: max by (service, replica) (abs(openldap_replication_delta{namespace="{{ .Release.Namespace }}",service="{{ include "ldapium.fullname" . }}-metrics"})) > {{ .Values.metrics.prometheusRule.replicationDivergenceThreshold | default 300 }}
+          expr: max by (namespace, service, replica) (abs(openldap_replication_delta{namespace="{{ .Release.Namespace }}",service="{{ include "ldapium.fullname" . }}-metrics"})) > {{ .Values.metrics.prometheusRule.replicationDivergenceThreshold | default 300 }}
           for: {{ .Values.metrics.prometheusRule.replicationDivergenceFor | default "5m" }}
           labels:
             severity: critical
