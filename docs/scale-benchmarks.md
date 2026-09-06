@@ -1,9 +1,10 @@
 # Scale benchmarks
 
 "This holds up to N entries" is a claim; this document is the reproducible
-measurement behind it instead. It covers four things: offline load
+measurement behind it instead. It covers five things: offline load
 throughput, search throughput/latency, write-and-replication convergence,
-and where to run all three.
+identity-lifecycle (joiner/mover/leaver) operation timing, and where to run
+all four.
 
 ## Where to run this
 
@@ -12,10 +13,11 @@ wall-clock time neither the runner's ephemeral disk nor CI's time budget can
 absorb, and a number produced by truncating the run early is noise, not
 evidence. So 10M/30M+ stays **local reproduction tooling, not a CI job** —
 `scripts/bench-generate-ldif.py`, `scripts/bench-load.sh`,
-`scripts/bench-search.sh`, `scripts/bench-replication.sh`, and the
+`scripts/bench-search.sh`, `scripts/bench-replication.sh`, the
 `scripts/bench-profile.sh` runner that wraps the first three (see "The
-profile runner" below), run by hand on whatever machine you actually care
-about the numbers for. The 1M profile is the exception: it fits a
+profile runner" below), and `scripts/bench-lifecycle.sh` (see "Identity-
+lifecycle load profile" below), run by hand on whatever machine you actually
+care about the numbers for. The 1M profile is the exception: it fits a
 GitHub-hosted runner's disk and time budget, so `.github/workflows/
 bench-profile.yml` (`workflow_dispatch` only — not on every push or PR, see
 that file's own comment for why) runs it on demand, which is what keeps the
@@ -207,6 +209,80 @@ The 1M profile also runs in CI on demand — see `.github/workflows/
 bench-profile.yml` (`workflow_dispatch`, capped at 1M, see that file's
 own guard step for why a larger value is rejected rather than silently
 attempted on a GitHub-hosted runner).
+
+### Identity-lifecycle load profile
+
+```bash
+docker build -t ldapium:e2e -f image/Dockerfile image/
+./scripts/bench-lifecycle.sh --identities 1000000 --ops 100000 --out scripts/bench-results
+```
+
+Closes the gap the "What this does not cover" section used to call out:
+issue #124's AC absorbed from #19 asked specifically for joiner/mover/leaver
+operation timing, not the generic `inetOrgPerson` write/search numbers
+`bench-profile.sh` measures. `scripts/bench-lifecycle.sh` reuses
+`bench-load.sh` for the base population (same offline `slapadd` path, same
+generator, same sizing formula as `bench-profile.sh` — see that script's own
+header) and adds a third phase: a deterministic, seeded queue of lifecycle
+operations (`scripts/bench-generate-lifecycle-ops.py` — pure and separately
+testable, unlike the LDAP-wire phases around it) run over the wire against a
+real server with `--concurrency` parallel workers.
+
+What "joiner", "mover", and "leaver" mean here, mapped to the same
+operations the console's backend performs (not a reinterpretation of them):
+
+| Term | Console operation | Wire operation here |
+|---|---|---|
+| Joiner | create a new identity | `ldapadd` a new `uid=join-<i>,ou=people,<base>` entry |
+| Mover | move an identity to a new org unit (`ui/backend/internal/ldapclient/tree.go`'s `MoveEntry`) | `ldapmodrdn -r -s ou=people-moved,<base>` — RDN preserved, `deleteOldRDN=true`, matching `buildMoveRequest` exactly |
+| Leaver | deactivate then remove an identity (`users.go`'s `Lock`, `pwdAccountLockedTime: 000001010000Z`) | `ldapmodify` (replace `pwdAccountLockedTime`) then `ldapdelete` — the same two-step sequence, not a single combined operation |
+
+`--mix joiner:mover:leaver` (default `50:30:20`) sets the op counts as a
+ratio of `--ops`; movers and leavers are assigned disjoint ranges of the
+loaded `uid=bench<N>` identities up front (leavers get the low end, movers
+the next slice) specifically so a mover and a leaver can never race the same
+DN — a race there would make both operations' latency and error numbers
+meaningless, not just noisy. `--identities` must cover at least
+mover-count + leaver-count or the script fails fast (exit 2) before starting
+any container.
+
+**ppolicy is auto-detected, not assumed.** The ppolicy overlay module is
+loaded unconditionally in `image/ldifs/01-cn-config.ldif` regardless of
+`LDAP_PASSWORD_POLICY_ENABLED` (only the `olcPPolicyDefault` policy pointer
+is conditional on that flag — confirmed by reading that file, not assumed),
+so `pwdAccountLockedTime` is legal schema on every stock `ldapium:e2e`/
+`-chaos`/`-security` image. The script still probes `cn=config` for the
+overlay (retried up to 5 times — live-verified this can miss on the very
+first query right after the readiness check passes, since the mdb backend
+and the cn=config backend don't necessarily finish coming up in the same
+instant) rather than hardcoding that assumption: against a custom `--image`
+without ppolicy compiled in, leaver ops silently become delete-only and the
+report's `ppolicyDetected: false` field says so.
+
+Post-run sanity checks (all three must pass, in one query each rather than
+per-operation, for the same reason `bench-profile.sh` keeps its own progress
+sampling O(1) — see that script's header): `ou=people-moved` holds exactly
+the mover count, the remaining `uid=bench*` count under `ou=people` equals
+`identities - movers - leavers` (leavers verifiably gone, movers verifiably
+elsewhere), and every `uid=join-*` entry exists. Any sanity failure, or any
+nonzero per-operation error count, fails the run (`status: "failed"`) —
+this is meant to catch a lifecycle operation silently no-op'ing, not just
+time the happy path.
+
+`--timeout-seconds` bounds the **operations phase only** (the base load has
+no cap here — use `bench-load.sh` directly if that needs bounding), and is
+deliberately cooperative rather than a preemptive kill: this repo's other
+`timeout`-based CI-only shell isn't available by default on macOS, which is
+this benchmark's other required run target per `AGENTS.md`. A worker
+finishes its current operation, then stops once the deadline has passed;
+`status` becomes `"timed-out"` and sanity checks are skipped, the same way
+`bench-profile.sh` skips search/write on a non-`"ok"` load status.
+
+A 1M-scale run has not been committed to `scripts/bench-results/` as of this
+writing — see the PR that added this section for whether one has landed
+since. Small local runs (tens of thousands of identities) are the everyday
+way to exercise this tool; see `.github/workflows/bench-lifecycle.yml` for
+the on-demand CI job.
 
 ## Measured results
 
@@ -474,8 +550,11 @@ other; use a real client for an actual SLO verdict.
   using the runbook in that section.
 - The identity-lifecycle-specific load profile (joiner/mover/leaver
   operations, as distinct from this document's raw LDAP write/search
-  benchmarks) called out in issue #124's absorbed AC from #19 is not
-  addressed by this PR — `scripts/bench-profile.sh` benchmarks generic
-  `inetOrgPerson` writes and `uid` searches, not identity-lifecycle
-  operations specifically. That AC remains open; see the PR description for
-  scoping.
+  benchmarks) called out in issue #124's absorbed AC from #19 is addressed
+  by `scripts/bench-lifecycle.sh` (see "Identity-lifecycle load profile"
+  above) — but only at the scale actually run so far: local smoke runs
+  (tens of thousands of identities) and the CI job's 200000-identity cap.
+  No 1M+ identity-lifecycle run has been committed to
+  `scripts/bench-results/` as of this writing; see that section for the
+  scoping this leaves open, same as this document's own 30M+ raw-load
+  caveat above.

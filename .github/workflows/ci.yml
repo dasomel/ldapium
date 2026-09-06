@@ -461,6 +461,11 @@ jobs:
       # Fixture-based unit test for entry data drift detection (#121).
       - run: ./scripts/test/test-detect-entry-drift.sh
 
+      # stdlib unittest for the pure bench-generate-lifecycle-ops.py helper
+      # (determinism, mix-ratio apportionment, mover/leaver disjoint ranges,
+      # input validation) — no Docker needed, see the test file's docstring.
+      - run: python3 -m unittest discover -s scripts/test -p 'test_*.py'
+
   incident-evidence:
     name: Incident evidence bundle (fixtures)
     runs-on: ubuntu-24.04

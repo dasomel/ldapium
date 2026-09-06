@@ -1,0 +1,136 @@
+name: Benchmark identity-lifecycle (manual)
+
+# Runs scripts/bench-lifecycle.sh's joiner/mover/leaver profile so the tool
+# itself stays exercised in CI — same rationale as bench-profile.yml, which
+# this is modeled on: workflow_dispatch only, not a correctness gate for a
+# PR (bench-lifecycle.sh's own shell/py logic has no unit test surface for
+# its LDAP-wire phases per AGENTS.md's testing philosophy — this workflow IS
+# that coverage), and not something every PR should pay the wall-clock cost
+# of.
+#
+# Capped well below bench-profile.yml's 1M: a GitHub-hosted runner can
+# absorb a 1M offline slapadd load fine (see docs/scale-benchmarks.md), but
+# this workflow's *operations* phase runs one `docker exec` per lifecycle
+# operation, online, sequentially per worker — a fundamentally different
+# cost profile from the load phase's single offline slapadd invocation.
+# 200000 keeps both the base load and the ops phase inside this job's time
+# budget; a real 1M+ lifecycle run (issue #124's actual target) is local
+# reproduction tooling, same as bench-profile.sh's 10M/30M+ scale.
+on:
+  workflow_dispatch:
+    inputs:
+      identities:
+        description: "Base identities to load (cap 200000 on this hosted runner — larger needs local reproduction, see docs/scale-benchmarks.md)"
+        required: false
+        default: "50000"
+        type: string
+      ops:
+        description: "Lifecycle operations to run"
+        required: false
+        default: "5000"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: bench-lifecycle.sh (GitHub-hosted runner)
+    runs-on: ubuntu-24.04
+    # Generously above a measured local run's wall time (see docs/
+    # scale-benchmarks.md's identity-lifecycle section) so a genuinely stuck
+    # run fails fast instead of riding GitHub's 360-minute default to the
+    # wall.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject an identities/ops count this runner cannot honestly absorb
+        env:
+          IDENTITIES: ${{ inputs.identities }}
+          OPS: ${{ inputs.ops }}
+        run: |
+          set -euo pipefail
+          case "$IDENTITIES" in
+            ''|*[!0-9]*) echo "identities must be a positive integer (got: $IDENTITIES)" >&2; exit 1 ;;
+          esac
+          case "$OPS" in
+            ''|*[!0-9]*) echo "ops must be a positive integer (got: $OPS)" >&2; exit 1 ;;
+          esac
+          if [ "$IDENTITIES" -gt 200000 ]; then
+            echo "identities=$IDENTITIES exceeds this workflow's 200000 cap — 1M+ needs local reproduction, see docs/scale-benchmarks.md" >&2
+            exit 1
+          fi
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Run bench-lifecycle.sh
+        env:
+          IDENTITIES: ${{ inputs.identities }}
+          OPS: ${{ inputs.ops }}
+        run: |
+          mkdir -p /tmp/bench-lifecycle-out
+          ./scripts/bench-lifecycle.sh \
+            --image ldapium:e2e \
+            --identities "$IDENTITIES" \
+            --ops "$OPS" \
+            --out /tmp/bench-lifecycle-out \
+            --label "GitHub-hosted runner (ubuntu-24.04), workflow_dispatch"
+
+      - name: Show result
+        if: always()
+        run: |
+          for f in /tmp/bench-lifecycle-out/*.md; do
+            [ -f "$f" ] || continue
+            cat "$f"
+          done
+
+      - name: Validate result JSON shape
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/bench-lifecycle-out/*.json)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no bench-lifecycle-*.json produced — bench-lifecycle.sh must have failed before writing a report" >&2
+            exit 1
+          fi
+          python3 - "${files[@]}" <<'PY'
+          import json, sys
+
+          required_top = ["benchmark", "timestampUtc", "requestedIdentities", "requestedOps",
+                           "mix", "concurrency", "status", "ppolicyDetected", "load",
+                           "opCounts", "executed", "errorCount", "byKind", "sanity"]
+
+          failed = False
+          for path in sys.argv[1:]:
+              with open(path) as f:
+                  doc = json.load(f)
+              missing_top = [k for k in required_top if k not in doc]
+              if missing_top:
+                  failed = True
+                  print(f"{path}: missing fields — top-level {missing_top}", file=sys.stderr)
+                  continue
+              if doc["benchmark"] != "lifecycle":
+                  failed = True
+                  print(f"{path}: benchmark={doc['benchmark']!r}, expected 'lifecycle'", file=sys.stderr)
+              if doc["status"] != "ok":
+                  failed = True
+                  print(f"{path}: status={doc['status']!r}, expected 'ok'", file=sys.stderr)
+              if doc["errorCount"] != 0:
+                  failed = True
+                  print(f"{path}: errorCount={doc['errorCount']}, expected 0", file=sys.stderr)
+              print(f"{path}: OK (status={doc['status']}, executed={doc['executed']}, errorCount={doc['errorCount']})")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-lifecycle-${{ github.run_id }}
+          path: /tmp/bench-lifecycle-out
+          if-no-files-found: warn
