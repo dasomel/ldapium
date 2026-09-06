@@ -104,10 +104,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --image) image="${2:?}"; shift 2 ;;
     --entries)
-      is_uint "${2:-}" && [ "${2:-0}" -gt 0 ] || {
+      if ! is_uint "${2:-}" || [ "${2:-0}" -le 0 ]; then
         printf -- '--entries must be a positive integer (got: %s)\n\n' "${2:-}" >&2
         usage >&2; exit 2
-      }
+      fi
       entries="${2:?}"; shift 2 ;;
     --base) base="${2:?}"; shift 2 ;;
     --out) out_dir="${2:?}"; shift 2 ;;
