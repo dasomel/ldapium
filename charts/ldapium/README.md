@@ -57,6 +57,10 @@ Service, and passed into the image; the image never has to guess K8s
 topology. `PodDisruptionBudget` and `topologySpreadConstraints` are also only
 rendered when `replicaCount > 1`.
 
+See [docs/ha-profile.md](../../docs/ha-profile.md) for the binding HA topology
+profile (D11–D13), failure modes and recovery matrix, reference RPO/RTO SLAs, and
+observability boundaries.
+
 ### Replication compatibility matrix
 
 This is the supported and tested boundary, not a claim that every OpenLDAP
@@ -68,18 +72,20 @@ version or the replication configuration changes.
 | OpenLDAP | 2.6.14, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
 | Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
 | Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
-| HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
+| HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior (D11) | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
 | Peer transport | `ldap://` inside the cluster, or `ldaps://` with a CA mounted and `tls.caFile` configured for strict peer-certificate verification | The TLS E2E verifies that a 3-provider install uses only `ldaps://`, rejects an invalid peer certificate, and converges a write. |
 | Bootstrap / recovery | One-provider offline LDIF seed or offline restore into ordinal `-0`, then scale to three providers for initial refresh | `replication-chaos-e2e.yml` and `backup-restore.yml` verify seed/restore followed by 3-provider convergence. |
 
-The following combinations are **not supported or not yet verified**: a
-non-MDB backend; OpenLDAP versions other than the image-pinned version;
-Mirror mode, active/standby, single-writer fencing, or provider/consumer
-topologies; independently bootstrapped data on every provider; and cross-site
-or multi-DC replication. Do not infer compatibility from an OpenLDAP feature
-existing upstream. In particular, a replicated restore requires the procedure
-in [Restoring a replicated deployment](#restoring-a-replicated-deployment),
-not loading the same backup into every pod.
+The following combinations are **not supported**: a non-MDB backend; OpenLDAP
+versions other than the image-pinned version; Mirror mode, Active-Standby (D11),
+single-writer standby fencing, or provider/consumer topologies; independently
+bootstrapped data on every provider; and cross-site or multi-DC replication (D13;
+supported cross-site DR is backup shipping + offline restore). Do not infer
+compatibility from an OpenLDAP feature existing upstream. In particular, a
+replicated restore requires the procedure in
+[Restoring a replicated deployment](#restoring-a-replicated-deployment), not
+loading the same backup into every pod. See [docs/ha-profile.md](../../docs/ha-profile.md)
+for details and rationale.
 
 ## Scale / Performance
 
@@ -773,6 +779,7 @@ and nothing here has verified it — check it against your own metric.
 |---|---|---|
 | `LDAPiumExporterDown` | no scrape for 5m | Is the pod up at all? The exporter shares the pod, so this is often "the server is gone", not "metrics are gone". `kubectl get pods`, then the container's logs. |
 | `LDAPiumReplicationLag` | a peer is more than `replicationLagThreshold` seconds behind for `replicationLagFor` | Compare `contextCSN` on each provider (`ldapsearch -b <rootDN> -s base contextCSN`). A peer that is behind and catching up is different from one that has stopped: check its syncrepl errors in the log. |
+| `LDAPiumContextCSNDivergence` | contextCSN delta exceeds `replicationDivergenceThreshold` seconds for `replicationDivergenceFor` | Critical replication desynchronization. Check syncrepl logs on both providers, clock synchronization (NTP), and disk space. |
 | `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
 | `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
 | `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds`, for 10m | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |

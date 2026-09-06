@@ -18,6 +18,9 @@ metrics:
     enabled: true
     replicationLagThreshold: 30
     replicationLagFor: 5m
+    replicationDivergenceThreshold: 300
+    replicationDivergenceFor: 5m
+    exporterDownFor: 5m
     connectionSaturationPercent: 80
     backupMaxAgeSeconds: 93600
     backupFailureFor: 5m

@@ -90,6 +90,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 
 - `README.md`
 - `charts/ldapium/README.md`
+- `docs/ha-profile.md`
 - `docs/product-boundary.md`
 - `docs/pam-boundary.md`
 - `docs/client-compatibility.md`
