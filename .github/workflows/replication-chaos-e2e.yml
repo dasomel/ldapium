@@ -305,13 +305,14 @@ jobs:
             "$total" "$ok" "$streak" "$streak_seconds" \
             > /tmp/write-availability-summary.txt
 
-          # The window now spans the full outage (delete issued through
-          # rejoin), so it should comfortably contain many samples at the
-          # probe's ~1/s cadence; a low count means the window collapsed and
-          # the streak/total numbers below would be vacuous. The streak bound
-          # is expressed in seconds of real unavailability, not attempts, so
-          # it doesn't silently loosen if the probe's cadence ever changes.
-          test "$total" -ge 20
+          # The window spans the full outage (delete issued through rejoin).
+          # The floor only guards against a collapsed window that would make
+          # the streak/total numbers vacuous; it must not assume a minimum
+          # outage duration, since a fast rejoin (observed: ~13s on kind) is
+          # the product behaving well, not a broken measurement. The streak
+          # bound is expressed in seconds of real unavailability, not
+          # attempts, so it doesn't silently loosen if the cadence changes.
+          test "$total" -ge 5
           test "$ok" -ge 1
           test "$streak_seconds" -le "$max_streak_seconds"
 
