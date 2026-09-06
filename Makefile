@@ -3,7 +3,7 @@
 KUBE_NAMESPACE ?=
 KUBE_RELEASE ?=
 
-.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward k8s-audit-export check licenses sbom
+.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward k8s-audit-export bench-profile check licenses sbom
 
 help: ## Show local development commands
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -54,6 +54,9 @@ k8s-ui-forward: ## Forward the deployed UI to http://127.0.0.1:8080 for Vite
 	ns=$${target%%/*}; svc=$${target#*/}; \
 	echo "Forwarding svc/$$svc in namespace $$ns to http://127.0.0.1:8080"; \
 	kubectl -n "$$ns" port-forward "svc/$$svc" 8080:8080
+
+bench-profile: ## Run the large-scale benchmark profile (BENCH_ENTRIES=1000000 default; local-only, not part of `make check`)
+	@./scripts/bench-profile.sh --image $${BENCH_IMAGE:-ldapium:e2e} --entries $${BENCH_ENTRIES:-1000000} --out scripts/bench-results
 
 check: ## Run what CI runs, in the same order (minus the registry checks)
 	@# Frontend first: ui/backend/web embeds the built SPA, so the Go module

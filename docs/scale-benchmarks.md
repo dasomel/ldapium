@@ -7,23 +7,48 @@ and where to run all three.
 
 ## Where to run this
 
-GitHub-hosted runners cannot do this honestly: a 30M-entry load needs disk
-and wall-clock time neither the runner's ephemeral disk nor CI's time budget
-can absorb, and a number produced by truncating the run early is noise, not
-evidence. So this is **local reproduction tooling, not a CI job** —
+GitHub-hosted runners cannot do 10M/30M+ honestly: that scale needs disk and
+wall-clock time neither the runner's ephemeral disk nor CI's time budget can
+absorb, and a number produced by truncating the run early is noise, not
+evidence. So 10M/30M+ stays **local reproduction tooling, not a CI job** —
 `scripts/bench-generate-ldif.py`, `scripts/bench-load.sh`,
-`scripts/bench-search.sh`, and `scripts/bench-replication.sh`, run by hand on
-whatever machine you actually care about the numbers for. Nothing here runs
-in CI, and nothing here is scheduled.
+`scripts/bench-search.sh`, `scripts/bench-replication.sh`, and the
+`scripts/bench-profile.sh` runner that wraps the first three (see "The
+profile runner" below), run by hand on whatever machine you actually care
+about the numbers for. The 1M profile is the exception: it fits a
+GitHub-hosted runner's disk and time budget, so `.github/workflows/
+bench-profile.yml` (`workflow_dispatch` only — not on every push or PR, see
+that file's own comment for why) runs it on demand, which is what keeps the
+tooling itself from silently rotting between real large-scale runs. 10M and
+30M+ are not scheduled anywhere and never will be from a shared runner.
 
 Before trusting any number this tooling produces, at any scale:
 
 - **`olcDbMaxSize` must exceed the loaded data's on-disk size**, or `slapadd`
   fails partway through with the map full instead of producing a load-time
-  number. `bench-load.sh --db-max-size-gb` controls this; size it for the
-  target `--count` before you start, not after a failed run. The chart's own
-  `ldap.dbMaxSize` (`charts/ldapium/values.yaml`) is the same knob for a real
-  deployment.
+  number. `bench-load.sh --db-max-size-gb` (`bench-profile.sh
+  --db-max-size-gb`) controls this; size it for the target `--count` before
+  you start, not after a failed run. The chart's own `ldap.dbMaxSize`
+  (`charts/ldapium/values.yaml`) is the same knob for a real deployment.
+  **The raw LDIF size is not a usable sizing basis** — live-verified while
+  building the profile runner below: this chart's 10 default indices
+  (`image/ldifs/01-cn-config.ldif`: `objectClass`, `entryUUID`, `entryCSN`,
+  `uid`, `cn`, `mail`, `memberOf`, `member`, `sn`, `givenName`) dominate the
+  in-map footprint, not entry payload. A first sizing attempt using the
+  measured ~217 bytes/entry raw-LDIF ratio died at 705,499/1,000,000 entries
+  with the map full; a second attempt at exactly this document's own
+  previously-published 4GiB-for-1M figure (see "1M / 10M / 30M+ load
+  profile" below for why that number stopped being sufficient) died at
+  931,999/1,000,000 (re-confirmed 2026-09-06 at 931,499/1,000,000 —
+  `bench-profile.sh`'s own default formula, at the time, still computed
+  exactly this insufficient 4GiB for `--entries 1000000`). Budget for
+  indices explicitly, not from LDIF bytes. `bench-profile.sh`'s default
+  formula has since been raised (see its own header comment) so that an
+  unqualified `--entries 1000000` — the invocation
+  `.github/workflows/bench-profile.yml` actually runs — succeeds without an
+  explicit `--db-max-size-gb`; that default still over-allocates badly past
+  a few million entries, so pass `--db-max-size-gb` explicitly, sized from a
+  measured run at a nearby scale, for anything beyond a quick smoke test.
 - **Indices must already be in place before a search benchmark means
   anything.** A search benchmark run against an unindexed attribute measures
   a full-table scan, not the product. `bench-search.sh` queries `uid`, which
@@ -94,6 +119,95 @@ convergence after a partition, reused rather than reinvented so a
 `kubectl` context with Helm 3 and capacity for a 3-replica StatefulSet — a
 local `kind` cluster is enough.
 
+### The profile runner
+
+```bash
+docker build -t ldapium:e2e -f image/Dockerfile image/
+./scripts/bench-profile.sh --entries 1000000 --out scripts/bench-results
+```
+
+`scripts/bench-profile.sh` is a single entry point over the three commands
+above, built for #124's ask (a repeatable 1M/10M/30M+ profile, not three
+commands and three stdout blobs an operator stitches together by hand). One
+invocation:
+
+1. generates the LDIF (streaming, one entry at a time — RAM stays flat
+   regardless of `--entries`, only disk grows);
+2. bootstraps a real release and bulk-loads it with **offline `slapadd -q`**
+   — `-q` (quick/no-verify mode) is the fastest supported bulk-load path,
+   which is why this runner uses it in place of bare `slapadd` — sampling
+   load progress and container memory every 5s (small runs) or 30s (100K+)
+   via a read-only `slapcat` peek against the still-loading volume (safe:
+   LMDB readers never block on a concurrent writer);
+3. enforces an optional `--timeout-seconds` wall-clock cap on the load phase
+   only — past it, the loader is killed and whatever the last progress
+   sample showed is reported as a partial, honest result rather than left
+   to run unbounded or silently discarded;
+4. runs `bench-search.sh` against the freshly loaded volumes, plus a new
+   single-connection online write-latency micro-benchmark (sequential
+   `ldapadd`, p50/p95/p99 — distinct from `bench-replication.sh`'s
+   multi-provider write+convergence burst, which stays k8s-only and
+   small-scale, see "Write + replication convergence" above);
+5. writes one JSON + one Markdown report (`bench-profile-<N>-<timestamp>.*`)
+   with environment (CPU/mem, image digest, OpenLDAP version, disk headroom)
+   folded into the same record, then deletes its volumes — unlike
+   `bench-load.sh`, which deliberately leaves them for a separate
+   `bench-search.sh` invocation, this runner is meant to be a self-contained
+   one-shot.
+
+**Three gotchas found live while building this that change how you size a
+run and how you read its output, not just cosmetic:**
+
+- **`-q`'s reported "on-disk size" and the disk it actually consumes are two
+  different numbers, and they can diverge sharply.** `-q` allocates
+  (`ftruncate`s) the full configured `--db-max-size-gb` immediately at load
+  start, not lazily as data is written — the *apparent* file size hits the
+  configured map size right away (confirmed with a tiny 500-entry/256MiB
+  test: apparent size was an exact 256MiB, vs. 1.4MB for the same load
+  without `-q`). But apparent size is not the same as *allocated* size on a
+  filesystem that supports sparse files, and this one does: a real 1M-entry
+  run measured **9.0GiB apparent vs. 1.4GiB actually allocated on disk —
+  6.3x apart** (live-verified 2026-09-06; the 500-entry test above was too
+  small to show this and an earlier draft of this doc wrongly generalized
+  from it). `bench-profile.sh` now records both as separate fields —
+  `dbApparentBytes` (`du -sb`, what `stat`/`ls -l` would report; confirms
+  the configured map size took effect but is *not* a capacity-planning
+  number under `-q`) and `dbAllocatedBytes` (plain `du`, real device blocks;
+  the number that matters for "how much disk does this actually need").
+  `ldifBytes` remains the closer proxy for actual *data* volume (excluding
+  index/LMDB overhead) than either.
+- **The right sizing basis for `--db-max-size-gb` is indices, not raw LDIF
+  bytes.** This chart ships 10 default indices
+  (`image/ldifs/01-cn-config.ldif`), and their in-map footprint dominates
+  over entry payload at any real scale. A sizing formula based on the ~217
+  bytes/entry raw-LDIF ratio undersizes badly — live-verified, see the
+  "olcDbMaxSize must exceed..." bullet above for the failed attempts that
+  found this the hard way.
+- **The default formula itself was silently insufficient at 1M until this
+  PR.** `bench-profile.sh --entries 1000000` with no `--db-max-size-gb`
+  override — exactly what `.github/workflows/bench-profile.yml` runs —
+  computed 4GiB by default and died with the map full at 931,499/1,000,000
+  entries (re-confirmed live 2026-09-06; see the "olcDbMaxSize must
+  exceed..." bullet above). The committed 1M/10M results below were
+  produced with an explicit `--db-max-size-gb` override, which is why the
+  bug had gone unnoticed. The default now derives from an empirically-
+  grounded ~9,400 bytes/entry (4,700 base + 2.0x headroom) instead of the
+  previous, proven-insufficient ~3,960 bytes/entry (1,800 base + 2.2x
+  headroom) — a live rerun at 1M with the corrected default (no override)
+  succeeded (`bench-profile-1000000-20260906T063039Z.json`). This default
+  is still a last resort, not a sizing recommendation: it scales worse than
+  linearly in practice (per-entry map overhead is not constant across
+  scale — the committed 10M result completed with an explicit override of
+  only ~2.1KB/entry, far below what this formula would compute at that N,
+  though that is evidence a smaller size *can* work, not proof of the
+  minimum). Pass `--db-max-size-gb` explicitly, sized from a measured run
+  at a nearby scale, for anything beyond a quick smoke test.
+
+The 1M profile also runs in CI on demand — see `.github/workflows/
+bench-profile.yml` (`workflow_dispatch`, capped at 1M, see that file's
+own guard step for why a larger value is rejected rather than silently
+attempted on a GitHub-hosted runner).
+
 ## Measured results
 
 Measured in this sandbox: Colima (Docker Desktop's Linux VM equivalent) on
@@ -107,15 +221,71 @@ scale, and giving a relative baseline.
 
 | Scale | Load time | Load rate | Search concurrency | Search QPS | p50 | p95 | p99 |
 |---|---|---|---|---|---|---|---|
-| 20,000 entries | 114.4s | 174.8 entries/s | 10 × 30 | 85.0 | 104ms | 143ms | 157ms |
-| 1,000,000 entries | 9,072.8s (151.2min) | 110.2 entries/s | 20 × 100 | 89.5 | 207ms | 295ms | 338ms |
+| 20,000 entries (`bench-load.sh`, no `-q`) | 114.4s | 174.8 entries/s | 10 × 30 | 85.0 | 104ms | 143ms | 157ms |
+| 1,000,000 entries (`bench-load.sh`, no `-q`) | 9,072.8s (151.2min) | 110.2 entries/s | 20 × 100 | 89.5 | 207ms | 295ms | 338ms |
 
-Search concurrency differs between the two runs (10 workers × 30 queries at
-20K vs. 20 × 100 at 1M), so the QPS/latency columns are not a pure
-apples-to-apples scale comparison — higher concurrency alone would be
+Search concurrency differs between the two runs above (10 workers × 30
+queries at 20K vs. 20 × 100 at 1M), so the QPS/latency columns are not a
+pure apples-to-apples scale comparison — higher concurrency alone would be
 expected to raise both QPS and per-query latency somewhat independent of
 data volume. Re-run with matched `--concurrency`/`--queries-per-worker` if
 you need an isolated scale effect.
+
+**Colima aarch64 VM, 3 vCPU/6 GiB cap, shared host** — `scripts/bench-profile.sh`
+(offline `slapadd -q`), measured for #124, on a *shared* 6 vCPU/12GiB host
+VM with two other workloads active concurrently (not the dedicated 4
+vCPU/6GiB sandbox the two rows in the table above used); search concurrency
+20 workers × 100 queries/worker (`--search-concurrency 20
+--search-queries-per-worker 100`, matching the older 1M non-`-q` row above)
+for both rows below — see "The profile runner" above for why this is
+dramatically faster than the non-`-q` rows above and not directly
+comparable to them:
+
+| Scale | Load time | Load rate | Search QPS | Search p50/p95/p99 | Write p50/p95/p99 (single conn, online) |
+|---|---|---|---|---|---|
+| 1,000,000 entries | 46.9s | 21,334.7 entries/s | 113.68 | 157ms / 216ms / 247ms | 62ms / 71ms / 75ms |
+| 10,000,000 entries | 2,340.9s (39.0min) | 4,271.9 entries/s | 116.06 | 155ms / 213ms / 240ms | 57ms / 65ms / 70ms |
+
+`slapadd -q` is ~194x faster than the non-`-q` path at 1M (21,334.7 vs. 110.2
+entries/s) — consistent with `-q` skipping the per-entry schema/constraint
+re-verification `bench-generate-ldif.py`'s own guaranteed-valid, guaranteed-
+unique output doesn't need. Search QPS/latency at the 1M scale and matched
+concurrency (20 × 100) landed close to the older non-`-q` measurement
+(113.68 QPS / 157-247ms vs. 89.5 QPS / 207-338ms) — search performance
+depends on the loaded data and indices, not on which `slapadd` mode built
+them, so the modest improvement here is plausibly host/contention noise
+(shared VM) rather than a `-q` effect. Write-latency (single online
+connection, sequential `ldapadd`) is a new metric this profile runner adds;
+there is no prior number to compare it against.
+
+**1M → 10M scaling, under this profile runner specifically:**
+
+- **Load rate drops sharply, worse than linearly.** 4,271.9 entries/s at
+  10M is ~20% of the 21,334.7 entries/s measured at 1M — a 5x throughput
+  drop for a 10x increase in entries — so total load *time* scaled ~50x
+  (46.9s → 2,340.9s), not the 10x a constant rate would imply. Consistent
+  with the same `slapadd`-single-transaction B+tree-depth effect already
+  documented for the non-`-q` path above, just measured again here on the
+  faster `-q` path: the effect isn't specific to which `slapadd` mode
+  builds the tree.
+- **Search latency and QPS stayed flat 1M → 10M** (113.68 QPS / 157ms p50
+  at 1M vs. 116.06 QPS / 155ms p50 at 10M — within run-to-run noise on a
+  shared host), unlike the roughly 2x p50 degradation measured 20K → 1M on
+  the older non-`-q` row above. The likely explanation is that
+  `bench-search.sh`'s `docker exec`-per-query fixed overhead (see the SLO
+  section's own caveat below) dominates the measurement at this range, and
+  a real index-depth cost — present but smaller between 1M and 10M
+  (`log₂` depth grows by ~3.3 levels vs. ~5.6 levels between 20K and 1M) —
+  is masked by it. This is **not** evidence that search performance is
+  scale-invariant past 10M; it's evidence that this harness's fixed
+  measurement overhead currently exceeds the real per-query cost
+  difference at this range. Write latency (single-connection online
+  `ldapadd`) is similarly flat (62ms → 57ms p50) for the same reason.
+- Loader RSS during the 10M load peaked at ~2.75GiB (sampled via `docker
+  stats`, see `scripts/bench-results/bench-profile-10000000-*.json`'s
+  `progressSamples`), comfortably inside the 6GiB cap; the equivalent 1M
+  sample is inconclusive (`0B` — the load finished before the first 30s
+  sampling interval elapsed) and is not usable as a comparison point.
 
 Raw evidence records (machine-readable, one JSON object per run):
 
@@ -130,6 +300,22 @@ Raw evidence records (machine-readable, one JSON object per run):
 Write + replication convergence, 3 providers, 500-entry burst: 2.75s to
 write (182.2 entries/s), **converged across all 3 providers within 1s** of
 the write completing.
+
+The `scripts/bench-profile.sh` runs' full JSON records (environment,
+progress samples, search, write-latency) are committed at
+`scripts/bench-results/bench-profile-1000000-20260903T232834Z.json` (1M,
+table row above) and `scripts/bench-results/bench-profile-10000000-
+20260903T233629Z.json` (10M, table row above; run with an explicit
+`--db-max-size-gb 20`, labeled "disk-budget-constrained attempt" in its own
+report — chosen to fit this shared VM's available disk, not derived from
+any sizing formula, so its sufficiency margin at 10M is unknown). A third
+record, `scripts/bench-results/bench-profile-1000000-20260906T063039Z.json`,
+is a later 1M-only rerun made after this PR raised the `--db-max-size-gb`
+default and split `dbApparentBytes`/`dbAllocatedBytes` (see "The profile
+runner" above) — it exists to evidence those two fixes (the corrected
+default succeeding unmodified, and the 6.3x apparent-vs-allocated gap) and
+is not part of the 1M/10M scaling comparison above, which uses the original
+matched-concurrency runs.
 
 ### 1M / 10M / 30M+ load profile
 
@@ -146,18 +332,100 @@ steadily with elapsed time, it wasn't stalled). Search latency degraded
 similarly: p50 roughly doubled (104ms → 207ms) between 20K and 1M.
 
 That means a naive linear extrapolation from the 20K rate understates 10M
-and 30M+ durations. Using the measured 1M rate (110.2 entries/s) as a more
-realistic — but likely still optimistic, since the degradation trend has no
-reason to flatten — basis: 10M is expected to take roughly 25 hours, and
-30M+ roughly 76 hours (3+ days). Both are outside what this sandbox's
-session budget can absorb in one run; this is exactly the constraint the
-issue itself calls out for CI runners, playing out here too, just at
-smaller scale. 10M and 30M+ are left to be run directly against target
-hardware using the exact command above with `--count 10000000` /
-`--count 30000000` and a correspondingly larger `--db-max-size-gb` — the
-tooling scales to those counts unchanged; only this sandbox's wall-clock
-budget doesn't, and real target hardware (not a 4-vCPU/6GiB developer VM)
-should scale meaningfully better than either number above.
+and 30M+ durations under the non-`-q` path — the projection above (10M
+~25h, 30M+ ~76h) was made before a real 10M run existed and used the 20K→1M
+non-`-q` trend as its only evidence. It is now superseded for `-q`: #124
+went on to actually run 10M under `scripts/bench-profile.sh`'s offline
+`slapadd -q` path (see "Measured results" above), which is both the
+faster, currently-recommended bulk-load path and a different code path
+with its own scaling behavior, not a simple multiple of the non-`-q`
+numbers above.
+
+**30M+ projection, derived from the two real `-q` measurements (1M and
+10M) instead of extrapolating from a single point:**
+
+Fitting a power law (`time ≈ a · entries^k`) through the two measured `-q`
+load times — 46.9s at 1M and 2,340.9s at 10M — gives `k ≈ 1.70` (load time
+grows faster than linearly with entry count, consistent with the B+tree
+page-split/rebalancing cost documented above). Projecting the same curve to
+30M:
+
+| | 1M (measured) | 10M (measured) | 30M (projected) |
+|---|---|---|---|
+| Load time | 46.9s | 2,340.9s (39.0min) | ~15,127s (~4.2h) |
+| Load rate | 21,334.7 entries/s | 4,271.9 entries/s | ~1,983 entries/s |
+| LDIF size | 217MB | 2.20GB | ~6.59GB (linear — LDIF size scales with entry count, not with the index effects that drive load time) |
+
+**Assumptions and honest limits of this projection:**
+
+- It assumes the same `k ≈ 1.70` degradation trend continues unchanged from
+  10M to 30M. The doc's own prior projection (for the non-`-q` path) made
+  the same kind of assumption and flagged it as "likely still optimistic,
+  since the degradation trend has no reason to flatten" — the same caveat
+  applies here: a two-point power-law fit is the best evidence available,
+  not a guarantee the curve doesn't get steeper (or flatter) past 10M.
+- **Disk sizing for a 30M run is the least certain part of this
+  projection.** The 10M run above used an explicit, disk-budget-constrained
+  `--db-max-size-gb 20` (~2.1KB/entry apparent) chosen to fit this shared
+  VM's available disk, not derived from a sizing formula or known to be a
+  tight bound — we don't know how close to full the map actually got.
+  Scaling that configured value linearly to 30M gives ~60GiB as a rough
+  reference point, but a separate, controlled 1M measurement in this same
+  PR found the *apparent* configured size can be ~6.3x larger than the
+  *actually allocated* disk (9.0GiB apparent vs. 1.4GiB allocated — see
+  "The profile runner" above) — so real disk consumption at 30M could be
+  meaningfully lower than 60GiB, or the ratio could shift at higher scale;
+  this has not been measured at 30M and should not be assumed. Budget disk
+  using `bench-profile.sh`'s own (now-corrected, still-conservative)
+  `--db-max-size-gb` default formula as an upper bound if you cannot
+  measure first, or run the 10M profile on your own target infrastructure
+  and read its `dbAllocatedBytes` to calibrate a tighter number before
+  attempting 30M.
+- RAM: loader RSS at 10M peaked at ~2.75GiB inside a 6GiB cap (see
+  "Measured results" above); nothing here predicts whether that stays
+  roughly flat or grows measurably by 30M, since it wasn't tracked across
+  more than one real data point.
+
+Both the projected load time and the disk estimate are outside what this
+shared sandbox's session budget can safely absorb in one run — this is
+exactly the constraint the issue itself calls out for CI runners, playing
+out here too, just at smaller scale than 30M would need on a GitHub-hosted
+runner. 30M+ is left to be run directly against target hardware.
+
+**Runbook: running 30M+ on your own infrastructure**
+
+```bash
+docker build -t ldapium:e2e -f image/Dockerfile image/
+
+# Pick --db-max-size-gb from a real measurement on your own hardware if you
+# can (run --entries 10000000 first and read dbAllocatedBytes from its
+# JSON), not from the projection above — see the disk-sizing caveat.
+./scripts/bench-profile.sh \
+  --entries 30000000 \
+  --out /path/to/persistent/results \
+  --db-max-size-gb 80 \
+  --timeout-seconds 43200 \
+  --label "<your infrastructure, e.g. 'bare-metal, 16 vCPU / 64GiB, NVMe'>"
+```
+
+- `--timeout-seconds` time-boxes the load phase only: past it, the loader
+  is killed and whatever the last progress sample showed is written as an
+  honest partial result (entries loaded, elapsed, on-disk size) instead of
+  running unbounded or being silently discarded — set it to whatever
+  wall-clock budget your infrastructure/session actually has, padded above
+  the projected ~4.2h above for margin.
+- Use real target hardware, not a developer VM — 16+ vCPU, 64+ GiB RAM, and
+  fast persistent (NVMe-class) storage with headroom well above whatever
+  `--db-max-size-gb` you choose. Do not cap the container at `--cpus
+  3 --memory 6g` the way this sandbox's measurements above did; that cap
+  exists here specifically because this VM is shared with other concurrent
+  workloads.
+- `--keep-volumes` if you want to inspect the loaded data afterward (run
+  `bench-search.sh`/`bench-replication.sh` against the same volumes) instead
+  of the default one-shot cleanup.
+- The tooling itself scales to 30M+ unchanged from 1M/10M — only wall-clock
+  time, disk, and RAM requirements grow; nothing in `bench-profile.sh`'s
+  logic is scale-limited below that.
 
 ## SLO judgment criteria
 
@@ -187,5 +455,22 @@ other; use a real client for an actual SLO verdict.
   ran in a sandboxed developer VM.
 - Search latency is measured through `docker exec`, not a persistent client
   connection — see the caveat above.
-- 10M and 30M+ entry load/search have not been run in this sandbox; the
-  tooling supports them and the command to run them is documented above.
+- 10M entry load/search **has** been run in this sandbox under
+  `scripts/bench-profile.sh`'s offline `slapadd -q` path (see "Measured
+  results" above) with an explicit, disk-budget-constrained
+  `--db-max-size-gb`, not the tool's own sizing formula — its disk
+  sufficiency margin at that scale is unknown (see the "1M / 10M / 30M+
+  load profile" section's disk-sizing caveat).
+- 30M+ entry load/search has not been run anywhere in this repo's history;
+  the "1M / 10M / 30M+ load profile" section's 30M projection is derived
+  from the two real 1M/10M `-q` measurements, not from a real 30M run, and
+  states its own assumptions and limits — treat it as a planning estimate,
+  not a measurement, until it is actually run on target infrastructure
+  using the runbook in that section.
+- The identity-lifecycle-specific load profile (joiner/mover/leaver
+  operations, as distinct from this document's raw LDAP write/search
+  benchmarks) called out in issue #124's absorbed AC from #19 is not
+  addressed by this PR — `scripts/bench-profile.sh` benchmarks generic
+  `inetOrgPerson` writes and `uid` searches, not identity-lifecycle
+  operations specifically. That AC remains open; see the PR description for
+  scoping.
