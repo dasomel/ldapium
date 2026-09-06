@@ -1,0 +1,129 @@
+name: Benchmark profile (manual)
+
+# Runs scripts/bench-profile.sh's 1M profile so the tool itself stays exercised
+# in CI, without pretending a GitHub-hosted runner can produce a 10M or 30M+
+# number honestly — see docs/scale-benchmarks.md's "Where to run this" and its
+# "1M / 10M / 30M+ load profile" section for why those stay local-only.
+#
+# workflow_dispatch only, deliberately: this is not correctness signal for a
+# PR (bench-load.sh/bench-profile.sh's own shell/py logic has no unit test
+# surface per AGENTS.md's testing philosophy — this workflow IS that coverage,
+# exercised on demand rather than on every push) and a multi-minute load run
+# is not something every PR should pay for.
+on:
+  workflow_dispatch:
+    inputs:
+      entries:
+        description: "Entries to load (keep at 1M or below — this runner is not for 10M/30M+, see docs/scale-benchmarks.md)"
+        required: false
+        default: "1000000"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  profile-1m:
+    name: bench-profile.sh (1M, GitHub-hosted runner)
+    runs-on: ubuntu-24.04
+    # 1M under bench-profile.sh's own defaults completes in well under a
+    # minute of load time (see docs/scale-benchmarks.md's measured results);
+    # this bounds the whole job (image build + load + search + write-latency)
+    # generously above that so a genuinely stuck run fails fast instead of
+    # riding GitHub's 360-minute default to the wall.
+    timeout-minutes: 30
+    # Guards against an operator typing a 10M/30M value into the manual
+    # dispatch input: this runner's disk/time budget is scoped to docs/
+    # scale-benchmarks.md's 1M profile, not the local-only large-scale ones.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject an entries count this runner cannot honestly absorb
+        env:
+          ENTRIES: ${{ inputs.entries }}
+        run: |
+          set -euo pipefail
+          case "$ENTRIES" in
+            ''|*[!0-9]*) echo "entries must be a positive integer (got: $ENTRIES)" >&2; exit 1 ;;
+          esac
+          if [ "$ENTRIES" -gt 1000000 ]; then
+            echo "entries=$ENTRIES exceeds this workflow's 1M cap — 10M/30M+ needs dedicated infrastructure, see docs/scale-benchmarks.md" >&2
+            exit 1
+          fi
+
+      - name: Build server image
+        run: docker build -t ldapium:e2e image
+
+      - name: Run bench-profile.sh
+        env:
+          ENTRIES: ${{ inputs.entries }}
+        run: |
+          mkdir -p /tmp/bench-out
+          ./scripts/bench-profile.sh \
+            --image ldapium:e2e \
+            --entries "$ENTRIES" \
+            --out /tmp/bench-out \
+            --label "GitHub-hosted runner (ubuntu-24.04), workflow_dispatch" \
+            --search-concurrency 10 --search-queries-per-worker 50 \
+            --write-count 50
+
+      - name: Show result
+        if: always()
+        run: |
+          for f in /tmp/bench-out/*.md; do
+            [ -f "$f" ] || continue
+            cat "$f"
+          done
+
+      - name: Validate result JSON shape
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/bench-out/*.json)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no bench-profile-*.json produced — bench-profile.sh must have failed before writing a report" >&2
+            exit 1
+          fi
+          python3 - "${files[@]}" <<'PY'
+          import json, sys
+
+          required_top = ["benchmark", "timestampUtc", "environment", "requestedEntries",
+                           "loadedCount", "status", "generation", "load", "search", "writeLatency"]
+          required_load = ["seconds", "entriesPerSecond", "dbMaxSizeBytes",
+                            "dbApparentBytes", "dbAllocatedBytes", "timeoutSeconds",
+                            "progressSamples"]
+          required_env = ["uname", "dockerCpus", "dockerMemBytes", "openldapVersion",
+                           "imageDigest", "tmpDiskFreeKb"]
+
+          failed = False
+          for path in sys.argv[1:]:
+              with open(path) as f:
+                  doc = json.load(f)
+              missing_top = [k for k in required_top if k not in doc]
+              missing_load = [k for k in required_load if k not in doc.get("load", {})]
+              missing_env = [k for k in required_env if k not in doc.get("environment", {})]
+              if missing_top or missing_load or missing_env:
+                  failed = True
+                  print(f"{path}: missing fields — top-level {missing_top}, "
+                        f"load {missing_load}, environment {missing_env}", file=sys.stderr)
+                  continue
+              if doc["benchmark"] != "profile":
+                  failed = True
+                  print(f"{path}: benchmark={doc['benchmark']!r}, expected 'profile'", file=sys.stderr)
+              if doc["status"] != "ok":
+                  failed = True
+                  print(f"{path}: status={doc['status']!r}, expected 'ok'", file=sys.stderr)
+              print(f"{path}: OK (status={doc['status']}, loadedCount={doc['loadedCount']})")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-profile-${{ github.run_id }}
+          path: /tmp/bench-out
+          if-no-files-found: warn

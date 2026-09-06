@@ -1,0 +1,57 @@
+{
+    "benchmark": "profile",
+    "label": "Colima aarch64 VM, 3 vCPU/6 GiB cap (shared host, 6 vCPU/12GiB total)",
+    "timestampUtc": "20260903T232834Z",
+    "environment": {
+        "uname": "Darwin Macmini-2.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:17:26 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6041 arm64",
+        "dockerCpus": "6",
+        "dockerMemBytes": "12513599488",
+        "openldapVersion": "@(#) $OpenLDAP: slapd 2.6.14 (Aug 23 2026 00:47:32) $",
+        "imageDigest": "sha256:56c1fdfb18e2e8be08d40c1fd89c2f7d449d0f8c7d1e8d05033a827120a3d58d",
+        "tmpDiskFreeKb": 190571616
+    },
+    "requestedEntries": 1000000,
+    "loadedCount": 1000000,
+    "status": "ok",
+    "loaderLogTail": "",
+    "generation": {
+        "seconds": 0.659,
+        "ldifBytes": 216666746
+    },
+    "load": {
+        "seconds": 46.872,
+        "entriesPerSecond": 21334.7,
+        "dbMaxSizeBytes": 8589934592,
+        "dbOnDiskBytes": 8589942848,
+        "timeoutSeconds": 0,
+        "progressSamples": [
+            {
+                "elapsedSeconds": 30,
+                "entriesVisible": 925999,
+                "loaderMem": "0B"
+            }
+        ]
+    },
+    "search": {
+        "benchmark": "search",
+        "image": "ldapium:e2e",
+        "entryCount": 1000000,
+        "concurrency": 20,
+        "totalQueries": 2000,
+        "failedQueries": 0,
+        "wallSeconds": 17.593,
+        "queriesPerSecond": 113.68,
+        "latencyMsP50": 157.249,
+        "latencyMsP95": 215.573,
+        "latencyMsP99": 246.871
+    },
+    "writeLatency": {
+        "benchmark": "write-latency",
+        "mode": "single-connection-sequential-online-ldapadd",
+        "count": 200,
+        "failed": 0,
+        "latencyMsP50": 62.03,
+        "latencyMsP95": 71.129,
+        "latencyMsP99": 75.484
+    }
+}
