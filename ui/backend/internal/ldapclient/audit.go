@@ -86,6 +86,15 @@ func redactAssertion(assertion string) string {
 		attr = attr[:colonIdx]
 	}
 
+	// An attribute-less extensible match (":ruleOID:=value" or
+	// ":dn:ruleOID:=value") applies the matching rule against every
+	// attribute on the entry, sensitive ones included — there is no
+	// attribute name left to gate the redaction decision on, so redact
+	// unconditionally rather than let the value through unredacted.
+	if op == ":=" && attr == "" {
+		return prefix + op + "<redacted>"
+	}
+
 	if attr != "" && sensitiveAttrRe.MatchString(attr) {
 		return prefix + op + "<redacted>"
 	}
@@ -389,4 +398,57 @@ func filterAndPaginateEvents(events []domain.AuditEvent, limit int, before strin
 	}
 
 	return filtered, nextBefore, hasMore
+}
+
+// auditActionsFetchLimit returns the SizeLimit/page cap AuditActions should
+// request from cn=accesslog for a page: limit+1 (enough to detect "more
+// pages remain" past the requested limit), or limit+2 when a cursor is set.
+// The extra +1 in the cursor case accounts for the server-side filter being
+// inclusive (reqStart<=cursor, since reqSession has no ORDERING matching
+// rule to also exclude the cursor's own session server-side) — the cursor
+// row it still matches is exactly the one entry filterAndPaginateEvents is
+// guaranteed to drop client-side, so without it hasMore under-reports by
+// one entry's worth every time a cursor is present.
+func auditActionsFetchLimit(limit int, before string) int {
+	if before != "" {
+		return limit + 2
+	}
+	return limit + 1
+}
+
+// sortConfirmed reports whether a search made with the server-side sort
+// control (RFC 2891) actually came back sorted newest-first by reqStart.
+// go-ldap's ControlServerSideSorting carries no criticality flag, so a
+// directory without the sssvlv overlay attached to cn=accesslog (e.g. an
+// existing deployment upgraded to an image version that only attaches the
+// overlay via slapadd on first boot) can silently ignore the control and
+// return err == nil with unsorted entries — the caller must not assume
+// "no error" means "sorted". Two independent checks: the SortResult
+// response control must be present and report success, and the entries
+// must actually be in descending reqStart order — the second check exists
+// because some server implementations of RFC 2891 don't reliably send the
+// response control at all (see the go-ldap source comment on
+// NewControlServerSideSortingResult), so an absent-but-actually-sorted
+// response is accepted, while a present-but-wrong one is not.
+func sortConfirmed(controls []ldap.Control, entries []*ldap.Entry) bool {
+	if sortResult, ok := ldap.FindControl(controls, ldap.ControlTypeServerSideSortingResult).(*ldap.ControlServerSideSortingResult); ok {
+		if sortResult.Result != ldap.ControlServerSideSortingCodeSuccess {
+			return false
+		}
+	}
+	return entriesSortedDescByReqStart(entries)
+}
+
+// entriesSortedDescByReqStart reports whether entries are already in
+// descending reqStart order, i.e. newest first.
+func entriesSortedDescByReqStart(entries []*ldap.Entry) bool {
+	prev := ""
+	for i, e := range entries {
+		cur := toGeneralizedTime(e.GetAttributeValue("reqStart"))
+		if i > 0 && cur > prev {
+			return false
+		}
+		prev = cur
+	}
+	return true
 }

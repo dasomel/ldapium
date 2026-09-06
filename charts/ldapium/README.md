@@ -817,21 +817,23 @@ To grant it to your own admin DN (LDAP-password mode) or the SSO service
 account (the DN in `ui.ldapServiceAccount`'s secret — see "Keycloak SSO"
 above), add a
 `by dn.exact=...read` clause to the monitor database's ACL, online, via
-`ldapmodify`:
+`ldapmodify`. The monitor database's numeric index shifts depending on which
+other databases/overlays are enabled (accesslog, for instance, claims its own
+index when `audit.accessLog.enabled` is set) — look it up rather than
+assuming a fixed value, the same way `.github/workflows/ui-e2e.yml` does in
+CI:
 
 ```bash
-cat <<'EOF' | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
-dn: olcDatabase={2}monitor,cn=config
+MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+  -b cn=config "(olcDatabase=monitor)" dn | sed -n 's/^dn: //p')
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+dn: $MONITOR_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="<your DN>" read by * none
 EOF
 ```
 
-The monitor database's numeric index (`{2}` above) is whatever this
-deployment actually assigned it — confirm with `ldapsearch -x -D
-"cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b cn=config
-"(olcDatabase=monitor)" dn` before modifying, rather than assuming `{2}`.
 Widening this ACL to `by users read` instead of naming a specific DN would
 let every authenticated directory user see connection and replication
 internals — a real security-scope decision, not something this chart makes

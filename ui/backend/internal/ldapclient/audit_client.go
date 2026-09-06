@@ -39,14 +39,16 @@ func (c *client) AuditActions(ctx context.Context, limit int, before string) ([]
 
 	attrs := []string{"reqType", "reqDN", "reqAuthzID", "reqStart", "reqEnd", "reqResult", "reqMod", "reqSession"}
 
-	// Attempt server-side sort control with SizeLimit = limit + 1
+	fetchLimit := auditActionsFetchLimit(limit, before)
+
+	// Attempt server-side sort control with SizeLimit = fetchLimit
 	sortCtrl := ldap.NewControlServerSideSortingWithSortKeys([]*ldap.SortKey{
 		{AttributeType: "reqStart", Reverse: true},
 	})
 
 	req := ldap.NewSearchRequest(
 		"cn=accesslog",
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, limit+1, 0, false,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, fetchLimit, 0, false,
 		filter,
 		attrs,
 		[]ldap.Control{sortCtrl},
@@ -54,16 +56,22 @@ func (c *client) AuditActions(ctx context.Context, limit int, before string) ([]
 
 	res, err := c.conn.Search(req)
 	var entries []*ldap.Entry
+	sorted := false
 
 	if err == nil || ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
 		if res != nil {
 			entries = res.Entries
+			sorted = sortConfirmed(res.Controls, res.Entries)
 		}
 	} else if ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) || ldap.IsErrorWithCode(err, ldap.LDAPResultInsufficientAccessRights) {
 		return nil, "", false, domain.ErrPermissionDenied
-	} else {
-		// Server-side sort not supported or failed: fall back to paged search with bounded page
-		pagedEntries, pagedErr := c.searchAccessLogPaged(ctx, "cn=accesslog", filter, attrs, limit+1)
+	}
+
+	if !sorted {
+		// Server-side sort not supported, failed, or unconfirmed (control
+		// missing/non-success, or entries not actually in order): fall
+		// back to paged search with a bounded page.
+		pagedEntries, pagedErr := c.searchAccessLogPaged(ctx, "cn=accesslog", filter, attrs, fetchLimit)
 		if pagedErr != nil {
 			if ldap.IsErrorWithCode(pagedErr, ldap.LDAPResultNoSuchObject) || ldap.IsErrorWithCode(pagedErr, ldap.LDAPResultInsufficientAccessRights) {
 				return nil, "", false, domain.ErrPermissionDenied
@@ -163,15 +171,22 @@ func (c *client) recentLogsLocked(ctx context.Context, limit int) ([]domain.Audi
 
 	res, err := c.conn.Search(req)
 	var entries []*ldap.Entry
+	sorted := false
 
 	if err == nil || ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
 		if res != nil {
 			entries = res.Entries
+			sorted = sortConfirmed(res.Controls, res.Entries)
 		}
 	} else if ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) || ldap.IsErrorWithCode(err, ldap.LDAPResultInsufficientAccessRights) {
 		return nil, domain.ErrPermissionDenied
-	} else {
-		// Fallback to paged search with bounded page
+	}
+
+	if !sorted {
+		// Server-side sort not supported, failed, or unconfirmed (control
+		// missing/non-success, or entries not actually in order): fall
+		// back to paged search with a bounded page. See sortConfirmed's
+		// doc comment for why "err == nil" alone can't be trusted here.
 		pagedEntries, pagedErr := c.searchAccessLogPaged(ctx, "cn=accesslog", "(reqStart=*)", attrs, limit)
 		if pagedErr != nil {
 			if ldap.IsErrorWithCode(pagedErr, ldap.LDAPResultNoSuchObject) || ldap.IsErrorWithCode(pagedErr, ldap.LDAPResultInsufficientAccessRights) {

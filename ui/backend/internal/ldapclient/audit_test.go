@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -139,6 +140,20 @@ func TestRedactFilter(t *testing.T) {
 			name:   "non-sensitive extensible match untouched",
 			filter: "(cn:caseExactMatch:=Alice)",
 			want:   "(cn:caseExactMatch:=Alice)",
+		},
+		{
+			// LOW: an attribute-less extensible match applies its matching
+			// rule against every attribute on the entry, including
+			// sensitive ones, so there is no attribute name to gate on —
+			// it must be redacted unconditionally rather than pass through.
+			name:   "attribute-less extensible match with dn is redacted conservatively",
+			filter: "(:dn:caseExactMatch:=hunter2)",
+			want:   "(:dn:caseExactMatch:=<redacted>)",
+		},
+		{
+			name:   "attribute-less extensible match with rule only is redacted conservatively",
+			filter: "(:caseExactMatch:=hunter2)",
+			want:   "(:caseExactMatch:=<redacted>)",
 		},
 	}
 
@@ -333,5 +348,171 @@ func TestFilterAndPaginateEvents_SharedReqStart(t *testing.T) {
 	page3, c3, hm3 := filterAndPaginateEvents(records, 1, c2)
 	if len(page3) != 1 || page3[0].Raw.ReqSession != "1001" || hm3 || c3 != "" {
 		t.Fatalf("limit=1 page 3 failed: count=%d, sess=%s, hasMore=%v, cursor=%s", len(page3), page3[0].Raw.ReqSession, hm3, c3)
+	}
+}
+
+// simulateAccessLogFetch stands in for what cn=accesslog itself returns for
+// AuditActions' server-side query: sorted newest-first, restricted to
+// reqStart<=cursor (inclusive — the same filter audit_client.go builds,
+// since reqSession has no ORDERING matching rule to exclude the cursor row
+// server-side too), then truncated to fetchLimit the way a SizeLimit would.
+func simulateAccessLogFetch(all []domain.AuditEvent, before string, fetchLimit int) []domain.AuditEvent {
+	sorted := make([]domain.AuditEvent, len(all))
+	copy(sorted, all)
+	sort.Slice(sorted, func(i, j int) bool { return compareAuditEvents(&sorted[i], &sorted[j]) < 0 })
+
+	candidates := sorted
+	if before != "" {
+		cursorStart, _ := parseCursor(before)
+		cursorGen := toGeneralizedTime(cursorStart)
+		candidates = nil
+		for _, e := range sorted {
+			if toGeneralizedTime(e.Raw.ReqStart) <= cursorGen {
+				candidates = append(candidates, e)
+			}
+		}
+	}
+	if len(candidates) > fetchLimit {
+		candidates = candidates[:fetchLimit]
+	}
+	return candidates
+}
+
+func TestAuditActionsPagination_FiveRecordsLimitTwo(t *testing.T) {
+	// HIGH-1: with a cursor, the server-side filter (reqStart<=cursor)
+	// matches the cursor row itself; fetching only limit+1 meant that,
+	// after filterAndPaginateEvents drops that one row client-side,
+	// exactly `limit` remain and hasMore is always false past page 1 —
+	// silently truncating the walk and losing every record beyond it.
+	// This walks 5 distinct-timestamp records with limit=2 through
+	// AuditActions' actual fetch-limit and pagination logic (via
+	// simulateAccessLogFetch + auditActionsFetchLimit) and asserts every
+	// record is reachable across pages, none duplicated.
+	const limit = 2
+	var all []domain.AuditEvent
+	for i := 1; i <= 5; i++ {
+		dn := fmt.Sprintf("uid=user%d,dc=example,dc=org", i)
+		// Descending timestamps: user1 is newest, user5 is oldest.
+		start := fmt.Sprintf("2026090408%02d00.000000Z", 60-i)
+		all = append(all, domain.AuditEvent{
+			Target: &dn,
+			Op:     "add",
+			Raw:    domain.AuditRaw{ReqStart: start, ReqSession: fmt.Sprintf("%d", 1000+i), ReqDN: dn},
+		})
+	}
+
+	var (
+		before      string
+		gotPages    [][]string
+		seen        = map[string]bool{}
+		safetyLimit = 10
+	)
+	for i := 0; i < safetyLimit; i++ {
+		fetchLimit := auditActionsFetchLimit(limit, before)
+		candidates := simulateAccessLogFetch(all, before, fetchLimit)
+		page, next, hasMore := filterAndPaginateEvents(candidates, limit, before)
+
+		var dns []string
+		for _, e := range page {
+			if seen[e.Raw.ReqDN] {
+				t.Fatalf("record %s returned more than once across pages", e.Raw.ReqDN)
+			}
+			seen[e.Raw.ReqDN] = true
+			dns = append(dns, e.Raw.ReqDN)
+		}
+		gotPages = append(gotPages, dns)
+
+		if !hasMore {
+			break
+		}
+		before = next
+		if i == safetyLimit-1 {
+			t.Fatalf("pagination did not terminate within %d pages", safetyLimit)
+		}
+	}
+
+	if len(seen) != 5 {
+		t.Fatalf("collected %d distinct records across %d pages, want 5 (all reachable); pages: %v", len(seen), len(gotPages), gotPages)
+	}
+	wantPages := [][]string{
+		{"uid=user1,dc=example,dc=org", "uid=user2,dc=example,dc=org"},
+		{"uid=user3,dc=example,dc=org", "uid=user4,dc=example,dc=org"},
+		{"uid=user5,dc=example,dc=org"},
+	}
+	if !reflect.DeepEqual(gotPages, wantPages) {
+		t.Errorf("pages = %v, want %v", gotPages, wantPages)
+	}
+}
+
+func TestSortConfirmed(t *testing.T) {
+	newer := ldap.NewEntry("reqStart=20260904090000.000001Z,cn=accesslog", map[string][]string{
+		"reqStart": {"20260904090000.000001Z"},
+	})
+	older := ldap.NewEntry("reqStart=20260904080000.000001Z,cn=accesslog", map[string][]string{
+		"reqStart": {"20260904080000.000001Z"},
+	})
+	inOrder := []*ldap.Entry{newer, older}
+	outOfOrder := []*ldap.Entry{older, newer}
+
+	successCtrl := &ldap.ControlServerSideSortingResult{Result: ldap.ControlServerSideSortingCodeSuccess}
+	failCtrl := &ldap.ControlServerSideSortingResult{Result: ldap.ControlServerSideSortingCodeOperationsError}
+
+	tests := []struct {
+		name     string
+		controls []ldap.Control
+		entries  []*ldap.Entry
+		want     bool
+	}{
+		{
+			// HIGH-2: ControlServerSideSorting has no criticality flag, so
+			// a server without sssvlv attached can silently ignore it and
+			// return no SortResult control at all. If the entries happen
+			// to be in order anyway, that's accepted...
+			name:     "no response control, entries in order is accepted",
+			controls: nil,
+			entries:  inOrder,
+			want:     true,
+		},
+		{
+			// ...but if they are not, that is exactly the silent-failure
+			// case the fallback exists for, so it must be caught.
+			name:     "no response control, entries out of order is rejected",
+			controls: nil,
+			entries:  outOfOrder,
+			want:     false,
+		},
+		{
+			name:     "success control, entries in order",
+			controls: []ldap.Control{successCtrl},
+			entries:  inOrder,
+			want:     true,
+		},
+		{
+			name:     "success control, entries out of order still rejected",
+			controls: []ldap.Control{successCtrl},
+			entries:  outOfOrder,
+			want:     false,
+		},
+		{
+			name:     "non-success control rejected even if entries look ordered",
+			controls: []ldap.Control{failCtrl},
+			entries:  inOrder,
+			want:     false,
+		},
+		{
+			name:     "no entries is trivially sorted",
+			controls: nil,
+			entries:  nil,
+			want:     true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sortConfirmed(tc.controls, tc.entries)
+			if got != tc.want {
+				t.Errorf("sortConfirmed() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

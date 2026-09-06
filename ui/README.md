@@ -259,6 +259,35 @@ individual Keycloak user. See
 | `POST` | `/api/groups/members` | Add member to group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404`, `409` |
 | `DELETE` | `/api/groups/members` | Remove member from group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404` |
 
+### `cn=accesslog` read access for the History page
+
+`GET /api/audit/actions` (the History page) and the recent-log portion of
+`GET /api/monitor` both read `cn=accesslog`. Its default ACL
+(`image/ldifs/01-cn-config.ldif`) is `to * by dn.exact="cn=admin,cn=accesslog"
+read by * none` — the same "own dedicated bind identity, everyone else
+denied" shape `cn=Monitor` uses (see the chart README's "Web console health
+view"). **Without an explicit grant, both endpoints return `403` for every
+identity, including the directory admin** — not an empty history, a hard
+permission error.
+
+To grant read access to your admin DN (LDAP login mode) or the SSO service
+account (`ui.ldapServiceAccount` / `LDAP_SERVICE_ACCOUNT_DN`), add a
+`by dn.exact=...read` clause the same way `.github/workflows/ui-e2e.yml` does
+in CI — look up the accesslog database's numeric index first, since it
+shifts depending on which other databases/overlays are enabled, rather than
+assuming a fixed value:
+
+```bash
+ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+  -b cn=config "(olcSuffix=cn=accesslog)" dn | sed -n 's/^dn: //p')
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+dn: $ACCESSLOG_DN
+changetype: modify
+replace: olcAccess
+olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by dn.exact="<your DN>" read by * none
+EOF
+```
+
 ## Development
 
 ```sh
