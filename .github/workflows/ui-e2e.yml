@@ -74,6 +74,7 @@ jobs:
             --set image.pullPolicy=Never \
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword="$ADMIN_PASSWORD_FOR_TEST" \
+            --set audit.accessLog.enabled=true \
             --set ui.enabled=true \
             --set ui.image.repository=ldapium-ui \
             --set ui.image.tag=e2e \
@@ -82,22 +83,24 @@ jobs:
             --set ui.session.loginFailureWindow=5s \
             --wait --timeout 5m
 
-      # cn=Monitor denies read to every bind except its own dedicated
-      # identity by default (see charts/ldapium/README.md's "Web console
-      # health view") — the health page's live-data assertions need the
-      # admin DN granted explicitly, the same ldapmodify an operator runs.
-      - name: Grant the admin DN read access to cn=Monitor
+      # cn=Monitor and cn=accesslog deny read to every bind except their own
+      # dedicated identities by default — the health and history pages'
+      # live-data assertions need the admin DN granted explicitly, the same
+      # ldapmodify an operator runs. Locate database DNs dynamically from cn=config
+      # so this doesn't break when database indices shift.
+      - name: Grant the admin DN read access to cn=Monitor and cn=accesslog
         run: |
           set -euo pipefail
-          cat <<'EOF' > /tmp/grant-monitor.ldif
-          dn: olcDatabase={2}monitor,cn=config
-          changetype: modify
-          replace: olcAccess
-          olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="cn=admin,dc=example,dc=org" read by * none
-          EOF
-          kubectl -n directory cp /tmp/grant-monitor.ldif directory-ldapium-0:/tmp/grant-monitor.ldif -c openldap
-          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
-            'ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -f /tmp/grant-monitor.ldif'
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c '
+            set -euo pipefail
+            MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "cn=config" "(olcDatabase=monitor)" dn | sed -n "s/^dn: //p")
+            ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b "cn=config" "(olcSuffix=cn=accesslog)" dn | sed -n "s/^dn: //p")
+            printf "dn: %s\nchangetype: modify\nreplace: olcAccess\nolcAccess: {0}to * by dn.exact=\"cn=monitoring,cn=Monitor\" read by dn.exact=\"cn=admin,dc=example,dc=org\" read by * none\n\n" "$MONITOR_DN" > /tmp/grant-access.ldif
+            if [ -n "$ACCESSLOG_DN" ]; then
+              printf "dn: %s\nchangetype: modify\nreplace: olcAccess\nolcAccess: {0}to * by dn.exact=\"cn=admin,cn=accesslog\" read by dn.exact=\"cn=admin,dc=example,dc=org\" read by * none\n" "$ACCESSLOG_DN" >> /tmp/grant-access.ldif
+            fi
+            ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -f /tmp/grant-access.ldif
+          '
 
       - name: Port-forward the UI service
         run: |

@@ -77,6 +77,29 @@ func (c *client) MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
 	}
 
 	stats := parseMonitorStats(res.Entries, c.cfg.BaseDN)
+
+	// Query base DN contextCSN for multi-provider replication tracking when enabled
+	csnReq := ldap.NewSearchRequest(
+		c.cfg.BaseDN,
+		ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+		"(objectClass=*)",
+		[]string{"contextCSN"},
+		nil,
+	)
+	if csnRes, csnErr := c.conn.Search(csnReq); csnErr == nil && len(csnRes.Entries) > 0 {
+		for _, val := range csnRes.Entries[0].GetAttributeValues("contextCSN") {
+			stats.ReplicationCSNs = append(stats.ReplicationCSNs, parseContextCSN(val))
+		}
+		sort.Slice(stats.ReplicationCSNs, func(i, j int) bool {
+			return stats.ReplicationCSNs[i].ServerID < stats.ReplicationCSNs[j].ServerID
+		})
+	}
+
+	// Read recent logs from cn=accesslog (best-effort, up to 50 entries)
+	if recent, recentErr := c.recentLogsLocked(ctx, 50); recentErr == nil {
+		stats.RecentLogs = recent
+	}
+
 	return &stats, nil
 }
 
@@ -112,6 +135,20 @@ func parseMonitorStats(entries []*ldap.Entry, baseDN string) domain.MonitorStats
 				stats.ConnectionsTotal = atoiOrZero(e.GetAttributeValue("monitorCounter"))
 			case "Max File Descriptors":
 				stats.ConnectionsMaxFDs = atoiOrZero(e.GetAttributeValue("monitorCounter"))
+			}
+
+		case strings.HasSuffix(dn, ",cn=waiters,cn=monitor"):
+			switch cn {
+			case "Read":
+				stats.WaitersRead = atoiOrZero(e.GetAttributeValue("monitorCounter"))
+			case "Write":
+				stats.WaitersWrite = atoiOrZero(e.GetAttributeValue("monitorCounter"))
+			}
+
+		case strings.HasSuffix(dn, ",cn=time,cn=monitor"):
+			switch cn {
+			case "Uptime":
+				stats.UptimeSeconds = atoi64OrZero(e.GetAttributeValue("monitoredInfo"))
 			}
 
 		case strings.HasSuffix(dn, ",cn=operations,cn=monitor"):

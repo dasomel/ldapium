@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  AuditActionsResponse,
   AuthConfig,
   Entry,
   Group,
@@ -66,6 +67,8 @@ export const api = {
   me: () => request<Me>('/me'),
   serverSettings: () => request<ServerSettings>('/server-settings'),
   monitorStats: () => request<MonitorStats>('/monitor'),
+  auditActions: (limit?: number, before?: string) =>
+    request<AuditActionsResponse>(`/audit/actions${qs({ limit: limit ? String(limit) : undefined, before })}`),
 
   tree: (dn?: string) => request<TreeNode[]>(`/tree${qs({ dn })}`),
   entry: (dn: string) => request<Entry>(`/entry${qs({ dn })}`),

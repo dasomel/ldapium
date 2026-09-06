@@ -176,6 +176,7 @@ LDAP_AUDIT_FILE="${LDAP_AUDIT_FILE:-/dev/stdout}"
 # created, below, for why a subdirectory rather than the mount point itself.
 LDAP_ACCESSLOG_ENABLED="${LDAP_ACCESSLOG_ENABLED:-false}"
 LDAP_ACCESSLOG_PURGE_DAYS="${LDAP_ACCESSLOG_PURGE_DAYS:-30}"
+LDAP_ACCESSLOG_OPS="${LDAP_ACCESSLOG_OPS:-reads bind}"
 ACCESSLOG_DIR="${DATA_DIR}/accesslog"
 
 # Password policy (see image/ldifs/03-base-structure.ldif and
@@ -699,23 +700,32 @@ d}" "$cn_config"
       # target and filter is exactly what an audit trail should not hand to
       # anyone who can reach the LDAP port.
       printf 'olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by * none\n'
+      # Attach sssvlv overlay to cn=accesslog so server-side sorting (RFC 2891)
+      # and bounded pagination are supported without loading the whole log.
+      printf '\ndn: olcOverlay=sssvlv,olcDatabase={2}mdb,cn=config\n'
+      printf 'objectClass: olcOverlayConfig\n'
+      printf 'objectClass: olcSssVlvConfig\n'
+      printf 'olcOverlay: sssvlv\n'
     } > "$accesslog_db"
     sed -i "/^#__ACCESSLOG_DB__$/{r ${accesslog_db}
 d}" "$cn_config"
 
     accesslog_overlay="${work}/accesslog-overlay.ldif"
     {
-      printf 'dn: olcOverlay=accesslog,olcDatabase={1}mdb,cn=config\n'
+      # Attached to olcDatabase={-1}frontend,cn=config as a global overlay so
+      # that internal searches initiated by other database overlays (like
+      # slapo-unique on {1}mdb) do not trigger accesslog and collide on reqStart
+      # RDN (MDB_KEYEXIST) during writes.
+      printf 'dn: olcOverlay=accesslog,olcDatabase={-1}frontend,cn=config\n'
       printf 'objectClass: olcOverlayConfig\n'
       printf 'objectClass: olcAccessLogConfig\n'
       printf 'olcOverlay: accesslog\n'
       printf 'olcAccessLogDB: cn=accesslog\n'
-      # bind, not just reads: rootdn/privileged-account bind usage is
-      # itself an audit requirement (a privileged bind with no matching
-      # write is otherwise invisible to both overlays — auditlog only
-      # sees writes), and a failed bind is exactly the "authentication
-      # failure" evidence a SIEM feed needs.
-      printf 'olcAccessLogOps: reads bind\n'
+      # olcAccessLogOps defaults to "reads bind" (preserving the baseline
+      # accesslog contract without duplicating auditlog writes). When
+      # configured with "writes reads bind" (e.g. for the UI console operator
+      # action history), writes (add, modify, delete, modrdn) are also captured.
+      printf 'olcAccessLogOps: %s\n' "$LDAP_ACCESSLOG_OPS"
       # FALSE (log every request, not only successful ones): with TRUE, a
       # rejected search or a failed bind — the two events most worth
       # auditing — would never reach cn=accesslog at all. reqResult is
@@ -730,7 +740,7 @@ d}" "$cn_config"
       # retention decision.
       printf 'olcAccessLogPurge: %s+00:00:00 0+01:00:00\n' "$LDAP_ACCESSLOG_PURGE_DAYS"
     } > "$accesslog_overlay"
-    log "enabling accesslog overlay (reads, purge after ${LDAP_ACCESSLOG_PURGE_DAYS}d)"
+    log "enabling accesslog overlay (${LDAP_ACCESSLOG_OPS}, purge after ${LDAP_ACCESSLOG_PURGE_DAYS}d)"
     sed -i "/^#__ACCESSLOG_OVERLAY__$/{r ${accesslog_overlay}
 d}" "$cn_config"
   else

@@ -19,6 +19,12 @@ type passwordPolicyListResponse struct {
 	Policies []domain.PasswordPolicy `json:"policies"`
 }
 
+type auditActionsResponse struct {
+	Events     []domain.AuditEvent `json:"events"`
+	NextBefore string              `json:"nextBefore,omitempty"`
+	HasMore    bool                `json:"hasMore"`
+}
+
 // serverSettingsResponse only includes settings useful for directory
 // administration. Connection hosts, certificate paths, and session secrets
 // remain server-only infrastructure details.

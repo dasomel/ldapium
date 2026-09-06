@@ -93,6 +93,12 @@ func (f *fakeLoginClient) MoveEntry(context.Context, string, string) error {
 func (f *fakeLoginClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
 	return nil, nil
 }
+func (f *fakeLoginClient) AuditActions(context.Context, int, string) ([]domain.AuditEvent, string, bool, error) {
+	return nil, "", false, nil
+}
+func (f *fakeLoginClient) RecentLogs(context.Context, int) ([]domain.AuditEvent, error) {
+	return nil, nil
+}
 func (f *fakeLoginClient) ListPasswordPolicies(context.Context, string) ([]domain.PasswordPolicy, error) {
 	return nil, nil
 }

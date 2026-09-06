@@ -284,6 +284,10 @@ audit:
     # -- Purge age: records older than this are removed by the overlay's own
     #    background task, not left to grow the data PVC without bound. Days.
     purgeDays: 30
+    # -- Operations to log in cn=accesslog. Defaults to "reads bind" in the image.
+    #    When the UI is enabled (ui.enabled=true), defaults to "writes reads bind"
+    #    so the web console operator action history records writes.
+    ops: ""
 
 backup:
   # -- Replication is NOT backup. A bad delete (or a bad ACL, or an attacker)
