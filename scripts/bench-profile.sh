@@ -46,6 +46,19 @@ skip_search=0
 skip_write=0
 keep_volumes=0
 
+# True iff $1 is a non-negative base-10 integer with no sign, decimal point,
+# or leading garbage — used to validate numeric flags at parse time instead
+# of letting a bad value (e.g. "--timeout-seconds abc") reach an arithmetic
+# `[ -gt ]`/`[ -ge ]` test deep inside the load loop, where bash would raise
+# an "integer expression expected" error mid-run instead of a clean, early
+# exit 2 with a usage message.
+is_uint() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 Usage: bench-profile.sh --entries N --out DIR [options]
@@ -90,11 +103,21 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --image) image="${2:?}"; shift 2 ;;
-    --entries) entries="${2:?}"; shift 2 ;;
+    --entries)
+      is_uint "${2:-}" && [ "${2:-0}" -gt 0 ] || {
+        printf -- '--entries must be a positive integer (got: %s)\n\n' "${2:-}" >&2
+        usage >&2; exit 2
+      }
+      entries="${2:?}"; shift 2 ;;
     --base) base="${2:?}"; shift 2 ;;
     --out) out_dir="${2:?}"; shift 2 ;;
     --db-max-size-gb) db_max_size_gb="${2:?}"; shift 2 ;;
-    --timeout-seconds) timeout_seconds="${2:?}"; shift 2 ;;
+    --timeout-seconds)
+      is_uint "${2:-}" || {
+        printf -- '--timeout-seconds must be a non-negative integer (got: %s)\n\n' "${2:-}" >&2
+        usage >&2; exit 2
+      }
+      timeout_seconds="${2:?}"; shift 2 ;;
     --search-concurrency) search_concurrency="${2:?}"; shift 2 ;;
     --search-queries-per-worker) search_queries_per_worker="${2:?}"; shift 2 ;;
     --write-count) write_count="${2:?}"; shift 2 ;;
@@ -108,7 +131,7 @@ while [ $# -gt 0 ]; do
 done
 
 image="${image:-ldapium:e2e}"
-[ "$entries" -gt 0 ] 2>/dev/null || { echo "--entries must be a positive integer" >&2; usage >&2; exit 2; }
+[ "$entries" -gt 0 ] 2>/dev/null || { echo "--entries is required" >&2; usage >&2; exit 2; }
 [ -n "$out_dir" ] || { echo "--out is required" >&2; usage >&2; exit 2; }
 
 command -v docker >/dev/null 2>&1 || { echo "docker not found on PATH" >&2; exit 1; }
@@ -180,7 +203,8 @@ ts="$(date -u +%Y%m%dT%H%M%SZ)"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/${run_id}-work-XXXXXX")
 
 cleanup() {
-  docker rm -f "${run_id}-bootstrap" "${run_id}-loader" "${run_id}-verify" "${run_id}-server" "${run_id}-du" >/dev/null 2>&1 || true
+  docker rm -f "${run_id}-bootstrap" "${run_id}-loader" "${run_id}-verify" "${run_id}-server" \
+    "${run_id}-du-apparent" "${run_id}-du-allocated" >/dev/null 2>&1 || true
   rm -f "$ldif_file"
   rm -rf "$work_dir"
   if [ "$keep_volumes" -eq 0 ]; then
@@ -364,14 +388,28 @@ log "on-disk DB size..."
 #     configured map size took effect, not what disk it actually consumed.
 #     ldifBytes remains the closer proxy for actual *data* volume (excluding
 #     index/LMDB overhead) than either.
-db_apparent_bytes=$(docker run --rm --name "${run_id}-du" \
-  -v "${vol_data}:/var/lib/openldap/data" \
-  --entrypoint sh "$image" -c "du -sb /var/lib/openldap/data 2>/dev/null | cut -f1" || echo 0)
-[ -n "$db_apparent_bytes" ] || db_apparent_bytes=0
-db_allocated_bytes=$(docker run --rm --name "${run_id}-du" \
-  -v "${vol_data}:/var/lib/openldap/data" \
-  --entrypoint sh "$image" -c "du -s --block-size=1 /var/lib/openldap/data 2>/dev/null | cut -f1" || echo 0)
-[ -n "$db_allocated_bytes" ] || db_allocated_bytes=0
+# Distinct --name per call (not a shared "${run_id}-du"): two docker run
+# invocations back to back with the same --rm'd container name race a
+# lagging removal — if the first container's removal hasn't completed by
+# the time the second starts, docker refuses the name collision and this
+# `du` call fails. Falling back to a bare `0` on that failure would silently
+# report "zero bytes" instead of "measurement failed", indistinguishable
+# from a real (if implausible) empty database — so a failure here is logged
+# and recorded as -1 (never a real byte count) instead.
+measure_du_bytes() {
+  local container_name="$1" du_flags="$2" out rc=0
+  out=$(docker run --rm --name "$container_name" \
+    -v "${vol_data}:/var/lib/openldap/data" \
+    --entrypoint sh "$image" -c "du ${du_flags} /var/lib/openldap/data | cut -f1") || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    log "WARNING: 'du ${du_flags}' via ${container_name} failed (exit ${rc}, output: '${out}') — recording -1, not 0"
+    echo -1
+    return
+  fi
+  echo "$out"
+}
+db_apparent_bytes=$(measure_du_bytes "${run_id}-du-apparent" "-sb")
+db_allocated_bytes=$(measure_du_bytes "${run_id}-du-allocated" "-s --block-size=1")
 
 log "load phase done: status=${status} loaded=${loaded_count}/${entries} seconds=${load_seconds} db-apparent-bytes=${db_apparent_bytes} db-allocated-bytes=${db_allocated_bytes}"
 

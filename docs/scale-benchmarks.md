@@ -308,7 +308,12 @@ table row above) and `scripts/bench-results/bench-profile-10000000-
 20260903T233629Z.json` (10M, table row above; run with an explicit
 `--db-max-size-gb 20`, labeled "disk-budget-constrained attempt" in its own
 report — chosen to fit this shared VM's available disk, not derived from
-any sizing formula, so its sufficiency margin at 10M is unknown). A third
+any sizing formula, so its sufficiency margin at 10M is unknown). Both of
+these two 0903 records predate the apparent/allocated split described in
+"The profile runner" above and carry the older single `dbOnDiskBytes` field
+(equal to the configured map size) instead of `dbApparentBytes`/
+`dbAllocatedBytes` — read their on-disk-size numbers as apparent size only,
+not real disk consumption. A third
 record, `scripts/bench-results/bench-profile-1000000-20260906T063039Z.json`,
 is a later 1M-only rerun made after this PR raised the `--db-max-size-gb`
 default and split `dbApparentBytes`/`dbAllocatedBytes` (see "The profile

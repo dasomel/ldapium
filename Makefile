@@ -55,8 +55,12 @@ k8s-ui-forward: ## Forward the deployed UI to http://127.0.0.1:8080 for Vite
 	echo "Forwarding svc/$$svc in namespace $$ns to http://127.0.0.1:8080"; \
 	kubectl -n "$$ns" port-forward "svc/$$svc" 8080:8080
 
-bench-profile: ## Run the large-scale benchmark profile (BENCH_ENTRIES=1000000 default; local-only, not part of `make check`)
-	@./scripts/bench-profile.sh --image $${BENCH_IMAGE:-ldapium:e2e} --entries $${BENCH_ENTRIES:-1000000} --out scripts/bench-results
+bench-profile: ## Run the large-scale benchmark profile (BENCH_ENTRIES=1000000, BENCH_OUT=.omc/bench-results defaults; local-only, not part of `make check`)
+	@# Default --out is gitignored (.omc/), not the tracked scripts/bench-results/:
+	@# a casual `make bench-profile` shouldn't drop untriaged result files into a
+	@# tracked directory. Pass BENCH_OUT=scripts/bench-results explicitly when you
+	@# actually intend to commit a run's results (as this PR's own runs were).
+	@./scripts/bench-profile.sh --image $${BENCH_IMAGE:-ldapium:e2e} --entries $${BENCH_ENTRIES:-1000000} --out $${BENCH_OUT:-.omc/bench-results}
 
 check: ## Run what CI runs, in the same order (minus the registry checks)
 	@# Frontend first: ui/backend/web embeds the built SPA, so the Go module
