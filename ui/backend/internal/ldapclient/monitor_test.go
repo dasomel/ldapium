@@ -42,6 +42,15 @@ func realMonitorEntries(baseDN string) []*ldap.Entry {
 		ldap.NewEntry("cn=Active,cn=Threads,cn=Monitor", map[string][]string{
 			"cn": {"Active"}, "monitoredInfo": {"1"},
 		}),
+		ldap.NewEntry("cn=Read,cn=Waiters,cn=Monitor", map[string][]string{
+			"cn": {"Read"}, "monitorCounter": {"3"},
+		}),
+		ldap.NewEntry("cn=Write,cn=Waiters,cn=Monitor", map[string][]string{
+			"cn": {"Write"}, "monitorCounter": {"1"},
+		}),
+		ldap.NewEntry("cn=Uptime,cn=Time,cn=Monitor", map[string][]string{
+			"cn": {"Uptime"}, "monitoredInfo": {"4200"},
+		}),
 		// cn=config — must NOT be mistaken for the data database.
 		ldap.NewEntry("cn=Database 0,cn=Databases,cn=Monitor", map[string][]string{
 			"cn": {"Database 0"}, "monitoredInfo": {"config"}, "namingContexts": {"cn=config"},
@@ -94,6 +103,12 @@ func TestParseMonitorStats(t *testing.T) {
 	}
 	if stats.ThreadsMax != 16 || stats.ThreadsMaxPending != 0 || stats.ThreadsActive != 1 {
 		t.Errorf("threads = %+v, want max=16 maxPending=0 active=1", stats)
+	}
+	if stats.WaitersRead != 3 || stats.WaitersWrite != 1 {
+		t.Errorf("waiters = read:%d write:%d, want read:3 write:1", stats.WaitersRead, stats.WaitersWrite)
+	}
+	if stats.UptimeSeconds != 4200 {
+		t.Errorf("UptimeSeconds = %d, want 4200", stats.UptimeSeconds)
 	}
 	if stats.DatabasePagesUsed != 28 || stats.DatabasePagesMax != 262144 || stats.DatabasePagesFree != 17 || stats.DatabaseEntries != 4 {
 		t.Errorf("database stats = %+v, want pagesUsed=28 pagesMax=262144 pagesFree=17 entries=4", stats)

@@ -40,6 +40,18 @@ func mapErr(op string, err error) error {
 			return domain.ErrPermissionDenied
 		case ldap.LDAPResultConstraintViolation, ldap.LDAPResultObjectClassViolation, ldap.LDAPResultInvalidAttributeSyntax:
 			return fmt.Errorf("%w: %s", domain.ErrInvalidInput, le.Err)
+		case ldap.LDAPResultNotAllowedOnNonLeaf:
+			// ModifyDN (MoveEntry) on an entry that still has children:
+			// the request itself is well-formed, but it conflicts with
+			// the directory's current state (children must be moved or
+			// removed first), which is what 409 -- not 400 -- means here.
+			return fmt.Errorf("%w: %s", domain.ErrConflict, le.Err)
+		case ldap.LDAPResultAffectsMultipleDSAs:
+			// ModifyDN with a newSuperior that would move the entry
+			// across naming contexts/backends: this deployment's directory
+			// doesn't support that, so the requested newParentDn is
+			// treated as invalid input rather than a state conflict.
+			return fmt.Errorf("%w: %s", domain.ErrInvalidInput, le.Err)
 		}
 	}
 	return fmt.Errorf("ldap %s: %w", op, err)

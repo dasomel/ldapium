@@ -1,0 +1,422 @@
+{
+    "benchmark": "profile",
+    "label": "Colima aarch64 VM, 3 vCPU/6 GiB cap (shared host, 6 vCPU/12GiB total) -- disk-budget-constrained attempt",
+    "timestampUtc": "20260903T233629Z",
+    "environment": {
+        "uname": "Darwin Macmini-2.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:17:26 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6041 arm64",
+        "dockerCpus": "6",
+        "dockerMemBytes": "12513599488",
+        "openldapVersion": "@(#) $OpenLDAP: slapd 2.6.14 (Aug 23 2026 00:47:32) $",
+        "imageDigest": "sha256:a094bc2785adadac50e969bb24816df7dcf2d4a770b68bab60b2013b38a0ebb4",
+        "tmpDiskFreeKb": 163189316
+    },
+    "requestedEntries": 10000000,
+    "loadedCount": 10000000,
+    "status": "ok",
+    "loaderLogTail": "",
+    "generation": {
+        "seconds": 6.212,
+        "ldifBytes": 2196666746
+    },
+    "load": {
+        "seconds": 2340.861,
+        "entriesPerSecond": 4271.93,
+        "dbMaxSizeBytes": 21474836480,
+        "dbOnDiskBytes": 21474844736,
+        "timeoutSeconds": 2700,
+        "progressSamples": [
+            {
+                "elapsedSeconds": 30,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.346GiB"
+            },
+            {
+                "elapsedSeconds": 61,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.931GiB"
+            },
+            {
+                "elapsedSeconds": 92,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.082GiB"
+            },
+            {
+                "elapsedSeconds": 123,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.813GiB"
+            },
+            {
+                "elapsedSeconds": 154,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.119GiB"
+            },
+            {
+                "elapsedSeconds": 185,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.604GiB"
+            },
+            {
+                "elapsedSeconds": 216,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.776GiB"
+            },
+            {
+                "elapsedSeconds": 248,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.235GiB"
+            },
+            {
+                "elapsedSeconds": 279,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.478GiB"
+            },
+            {
+                "elapsedSeconds": 310,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.847GiB"
+            },
+            {
+                "elapsedSeconds": 341,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.222GiB"
+            },
+            {
+                "elapsedSeconds": 372,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.523GiB"
+            },
+            {
+                "elapsedSeconds": 403,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.573GiB"
+            },
+            {
+                "elapsedSeconds": 434,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.34GiB"
+            },
+            {
+                "elapsedSeconds": 465,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.775GiB"
+            },
+            {
+                "elapsedSeconds": 496,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.611GiB"
+            },
+            {
+                "elapsedSeconds": 527,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.892GiB"
+            },
+            {
+                "elapsedSeconds": 558,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.631GiB"
+            },
+            {
+                "elapsedSeconds": 590,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.87GiB"
+            },
+            {
+                "elapsedSeconds": 621,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.628GiB"
+            },
+            {
+                "elapsedSeconds": 652,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.818GiB"
+            },
+            {
+                "elapsedSeconds": 683,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.525GiB"
+            },
+            {
+                "elapsedSeconds": 714,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.881GiB"
+            },
+            {
+                "elapsedSeconds": 746,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.327GiB"
+            },
+            {
+                "elapsedSeconds": 777,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.657GiB"
+            },
+            {
+                "elapsedSeconds": 809,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.049GiB"
+            },
+            {
+                "elapsedSeconds": 840,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.458GiB"
+            },
+            {
+                "elapsedSeconds": 871,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.927GiB"
+            },
+            {
+                "elapsedSeconds": 904,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.129GiB"
+            },
+            {
+                "elapsedSeconds": 935,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.595GiB"
+            },
+            {
+                "elapsedSeconds": 967,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.768GiB"
+            },
+            {
+                "elapsedSeconds": 999,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.398GiB"
+            },
+            {
+                "elapsedSeconds": 1031,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.872GiB"
+            },
+            {
+                "elapsedSeconds": 1063,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.572GiB"
+            },
+            {
+                "elapsedSeconds": 1094,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.697GiB"
+            },
+            {
+                "elapsedSeconds": 1126,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.418GiB"
+            },
+            {
+                "elapsedSeconds": 1157,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.804GiB"
+            },
+            {
+                "elapsedSeconds": 1188,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.163GiB"
+            },
+            {
+                "elapsedSeconds": 1219,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.514GiB"
+            },
+            {
+                "elapsedSeconds": 1250,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.628GiB"
+            },
+            {
+                "elapsedSeconds": 1283,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.009GiB"
+            },
+            {
+                "elapsedSeconds": 1315,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.592GiB"
+            },
+            {
+                "elapsedSeconds": 1346,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.78GiB"
+            },
+            {
+                "elapsedSeconds": 1377,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.149GiB"
+            },
+            {
+                "elapsedSeconds": 1408,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.722GiB"
+            },
+            {
+                "elapsedSeconds": 1441,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.01GiB"
+            },
+            {
+                "elapsedSeconds": 1472,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.751GiB"
+            },
+            {
+                "elapsedSeconds": 1511,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.89GiB"
+            },
+            {
+                "elapsedSeconds": 1542,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.308GiB"
+            },
+            {
+                "elapsedSeconds": 1576,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.988GiB"
+            },
+            {
+                "elapsedSeconds": 1607,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.499GiB"
+            },
+            {
+                "elapsedSeconds": 1638,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.007GiB"
+            },
+            {
+                "elapsedSeconds": 1670,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.637GiB"
+            },
+            {
+                "elapsedSeconds": 1703,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.861GiB"
+            },
+            {
+                "elapsedSeconds": 1734,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.556GiB"
+            },
+            {
+                "elapsedSeconds": 1768,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.893GiB"
+            },
+            {
+                "elapsedSeconds": 1807,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.124GiB"
+            },
+            {
+                "elapsedSeconds": 1838,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.903GiB"
+            },
+            {
+                "elapsedSeconds": 1869,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.573GiB"
+            },
+            {
+                "elapsedSeconds": 1900,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.435GiB"
+            },
+            {
+                "elapsedSeconds": 1931,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.354GiB"
+            },
+            {
+                "elapsedSeconds": 1963,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.333GiB"
+            },
+            {
+                "elapsedSeconds": 1994,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.308GiB"
+            },
+            {
+                "elapsedSeconds": 2025,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.717GiB"
+            },
+            {
+                "elapsedSeconds": 2057,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.791GiB"
+            },
+            {
+                "elapsedSeconds": 2088,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.602GiB"
+            },
+            {
+                "elapsedSeconds": 2119,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.835GiB"
+            },
+            {
+                "elapsedSeconds": 2150,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.979GiB"
+            },
+            {
+                "elapsedSeconds": 2182,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.104GiB"
+            },
+            {
+                "elapsedSeconds": 2213,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "1.917GiB"
+            },
+            {
+                "elapsedSeconds": 2245,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.653GiB"
+            },
+            {
+                "elapsedSeconds": 2276,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.071GiB"
+            },
+            {
+                "elapsedSeconds": 2307,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "2.753GiB"
+            },
+            {
+                "elapsedSeconds": 2341,
+                "entriesVisible": "n/a (skipped above 2000000 entries \u2014 see comment above)",
+                "loaderMem": "0B"
+            }
+        ]
+    },
+    "search": {
+        "benchmark": "search",
+        "image": "ldapium:e2e",
+        "entryCount": 10000000,
+        "concurrency": 20,
+        "totalQueries": 2000,
+        "failedQueries": 0,
+        "wallSeconds": 17.233,
+        "queriesPerSecond": 116.06,
+        "latencyMsP50": 154.792,
+        "latencyMsP95": 212.557,
+        "latencyMsP99": 239.519
+    },
+    "writeLatency": {
+        "benchmark": "write-latency",
+        "mode": "single-connection-sequential-online-ldapadd",
+        "count": 200,
+        "failed": 0,
+        "latencyMsP50": 57.421,
+        "latencyMsP95": 65.158,
+        "latencyMsP99": 69.872
+    }
+}

@@ -95,6 +95,10 @@ the boolean and the status code — the same redaction `respondErr`
 (`internal/httpapi/errors.go`) applies to every other unmapped internal
 error, applied here too since this endpoint has no session to gate it.
 
+See [`docs/auth-provider-policy.md`](../docs/auth-provider-policy.md) for
+the full provider priority, failure, audit, and CAS/SAML boundary policy,
+including the structured `auth` event line emitted on every login outcome.
+
 ## Configuration (environment variables)
 
 No security-relevant setting has a hardcoded default — you must set the
@@ -212,6 +216,77 @@ newly created group is seeded with the creating user as its first member —
 there's no service account to use as a placeholder instead. Add the real
 member(s) and remove yourself from the group afterwards if you don't want
 to remain on it.
+
+## HTTP API
+
+All endpoints under `/api` except `/api/auth/config`, `/api/health/ldap`, `/api/login`,
+and `/api/sso/*` require an active session cookie (`ldapium_session`). Which identity an
+operation runs as depends on the authentication mode (see
+[Authentication modes](#authentication-modes) above): in LDAP login mode it runs as the
+bound directory user, under that user's own OpenLDAP ACLs; in Keycloak SSO mode — including
+`POST /api/entry/move` — it runs as `LDAP_SERVICE_ACCOUNT_DN`, scoped by that service
+account's own ACLs and gated by the `SSO_ADMIN_ROLE` check on login, never as the
+individual Keycloak user. See
+[`docs/auth-provider-policy.md`](../docs/auth-provider-policy.md) for the full policy.
+
+| Method | Endpoint | Description | Status Codes |
+|---|---|---|---|
+| `GET` | `/api/auth/config` | Configured authentication mode (`ldap` or `sso`) | `200` |
+| `GET` | `/api/health/ldap` | Unauthenticated LDAP ping reachability check | `200`, `503` |
+| `POST` | `/api/login` | Bind as directory user and start session | `200`, `400`, `401`, `429` |
+| `POST` | `/api/logout` | End session and close bound LDAP connection | `200` |
+| `GET` | `/api/sso/start` | Initiate OIDC authorization code flow | `302`, `400` |
+| `GET` | `/api/sso/callback` | Handle OIDC callback and create session | `302`, `400` |
+| `GET` | `/api/me` | Current session's authenticated DN | `200`, `401` |
+| `GET` | `/api/server-settings` | Directory configuration and deployment metadata | `200`, `401` |
+| `GET` | `/api/monitor` | Read `cn=Monitor` statistics | `200`, `401`, `403` |
+| `GET` | `/api/audit/actions` | List operator action history (`?limit=&before=`) from `cn=accesslog` (admin only) | `200`, `401`, `403` |
+| `GET` | `/api/tree` | List child nodes of `?dn=` (or base DN if omitted) | `200`, `400`, `401` |
+| `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `404` |
+| `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if the entry still has children) |
+| `GET` | `/api/password-policies` | List password policy entries under base | `200`, `401` |
+| `GET` | `/api/users` | List user entries under search base | `200`, `401` |
+| `POST` | `/api/users` | Create user under `LDAP_USER_CREATE_BASE` | `201`, `400`, `401`, `409` (conflict if uid exists) |
+| `PUT` | `/api/users` | Update attributes on user | `204`, `400`, `401`, `404` |
+| `DELETE` | `/api/users` | Delete user at `?dn=` | `204`, `400`, `401`, `404` (not found if already deleted) |
+| `POST` | `/api/users/password` | Change password via RFC 3062 Password Modify | `200`, `400`, `401`, `403` |
+| `POST` | `/api/users/unlock` | Clear ppolicy lockout (`pwdAccountLockedTime`) | `204`, `400`, `401`, `404` |
+| `POST` | `/api/users/lock` | Administratively disable user account | `204`, `400`, `401`, `404` |
+| `GET` | `/api/groups` | List groups under search base | `200`, `401` |
+| `POST` | `/api/groups` | Create group under `LDAP_GROUP_CREATE_BASE` | `201`, `400`, `401`, `409` (conflict if group exists) |
+| `PUT` | `/api/groups` | Update group attributes | `204`, `400`, `401`, `404` |
+| `DELETE` | `/api/groups` | Delete group at `?dn=` | `204`, `400`, `401`, `404` (not found if already deleted) |
+| `POST` | `/api/groups/members` | Add member to group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404`, `409` |
+| `DELETE` | `/api/groups/members` | Remove member from group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404` |
+
+### `cn=accesslog` read access for the History page
+
+`GET /api/audit/actions` (the History page) and the recent-log portion of
+`GET /api/monitor` both read `cn=accesslog`. Its default ACL
+(`image/ldifs/01-cn-config.ldif`) is `to * by dn.exact="cn=admin,cn=accesslog"
+read by * none` — the same "own dedicated bind identity, everyone else
+denied" shape `cn=Monitor` uses (see the chart README's "Web console health
+view"). **Without an explicit grant, both endpoints return `403` for every
+identity, including the directory admin** — not an empty history, a hard
+permission error.
+
+To grant read access to your admin DN (LDAP login mode) or the SSO service
+account (`ui.ldapServiceAccount` / `LDAP_SERVICE_ACCOUNT_DN`), add a
+`by dn.exact=...read` clause the same way `.github/workflows/ui-e2e.yml` does
+in CI — look up the accesslog database's numeric index first, since it
+shifts depending on which other databases/overlays are enabled, rather than
+assuming a fixed value:
+
+```bash
+ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+  -b cn=config "(olcSuffix=cn=accesslog)" dn | sed -n 's/^dn: //p')
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+dn: $ACCESSLOG_DN
+changetype: modify
+replace: olcAccess
+olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by dn.exact="<your DN>" read by * none
+EOF
+```
 
 ## Development
 
