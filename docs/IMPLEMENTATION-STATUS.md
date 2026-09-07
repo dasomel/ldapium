@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-08-28 against `main`.
+Last verified: 2026-09-07 against `main`.
 
 This snapshot records features already merged to `main`. Open pull requests and issue-only roadmap items are intentionally excluded.
 
@@ -15,7 +15,9 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - memberOf / refint / ppolicy / unique / syncprov overlays
 - standalone and multi-provider replication paths
 - replication chaos testing, including real network partition and same-entry conflict behavior
-- raw replication CSN discard evidence in the audit export
+- raw replication CSN discard evidence in the audit export with entryUUID objectId correlation
+- HA topology governance (D11-D13): Active-Active N-Way multi-provider, reference RPO/RTO SLAs, cross-site DR via backup shipping
+- Prometheus alert rules for replication lag, ContextCSN divergence, and exporter health
 
 ## TLS and authentication hardening
 
@@ -27,6 +29,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - StartTLS on port 389 verified in CI
 - optional mTLS / SASL EXTERNAL mapping with documented CA-boundary caveat
 - failed-login rate limiting in the management UI
+- provider fallback policy and structured authentication audit logging
 
 ## Authorization / audit
 
@@ -36,6 +39,8 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - accesslog for reads and binds, including failed binds
 - unified NDJSON export across audit/access/replication-conflict sources
 - normalized identity audit event envelope (schemaVersion/seq/correlationId/privileged/objectId) over that same export, with deterministic replay coverage
+- tamper-evident cryptographic hash chain verification over normalized audit exports
+- audit shipper with bounded exponential backoff retries, dead-letter queue, and idempotent cursor
 - rootdn vs ordinary-user actor distinction verified
 - HTTP 500 error redaction with request correlation
 - `userPassword` redaction from generic DIT browser responses
@@ -44,6 +49,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 
 - DIT browser
 - user/group create, edit and delete
+- entry move via LDAP ModifyDN (`/api/entry/move`) with idempotency error mapping
 - password change / reset
 - account lock/unlock
 - organizational metadata fields
@@ -51,7 +57,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - operator action history view (`/history`, `GET /api/audit/actions`) with actor/op filtering, cursor pagination, and attribute value redaction
 - unauthenticated LDAP reachability health endpoint
 - browser-driven Playwright E2E against a real directory
-- Keycloak/OIDC integration path
+- Keycloak/OIDC integration path with end-to-end user federation testing
 
 ## Operations / resilience
 
@@ -60,9 +66,10 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - real-version rolling upgrade coverage (previous OpenLDAP -> current)
 - write-availability sampling during upgrade
 - offline bundle verification with `imagePullPolicy=Never`
-- cn=config drift detection
+- cn=config and entry data drift detection against canonicalized baselines
+- external LDIF migration dry-run validation and reconciliation report
 - deterministic, redacted, versioned incident-evidence export for offline/local-LLM RCA (no ChatOps bot, AI service, or remediation executor shipped)
-- local scale benchmark tooling and documented 20K / 1M reference measurements
+- local scale benchmark tooling with 1M/10M measured profiles, honest apparent vs allocated disk reporting, 30M+ projections, and identity-lifecycle (joiner/mover/leaver) load profiles
 - rendered chart schema validation with kubeconform
 
 ## Supply chain
@@ -81,7 +88,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - The published image is not claimed to be FIPS validated.
 - mTLS client-certificate trust requires careful CA scoping because an unmapped but CA-trusted certificate can still authenticate as a raw certificate subject.
 - Multi-provider conflict resolution is observable but still follows OpenLDAP's last-write/CSN behavior; ldapium does not invent a distributed consensus layer on top of it.
-- The SIEM and audit integration boundary is pull-only: newline-delimited JSON (NDJSON) produced by `scripts/export-audit-log.sh` is the integration contract. There is no push-based streaming daemon, retry loop, dead-letter queue, or direct SIEM connector.
+- SIEM export tooling is batch-oriented: `scripts/ship-audit-log.sh` ships NDJSON batches with retry/dead-letter and cursor persistence to HTTP sinks; real-time background push daemonization is delegated to platform log forwarders.
 - Audit retention is bifurcated: `cn=accesslog` purge age is configurable via `LDAP_ACCESSLOG_PURGE_DAYS` (default 30 days) in `image/entrypoint.sh` (with a fixed 1-hour purge cycle in `olcAccessLogPurge`), whereas `auditlog` writes to `LDAP_AUDIT_FILE` (default `/dev/stdout`) with no OpenLDAP-native retention or log rotation mechanism, leaving file management to container/host log shippers.
 - The management REST API (`ui/backend`) has no internal role-based access engine: requests are gated by session cookie validation (`requireSession` in `ui/backend/internal/httpapi/middleware.go` and `server.go`). In default LDAP login mode, operations execute over the user's bound LDAP connection and are authorized by OpenLDAP's own ACLs; in SSO mode, the backend binds using `LDAP_SERVICE_ACCOUNT_DN`, meaning all authenticated Keycloak users with `SSO_ADMIN_ROLE` share the service account's directory permissions (see `ui/README.md`).
 - The Helm chart is completely cloud-provider agnostic: defaults in `charts/ldapium/values.yaml` specify `service.type: ClusterIP` and default `storageClassName: ""` with no cloud-specific annotations, validated by continuous Kind-based CI (`.github/workflows/e2e.yml`) and air-gapped bundle installations using `imagePullPolicy=Never` (`scripts/offline-install.sh`).
@@ -91,6 +98,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - `README.md`
 - `charts/ldapium/README.md`
 - `docs/ha-profile.md`
+- `docs/migration.md`
 - `docs/product-boundary.md`
 - `docs/pam-boundary.md`
 - `docs/client-compatibility.md`
@@ -102,5 +110,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - `.github/workflows/e2e.yml`
 - `.github/workflows/security-e2e.yml`
 - `.github/workflows/replication-chaos-e2e.yml`
+- `.github/workflows/bench-profile.yml`
+- `.github/workflows/bench-lifecycle.yml`
 
 Refresh this document only from merged implementation and reproducible evidence.
