@@ -144,3 +144,101 @@ test('logs out and cannot reach an authed page without a session', async ({ page
   await page.goto('/health')
   await expect(page).toHaveURL(/\/login$/)
 })
+
+test('records operator action history for UI create and delete without leaking attribute values, and renders extended monitor stats', async ({ page }) => {
+  const runSuffix = Date.now().toString()
+  const testUser = {
+    uid: `e2e-history-${runSuffix}`,
+    cn: `History Check User ${runSuffix}`,
+    sn: 'Check',
+    mail: `history-${runSuffix}@example.org`,
+    password: `HistorySecret-${runSuffix}!`,
+  }
+
+  await login(page)
+  await page.getByRole('link', { name: 'Users' }).click()
+  await expect(page).toHaveURL(/\/users$/)
+
+  // Cleanup if left from prior run
+  await filterUsers(page, testUser.uid)
+  await deleteUserIfPresent(page, testUser.uid)
+  await filterUsers(page, '')
+
+  // Create user via UI
+  await page.getByRole('button', { name: 'New user' }).first().click()
+  const createDialog = page.getByRole('dialog', { name: 'New user' })
+  await createDialog.locator('#uid').fill(testUser.uid)
+  await createDialog.locator('#mail').fill(testUser.mail)
+  await createDialog.locator('#sn').fill(testUser.sn)
+  await createDialog.locator('#cn').fill(testUser.cn)
+  await createDialog.locator('#password').fill(testUser.password)
+  await createDialog.getByRole('button', { name: 'Create user' }).click()
+  await expect(page.getByText(`Created user ${testUser.uid}`)).toBeVisible()
+
+  // Delete user via UI
+  await filterUsers(page, testUser.uid)
+  await deleteUserIfPresent(page, testUser.uid)
+  await expect(userRow(page, testUser.uid)).toHaveCount(0)
+
+  // Navigate to History page
+  await page.locator('a[href="/history"]').click()
+  await expect(page).toHaveURL(/\/history$/)
+  await expect(page.getByText('Your account cannot view operator action history')).toHaveCount(0)
+
+  // Verify rows are visible
+  const targetDn = `uid=${testUser.uid},dc=example,dc=org`
+  const historyRows = page.locator('[data-testid="history-row"]')
+  await expect(historyRows.first()).toBeVisible({ timeout: 15_000 })
+
+  const addRow = historyRows.filter({ hasText: 'add' }).filter({ hasText: targetDn })
+  const delRow = historyRows.filter({ hasText: 'delete' }).filter({ hasText: targetDn })
+
+  await expect(addRow.first()).toBeVisible({ timeout: 15_000 })
+  await expect(delRow.first()).toBeVisible({ timeout: 15_000 })
+  expect(await addRow.count()).toBeGreaterThanOrEqual(1)
+  expect(await delRow.count()).toBeGreaterThanOrEqual(1)
+
+  // Assert actor is present on both rows
+  await expect(addRow.locator('[data-testid="history-actor"]').first()).toContainText(IDENTITY)
+  await expect(delRow.locator('[data-testid="history-actor"]').first()).toContainText(IDENTITY)
+
+  // Assert no attribute values (password, email, cn, sn) appear in changed attributes
+  const addAttrs = addRow.locator('[data-testid="history-attrs"]').first()
+  await expect(addAttrs).not.toContainText(testUser.password)
+  await expect(addAttrs).not.toContainText(testUser.mail)
+  await expect(addAttrs).not.toContainText(testUser.cn)
+  await expect(addAttrs).not.toContainText(testUser.sn)
+
+  // API-level assertion: GET /api/audit/actions and /api/monitor do not contain password string or userPassword values
+  const auditResult = await page.evaluate(async () => {
+    const res = await fetch('/api/audit/actions')
+    return { ok: res.ok, status: res.status, text: await res.text() }
+  })
+  expect(auditResult.ok).toBeTruthy()
+  expect(auditResult.text).not.toContain(testUser.password)
+  expect(auditResult.text).not.toContain('{SSHA}')
+  expect(auditResult.text).not.toContain('{ARGON2}')
+
+  const monitorResult = await page.evaluate(async () => {
+    const res = await fetch('/api/monitor')
+    return { ok: res.ok, status: res.status, text: await res.text() }
+  })
+  expect(monitorResult.ok).toBeTruthy()
+  expect(monitorResult.text).not.toContain(testUser.password)
+  expect(monitorResult.text).not.toContain('{SSHA}')
+  expect(monitorResult.text).not.toContain('{ARGON2}')
+
+  // Open Monitor and assert counters render
+  await page.locator('a[href="/health"]').click()
+  await expect(page).toHaveURL(/\/health$/)
+  await expect(page.getByText("Your account can't read cn=Monitor")).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Connections' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Database' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Threads' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Uptime & Waiters/i })).toBeVisible()
+  await expect(page.getByText('Read waiters', { exact: false })).toBeVisible()
+  await expect(page.getByText('Write waiters', { exact: false })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Recent access logs' })).toBeVisible()
+})
+

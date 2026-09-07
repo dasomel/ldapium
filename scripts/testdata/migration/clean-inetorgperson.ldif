@@ -1,0 +1,35 @@
+dn: dc=example,dc=org
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Example Organization
+dc: example
+
+dn: ou=people,dc=example,dc=org
+objectClass: top
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=alice,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Smith
+sn: Smith
+givenName: Alice
+mail: alice@example.org
+userPassword: {ARGON2}$argon2id$v=19$m=7168,t=5,p=1$cleanPasswordHashAlice
+
+dn: uid=bob,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Jones
+sn: Jones
+givenName: Bob
+mail: bob@example.org
+userPassword: {ARGON2}$argon2id$v=19$m=7168,t=5,p=1$cleanPasswordHashBob

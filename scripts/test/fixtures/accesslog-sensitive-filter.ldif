@@ -1,0 +1,26 @@
+dn: reqStart=20260823160000.000001Z,cn=accesslog
+objectClass: auditSearch
+reqStart: 20260823160000.000001Z
+reqSession: 2001
+reqAuthzID: cn=admin,dc=example,dc=org
+reqDN: dc=example,dc=org
+reqFilter: (userPassword=hunter2)
+reqResult: 0
+
+dn: reqStart=20260823160010.000001Z,cn=accesslog
+objectClass: auditSearch
+reqStart: 20260823160010.000001Z
+reqSession: 2002
+reqAuthzID: cn=admin,dc=example,dc=org
+reqDN: dc=example,dc=org
+reqFilter: (&(uid=alice)(authToken=abc123XYZ))
+reqResult: 0
+
+dn: reqStart=20260823160020.000001Z,cn=accesslog
+objectClass: auditSearch
+reqStart: 20260823160020.000001Z
+reqSession: 2003
+reqAuthzID: cn=admin,dc=example,dc=org
+reqDN: dc=example,dc=org
+reqFilter: (uid=alice)
+reqResult: 0

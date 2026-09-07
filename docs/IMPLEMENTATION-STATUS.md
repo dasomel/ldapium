@@ -35,6 +35,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - auditlog write attribution
 - accesslog for reads and binds, including failed binds
 - unified NDJSON export across audit/access/replication-conflict sources
+- normalized identity audit event envelope (schemaVersion/seq/correlationId/privileged/objectId) over that same export, with deterministic replay coverage
 - rootdn vs ordinary-user actor distinction verified
 - HTTP 500 error redaction with request correlation
 - `userPassword` redaction from generic DIT browser responses
@@ -46,7 +47,8 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - password change / reset
 - account lock/unlock
 - organizational metadata fields
-- cn=Monitor health view
+- cn=Monitor health view with uptime, thread/connection waiters, replication CSNs, and access log stream
+- operator action history view (`/history`, `GET /api/audit/actions`) with actor/op filtering, cursor pagination, and attribute value redaction
 - unauthenticated LDAP reachability health endpoint
 - browser-driven Playwright E2E against a real directory
 - Keycloak/OIDC integration path
@@ -59,6 +61,7 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - write-availability sampling during upgrade
 - offline bundle verification with `imagePullPolicy=Never`
 - cn=config drift detection
+- deterministic, redacted, versioned incident-evidence export for offline/local-LLM RCA (no ChatOps bot, AI service, or remediation executor shipped)
 - local scale benchmark tooling and documented 20K / 1M reference measurements
 - rendered chart schema validation with kubeconform
 
@@ -78,15 +81,24 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - The published image is not claimed to be FIPS validated.
 - mTLS client-certificate trust requires careful CA scoping because an unmapped but CA-trusted certificate can still authenticate as a raw certificate subject.
 - Multi-provider conflict resolution is observable but still follows OpenLDAP's last-write/CSN behavior; ldapium does not invent a distributed consensus layer on top of it.
+- The SIEM and audit integration boundary is pull-only: newline-delimited JSON (NDJSON) produced by `scripts/export-audit-log.sh` is the integration contract. There is no push-based streaming daemon, retry loop, dead-letter queue, or direct SIEM connector.
+- Audit retention is bifurcated: `cn=accesslog` purge age is configurable via `LDAP_ACCESSLOG_PURGE_DAYS` (default 30 days) in `image/entrypoint.sh` (with a fixed 1-hour purge cycle in `olcAccessLogPurge`), whereas `auditlog` writes to `LDAP_AUDIT_FILE` (default `/dev/stdout`) with no OpenLDAP-native retention or log rotation mechanism, leaving file management to container/host log shippers.
+- The management REST API (`ui/backend`) has no internal role-based access engine: requests are gated by session cookie validation (`requireSession` in `ui/backend/internal/httpapi/middleware.go` and `server.go`). In default LDAP login mode, operations execute over the user's bound LDAP connection and are authorized by OpenLDAP's own ACLs; in SSO mode, the backend binds using `LDAP_SERVICE_ACCOUNT_DN`, meaning all authenticated Keycloak users with `SSO_ADMIN_ROLE` share the service account's directory permissions (see `ui/README.md`).
+- The Helm chart is completely cloud-provider agnostic: defaults in `charts/ldapium/values.yaml` specify `service.type: ClusterIP` and default `storageClassName: ""` with no cloud-specific annotations, validated by continuous Kind-based CI (`.github/workflows/e2e.yml`) and air-gapped bundle installations using `imagePullPolicy=Never` (`scripts/offline-install.sh`).
 
 ## Related evidence
 
 - `README.md`
 - `charts/ldapium/README.md`
+- `docs/ha-profile.md`
+- `docs/product-boundary.md`
+- `docs/pam-boundary.md`
 - `docs/client-compatibility.md`
 - `docs/air-gap.md`
 - `docs/encryption-at-rest.md`
 - `docs/scale-benchmarks.md`
+- `docs/audit-event-schema.md`
+- `docs/incident-evidence.md`
 - `.github/workflows/e2e.yml`
 - `.github/workflows/security-e2e.yml`
 - `.github/workflows/replication-chaos-e2e.yml`

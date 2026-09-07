@@ -97,9 +97,11 @@ func (s *Server) routes(spa fs.FS) {
 	authed.GET("/me", s.handleMe)
 	authed.GET("/server-settings", s.handleGetServerSettings)
 	authed.GET("/monitor", s.handleGetMonitorStats)
+	authed.GET("/audit/actions", s.handleGetAuditActions)
 
 	authed.GET("/tree", s.handleTreeChildren)
 	authed.GET("/entry", s.handleGetEntry)
+	authed.POST("/entry/move", s.handleMoveEntry)
 
 	authed.GET("/password-policies", s.handleListPasswordPolicies)
 

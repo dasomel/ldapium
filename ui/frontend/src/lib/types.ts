@@ -43,6 +43,45 @@ export interface OperationCounter {
   completed: number
 }
 
+export interface ReplicationCSN {
+  serverId: string
+  csn: string
+  timestamp?: string
+}
+
+export interface AuditRaw {
+  reqSession?: string
+  reqType?: string
+  reqDN?: string
+  reqAuthzID?: string
+  reqResult?: string
+  reqStart?: string
+  reqEnd?: string
+  changedAttrs?: string[]
+  filter?: string
+}
+
+export interface AuditEvent {
+  schemaVersion: string
+  source: string
+  seq: number
+  time: string | null
+  actor: string
+  target: string | null
+  op: string
+  result: string
+  objectId: string | null
+  correlationId: string
+  privileged: boolean
+  raw: AuditRaw
+}
+
+export interface AuditActionsResponse {
+  events: AuditEvent[]
+  nextBefore?: string
+  hasMore: boolean
+}
+
 export interface MonitorStats {
   connectionsCurrent: number
   connectionsTotal: number
@@ -53,10 +92,15 @@ export interface MonitorStats {
   threadsMax: number
   threadsMaxPending: number
   threadsActive: number
+  waitersRead: number
+  waitersWrite: number
+  uptimeSeconds: number
+  replicationCsns?: ReplicationCSN[]
   databasePagesUsed: number
   databasePagesMax: number
   databasePagesFree: number
   databaseEntries: number
+  recentLogs?: AuditEvent[]
 }
 
 export interface TreeNode {

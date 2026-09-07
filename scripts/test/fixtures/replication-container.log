@@ -1,0 +1,4 @@
+5b1401 slapd syncrepl consumer starting rid=002
+do_syncrep2: rid=002 CSN too old, ignoring 20260825130859.674401Z#000000#003#000000 (uid=baseline,ou=chaos,dc=example,dc=org)
+5b1402 some other unrelated line
+do_syncrep2: rid=001 CSN too old, ignoring 20260825131000.100000Z#000001#002#000000 (uid=other,ou=chaos,dc=example,dc=org)
