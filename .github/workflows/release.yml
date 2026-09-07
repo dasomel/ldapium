@@ -35,10 +35,7 @@ jobs:
     permissions:
       contents: read
       checks: read
-      # Branch protection names the checks a merge had to pass. Reading it here
-      # is what keeps this job from carrying its own copy of that list, which
-      # would drift the moment someone changed the real one.
-      administration: read
+      statuses: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
