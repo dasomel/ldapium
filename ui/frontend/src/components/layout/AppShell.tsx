@@ -2,6 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import {
   Activity,
   FolderTree,
+  History,
   KeyRound,
   Languages,
   LogOut,
@@ -23,6 +24,7 @@ const nav: { to: string; labelKey: DictKey; icon: typeof FolderTree }[] = [
   { to: '/tree', labelKey: 'nav.tree', icon: FolderTree },
   { to: '/users', labelKey: 'nav.users', icon: UserRound },
   { to: '/groups', labelKey: 'nav.groups', icon: Users2 },
+  { to: '/history', labelKey: 'nav.history', icon: History },
   { to: '/health', labelKey: 'nav.health', icon: Activity },
   { to: '/server-settings', labelKey: 'nav.serverSettings', icon: Server },
 ]

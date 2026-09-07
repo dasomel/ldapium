@@ -44,12 +44,26 @@ type Client interface {
 	// GetEntry returns the full attribute set of dn.
 	GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 
+	// MoveEntry moves the entry at dn under newParentDN without changing
+	// its RDN.
+	MoveEntry(ctx context.Context, dn, newParentDN string) error
+
 	// MonitorStats reads slapd's cn=Monitor subtree for the admin UI's
 	// health view. cn=Monitor's own ACL restricts it to a dedicated bind
 	// identity this app never holds (see the doc comment in monitor.go),
 	// so callers should expect domain.ErrPermissionDenied for most bound
 	// users and treat it as "unavailable, and why" — not a server failure.
 	MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
+
+	// AuditActions returns operator write action events from cn=accesslog
+	// (?limit=&before=). Like MonitorStats, cn=accesslog requires read ACL
+	// which may not be granted to standard users, returning
+	// domain.ErrPermissionDenied when unauthorized.
+	AuditActions(ctx context.Context, limit int, before string) (events []domain.AuditEvent, nextBefore string, hasMore bool, err error)
+
+	// RecentLogs returns the last N accesslog entries of all op types
+	// (including binds and searches with filter redaction).
+	RecentLogs(ctx context.Context, limit int) ([]domain.AuditEvent, error)
 
 	// ListPasswordPolicies returns every pwdPolicy entry under base. See
 	// the method doc comment in policy.go for why an empty result is

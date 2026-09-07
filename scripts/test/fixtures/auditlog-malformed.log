@@ -1,0 +1,13 @@
+# modify 1756000400 dc=example,dc=org cn=admin,dc=example,dc=org
+dn: uid=carol,ou=people,dc=example,dc=org
+changetype: modify
+replace: userPassword hunter2 leaked-on-one-line
+sn: Carol
+-
+
+# modify 1756000500 dc=example,dc=org cn=admin,dc=example,dc=org
+dn: uid=dave,ou=people,dc=example,dc=org
+changetype: modify
+replace: 123bad!name
+sn: Dave
+-

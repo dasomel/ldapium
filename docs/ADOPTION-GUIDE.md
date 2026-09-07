@@ -28,6 +28,7 @@ After standalone behavior is verified, evaluate replication, backup/restore, Key
 - `docs/air-gap.md` — offline operation
 - `docs/encryption-at-rest.md` — storage-layer boundary
 - `docs/scale-benchmarks.md` — reference measurements
+- `docs/incident-evidence.md` — incident-evidence export, redaction guarantee, read-only RCA contract
 
 ## 5. Claims to keep precise
 

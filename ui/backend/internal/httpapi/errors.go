@@ -14,7 +14,7 @@ import (
 // JSON body, so handlers never construct echo.HTTPError by hand and the
 // mapping lives in exactly one place.
 //
-// The five mapped cases below are deliberately curated, user-facing
+// The six mapped cases below are deliberately curated, user-facing
 // messages (validation feedback, "not found", etc.) and are safe to
 // return verbatim. Anything that falls through to the default 500 is, by
 // definition, a failure this code didn't anticipate — most commonly a raw
@@ -30,6 +30,8 @@ func respondErr(c echo.Context, err error) error {
 	case errors.Is(err, domain.ErrNotFound):
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	case errors.Is(err, domain.ErrAlreadyExists):
+		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, domain.ErrConflict):
 		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})

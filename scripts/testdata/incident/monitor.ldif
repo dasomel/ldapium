@@ -1,0 +1,33 @@
+dn: cn=Total,cn=Connections,cn=Monitor
+cn: Total
+monitorCounter: 42
+
+dn: cn=Current,cn=Connections,cn=Monitor
+cn: Current
+monitorCounter: 3
+
+dn: cn=Max File Descriptors,cn=Connections,cn=Monitor
+cn: Max File Descriptors
+monitorCounter: 1024
+
+dn: cn=Bind,cn=Operations,cn=Monitor
+cn: Bind
+monitorOpInitiated: 100
+monitorOpCompleted: 100
+
+dn: cn=Search,cn=Operations,cn=Monitor
+cn: Search
+monitorOpInitiated: 500
+monitorOpCompleted: 498
+
+dn: cn=Max,cn=Threads,cn=Monitor
+cn: Max
+monitoredInfo: 16
+
+dn: cn=Active,cn=Threads,cn=Monitor
+cn: Active
+monitoredInfo: 2
+
+dn: cn=Max Pending,cn=Threads,cn=Monitor
+cn: Max Pending
+monitoredInfo: 0

@@ -1,0 +1,16 @@
+dn: reqStart=20260823155413.000004Z,cn=accesslog
+objectClass: auditSearch
+reqStart: 20260823155413.000004Z
+reqSession: 1001
+reqAuthzID: cn=admin,dc=example,dc=org
+reqDN: dc=example,dc=org
+reqFilter: (uid=alice)
+reqResult: 0
+
+dn: reqStart=20260823155500.000004Z,cn=accesslog
+objectClass: auditBind
+reqStart: 20260823155500.000004Z
+reqSession: 1002
+reqDN: cn=admin,dc=example,dc=org
+reqResult: 49
+
