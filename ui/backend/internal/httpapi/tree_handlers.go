@@ -45,3 +45,22 @@ func (s *Server) handleGetEntry(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, entry)
 }
+
+// handleMoveEntry moves an entry to a new superior parent DN via ModifyDN.
+func (s *Server) handleMoveEntry(c echo.Context) error {
+	var req moveEntryRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	if err := validate.DN(req.DN); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if err := validate.DN(req.NewParentDN); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	if err := currentSession(c).Bound.MoveEntry(c.Request().Context(), req.DN, req.NewParentDN); err != nil {
+		return respondErr(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}

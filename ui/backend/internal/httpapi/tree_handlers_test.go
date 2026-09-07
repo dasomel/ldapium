@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
@@ -14,13 +15,16 @@ import (
 )
 
 // countingTreeClient reuses the full Client double from auth_handlers_test.go
-// (via embedding) and only counts the two calls these handlers make, so a
+// (via embedding) and only counts the calls these handlers make, so a
 // test can assert a malformed DN is rejected before it ever reaches the
 // directory.
 type countingTreeClient struct {
 	*fakeLoginClient
-	treeCalls  int
-	entryCalls int
+	treeCalls           int
+	entryCalls          int
+	moveCalls           int
+	lastMoveDN          string
+	lastMoveNewParentDN string
 }
 
 func (c *countingTreeClient) Tree(context.Context, string) ([]domain.TreeNode, error) {
@@ -31,6 +35,13 @@ func (c *countingTreeClient) Tree(context.Context, string) ([]domain.TreeNode, e
 func (c *countingTreeClient) GetEntry(context.Context, string) (*domain.Entry, error) {
 	c.entryCalls++
 	return &domain.Entry{}, nil
+}
+
+func (c *countingTreeClient) MoveEntry(_ context.Context, dn, newParentDN string) error {
+	c.moveCalls++
+	c.lastMoveDN = dn
+	c.lastMoveNewParentDN = newParentDN
+	return nil
 }
 
 func treeTestContext(e *echo.Echo, dn string, client *countingTreeClient) (echo.Context, *httptest.ResponseRecorder) {
@@ -151,5 +162,78 @@ func TestHandleGetEntry_ValidDNPassesThrough(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || client.entryCalls != 1 {
 		t.Errorf("status=%d entryCalls=%d, want 200 and 1", rec.Code, client.entryCalls)
+	}
+}
+
+func TestHandleMoveEntry_RejectsMalformedDN(t *testing.T) {
+	s := newTreeTestServer()
+	e := echo.New()
+	client := &countingTreeClient{fakeLoginClient: &fakeLoginClient{}}
+
+	body := `{"dn":"not-a-dn","newParentDn":"ou=engineering,dc=example,dc=org"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/entry/move", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(sessionContextKey, &session.Session{DN: "cn=admin,dc=example,dc=org", Bound: client})
+
+	err := s.handleMoveEntry(c)
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok || httpErr.Code != http.StatusBadRequest {
+		t.Fatalf("handleMoveEntry(malformed DN) = %v (%T), want 400 *echo.HTTPError", err, err)
+	}
+	if client.moveCalls != 0 {
+		t.Errorf("MoveEntry called %d times for malformed DN; must never reach client", client.moveCalls)
+	}
+}
+
+func TestHandleMoveEntry_RejectsMalformedNewParentDN(t *testing.T) {
+	s := newTreeTestServer()
+	e := echo.New()
+	client := &countingTreeClient{fakeLoginClient: &fakeLoginClient{}}
+
+	body := `{"dn":"uid=alice,ou=people,dc=example,dc=org","newParentDn":"not-a-dn"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/entry/move", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(sessionContextKey, &session.Session{DN: "cn=admin,dc=example,dc=org", Bound: client})
+
+	err := s.handleMoveEntry(c)
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok || httpErr.Code != http.StatusBadRequest {
+		t.Fatalf("handleMoveEntry(malformed newParent) = %v (%T), want 400 *echo.HTTPError", err, err)
+	}
+	if client.moveCalls != 0 {
+		t.Errorf("MoveEntry called %d times for malformed newParent; must never reach client", client.moveCalls)
+	}
+}
+
+func TestHandleMoveEntry_ValidMovePassesThrough(t *testing.T) {
+	s := newTreeTestServer()
+	e := echo.New()
+	client := &countingTreeClient{fakeLoginClient: &fakeLoginClient{}}
+
+	body := `{"dn":"uid=alice,ou=people,dc=example,dc=org","newParentDn":"ou=engineering,dc=example,dc=org"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/entry/move", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(sessionContextKey, &session.Session{DN: "cn=admin,dc=example,dc=org", Bound: client})
+
+	if err := s.handleMoveEntry(c); err != nil {
+		t.Fatalf("handleMoveEntry(valid) unexpected error: %v", err)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 NoContent", rec.Code)
+	}
+	if client.moveCalls != 1 {
+		t.Errorf("MoveEntry calls = %d, want 1", client.moveCalls)
+	}
+	if client.lastMoveDN != "uid=alice,ou=people,dc=example,dc=org" {
+		t.Errorf("lastMoveDN = %q, want uid=alice,ou=people,dc=example,dc=org", client.lastMoveDN)
+	}
+	if client.lastMoveNewParentDN != "ou=engineering,dc=example,dc=org" {
+		t.Errorf("lastMoveNewParentDN = %q, want ou=engineering,dc=example,dc=org", client.lastMoveNewParentDN)
 	}
 }

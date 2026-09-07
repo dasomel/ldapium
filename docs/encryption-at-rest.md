@@ -112,3 +112,54 @@ If a specific certification (KISA cryptographic module validation, FIPS
 should be checked against this list *before* the deployment is planned, not
 discovered during it — the honest answer today is that this build does not
 carry one, and adding one is a build change, not a configuration one.
+
+## Password hashing and derivation matrix
+
+The directory stores user credentials in the `userPassword` attribute as formatted
+hash strings (`{SCHEME}<digest>`). Password hashing behavior is determined by the
+frontend database configuration (`olcPasswordHash` on `olcDatabase={0}frontend,cn=config`),
+populated at initial bootstrap via `image/ldifs/01-cn-config.ldif:63`.
+
+### Scheme support matrix
+
+| Scheme | Implementation source | Image availability | Approved for use | Notes |
+|---|---|---|---|---|
+| `{ARGON2}` | `argon2.la` (`libargon2`) | Built & loaded | **Yes** (Default) | Argon2id (`m=7168,t=5,p=1`), OWASP recommended memory-hard KDF. |
+| `{SSHA}` | OpenLDAP core built-in | Built-in | **Legacy only** | Salted SHA-1. Functionally supported; not approved for modern security baselines due to SHA-1 collision weaknesses. |
+| `{SSHA256}` / `{SSHA384}` / `{SSHA512}` | `pw-sha2` contrib module | **Not built** | No | OpenLDAP contrib module is omitted from `image/Dockerfile`. Specifying this scheme causes `slapd` startup or bind errors. |
+| `{PBKDF2}` | `pw-pbkdf2` contrib module | **Not built** | No | Contrib module is omitted from `image/Dockerfile`. Not supported. |
+
+### How to configure or change the hash scheme
+
+The password hashing scheme can be configured at bootstrap or modified at runtime:
+
+1. **At initial bootstrap**:
+   Pass the `LDAP_PASSWORD_HASH` environment variable (default `{ARGON2}`) or set
+   `ldap.passwordHash` in `charts/ldapium/values.yaml`. This defines `olcPasswordHash`
+   and sets the scheme used by `slappasswd` to mint the initial directory administrator
+   password hash (`image/entrypoint.sh:469-478`).
+
+2. **On an existing deployment (runtime change)**:
+   Modify `olcPasswordHash` on the frontend configuration database using `ldapmodify`
+   authenticated as `cn=admin,cn=config` over the local IPC socket:
+
+   ```bash
+   docker exec ldap ldapmodify -x -H "ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi" \
+     -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" <<'EOF'
+   dn: olcDatabase={0}frontend,cn=config
+   changetype: modify
+   replace: olcPasswordHash
+   olcPasswordHash: {SSHA}
+   EOF
+   ```
+
+   In Kubernetes, execute this command inside the `ldapium-0` pod or apply it offline
+   via `slapmodify` against the configuration PVC.
+
+3. **Behavioral impact**:
+   Changing `olcPasswordHash` affects **newly set or changed passwords only**.
+   OpenLDAP validates authentication requests by parsing the `{SCHEME}` tag directly
+   from the target entry's stored `userPassword` value. Existing stored hashes remain
+   fully functional and will only migrate to the new hashing scheme when the user or
+   administrator submits a password update.
+

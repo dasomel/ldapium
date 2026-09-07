@@ -468,23 +468,41 @@ jobs:
           echo "::endgroup::"
           echo "$out" | grep -q '"source":"auditlog"'
           echo "$out" | grep -q '"source":"accesslog"'
-          # Every line has to be valid JSON, not just look like it.
-          echo "$out" | while IFS= read -r line; do
-            python3 -c "import json,sys; json.loads(sys.argv[1])" "$line"
-          done
-          echo "PASS: export-audit-log.sh produced valid NDJSON with both sources"
+          echo "PASS: export-audit-log.sh produced both sources"
+
+          # Every line has to parse as JSON and carry the identity-audit
+          # envelope (docs/audit-event-schema.md, #24) — schemaVersion, a
+          # contiguous seq, and a correlationId are the three fields a SIEM
+          # integration keys on, so a live run has to prove them, not just
+          # the fixture replay test in scripts/test/.
+          echo "$out" | python3 -c '
+          import json, sys
+          seqs = []
+          for lineno, line in enumerate(sys.stdin, start=1):
+              line = line.strip()
+              if not line:
+                  continue
+              rec = json.loads(line)
+              for field in ("schemaVersion", "source", "seq", "correlationId", "actor", "target", "op", "result", "privileged", "raw"):
+                  assert field in rec, f"line {lineno}: missing {field!r}: {line}"
+              schema_version = rec["schemaVersion"]
+              assert schema_version == "1", f"line {lineno}: unexpected schemaVersion {schema_version!r}"
+              seqs.append(rec["seq"])
+          assert seqs == list(range(1, len(seqs) + 1)), f"seq is not contiguous starting at 1: {seqs}"
+          print(f"{len(seqs)} records, all with schemaVersion/seq/correlationId, seq contiguous 1..{len(seqs)}")
+          '
+          echo "PASS: every record parses and carries schemaVersion/seq/correlationId"
 
           # A privileged write has to be tellable from an ordinary user's
-          # write in the same feed (#76): the rootdn bypasses every ACL, so
-          # the bind DN auditlog records is the only thing that says which
-          # kind of write a change was. Both happened earlier in this job —
-          # the seed and modify steps bound as the rootdn, the self-service
-          # step bound as bob — so both actors must show up, distinctly, as
-          # auditlog modify records. `target` is the database suffix in
-          # auditlog's format, not the entry DN, so it is not asserted here.
-          echo "$out" | grep -q '"source":"auditlog".*"actor":"cn=admin,dc=example,dc=org","op":"modify"'
-          echo "$out" | grep -q '"source":"auditlog".*"actor":"uid=bob,ou=people,dc=example,dc=org","op":"modify"'
-          echo "PASS: rootdn and self-service writes are attributed to distinct actors in the export"
+          # write in the same feed (#76): the rootdn bypasses every ACL, and
+          # `privileged` (docs/audit-event-schema.md) now says this directly
+          # instead of leaving the caller to infer it from the actor DN. Both
+          # happened earlier in this job — the seed and modify steps bound as
+          # the rootdn, the self-service step bound as bob — so both must show
+          # up as distinct auditlog modify records with the right classification.
+          echo "$out" | grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"cn=admin,dc=example,dc=org",.*"op":"modify".*"privileged":true'
+          echo "$out" | grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"uid=bob,ou=people,dc=example,dc=org",.*"op":"modify".*"privileged":false'
+          echo "PASS: rootdn and self-service writes are attributed to distinct actors, correctly classified privileged"
 
       - name: Verify chart security context
         run: |

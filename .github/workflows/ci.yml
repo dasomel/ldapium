@@ -448,10 +448,41 @@ jobs:
       # as POSIX sh; the scripts/ helpers declare their own shebangs and are
       # checked against whatever each one asks for.
       - run: shellcheck -s sh image/entrypoint.sh
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh scripts/test/*.sh
       # The `helm test` script is a chart file, not an inline blob in a
       # template, precisely so it can be linted here and run by hand.
       - run: shellcheck charts/ldapium/files/tests/*.sh
+
+      # Pure fixture-based unit test for the audit export normalizer (#24) —
+      # no cluster needed, see the script's own header for what it does and
+      # does not cover.
+      - run: ./scripts/test/test-export-audit-log.sh
+      - run: ./scripts/test/test-ship-audit-log.sh
+      # Fixture-based unit test for entry data drift detection (#121).
+      - run: ./scripts/test/test-detect-entry-drift.sh
+
+      # stdlib unittest for the pure bench-generate-lifecycle-ops.py helper
+      # (determinism, mix-ratio apportionment, mover/leaver disjoint ranges,
+      # input validation) — no Docker needed, see the test file's docstring.
+      - run: python3 -m unittest discover -s scripts/test -p 'test_*.py'
+
+  incident-evidence:
+    name: Incident evidence bundle (fixtures)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fully offline: fixtures under scripts/testdata/incident/ stand in for
+      # a live directory, so this needs no Docker/kind — determinism,
+      # redaction, and the findings rule set are exercised on every PR, not
+      # only when Docker happens to be available (see e2e.yml's own
+      # "install + helm test" job for the live-bundle check against a real
+      # kind-deployed directory).
+      - run: ./scripts/test-incident-evidence.sh
+
+      # Fixture-based unit test for migration dry-run reconciliation (#123) —
+      # no Docker needed for the schema normalizer / report tests.
+      - run: ./scripts/test/test-migration-dryrun.sh
 
   hadolint:
     name: hadolint (Dockerfiles, informational)

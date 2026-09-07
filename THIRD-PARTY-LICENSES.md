@@ -45,11 +45,11 @@ SBOM attached to that release, or:
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
 | `github.com/valyala/bytebufferpool` | MIT | [link](https://github.com/valyala/bytebufferpool/blob/v1.0.0/LICENSE) |
 | `github.com/valyala/fasttemplate` | MIT | [link](https://github.com/valyala/fasttemplate/blob/v1.2.2/LICENSE) |
-| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.54.0:LICENSE) |
+| `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.55.0:LICENSE) |
 | `golang.org/x/net` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE) |
 | `golang.org/x/oauth2` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
 | `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
-| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE) |
+| `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
 | `golang.org/x/time/rate` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 
 ## UI frontend (npm, production dependencies)

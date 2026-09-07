@@ -1,0 +1,3 @@
+{"pod":"test-pod-0","source":"auditlog","time":"1756000000","actor":"cn=admin,dc=example,dc=org","op":"add","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["uid"]}
+this line is not valid JSON at all {{{
+{"pod":"test-pod-0","source":"auditlog","time":"1756000100","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}

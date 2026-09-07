@@ -112,6 +112,13 @@ spec:
             {{- if .Values.audit.accessLog.enabled }}
             - name: LDAP_ACCESSLOG_PURGE_DAYS
               value: {{ .Values.audit.accessLog.purgeDays | quote }}
+            {{- if .Values.audit.accessLog.ops }}
+            - name: LDAP_ACCESSLOG_OPS
+              value: {{ .Values.audit.accessLog.ops | quote }}
+            {{- else if .Values.ui.enabled }}
+            - name: LDAP_ACCESSLOG_OPS
+              value: "writes reads bind"
+            {{- end }}
             {{- end }}
             - name: LDAP_TLS_ENABLED
               value: {{ .Values.tls.enabled | quote }}

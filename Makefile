@@ -3,7 +3,7 @@
 KUBE_NAMESPACE ?=
 KUBE_RELEASE ?=
 
-.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward k8s-audit-export check licenses sbom
+.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward k8s-audit-export bench-profile check licenses sbom
 
 help: ## Show local development commands
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -55,6 +55,13 @@ k8s-ui-forward: ## Forward the deployed UI to http://127.0.0.1:8080 for Vite
 	echo "Forwarding svc/$$svc in namespace $$ns to http://127.0.0.1:8080"; \
 	kubectl -n "$$ns" port-forward "svc/$$svc" 8080:8080
 
+bench-profile: ## Run the large-scale benchmark profile (BENCH_ENTRIES=1000000, BENCH_OUT=.omc/bench-results defaults; local-only, not part of `make check`)
+	@# Default --out is gitignored (.omc/), not the tracked scripts/bench-results/:
+	@# a casual `make bench-profile` shouldn't drop untriaged result files into a
+	@# tracked directory. Pass BENCH_OUT=scripts/bench-results explicitly when you
+	@# actually intend to commit a run's results (as this PR's own runs were).
+	@./scripts/bench-profile.sh --image $${BENCH_IMAGE:-ldapium:e2e} --entries $${BENCH_ENTRIES:-1000000} --out $${BENCH_OUT:-.omc/bench-results}
+
 check: ## Run what CI runs, in the same order (minus the registry checks)
 	@# Frontend first: ui/backend/web embeds the built SPA, so the Go module
 	@# does not compile until ui/frontend has been built at least once.
@@ -65,10 +72,20 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/check-versions.sh
 	@./scripts/check-modules.sh
 	@shellcheck -s sh image/entrypoint.sh
-	@shellcheck scripts/*.sh
+	@shellcheck scripts/*.sh scripts/test/*.sh
 	@shellcheck charts/ldapium/files/tests/*.sh
+	@./scripts/test-incident-evidence.sh
 	@./scripts/licenses.sh --check
 	@./scripts/check-make-parity.sh
+	@# check-make-parity.sh's own comparison regex only matches top-level
+	@# scripts/*.sh invocations in ci.yml, so it cannot see this one — a
+	@# script living in a subdirectory (scripts/test/) is outside what that
+	@# tool was written to compare. Listed here by hand instead of teaching
+	@# the parity checker a new path shape for a single caller.
+	@./scripts/test/test-export-audit-log.sh
+	@./scripts/test/test-ship-audit-log.sh
+	@./scripts/test/test-migration-dryrun.sh
+	@./scripts/test/test-detect-entry-drift.sh
 	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
