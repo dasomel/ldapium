@@ -57,6 +57,36 @@ Service, and passed into the image; the image never has to guess K8s
 topology. `PodDisruptionBudget` and `topologySpreadConstraints` are also only
 rendered when `replicaCount > 1`.
 
+See [docs/ha-profile.md](../../docs/ha-profile.md) for the binding HA topology
+profile (D11–D13), failure modes and recovery matrix, reference RPO/RTO SLAs, and
+observability boundaries.
+
+### Replication compatibility matrix
+
+This is the supported and tested boundary, not a claim that every OpenLDAP
+topology works with this chart. Re-test a row whenever the image's OpenLDAP
+version or the replication configuration changes.
+
+| Layer | Supported / verified combination | Evidence |
+|---|---|---|
+| OpenLDAP | 2.6.14, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
+| Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
+| Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
+| HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior (D11) | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
+| Peer transport | `ldap://` inside the cluster, or `ldaps://` with a CA mounted and `tls.caFile` configured for strict peer-certificate verification | The TLS E2E verifies that a 3-provider install uses only `ldaps://`, rejects an invalid peer certificate, and converges a write. |
+| Bootstrap / recovery | One-provider offline LDIF seed or offline restore into ordinal `-0`, then scale to three providers for initial refresh | `replication-chaos-e2e.yml` and `backup-restore.yml` verify seed/restore followed by 3-provider convergence. |
+
+The following combinations are **not supported**: a non-MDB backend; OpenLDAP
+versions other than the image-pinned version; Mirror mode, Active-Standby (D11),
+single-writer standby fencing, or provider/consumer topologies; independently
+bootstrapped data on every provider; and cross-site or multi-DC replication (D13;
+supported cross-site DR is backup shipping + offline restore). Do not infer
+compatibility from an OpenLDAP feature existing upstream. In particular, a
+replicated restore requires the procedure in
+[Restoring a replicated deployment](#restoring-a-replicated-deployment), not
+loading the same backup into every pod. See [docs/ha-profile.md](../../docs/ha-profile.md)
+for details and rationale.
+
 ## Scale / Performance
 
 "This holds up to N entries" is a claim; [docs/scale-benchmarks.md](../../docs/scale-benchmarks.md)
@@ -318,6 +348,77 @@ RP-initiated logout. Register `<origin>/login` as a valid post-logout
 redirect URI for every `ui.sso.callbackOrigins` entry. If Keycloak does not
 advertise an end-session endpoint, logout remains local-only.
 
+### Keycloak LDAP user federation
+
+The above is Keycloak as an OIDC provider the UI relies on. The *other*
+direction — Keycloak reading users and groups out of ldapium via its LDAP
+user storage SPI — is a separate integration with its own settings, live-
+verified end to end (LDAP write -> sync -> Keycloak group -> token `groups`
+claim) by `.github/workflows/keycloak-federation-e2e.yml`. This is the same
+provider `docs/client-compatibility.md`'s "Kubernetes RBAC group mapping"
+section has a Kubernetes API server's `--oidc-groups-claim` ultimately
+reading from.
+
+Bind DN: use a dedicated, least-privilege identity — never `<LDAP_ADMIN_DN>`
+or `cn=admin,cn=config`. The workflow's `cn=keycloak-svc,<rootDN>` needs no
+bespoke ACL grant at all: the default ACL (this file's parent
+`image/README.md`, "Access control (ACL)") already gives any authenticated
+bind read access to every attribute except `userPassword`, which is exactly
+what LDAP federation needs — search `ou=people`/`ou=groups`, read
+`mail`/`sn`/`givenName`/`member` — and nothing it doesn't. It uses
+`organizationalRole` + `simpleSecurityObject`, the same objectClasses
+`<LDAP_ADMIN_DN>` gets, just without rootdn's ACL bypass.
+
+Keycloak realm settings > User federation > Add Ldap providers, or the
+equivalent `kcadm.sh`/Admin REST API component, with:
+
+| Setting | Value | Why |
+|---|---|---|
+| Vendor | `other` | This is OpenLDAP, not one of Keycloak's named vendor presets |
+| Connection URL | `ldap://<host>:389` | Plaintext inside a trusted network/namespace; see the LDAPS note below |
+| Bind DN | `cn=keycloak-svc,<rootDN>` | Dedicated read-only identity, not the directory or `cn=config` admin |
+| Edit mode | `READ_ONLY` | Keycloak never writes back to this directory |
+| Users DN | `ou=people,<rootDN>` | |
+| Username LDAP attribute | `uid` | |
+| RDN LDAP attribute | `uid` | |
+| UUID LDAP attribute | `entryUUID` | Operational attribute every entry already has; no schema change needed |
+| User object classes | `inetOrgPerson` | |
+
+Group mapper (`group-ldap-mapper`):
+
+| Setting | Value | Why |
+|---|---|---|
+| Groups DN | `ou=groups,<rootDN>` | |
+| Group name LDAP attribute | `cn` | |
+| Group object classes | `groupOfNames` | |
+| Membership attribute | `member` | This image ships no `memberOf` overlay instance (`memberof.la` loads but is never configured — see "Verifying an install" below); group membership has to be read from the group side |
+| Membership attribute type | `DN` | `member` holds full DNs, not bare `uid`s |
+| Mode | `READ_ONLY` | |
+
+Plus user attribute mappers (`user-attribute-ldap-mapper`) for `mail` ->
+`email`, `givenName` -> `firstName`, `sn` -> `lastName`, all read-only.
+
+A group membership protocol mapper (`oidc-group-membership-mapper`,
+`claim.name=groups`) on the client turns the imported groups into the
+token's `groups` claim — the same claim `docs/client-compatibility.md`
+documents Kubernetes's `--oidc-groups-claim=groups` reading.
+
+**LDAPS**: this workflow deliberately runs plain `ldap://` inside a private
+docker network rather than standing up a CA. `e2e.yml`'s TLS job builds one,
+but it's scoped to that job's own Kubernetes Service DNS names and isn't
+something a separate, non-kind workflow can reuse. TLS transport itself is
+independently proven there; what this workflow proves is the federation
+*contract* (attribute/group mapping, sync, and the token claim chain), which
+is orthogonal to transport encryption. Terminate TLS the same way you would
+for any other LDAP client (`tls.enabled=true` + `ldaps://` in Connection
+URL) in a real deployment.
+
+Trigger a sync from Keycloak (`kcadm.sh create
+"user-storage/<id>/sync?action=triggerFullSync" -r <realm>`, or the realm's
+User federation page) after any LDAP-side user/group change — `READ_ONLY`
+federation is pull-based, not push-based; nothing in this chart or image
+notifies Keycloak of a change.
+
 ## Verifying an install
 
 ```bash
@@ -558,25 +659,28 @@ itself and would otherwise grow without bound the same way an unrotated
 `scripts/export-audit-log.sh` reads `auditlog` writes and raw replication
 diagnostics (container logs, every pod), plus `accesslog` reads/binds (an LDAP
 bind, every pod, skipped with a warning on any pod where it is not enabled),
-and prints one JSON object per line — one feed for a SIEM instead of separate
-manual procedures. The replication stream is deliberately undeduplicated:
-its `CSN too old, ignoring` lines mix genuine same-entry conflicts with
-harmless N-way relay duplicates, so no individual line is confirmed data loss.
+and prints one normalized identity-audit event per line — one feed for a
+SIEM instead of separate manual procedures. The replication stream is
+deliberately undeduplicated: its `CSN too old, ignoring` lines mix genuine
+same-entry conflicts with harmless N-way relay duplicates, so no individual
+line is confirmed data loss.
 
 ```bash
 ./scripts/export-audit-log.sh -n <namespace> -r <fullname>
-{"pod":"...","source":"auditlog","time":"1787500678","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org"}
-{"pod":"...","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0"}
-{"pod":"...","source":"replication-conflict-raw","time":"20260825130859.674401Z","entry":"uid=baseline,ou=chaos,dc=example,dc=org","discardedCSN":"20260825130859.674401Z#000000#003#000000","rid":"002"}
-{"pod":"...","source":"accesslog","time":"20260823155733.000004Z","actor":"cn=admin,dc=example,dc=org","op":"bind","target":"cn=admin,dc=example,dc=org","filter":"","result":"49"}
+{"schemaVersion":"1","source":"auditlog","seq":1,"time":"2026-08-23T15:57:32Z","actor":"cn=admin,dc=example,dc=org","target":"uid=alice,ou=people,dc=example,dc=org","op":"modify","result":"unknown","objectId":null,"correlationId":"auditlog:directory-ldapium-0:1787500652:uid=alice,ou=people,dc=example,dc=org:cn=admin,dc=example,dc=org","privileged":true,"raw":{"pod":"directory-ldapium-0","source":"auditlog","time":"1787500652","actor":"cn=admin,dc=example,dc=org","op":"modify","target":"dc=example,dc=org","entryDn":"uid=alice,ou=people,dc=example,dc=org","entryUUID":"","changedAttrs":["sn"]}}
+{"schemaVersion":"1","source":"accesslog","seq":2,"time":"2026-08-23T15:57:32.000004Z","actor":"cn=admin,dc=example,dc=org","target":"dc=example,dc=org","op":"search","result":"success","objectId":null,"correlationId":"accesslog:directory-ldapium-0:118:20260823155732.000004Z","privileged":true,"raw":{"pod":"directory-ldapium-0","source":"accesslog","time":"20260823155732.000004Z","actor":"cn=admin,dc=example,dc=org","op":"search","target":"dc=example,dc=org","filter":"(objectClass=*)","result":"0","reqSession":"118"}}
 ```
 
-`time` is not the same format between the two sources — `auditlog` is a raw
-Unix epoch, `accesslog` is LDAP `GeneralizedTime` — stated rather than
-reformatted, since reformatting one to match the other in POSIX shell means
-date arithmetic that behaves differently under GNU vs. BSD `date`. A SIEM's
-own ingest normalizes this with a real date library; guessing at it here
-risked silently producing a wrong time instead.
+Every record is wrapped in a common envelope — `schemaVersion`, `seq`,
+`time` (RFC3339 UTC, normalized from each source's own native format),
+`actor`, `target`, `op`, `result`, `objectId`, `correlationId`, and
+`privileged` — with the original per-source fields preserved (with search
+filters and changed-attribute lists redacted/sanitized where sensitive)
+under `raw`. Full field semantics, derivations, and their documented limits
+live in [`docs/audit-event-schema.md`](../../docs/audit-event-schema.md);
+`--legacy` reproduces the pre-envelope flat shape for scripts that want it,
+but is not a byte-for-byte compatibility guarantee — see that document
+before relying on it.
 
 On a replicated install this iterates every pod for the same reason the
 extraction procedure above does: each provider only has the events it
@@ -612,6 +716,28 @@ full drift. `olcSyncrepl`'s `credentials="..."` (the cleartext replication
 bind password) is masked to a fixed placeholder rather than compared, so it
 never reaches the baseline file or a diff line, same principle as the
 `userPassword` denylist above.
+
+### Detecting entry-data drift
+
+Directory entries (identities, groups, organizational units) replicate across
+providers and change via administrative or self-service actions.
+`scripts/detect-entry-drift.sh` exports the subtree as LDIF, strips operational
+attributes (`entryCSN`, `entryUUID`, `modifyTimestamp`, `modifiersName`,
+`createTimestamp`, `creatorsName`, `contextCSN`, `structuralObjectClass`), redacts
+`userPassword` values to a fixed placeholder (`userPassword: <redacted>`),
+canonicalizes the LDIF (sorting attributes within each entry and sorting entries
+by DN), and diffs against a baseline file:
+
+```bash
+./scripts/detect-entry-drift.sh -n <namespace> -r <fullname> --baseline-out baseline.ldif
+# ... later, in CI, on a cron schedule, or before maintenance ...
+./scripts/detect-entry-drift.sh -n <namespace> -r <fullname> --check baseline.ldif
+```
+
+Exit codes:
+- `0`: no drift detected
+- `1`: drift detected (diff printed to stdout)
+- `2`: error (e.g. baseline file missing, connectivity/auth failure, invalid arguments)
 
 ## Observability
 
@@ -653,6 +779,7 @@ and nothing here has verified it — check it against your own metric.
 |---|---|---|
 | `LDAPiumExporterDown` | no scrape for 5m | Is the pod up at all? The exporter shares the pod, so this is often "the server is gone", not "metrics are gone". `kubectl get pods`, then the container's logs. |
 | `LDAPiumReplicationLag` | a peer is more than `replicationLagThreshold` seconds behind for `replicationLagFor` | Compare `contextCSN` on each provider (`ldapsearch -b <rootDN> -s base contextCSN`). A peer that is behind and catching up is different from one that has stopped: check its syncrepl errors in the log. |
+| `LDAPiumContextCSNDivergence` | contextCSN delta exceeds `replicationDivergenceThreshold` seconds for `replicationDivergenceFor` | Critical replication desynchronization. Check syncrepl logs on both providers, clock synchronization (NTP), and disk space. |
 | `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
 | `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
 | `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds`, for 10m | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
@@ -697,21 +824,23 @@ To grant it to your own admin DN (LDAP-password mode) or the SSO service
 account (the DN in `ui.ldapServiceAccount`'s secret — see "Keycloak SSO"
 above), add a
 `by dn.exact=...read` clause to the monitor database's ACL, online, via
-`ldapmodify`:
+`ldapmodify`. The monitor database's numeric index shifts depending on which
+other databases/overlays are enabled (accesslog, for instance, claims its own
+index when `audit.accessLog.enabled` is set) — look it up rather than
+assuming a fixed value, the same way `.github/workflows/ui-e2e.yml` does in
+CI:
 
 ```bash
-cat <<'EOF' | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
-dn: olcDatabase={2}monitor,cn=config
+MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+  -b cn=config "(olcDatabase=monitor)" dn | sed -n 's/^dn: //p')
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+dn: $MONITOR_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="<your DN>" read by * none
 EOF
 ```
 
-The monitor database's numeric index (`{2}` above) is whatever this
-deployment actually assigned it — confirm with `ldapsearch -x -D
-"cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" -b cn=config
-"(olcDatabase=monitor)" dn` before modifying, rather than assuming `{2}`.
 Widening this ACL to `by users read` instead of naming a specific DN would
 let every authenticated directory user see connection and replication
 internals — a real security-scope decision, not something this chart makes

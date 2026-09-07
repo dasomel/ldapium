@@ -19,6 +19,12 @@ type MonitorStats struct {
 	ThreadsMaxPending int `json:"threadsMaxPending"`
 	ThreadsActive     int `json:"threadsActive"`
 
+	WaitersRead   int   `json:"waitersRead"`
+	WaitersWrite  int   `json:"waitersWrite"`
+	UptimeSeconds int64 `json:"uptimeSeconds"`
+
+	ReplicationCSNs []ReplicationCSN `json:"replicationCsns,omitempty"`
+
 	// Database* describe the primary data database (the one whose
 	// namingContexts matches the deployment's configured base DN), not
 	// cn=config or cn=Monitor's own internal database entries.
@@ -26,6 +32,16 @@ type MonitorStats struct {
 	DatabasePagesMax  int64 `json:"databasePagesMax"`
 	DatabasePagesFree int64 `json:"databasePagesFree"`
 	DatabaseEntries   int64 `json:"databaseEntries"`
+
+	RecentLogs []AuditEvent `json:"recentLogs,omitempty"`
+}
+
+// ReplicationCSN describes the replication state for one provider node
+// reported via contextCSN on the base DN.
+type ReplicationCSN struct {
+	ServerID  string `json:"serverId"`
+	CSN       string `json:"csn"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 // OperationCounter is slapd's initiated/completed count for one LDAP

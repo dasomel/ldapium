@@ -17,7 +17,7 @@ tests:
   - interval: 1m
     name: the metrics endpoint stops answering
     input_series:
-      - series: 'up{service="alerts-ldapium-metrics"}'
+      - series: 'up{namespace="directory",service="alerts-ldapium-metrics"}'
         values: "1+0x5 0+0x10"
     alert_rule_test:
       - eval_time: 5m
@@ -28,17 +28,72 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              namespace: directory
               service: alerts-ldapium-metrics
+              release: alerts
             exp_annotations:
               summary: "LDAPium metrics endpoint is down"
-              description: "Prometheus cannot scrape the LDAPium metrics endpoint for 5 minutes."
+              description: "Prometheus cannot scrape the LDAPium metrics endpoint for 5m."
+
+  - interval: 1m
+    name: metrics from another namespace with the same service name do not trigger
+    input_series:
+      # Same fullname/service as the installs above, but scraped out of a
+      # different namespace. Before the namespace matcher was added, `service`
+      # alone was ambiguous across namespaces and this series would have
+      # cross-fired every alert below.
+      - series: 'up{namespace="other-directory",service="alerts-ldapium-metrics"}'
+        values: "1+0x5 0+0x20"
+      - series: 'openldap_replication_delta{namespace="other-directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 500+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LDAPiumExporterDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LDAPiumReplicationLag
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts: []
+
+  - interval: 1m
+    name: an identically-named replica lagging in another namespace does not merge with or mask this one
+    input_series:
+      # Same service AND replica name in both namespaces, both lagging at
+      # once. This rule's own expr selector only ever matches its own
+      # namespace, so `other-directory`'s series can never reach the `max`
+      # aggregation in the first place — but that only holds because the
+      # selector carries the namespace matcher. This proves the surviving
+      # alert is the one from OUR namespace, and that `by (namespace, ...)`
+      # keeps that namespace on the fired alert's own label set rather than
+      # dropping it, so two real installs sharing this fullname would never
+      # produce indistinguishable alerts in Alertmanager even if their
+      # replica names happened to collide too.
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+      - series: 'openldap_replication_delta{namespace="other-directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LDAPiumReplicationLag
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: directory
+              service: alerts-ldapium-metrics
+              replica: ldapium-1
+              release: alerts
+            exp_annotations:
+              summary: "LDAPium replication lag is high"
+              description: "At least one replication peer is more than the configured threshold behind the local provider."
 
   - interval: 1m
     name: a replica falls behind
     input_series:
-      - series: 'openldap_replication_delta{replica="ldapium-1"}'
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
         values: "0+0x5 45+0x20"
-      - series: 'openldap_replication_delta{replica="ldapium-2"}'
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-2"}'
         values: "0+0x30"
     alert_rule_test:
       # The threshold is crossed at 5m but the rule waits 5m more, so nothing
@@ -51,7 +106,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              namespace: directory
+              service: alerts-ldapium-metrics
               replica: ldapium-1
+              release: alerts
             exp_annotations:
               summary: "LDAPium replication lag is high"
               description: "At least one replication peer is more than the configured threshold behind the local provider."
@@ -59,11 +117,90 @@ tests:
   - interval: 1m
     name: a replica that stays caught up never alerts
     input_series:
-      - series: 'openldap_replication_delta{replica="ldapium-1"}'
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
         values: "0 5 12 3 0 8 0+0x30"
     alert_rule_test:
       - eval_time: 40m
         alertname: LDAPiumReplicationLag
+        exp_alerts: []
+
+  - interval: 1m
+    name: local dial failure does not trigger alerts
+    input_series:
+      - series: 'openldap_dial{result="fail"}'
+        values: "0+0x5 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LDAPiumReplicationLag
+        exp_alerts: []
+
+  - interval: 1m
+    name: metrics from another release do not trigger replication alerts
+    input_series:
+      - series: 'openldap_replication_delta{service="other-release-metrics",replica="ldapium-1"}'
+        values: "0+0x5 500+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LDAPiumReplicationLag
+        exp_alerts: []
+
+  - interval: 1m
+    name: contextCSN diverges beyond critical threshold
+    input_series:
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 350+0x20"
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-2"}'
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+              service: alerts-ldapium-metrics
+              replica: ldapium-1
+              release: alerts
+            exp_annotations:
+              summary: "LDAPium contextCSN divergence is critical"
+              description: "At least one replication peer contextCSN has diverged by more than the critical threshold from the local provider."
+
+  - interval: 1m
+    name: contextCSN diverges in negative direction
+    input_series:
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 -400+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LDAPiumContextCSNDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+              service: alerts-ldapium-metrics
+              replica: ldapium-1
+              release: alerts
+            exp_annotations:
+              summary: "LDAPium contextCSN divergence is critical"
+              description: "At least one replication peer contextCSN has diverged by more than the critical threshold from the local provider."
+
+  - interval: 1m
+    name: normal replication delta within threshold does not trigger critical divergence
+    input_series:
+      - series: 'openldap_replication_delta{namespace="directory",service="alerts-ldapium-metrics",replica="ldapium-1"}'
+        values: "0+0x5 45+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LDAPiumContextCSNDivergence
         exp_alerts: []
 
   - interval: 1m
