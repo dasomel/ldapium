@@ -6,7 +6,7 @@ compatibility: Requires the LDAPium checkout and project Docker/Go/Helm/UI toolc
 metadata:
   openforge-scope: project
   openforge-owner: dasomel/ldapium
-  openforge-maturity: verified
+  openforge-maturity: draft
   openforge-version: "1"
 ---
 
