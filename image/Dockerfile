@@ -89,7 +89,7 @@ RUN ./configure \
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
-FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS exporter-builder
+FROM golang:1.27.0-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
