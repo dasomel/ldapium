@@ -3,10 +3,10 @@ module github.com/dasomel/ldapium/ui/backend
 go 1.26.6
 
 require (
-	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/labstack/echo/v4 v4.15.4
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
