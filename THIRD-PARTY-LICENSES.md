@@ -33,7 +33,7 @@ SBOM attached to that release, or:
 | Module | License | Source |
 |---|---|---|
 | `github.com/Azure/go-ntlmssp` | MIT | [link](https://github.com/Azure/go-ntlmssp/blob/v0.1.1/LICENSE) |
-| `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | [link](https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE) |
+| `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | [link](https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE) |
 | `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.8/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
@@ -47,7 +47,7 @@ SBOM attached to that release, or:
 | `github.com/valyala/fasttemplate` | MIT | [link](https://github.com/valyala/fasttemplate/blob/v1.2.2/LICENSE) |
 | `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.55.0:LICENSE) |
 | `golang.org/x/net` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE) |
-| `golang.org/x/oauth2` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
+| `golang.org/x/oauth2` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
 | `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
 | `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
 | `golang.org/x/time/rate` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
