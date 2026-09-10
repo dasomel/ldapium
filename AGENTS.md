@@ -1,9 +1,6 @@
 # ldapium
 
-ldapium follows the OpenForge context-efficient agent engineering model. Read `README.md`,
-`ui/README.md`, `image/README.md`, `charts/ldapium/README.md`, `CONTRIBUTING.md`,
-`RELEASING.md`, and the relevant issue/spec before editing — this file carries only the
-gotchas that aren't derivable from those.
+ldapium follows the OpenForge model-agnostic agent engineering model. Inspect `README.md`, `ui/README.md`, `image/README.md`, `charts/ldapium/README.md`, `CONTRIBUTING.md`, `RELEASING.md`, project skills, and the relevant issue/spec only when they apply to the current task. This file carries the high-value gotchas that are not safely derivable from those sources.
 
 ## Rules
 
@@ -15,6 +12,8 @@ gotchas that aren't derivable from those.
 - Let formatter/linter rules own deterministic style. Comments explain why, invariants, hazards, or compatibility constraints.
 - For bugs, prefer: reproduce -> failing test/evidence -> minimal fix -> same test passes -> relevant regression suite.
 - Use integration/E2E evidence for LDAP, auth, backup/restore, upgrade, and browser behavior when unit tests cannot prove the real path.
+- Choose verification proportional to task risk and user impact; do not require live-LDAP/browser paths for unrelated trivial changes.
+- Safe local/disposable inspect-edit-build-test-fix-retest work may proceed within scope. Shared/production/destructive/release/credential/permission/external mutations require explicit authorization unless already granted.
 - Do not claim completion without stating which checks actually ran and their scope.
 - End substantive work as A) complete/verified, B) meaningful verified progress with the next blocker isolated, or C) stop with evidence when further work requires unjustified scope, fragile patches, unsupported assumptions, or unacceptable risk.
 
@@ -79,4 +78,7 @@ intentionally scoped down across multiple PRs rather than done in one shot. PR b
 one of these on a partial PR; when an issue's remaining scope needs reorganizing, split it into
 focused successor issues instead.
 
-Reference: https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
+References:
+- https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
+- https://github.com/dasomel/openforge/blob/main/docs/model-agnostic-agent-instructions.md
+- https://github.com/dasomel/openforge/blob/main/docs/user-centric-validation.md
