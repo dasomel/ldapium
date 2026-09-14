@@ -108,12 +108,12 @@ make check
 ## 문서
 
 - [영문 README](README.md)
-- [한국어 README](README_ko.md)
-- [한국어 기여 가이드](CONTRIBUTING_ko.md)
-- [한국어 변경 기록](CHANGELOG_ko.md)
-- [한국어 보안 정책](SECURITY_ko.md)
-- [한국어 릴리스 가이드](RELEASING_ko.md)
-- [한국어 법률/라이선스 안내](docs/legal_ko.md)
+- [한국어 README](README-ko.md)
+- [한국어 기여 가이드](CONTRIBUTING-ko.md)
+- [한국어 변경 기록](CHANGELOG-ko.md)
+- [한국어 보안 정책](SECURITY-ko.md)
+- [한국어 릴리스 가이드](RELEASING-ko.md)
+- [한국어 법률/라이선스 안내](docs/legal-ko.md)
 
 ## 라이선스
 
