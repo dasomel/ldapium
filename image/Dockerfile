@@ -1,10 +1,10 @@
 #
-# From-source OpenLDAP 2.6.14, built and owned by this project — no osixia,
+# From-source OpenLDAP 2.6.15, built and owned by this project — no osixia,
 # no vegardit. See image/README.md for the full env var contract and
 # image/ldifs/*.ldif for the bootstrap templates.
 
-ARG OPENLDAP_VERSION=2.6.14
-ARG OPENLDAP_SHA256=806dcd21d366428187fba3278da773d5930f774852c9e92517f950d585f19107
+ARG OPENLDAP_VERSION=2.6.15
+ARG OPENLDAP_SHA256=bc91225dbfc50354033b1303bc91d1a7f6ddd1dc32fac950d79c28fe66d6bca8
 
 FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS builder
 ARG OPENLDAP_VERSION

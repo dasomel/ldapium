@@ -7,7 +7,7 @@ English | **한국어**
 [![CI](https://github.com/dasomel/ldapium/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.14-informational)](https://www.openldap.org/)
+[![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.15-informational)](https://www.openldap.org/)
 
 > **상태: prototype**. 초기부터 공개하여 패키징과 운영 방식을 실제 환경에서 검증하는 프로젝트입니다. 현재 릴리스 문서에 기술된 기능 중 일부는 아직 독립적인 환경에서 충분히 검증되지 않았으며, 특히 TLS 경로는 end-to-end 검증이 필요합니다.
 
@@ -31,7 +31,7 @@ ldapium은 이 문제를 다음 구성으로 해결합니다.
 
 | 경로 | 설명 |
 |---|---|
-| `image/` | OpenLDAP 2.6.14 서버 이미지 |
+| `image/` | OpenLDAP 2.6.15 서버 이미지 |
 | `ui/` | DIT 브라우저, 사용자/그룹 관리, 비밀번호 관리 UI |
 | `charts/ldapium/` | StatefulSet, replication, backup, UI 등을 제공하는 Helm chart |
 
