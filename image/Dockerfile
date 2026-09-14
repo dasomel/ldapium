@@ -82,15 +82,20 @@ RUN ./configure \
 
 # Keep the exporter build isolated from the OpenLDAP source toolchain so the
 # application build cache is not invalidated when exporter code changes.
-# v2.9.14 declares toolchain go1.26.5, so pin the builder to that exact
-# toolchain instead of relying on Go's automatic toolchain download.
+# GOTOOLCHAIN=local below means no toolchain is downloaded at build time, so
+# what has to hold is the exporter's `go` directive (1.26), not its `toolchain`
+# line: v2.9.18 asks for go1.27.1 and still builds on this 1.27.0 builder,
+# because with switching disabled the toolchain line is advisory. Verified by
+# building v2.9.18 in this exact pinned image. A future release that raises the
+# `go` directive past the builder's version fails here, and the builder tag is
+# then what has to move.
 #
 # The upstream go.mod carries a `replace` directive, which `go install pkg@version`
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
 FROM golang:1.27.0-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS exporter-builder
-ARG OPENLDAP_EXPORTER_VERSION=v2.9.14
+ARG OPENLDAP_EXPORTER_VERSION=v2.9.18
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
 RUN set -eux; \
