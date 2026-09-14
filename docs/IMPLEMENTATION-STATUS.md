@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-09-07 against `main`.
+Last verified: 2026-09-14 against `main`.
 
 This snapshot records features already merged to `main`. Open pull requests and issue-only roadmap items are intentionally excluded.
 
