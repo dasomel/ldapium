@@ -203,7 +203,7 @@ an organization maintains both Active Directory and ldapium requires treating th
 as separate directory realms or brokering authentication and synchronization via
 an external Identity Provider (such as Keycloak user federation) or dedicated
 integration tooling; ldapium contains no built-in AD connector or synchronization
-agent (see [docs/product-boundary.md](docs/product-boundary.md)).
+agent (see [product-boundary.md](product-boundary.md)).
 
 Anyone evaluating this project as "the LDAP server for a Windows shop" should
 read this table as the boundary, not as a to-do list — several of these
@@ -217,7 +217,7 @@ not grow: a multi-directory federation/sync engine, a Source-of-Authority
 matching/merge engine, a SCIM server or client, an IGA connector framework (SPI,
 retry/dead-letter, reconciliation engine), a PAM/JIT/JEA request workflow or
 credential vault, a SPIFFE/SPIRE integration, or a ChatOps/AI remediation
-executor (see [docs/product-boundary.md](docs/product-boundary.md)). The
+executor (see [product-boundary.md](product-boundary.md)). The
 integration boundary for each of those capabilities is an external IdP / IGA /
 PAM / observability product (e.g. Keycloak, an enterprise IGA suite, a PAM
 vault, a SIEM) that talks to ldapium over standard LDAPv3
@@ -465,5 +465,5 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | Kubernetes API server OIDC via Keycloak | Supported via external IdP | `kube-apiserver` validates OIDC tokens issued by Keycloak; ldapium serves as the backing LDAP user/group directory. |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
 | SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. |
-| Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [docs/product-boundary.md](docs/product-boundary.md). |
-| SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [docs/product-boundary.md](docs/product-boundary.md). |
+| Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [product-boundary.md](product-boundary.md). |
+| SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [product-boundary.md](product-boundary.md). |
