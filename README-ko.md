@@ -29,6 +29,9 @@ ldapium은 이 문제를 다음 구성으로 해결합니다.
 
 ## 구성 요소
 
+런타임 경계, HA 토폴로지 및 Helm/Compose 배포 차이는
+[아키텍처 가이드](docs/architecture.md)를 참고하십시오.
+
 | 경로 | 설명 |
 |---|---|
 | `image/` | OpenLDAP 2.6.14 서버 이미지 |
