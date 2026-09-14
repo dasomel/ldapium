@@ -63,6 +63,9 @@ without waiting for a release.
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. |
 | `charts/ldapium/` | Helm chart deploying the server, with the UI as an optional component. |
 
+See the [architecture guide](docs/architecture.md) for the runtime boundaries, HA topology,
+and differences between Helm and Compose deployments.
+
 ## Install
 
 Both images and the chart are **intended** to be published to GHCR and cut from the same git tag,
