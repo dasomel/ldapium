@@ -4,7 +4,7 @@ A maintained OpenLDAP stack for Kubernetes: a server image **compiled from upstr
 source**, a management UI, and a Helm chart — built because the existing options stopped
 being viable.
 
-**English | [한국어](README_ko.md)**
+**English | [한국어](README-ko.md)**
 
 [![CI](https://github.com/dasomel/ldapium/actions/workflows/ci.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml)
@@ -257,10 +257,10 @@ including why the Debian base's GPL packages do not reach this project's code.
 
 ## Contributing, security, releases
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) / [한국어](CONTRIBUTING_ko.md) — local setup, project rules, and CI checks
-- [SECURITY.md](SECURITY.md) / [한국어](SECURITY_ko.md) — vulnerability reporting and security scope
-- [CHANGELOG.md](CHANGELOG.md) / [한국어](CHANGELOG_ko.md) — changes and known gaps
-- [RELEASING.md](RELEASING.md) / [한국어](RELEASING_ko.md) — release procedure
+- [CONTRIBUTING.md](CONTRIBUTING.md) / [한국어](CONTRIBUTING-ko.md) — local setup, project rules, and CI checks
+- [SECURITY.md](SECURITY.md) / [한국어](SECURITY-ko.md) — vulnerability reporting and security scope
+- [CHANGELOG.md](CHANGELOG.md) / [한국어](CHANGELOG-ko.md) — changes and known gaps
+- [RELEASING.md](RELEASING.md) / [한국어](RELEASING-ko.md) — release procedure
 - [docs/ha-profile.md](docs/ha-profile.md) — High Availability topology profile (D11–D13), failure modes matrix, and RPO/RTO SLA
 - [docs/migration.md](docs/migration.md) — staged cutover, dry-run reconciliation, and rollback runbook
 - [docs/product-boundary.md](docs/product-boundary.md) — product scope, non-goals, and boundary obligations
