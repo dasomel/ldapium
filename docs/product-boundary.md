@@ -10,8 +10,8 @@ SPIFFE/SPIRE integration, or a ChatOps/AI remediation executor.
 This document establishes maintainer decision D1 as the binding product boundary.
 Where integration requirements touch these capabilities, the boundary itself is
 the deliverable: external products own their respective lifecycles and interact
-with ldapium exclusively over LDAPv3 (`ldap://`, `ldaps://`, `ldapi://`) and
-pull-based audit exports.
+with ldapium over LDAPv3 (`ldap://`, `ldaps://`, `ldapi://`), its pull-based
+audit export, or the operator-invoked batch HTTPS audit shipper.
 
 ## What ldapium is
 
@@ -61,14 +61,15 @@ directory interfaces:
   CyberArk). The external vault rotates passwords by issuing standard LDAP `modify`
   requests on `userPassword` (see [docs/pam-boundary.md](pam-boundary.md)).
 - **SPIFFE/SPIRE integration**: Workload identity issuance and short-lived X.509
-  SVID lifecycle management belong in an external SPIFFE/SPIRE control plane. ldapium
-  authenticates workload certificates at the TLS transport boundary via SASL
-  `EXTERNAL` using `olcAuthzRegexp` identity mapping (`image/entrypoint.sh`).
+  SVID lifecycle management belong in an external SPIFFE/SPIRE control plane.
+  ldapium's generic TLS client-certificate authentication can map a certificate
+  subject DN through SASL `EXTERNAL` and `olcAuthzRegexp` (`image/entrypoint.sh`),
+  but it does not validate SPIFFE IDs or issue SVIDs.
 - **ChatOps and AI remediation executors**: Conversational operations bots and
   autonomous remediation agents belong in external SecOps, ITSM, or monitoring
-  platforms. These tools pull ldapium's NDJSON audit export (`scripts/export-audit-log.sh`)
-  or monitor metrics (`/metrics`) and invoke operational actions via standard Kubernetes
-  or LDAP APIs.
+  platforms. These tools pull ldapium's NDJSON audit export or operators deliver it in
+  batches with `scripts/ship-audit-log.sh`; they monitor metrics (`/metrics`) and invoke
+  operational actions via standard Kubernetes or LDAP APIs.
 
 ## Obligations at the integration boundary
 
@@ -103,7 +104,8 @@ at its boundary:
    Unsupported client mechanisms and protocols are explicitly declared rather than
    left ambiguous. This includes unconfigured SASL mechanisms, lack of Active
    Directory Kerberos/GPO protocol emulation (`docs/client-compatibility.md`), lack of
-   push-based SIEM streaming, and strict CA requirements under mutual TLS.
+   a resident real-time SIEM push daemon (the batch shipper is operator-invoked), and
+   strict CA requirements under mutual TLS.
 
 ## Capability touchpoint matrix
 
@@ -114,8 +116,8 @@ at its boundary:
 | SCIM protocol gateway | SCIM server / bridge | Standard LDAPv3 CRUD | `image/ldifs/01-cn-config.ldif` |
 | IGA connector & reconciliation | IGA suite (MidPoint, SailPoint) | LDAPv3 + NDJSON audit export | `scripts/export-audit-log.sh` |
 | PAM & credential vault | Secrets vault (Vault, CyberArk) | LDAPv3 modify (`userPassword`) | `docs/pam-boundary.md` |
-| Workload identity (SPIFFE/SPIRE) | SPIRE agent / control plane | mTLS / SASL `EXTERNAL` | `image/entrypoint.sh`, `docs/client-compatibility.md` |
-| ChatOps & remediation | ITSM / SIEM / AIOps platform | Pull NDJSON audit export | `scripts/export-audit-log.sh` |
+| Workload identity (SPIFFE/SPIRE) | SPIRE agent / control plane | Generic mTLS subject-DN → SASL `EXTERNAL` mapping; no SPIFFE support | `image/entrypoint.sh`, `docs/client-compatibility.md` |
+| ChatOps & remediation | ITSM / SIEM / AIOps platform | Pull NDJSON export or operator-invoked batch HTTPS shipper | `scripts/export-audit-log.sh`, `scripts/ship-audit-log.sh` |
 
 ## Migration and cutover stance
 
