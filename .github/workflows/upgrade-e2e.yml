@@ -21,8 +21,8 @@ jobs:
       # The release immediately before image/Dockerfile's OPENLDAP_VERSION.
       # Bump both together; scripts/check-versions.sh does not police this one
       # because it is deliberately one behind.
-      PREVIOUS_OPENLDAP_VERSION: "2.6.13"
-      PREVIOUS_OPENLDAP_SHA256: "d693b49517a42efb85a1a364a310aed16a53d428d1b46c0d31ef3fba78fcb656"
+      PREVIOUS_OPENLDAP_VERSION: "2.6.14"
+      PREVIOUS_OPENLDAP_SHA256: "806dcd21d366428187fba3278da773d5930f774852c9e92517f950d585f19107"
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +42,7 @@ jobs:
       # exercises the rollout mechanics and nothing about compatibility. This
       # builds the previous OpenLDAP release from the same Dockerfile so the
       # upgrade actually crosses a version boundary: the baseline release
-      # writes its mdb and cn=config with 2.6.13, and 2.6.14 has to come up on
+      # writes its mdb and cn=config with 2.6.14, and 2.6.15 has to come up on
       # them without a dump-and-reload.
       - name: Build the previous release's server image
         run: |

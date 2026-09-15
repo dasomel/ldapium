@@ -1,6 +1,6 @@
 # ldapium image
 
-A from-source OpenLDAP **2.6.14** container image that this project owns outright —
+A from-source OpenLDAP **2.6.15** container image that this project owns outright —
 no dependency on [osixia/docker-openldap](https://github.com/osixia/docker-openldap)
 (abandoned, last stable release 2021) or
 [vegardit/docker-openldap](https://github.com/vegardit/docker-openldap) (built from
@@ -21,7 +21,7 @@ LDIFs in `LDAP_SEED_DIR`.
 docker build --platform linux/arm64 -t ldapium:dev image/
 ```
 
-Multi-stage build: a `debian:trixie-slim` builder stage compiles OpenLDAP 2.6.14
+Multi-stage build: a `debian:trixie-slim` builder stage compiles OpenLDAP 2.6.15
 from the official source tarball (checksum-pinned), then only the built
 binaries/libraries/modules and schema files are copied into a clean
 `debian:trixie-slim` runtime stage. No compiler toolchain ships in the final image.

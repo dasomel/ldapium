@@ -15,7 +15,7 @@ pull-based audit exports.
 
 ## What ldapium is
 
-ldapium packages upstream OpenLDAP 2.6.14 compiled directly from source
+ldapium packages upstream OpenLDAP 2.6.15 compiled directly from source
 (`image/Dockerfile`) for Kubernetes and container environments. It provides:
 
 - A directory server running OpenLDAP's `back-mdb` storage engine with compiled
