@@ -70,6 +70,16 @@ unit-test pure helper functions (escaping, DTO mapping, filter building) with
 a running container (see "Local Docker/LDAP verification" above). Don't introduce a mocking
 framework for this.
 
+## Research evidence
+
+ldapium follows the [OpenForge Research Evidence Collection Standard](https://github.com/dasomel/openforge/blob/main/docs/research-evidence.md):
+preserve reproducible test/build/CI/agent-assistance measurements from normal
+development, including failures, so future empirical analysis does not need to
+be reconstructed retrospectively. See `research/README.md` for the local
+conventions (record layout, schema, and the legacy-evidence-on-discovery rule).
+Do not let evidence capture slow down normal development; it is opportunistic,
+not a blocking gate.
+
 ## Issue tracker convention
 
 Open issues in the low-teens-to-20s range are large RFP-derived umbrella issues, each
@@ -82,3 +92,4 @@ References:
 - https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
 - https://github.com/dasomel/openforge/blob/main/docs/model-agnostic-agent-instructions.md
 - https://github.com/dasomel/openforge/blob/main/docs/user-centric-validation.md
+- https://github.com/dasomel/openforge/blob/main/docs/research-evidence.md

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dasomel/openforge/schemas/research-evidence-v1.schema.json",
+  "title": "OpenForge Public Research Evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "timestamp",
+    "repository",
+    "revision",
+    "event_type",
+    "task_or_test",
+    "result",
+    "duration_ms",
+    "environment",
+    "attempt",
+    "human_interventions",
+    "review_corrections",
+    "ci_retries",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "maxLength": 200},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+    "event_type": {"enum": ["build", "test", "install", "deploy", "runtime", "recovery", "agent_task", "release", "benchmark"]},
+    "task_or_test": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9_.:/() -]+$"},
+    "result": {"enum": ["pass", "fail", "partial", "cancelled", "skipped"]},
+    "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+    "environment": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9_.-]+$"},
+    "attempt": {"type": "integer", "minimum": 0},
+    "human_interventions": {"type": "integer", "minimum": 0},
+    "review_corrections": {"type": "integer", "minimum": 0},
+    "ci_retries": {"type": "integer", "minimum": 0},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "integer", "boolean", "null"]
+      },
+      "propertyNames": {"pattern": "^[A-Za-z0-9_.-]{1,80}$"},
+      "maxProperties": 40
+    }
+  }
+}

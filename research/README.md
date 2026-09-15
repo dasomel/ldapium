@@ -16,3 +16,18 @@ Use `dasomel/openforge#89` as the portfolio-level legacy catalog source of truth
 This is a personal OSS/test project. Test DNs/users that are synthetic, RFC1918 addresses, local LDAP/container/service names, local topology, and reproducibility-relevant environment details may remain when intentionally public test data.
 
 Never publish actual passwords, password hashes, credentials/tokens/private keys, real personal directory data, or accidental personal data. Review future third-party/non-public artifacts separately. Validate structured evidence against the OpenForge schema and run secret/pattern checks before publication.
+
+## Layout
+
+```text
+research/
+  README.md            # this file
+  evidence/
+    YYYY-MM.jsonl       # append-only prospective records, one JSON object per line
+  experiments/
+    <experiment-id>/    # explicit benchmarks: protocol + summarized results
+  issue-*.md            # dated implementation/verification reports (legacy evidence)
+```
+
+`schemas/research-evidence-v1.schema.json` (vendored from OpenForge) is the canonical
+schema for `research/evidence/*.jsonl` records.
