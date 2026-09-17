@@ -705,6 +705,47 @@ jobs:
           grep -q 'verify error' /tmp/tls-evidence/old-ca-rejected.txt
           echo "PASS: the retired CA is genuinely no longer trusted"
 
+      - name: Roll back the CA rotation (offline trust-root rollback, issue #158)
+        if: matrix.scenario == 'replicated'
+        # The steps above only prove forward rotation. This proves the
+        # documented rollback direction too — restore the pre-rotation
+        # leaf+CA bundle from the same fixture files used above, no new
+        # material generated — which is what docs/client-compatibility.md's
+        # "SPIFFE/SPIRE integration profile" section points to as ldapium's
+        # own offline trust-root rotation/rollback contract (ldapium has no
+        # SPIFFE trust bundle of its own; its CA bundle is the analogous
+        # trust-root material this image actually holds).
+        run: |
+          set -euo pipefail
+          admin_dn="cn=admin,dc=example,dc=org"
+          dir=/tmp/ldapium-tls
+
+          echo "Restoring the pre-rotation leaf+CA bundle..."
+          kubectl -n directory create secret generic ldapium-tls \
+            --from-file=tls.crt="$dir/rotated.crt" \
+            --from-file=tls.key="$dir/rotated.key" \
+            --from-file=ca.crt="$dir/ca.crt" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n directory rollout restart statefulset/directory-ldapium
+          kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
+
+          password=$(kubectl -n directory get secret directory-ldapium-admin -o jsonpath='{.data.admin-password}' | base64 -d)
+          kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "LDAPTLS_REQCERT=demand LDAPTLS_CACERT=/etc/openldap/tls/ca.crt ldapwhoami -x -H \"ldaps://directory-ldapium.directory.svc.cluster.local:636\" -D \"$admin_dn\" -w \"$password\"" \
+            | grep -q "dn:${admin_dn}"
+          echo "PASS: a client trusting the original (rolled-back) CA can bind again"
+
+          kubectl -n directory exec -i directory-ldapium-0 -c openldap -- sh -c "cat > /tmp/new-ca-only.crt" < "$dir/ca2.crt"
+          if kubectl -n directory exec directory-ldapium-0 -c openldap -- sh -c \
+            "openssl s_client -connect directory-ldapium.directory.svc.cluster.local:636 -CAfile /tmp/new-ca-only.crt -verify_return_error </dev/null" \
+            >/tmp/tls-evidence/new-ca-rejected-after-rollback.txt 2>&1; then
+            echo "::error::a TLS handshake trusting only the rotated-away-from CA unexpectedly succeeded after rollback"
+            cat /tmp/tls-evidence/new-ca-rejected-after-rollback.txt
+            exit 1
+          fi
+          grep -q 'verify error' /tmp/tls-evidence/new-ca-rejected-after-rollback.txt
+          echo "PASS: rollback is genuine — the CA rotated away from is no longer trusted"
+
       - name: Collect TLS evidence
         if: always()
         run: |
