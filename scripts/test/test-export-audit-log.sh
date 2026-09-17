@@ -378,6 +378,54 @@ else
   fi
 fi
 
+# 18. End-to-end privileged-action correlation (issue #161's in-bounds audit
+# slice; the break-glass workflow half of #161 is out of scope per
+# docs/product-boundary.md's D1 — see AGENTS.md/PR description). This is not
+# a new capability: it asserts, on the existing fixture data, that a
+# privileged rootdn write is correlatable end-to-end through the export
+# pipeline back to that actor — one NDJSON record carries actor, target,
+# op, privileged:true, and a correlationId that itself embeds both the
+# actor and target DNs (see docs/audit-event-schema.md's "correlationId"
+# section), so a SIEM does not have to trust the `privileged` flag alone.
+if python3 - "${work}/run1.ndjson" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+admin_dn = "cn=admin,dc=example,dc=org"
+target_dn = "uid=alice,ou=people,dc=example,dc=org"
+found = None
+with open(path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if (
+            rec.get("source") == "auditlog"
+            and rec.get("op") == "modify"
+            and rec.get("actor") == admin_dn
+            and rec.get("target") == target_dn
+            and rec.get("privileged") is True
+        ):
+            found = rec
+            break
+
+if found is None:
+    sys.exit("no privileged rootdn modify record found correlating actor+target+op")
+
+corr = found["correlationId"]
+if admin_dn not in corr or target_dn not in corr:
+    sys.exit(f"correlationId does not embed both actor and target DN: {corr!r}")
+
+print(f"correlatable: privileged rootdn modify on {target_dn!r} (correlationId={corr!r})")
+PYEOF
+then
+  ok "a privileged rootdn action is correlatable to that actor through the export pipeline (#161 audit slice)"
+else
+  bad "privileged rootdn action was not correlatable end-to-end through the export pipeline"
+fi
+
 if [ "$fail" != 0 ]; then
   echo "one or more audit export normalizer checks FAILED" >&2
   exit 1
