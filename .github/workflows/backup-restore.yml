@@ -138,6 +138,51 @@ jobs:
               --target-data /var/lib/openldap/data \
               --confirm-offline
 
+      - name: Restore the same backup a second time into a fresh target (idempotency evidence)
+        run: |
+          # #154 determinism evidence: restore.sh runs slapadd (offline batch
+          # import) against a freshly-reset target, same as the step above.
+          # Doing it again from the *same* backup into a *second* fresh target
+          # is the reproducible-import claim: repeated import of an identical
+          # LDIF batch must yield identical directory state, not just "restore
+          # ran without error." Compared against restore-1's dump below.
+          rm -rf /tmp/restore-config-2 /tmp/restore-data-2
+          mkdir -p /tmp/restore-config-2 /tmp/restore-data-2
+          manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          docker run --rm --user 0 --network none \
+            -v /tmp/ldap-backup:/backup:ro \
+            -v /tmp/restore-config-2:/etc/openldap/slapd.d \
+            -v /tmp/restore-data-2:/var/lib/openldap/data \
+            -v "$PWD/scripts:/scripts:ro" \
+            ldapium:e2e \
+            /bin/bash /scripts/restore.sh \
+              --backup-dir /backup \
+              --manifest "/backup/$(basename "$manifest")" \
+              --target-config /etc/openldap/slapd.d \
+              --target-data /var/lib/openldap/data \
+              --confirm-offline
+
+      - name: Assert repeated offline restore of the same backup is idempotent
+        run: |
+          # Dump both restores offline (slapcat, no daemon involved) and diff:
+          # importing the same LDIF batch twice against a fresh target must
+          # produce byte-identical directory state.
+          docker run --rm --user 999:999 \
+            -v /tmp/restore-config:/etc/openldap/slapd.d:ro \
+            -v /tmp/restore-data:/var/lib/openldap/data:ro \
+            ldapium:e2e \
+            slapcat -n 1 -F /etc/openldap/slapd.d > /tmp/restore-1-dump.ldif
+          docker run --rm --user 999:999 \
+            -v /tmp/restore-config-2:/etc/openldap/slapd.d:ro \
+            -v /tmp/restore-data-2:/var/lib/openldap/data:ro \
+            ldapium:e2e \
+            slapcat -n 1 -F /etc/openldap/slapd.d > /tmp/restore-2-dump.ldif
+          if ! diff -u /tmp/restore-1-dump.ldif /tmp/restore-2-dump.ldif; then
+            echo '::error::repeated restore of the same backup produced different directory state'
+            exit 1
+          fi
+          echo "PASS: repeated offline restore of the same backup is idempotent (identical slapcat dumps)"
+
       - name: Start restored directory
         run: |
           docker run -d --name ldapium-restored --network ldapium-e2e \
