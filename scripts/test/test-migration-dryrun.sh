@@ -166,7 +166,54 @@ assert report["schema_source"] == "n/a", "schema_source should be n/a for a pars
 PYCHECK
 ok "unparseable garbage fixture reports a non-empty error list and exits fatally"
 
-# 6. Offline contract test for migration-dryrun.sh's docker exit-code handling
+# 6. Attribute mapping schema-version compatibility gate (issue #152): an LDIF
+#    that declares a "ldapium-attribute-mapping-schema-version" this tooling
+#    doesn't recognize must be flagged as a finding and exit 1, not silently
+#    accepted.
+set +e
+python3 "${lib_dir}/migration-report.py" \
+  "${fixtures}/unsupported-mapping-version.ldif" \
+  --base-dn "dc=example,dc=org" \
+  -o "${work}/unsupported-version.json"
+exit_unsupported_version=$?
+set -e
+
+if [ "$exit_unsupported_version" -eq 1 ]; then
+  ok "unsupported attribute-mapping schema-version fixture exited 1"
+else
+  bad "unsupported attribute-mapping schema-version fixture exited $exit_unsupported_version (expected 1)"
+fi
+
+python3 - <<PYCHECK
+import json
+
+with open("${work}/unsupported-version.json") as f:
+    report = json.load(f)
+
+ams = report["attribute_mapping_schema"]
+assert ams["declared_version"] == "99", "declared_version should be '99'"
+assert ams["compatible"] is False, "compatible should be False for an unrecognized version"
+assert "1" in ams["supported_versions"], "supported_versions should include '1'"
+assert any("ldapium-attribute-mapping-schema-version" in e["message"] for e in report["errors"]), \
+    "errors should include the unrecognized mapping schema-version finding"
+PYCHECK
+ok "unsupported attribute-mapping schema-version is rejected as a compatibility finding"
+
+# 6b. A clean fixture with no version pragma is treated as compatible
+#     (undeclared version is not itself a finding).
+python3 - <<PYCHECK
+import json
+
+with open("${work}/clean.json") as f:
+    report = json.load(f)
+
+ams = report["attribute_mapping_schema"]
+assert ams["declared_version"] is None, "declared_version should be None when no pragma is present"
+assert ams["compatible"] is True, "compatible should default True when no version is declared"
+PYCHECK
+ok "LDIF with no attribute-mapping schema-version pragma is treated as compatible"
+
+# 7. Offline contract test for migration-dryrun.sh's docker exit-code handling
 #    (P0-1) and container cleanup (P2-2), using a fake `docker` on PATH.
 #    Local Docker is not required/assumed to be present or network-reachable;
 #    this exercises the shell contract, not the real slapadd path (that is

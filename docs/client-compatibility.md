@@ -293,6 +293,58 @@ by ldapium's bootstrap configuration (`image/ldifs/01-cn-config.ldif`):
   - For Kubernetes API access: Keycloak maps LDAP groups into a designated `groups`
     claim array in the issued ID/access tokens.
 
+### Standard attribute mapping and schema versioning contract for SCIM bridges
+
+ldapium does not implement a SCIM server or client (see
+[product-boundary.md](product-boundary.md)). Where an external SCIM 2.0 bridge
+or IdP-sync tool provisions users/groups into ldapium, it does so as an
+ordinary LDAPv3 client performing standard `add`/`modify`/`search` operations —
+the same integration surface Keycloak's LDAP user federation uses above. This
+section documents the LDAP-attribute side of that contract so a SCIM bridge's
+own mapping configuration can be written against a stable target, and defines
+an offline compatibility gate against the bridge's declared mapping-schema
+version.
+
+- **Standard SCIM core schema (RFC 7643) attribute mapping**, using the same
+  schemas as the Keycloak contract above (`core.ldif`, `cosine.ldif`,
+  `inetorgperson.ldif`):
+
+  | SCIM core attribute | LDAP attribute | Notes |
+  |---|---|---|
+  | `userName` | `uid` | Indexed (`olcDbIndex: uid eq`) |
+  | `emails[type="work"].value` | `mail` | Indexed (`mail eq`) |
+  | `name.givenName` | `givenName` | Indexed (`givenName eq`) |
+  | `name.familyName` | `sn` | Indexed (`sn pres,eq,sub`) |
+  | `displayName` | `cn` | Indexed (`cn pres,eq,sub`) |
+  | `active` | Entry presence (no disable flag) | ldapium has no standard "disabled account" attribute; a bridge must model deprovisioning as entry deletion or its own convention (e.g. moving the entry, or a group membership change) — see [product-boundary.md](product-boundary.md) for identity-lifecycle boundaries |
+  | `groups[].value` / `groups[].display` | `memberOf` (read) / `groupOfNames.member` (write) | `memberOf` is a `slapo-memberof`-maintained operational attribute (`01-cn-config.ldif:104-109`); a bridge provisions group membership by writing `member` on the `groupOfNames` entry, matching Keycloak's `group-ldap-mapper` behavior above |
+  | `id` / `externalId` | `entryUUID` | Server-generated, immutable; a bridge should treat this as the stable correlation key rather than `uid` if usernames can be renamed |
+
+  This is a documentation contract an external bridge implements against —
+  ldapium parses no SCIM schema and exposes no `/scim/v2/*` endpoint.
+
+- **Schema/version compatibility gate**: an LDIF a SCIM bridge or IdP-sync tool
+  generates for offline load/migration (see "Staged Migration Procedure" in
+  [migration.md](migration.md)) may declare which version of the attribute
+  mapping above it was produced against, via a leading comment pragma:
+
+  ```
+  # ldapium-attribute-mapping-schema-version: 1
+  ```
+
+  `scripts/migration-dryrun.sh` / `scripts/lib/migration-report.py` (the same
+  offline dry-run reconciliation tooling used for directory migration) reads
+  this pragma and reports it under `attribute_mapping_schema` in the JSON
+  report (`declared_version`, `supported_versions`, `compatible`). An LDIF
+  declaring an unrecognized version is treated as a reconciliation finding —
+  the dry-run exits `1` — instead of being silently loaded with a stale or
+  incompatible attribute mapping; an LDIF with no pragma is compatible by
+  default (undeclared version is not itself a finding). Currently supported
+  version: `1` (the mapping table above). This gate runs offline, against a
+  batch LDIF export/import; it is not a live sync protocol check, matching
+  ldapium's existing migration boundary (no live polling of external
+  directories or bridges — see [migration.md](migration.md)).
+
 ### Keycloak to Kubernetes issuer and audience validation
 
 ldapium does not validate Kubernetes API tokens, nor does it interact with the
@@ -536,4 +588,4 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
 | SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. See "SPIFFE/SPIRE integration profile" above for the documented trust-domain/issuer/audience mapping contract when an external SPIRE deployment is used alongside ldapium. |
 | Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [product-boundary.md](product-boundary.md). |
-| SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [product-boundary.md](product-boundary.md). |
+| SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [product-boundary.md](product-boundary.md). See "Standard attribute mapping and schema versioning contract for SCIM bridges" above for the documented LDAP-attribute mapping and offline schema-version compatibility gate an external SCIM bridge integrates against. |

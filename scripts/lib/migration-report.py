@@ -164,6 +164,37 @@ KNOWN_ATTRIBUTES: Set[str] = {
 
 REDACTED_PASSWORD = "***REDACTED***"
 
+# Standard attribute mapping / schema versioning contract (issue #152): an
+# external SCIM bridge or IdP-sync tool that generated the LDIF may declare
+# which version of ldapium's documented LDAP<->SCIM attribute mapping
+# contract (docs/client-compatibility.md, "Standard attribute mapping and
+# schema versioning contract for SCIM bridges") it was produced against, via
+# a leading comment pragma:
+#   # ldapium-attribute-mapping-schema-version: 1
+# This is a documentation contract, not a SCIM implementation: ldapium never
+# parses or emits SCIM itself (docs/product-boundary.md). The gate below only
+# rejects an LDIF that declares a version this dry-run tooling doesn't
+# recognize, so a stale bridge can't silently desync its attribute mapping.
+SUPPORTED_ATTRIBUTE_MAPPING_SCHEMA_VERSIONS: Set[str] = {"1"}
+ATTRIBUTE_MAPPING_VERSION_PRAGMA_RE = re.compile(
+    r"^#\s*ldapium-attribute-mapping-schema-version:\s*(\S+)\s*$"
+)
+
+
+def extract_attribute_mapping_schema_version(path: str) -> Optional[str]:
+    """Scan an LDIF file's comment lines for the attribute-mapping schema-version pragma.
+
+    Returns the declared version string, or None if the LDIF does not declare one.
+    Only comment lines are scanned (LDIF data lines never start with '#'), so this
+    never touches entry data.
+    """
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = ATTRIBUTE_MAPPING_VERSION_PRAGMA_RE.match(line.rstrip("\r\n"))
+            if m:
+                return m.group(1)
+    return None
+
 
 class LDIFParseError(Exception):
     def __init__(self, errors: List[Dict[str, str]]):
@@ -474,6 +505,7 @@ def analyze_ldif(
     schema_source: str = "static-fallback",
     unique_attributes: Optional[List[str]] = None,
     unique_filter: str = "objectClass=inetOrgPerson",
+    attribute_mapping_schema_version: Optional[str] = None,
 ) -> Tuple[Dict, int]:
     """Analyze entries and produce the reconciliation report dictionary and exit code."""
     if known_ocs is None:
@@ -608,6 +640,25 @@ def analyze_ldif(
 
     duplicate_collision_count = sum(len(v) for v in duplicate_collisions.values())
 
+    attribute_mapping_schema = {
+        "declared_version": attribute_mapping_schema_version,
+        "supported_versions": sorted(SUPPORTED_ATTRIBUTE_MAPPING_SCHEMA_VERSIONS),
+        "compatible": (
+            attribute_mapping_schema_version is None
+            or attribute_mapping_schema_version in SUPPORTED_ATTRIBUTE_MAPPING_SCHEMA_VERSIONS
+        ),
+    }
+    if not attribute_mapping_schema["compatible"]:
+        unique_errors.append({
+            "dn": "n/a",
+            "message": (
+                f'unrecognized ldapium-attribute-mapping-schema-version '
+                f'"{attribute_mapping_schema_version}" '
+                f'(supported: {", ".join(attribute_mapping_schema["supported_versions"])})'
+            ),
+        })
+        unique_errors.sort(key=lambda x: (x["dn"], x["message"]))
+
     findings_count = (
         len(unknown_object_classes)
         + len(unknown_attributes)
@@ -634,6 +685,7 @@ def analyze_ldif(
         "entries_outside_base_dn": entries_outside_base_dn,
         "duplicate_collisions": {k: v for k, v in sorted(duplicate_collisions.items())},
         "entries_with_no_structural_object_class": entries_with_no_structural_oc,
+        "attribute_mapping_schema": attribute_mapping_schema,
         "errors": unique_errors,
     }
 
@@ -699,6 +751,11 @@ def main() -> int:
             "entries_outside_base_dn": [],
             "duplicate_collisions": {"uid": [], "mail": []},
             "entries_with_no_structural_object_class": [],
+            "attribute_mapping_schema": {
+                "declared_version": None,
+                "supported_versions": sorted(SUPPORTED_ATTRIBUTE_MAPPING_SCHEMA_VERSIONS),
+                "compatible": True,
+            },
             "errors": unique_errors,
         }
         print(f"ERROR: Unparseable LDIF: {args.ldif}", file=sys.stderr)
@@ -719,6 +776,12 @@ def main() -> int:
     known_ocs, known_attrs, schema_source = load_schema(args.schema_ldif)
 
     try:
+        attribute_mapping_schema_version = extract_attribute_mapping_schema_version(args.ldif)
+    except Exception as e:
+        print(f"ERROR: Failed to scan LDIF for attribute-mapping schema-version pragma: {e}", file=sys.stderr)
+        return 2
+
+    try:
         report, exit_code = analyze_ldif(
             entries,
             args.base_dn,
@@ -728,6 +791,7 @@ def main() -> int:
             schema_source=schema_source,
             unique_attributes=unique_attributes,
             unique_filter=args.unique_filter,
+            attribute_mapping_schema_version=attribute_mapping_schema_version,
         )
     except Exception as e:
         print(f"ERROR: Analysis failed: {e}", file=sys.stderr)
