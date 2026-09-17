@@ -418,6 +418,76 @@ component boundary:
    by OpenLDAP with standard LDAP result codes (e.g. `invalidCredentials` [49],
    `insufficientAccessRights` [50]).
 
+### SPIFFE/SPIRE integration profile (documentation contract, not code)
+
+This section documents how ldapium's identity data maps into a SPIFFE/SPIRE
+deployment when an operator chooses to run one alongside it. It is a
+**compatibility contract, not an ldapium subsystem**: ldapium issues no
+SVIDs, runs no attestation endpoint, and does not talk to a SPIRE server or
+agent. The "SPIFFE / SPIRE" row in the compatibility matrix below stays
+"Not supported" for exactly that reason — this section only says how the two
+systems' data lines up when an external SPIRE deployment sits next to
+ldapium, the same boundary already drawn for Keycloak and Kubernetes OIDC.
+
+- **Trust-domain mapping**: SPIFFE trust domains (`spiffe://<trust-domain>/...`)
+  are a workload-identity concept scoped to the SPIRE server; ldapium has no
+  equivalent construct. Operators map one ldapium deployment (one LDAP root
+  DN / one directory realm) to at most one SPIFFE trust domain, mirroring the
+  1:1 "separate directory realms" guidance already given for Active Directory
+  coexistence above. Do not fan one ldapium directory out across multiple
+  trust domains — there is nothing in ldapium to keep the workload identities
+  they'd issue from being cross-attributed to the same human/group data.
+- **Issuer mapping**: ldapium is never the SPIFFE issuer. Where an external
+  bridge (e.g. a Keycloak plugin, or a SPIRE server's own OIDC Federation
+  endpoint) exchanges an LDAP-derived human identity for a workload
+  credential, the issuer the workload's consumer validates is the SPIRE
+  server (or its federation endpoint), never ldapium — consistent with
+  "Keycloak to Kubernetes issuer and audience validation" above, which
+  already establishes that ldapium is not a token issuer of any kind.
+- **Audience mapping**: SPIFFE JWT-SVID `aud` values are set by the relying
+  workload's SPIRE registration entry, not by anything ldapium exposes.
+  ldapium's only contribution is the group/attribute data (via the LDAP
+  group and attribute mapping contract above) an operator's SPIRE-adjacent
+  tooling may use to decide *which* registration entries a given human actor
+  is allowed to provision — an authorization input, not part of the SVID
+  itself.
+- **Short-lived workload credential boundary**: SPIFFE SVIDs are short-lived
+  by design and rotate automatically via the SPIRE agent; ldapium has no
+  role in issuing, validating, or rotating them. The boundary is identical
+  to identity class 4 above (Kubernetes ServiceAccount): a workload
+  credential lives entirely inside the Kubernetes/SPIRE execution boundary
+  and is never an ldapium identity.
+- **Offline trust-root / issuer metadata import and rotation**: ldapium
+  itself only holds one piece of trust-root material relevant to this
+  boundary — its own TLS CA bundle (`LDAP_TLS_CA_FILE`, see "TLS cipher
+  suite baseline" below and `image/README.md`), used for mutual TLS and for
+  any client (including a SPIRE-adjacent bridge) validating ldapium's own
+  server certificate. It has no notion of a *SPIFFE* trust bundle or SPIRE
+  federation metadata to import — that lives on the SPIRE server. The
+  documented, offline procedure for rotating ldapium's own CA trust
+  material is:
+  1. Replace the file at the path `LDAP_TLS_CA_FILE` points to with the new
+     CA bundle (same path, new bytes) so no `cn=config` edit is required.
+  2. Restart the ldapium container so slapd re-reads the TLS configuration
+     at bootstrap (this image applies `olcTLSCACertificateFile` once at
+     first start; see the bootstrap note in `image/entrypoint.sh`).
+  3. Verify: a client trusting only the new CA can complete a TLS/mTLS
+     handshake; a client trusting only the old CA fails.
+  4. Rollback: restore the previous CA bundle file at the same path and
+     restart again. Because the swap never touches `cn=config` or any DIT
+     data, rollback is a pure file-and-restart operation with no directory
+     state to undo.
+
+  The rotation half of this was already live-verified by `.github/workflows/e2e.yml`'s
+  "Rotate the CA in two steps without breaking replication" step (`e2e (replicated)`
+  job): it swaps a throwaway CA bundle for a second one and proves the retired
+  CA is genuinely no longer trusted. Its "Roll back the CA rotation" step
+  restores the original bundle and proves the CA that was rotated away from is
+  rejected again — the rollback half of the "offline trust-root / issuer
+  metadata import and rotation" acceptance criterion in issue #158 — using
+  only ldapium's existing `LDAP_TLS_CA_FILE` / `cn=config` mechanism, no SPIRE
+  server involved.
+
 ## TLS cipher suite baseline
 
 `olcTLSCipherSuite` is fixed to the Mozilla "Intermediate" profile's TLS 1.2
@@ -464,6 +534,6 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | Keycloak LDAP user federation (LDAP -> Keycloak group -> token `groups` claim) | Supported, continuously live-verified | `.github/workflows/keycloak-federation-e2e.yml`; settings in `charts/ldapium/README.md`'s "Keycloak LDAP user federation" — was previously described but untested |
 | Kubernetes API server OIDC via Keycloak | Supported via external IdP | `kube-apiserver` validates OIDC tokens issued by Keycloak; ldapium serves as the backing LDAP user/group directory. |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
-| SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. |
+| SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. See "SPIFFE/SPIRE integration profile" above for the documented trust-domain/issuer/audience mapping contract when an external SPIRE deployment is used alongside ldapium. |
 | Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [product-boundary.md](product-boundary.md). |
 | SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [product-boundary.md](product-boundary.md). |
