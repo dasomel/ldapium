@@ -487,7 +487,9 @@ jobs:
           echo "matched auditlog record: ${record}"
           [ -n "${record}" ] || { echo "::error::no auditlog record found for alice's pwdAccountLockedTime change"; exit 1; }
 
-          actor=$(printf '%s\n' "${record}" | awk '/^# modify /{print $NF}')
+          # Header is "# modify <ts> <suffix-dn> <bind-dn> IP=... conn=...";
+          # $NF would grab the trailing conn=<id> token instead of the bind DN.
+          actor=$(printf '%s\n' "${record}" | awk '/^# modify /{print $5}')
           target=$(printf '%s\n' "${record}" | awk '/^dn: /{print $2}')
           echo "actor=${actor} target=${target}"
 
