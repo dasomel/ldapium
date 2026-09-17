@@ -106,6 +106,86 @@ at its boundary:
    Directory Kerberos/GPO protocol emulation (`docs/client-compatibility.md`), lack of
    a resident real-time SIEM push daemon (the batch shipper is operator-invoked), and
    strict CA requirements under mutual TLS.
+6. **Change-origin metadata for federation and sync loop prevention**:
+   When external federation, synchronization, or IGA engines consume changes from
+   ldapium — whether via LDAPv3 protocol (direct LDAP replication or connector polling)
+   or audit export (NDJSON) — they integrate against ldapium's published change-origin
+   contract. This contract specifies the metadata available to external systems for
+   detecting and preventing replay loops, deduplicating redundant syncs, and implementing
+   idempotent reconciliation.
+   
+   ldapium **does not ship a loop-prevention or conflict-resolution engine**; those
+   responsibilities belong to the external federation product. However, ldapium
+   guarantees specific metadata in every change event to enable this integration:
+
+   - **`source`**: One of `auditlog` (writes captured by OpenLDAP), `accesslog` (reads/binds),
+     or `replication-conflict-raw` (CSN discard diagnostics) in audit export mode. In direct
+     LDAP protocol mode, an external engine tracks changes using OpenLDAP's native operational
+     attributes (`modifiersName`, `modifyTimestamp`, `creatorsName`, `createTimestamp`)
+     instead.
+   - **`entryUUID`**: Globally unique, immutable per-entry identifier generated and
+     maintained by OpenLDAP (`entryUUID` attribute). This is the authoritative identity
+     key for deduplication across syncs and is returned in all LDAP search responses
+     unless the caller lacks read permission on the attribute.
+   - **`entryCSN`** (Change Sequence Number): OpenLDAP-assigned, server-unique timestamp
+     and sequence counter attached to every entry upon creation and updated on every
+     modification. Format: `20260904080000.000000Z#000000#000#000000` (GeneralizedTime
+     YYYYMMDDHHMMSS.ffffffZ with microseconds, server-id fragment, change-id sequence).
+     This is the per-entry causality token for ordering and deduplication. Indexed for
+     efficient polling.
+   - **`contextCSN`**: The maximum `entryCSN` achieved by the directory at a point in
+     time, maintained on the root DN entry. Used by external engines to implement
+     watermark-based change polling: query the root DN, read `contextCSN`, and in the
+     next sync run, retrieve only entries with `entryCSN` greater than the previously
+     stored watermark. This enables partial, resumed, and idempotent sync recovery
+     after connector restart.
+   - **Audit `source` field** (NDJSON export only): When consuming audit export via
+     `scripts/export-audit-log.sh`, each event carries a `source` field identifying
+     whether the change originated in `auditlog` (a write operation initiated by an
+     external client), `accesslog` (a read/search), or `replication-conflict-raw`
+     (an internal replication conflict/discard). This distinguishes client-initiated
+     changes from replication artifacts.
+
+   **Implementing loop detection**: An external federation engine consuming changes from
+   ldapium must track the *source* of each change to avoid re-applying its own outbound
+   writes back to ldapium (a loop). The recommended pattern:
+   1. Assign a stable identity to the connector (e.g., bind DN, service account name).
+   2. When ldapium emits a change via LDAP or audit export, check the audit actor
+      (`actor` field) or LDAP `modifiersName`/`creatorsName` attributes.
+   3. If the actor matches the connector's own bind identity, skip re-propagation of that
+      change to other directories (it is an echo from a prior outbound write).
+   4. For changes from other actors (human administrators, other connectors, upstream
+      IdPs), apply transformation rules and propagate to peer directories.
+
+   **Implementing idempotent replay**: Undelivered changes (lost network connection,
+   connector crash) are recovered by re-running the sync from the last known
+   `contextCSN` watermark:
+   1. Before each sync run, query the root DN: `ldapsearch -b <rootDN> -s base contextCSN`.
+   2. Store the returned `contextCSN` value after successful sync completion.
+   3. On restart, query entries with `(entryCSN>=<stored-contextCSN>)` to re-fetch
+      potentially missed changes.
+   4. Use `entryUUID` and the entry's current state to deduplicate and idempotently
+      apply any duplicate deliveries.
+
+   **Limits and non-guarantees**:
+   - ldapium does *not* assign change events a client-supplied request id or correlation
+     id across LDAP protocol and audit export; the external system must correlate via
+     entry identity (`entryUUID`, target DN) and timestamp.
+   - `entryCSN` is server-assigned and reflects OpenLDAP's local causality, not
+     cross-cluster wall-clock time. Two concurrent writes on different providers in an
+     N-way replicated cluster may have entryCSN timestamps in any order; the consumer
+     must not assume timestamp order implies logical causality.
+   - OpenLDAP's multi-provider replication uses `entryCSN` for conflict resolution
+     (last-write-wins by timestamp), not application-level conflict detection. Genuine
+     same-entry conflicts on different providers are resolved silently by the larger
+     `entryCSN` value, with no explicit conflict log entry to the external consumer.
+     The `replication-conflict-raw` audit source reports *discarded* CSNs (losing writes)
+     but mixes genuine conflicts with harmless relay duplicates; external systems must
+     correlate with directory state rather than treating every discard as confirmed
+     data loss.
+   - Audit export mode (NDJSON) provides pull-based snapshots; there is no persistent
+     server-side cursor or subscription. Consumers implement their own watermarking
+     and retry logic (see `scripts/ship-audit-log.sh` for a reference implementation).
 
 ## Capability touchpoint matrix
 
