@@ -166,7 +166,9 @@ jobs:
         run: |
           # Dump both restores offline (slapcat, no daemon involved) and diff:
           # importing the same LDIF batch twice against a fresh target must
-          # produce byte-identical directory state.
+          # produce byte-identical directory state. Must run before "Start
+          # restored directory" below — once slapd owns /tmp/restore-data,
+          # its state is no longer a clean offline snapshot to diff against.
           docker run --rm --user 999:999 \
             -v /tmp/restore-config:/etc/openldap/slapd.d:ro \
             -v /tmp/restore-data:/var/lib/openldap/data:ro \
@@ -248,6 +250,7 @@ jobs:
         run: |
           docker rm -f ldapium-source ldapium-restored 2>/dev/null || true
           docker network rm ldapium-e2e 2>/dev/null || true
+          rm -rf /tmp/restore-config-2 /tmp/restore-data-2
 
   dr-3node:
     name: 3-node backup → bad delete → restore → resync
