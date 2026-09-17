@@ -138,6 +138,57 @@ jobs:
               --target-data /var/lib/openldap/data \
               --confirm-offline
 
+      - name: Restore the same backup a second time into a fresh target (idempotency evidence)
+        run: |
+          # #154 determinism evidence: restore.sh runs slapadd (offline batch
+          # import) against a freshly-reset target, same as the step above.
+          # Doing it again from the *same* backup into a *second* fresh target
+          # is the reproducible-import claim: repeated import of an identical
+          # LDIF batch must yield identical directory state, not just "restore
+          # ran without error." Compared against restore-1's dump below.
+          rm -rf /tmp/restore-config-2 /tmp/restore-data-2
+          mkdir -p /tmp/restore-config-2 /tmp/restore-data-2
+          manifest=$(find /tmp/ldap-backup -name 'manifest-*.sha256' -type f | head -1)
+          docker run --rm --user 0 --network none \
+            -v /tmp/ldap-backup:/backup:ro \
+            -v /tmp/restore-config-2:/etc/openldap/slapd.d \
+            -v /tmp/restore-data-2:/var/lib/openldap/data \
+            -v "$PWD/scripts:/scripts:ro" \
+            ldapium:e2e \
+            /bin/bash /scripts/restore.sh \
+              --backup-dir /backup \
+              --manifest "/backup/$(basename "$manifest")" \
+              --target-config /etc/openldap/slapd.d \
+              --target-data /var/lib/openldap/data \
+              --confirm-offline
+
+      - name: Assert repeated offline restore of the same backup is idempotent
+        run: |
+          # Dump both restores offline (slapcat, no daemon involved) and diff:
+          # importing the same LDIF batch twice against a fresh target must
+          # produce byte-identical directory state. Must run before "Start
+          # restored directory" below — once slapd owns /tmp/restore-data,
+          # its state is no longer a clean offline snapshot to diff against.
+          # No :ro / --user override: back-mdb's LMDB env creates/updates a
+          # lock file even for a read-only slapcat, and restore.sh (run as
+          # --user 0 above) leaves these dirs root-owned — same pattern as
+          # scripts/bench-profile.sh's slapcat invocation.
+          docker run --rm --entrypoint slapcat \
+            -v /tmp/restore-config:/etc/openldap/slapd.d \
+            -v /tmp/restore-data:/var/lib/openldap/data \
+            ldapium:e2e \
+            -n 1 -F /etc/openldap/slapd.d > /tmp/restore-1-dump.ldif
+          docker run --rm --entrypoint slapcat \
+            -v /tmp/restore-config-2:/etc/openldap/slapd.d \
+            -v /tmp/restore-data-2:/var/lib/openldap/data \
+            ldapium:e2e \
+            -n 1 -F /etc/openldap/slapd.d > /tmp/restore-2-dump.ldif
+          if ! diff -u /tmp/restore-1-dump.ldif /tmp/restore-2-dump.ldif; then
+            echo '::error::repeated restore of the same backup produced different directory state'
+            exit 1
+          fi
+          echo "PASS: repeated offline restore of the same backup is idempotent (identical slapcat dumps)"
+
       - name: Start restored directory
         run: |
           docker run -d --name ldapium-restored --network ldapium-e2e \
@@ -203,6 +254,10 @@ jobs:
         run: |
           docker rm -f ldapium-source ldapium-restored 2>/dev/null || true
           docker network rm ldapium-e2e 2>/dev/null || true
+          # root-owned (restore.sh ran as --user 0 above): a plain rm -rf as
+          # the runner user can't remove these.
+          docker run --rm --user 0 -v /tmp:/tmp busybox \
+            rm -rf /tmp/restore-config-2 /tmp/restore-data-2
 
   dr-3node:
     name: 3-node backup → bad delete → restore → resync
