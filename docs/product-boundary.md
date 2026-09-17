@@ -123,22 +123,28 @@ at its boundary:
      LDAP protocol mode, an external engine tracks changes using OpenLDAP's native operational
      attributes (`modifiersName`, `modifyTimestamp`, `creatorsName`, `createTimestamp`)
      instead.
-   - **`entryUUID`**: Globally unique, immutable per-entry identifier generated and
-     maintained by OpenLDAP (`entryUUID` attribute). This is the authoritative identity
-     key for deduplication across syncs and is returned in all LDAP search responses
-     unless the caller lacks read permission on the attribute.
-   - **`entryCSN`** (Change Sequence Number): OpenLDAP-assigned, server-unique timestamp
-     and sequence counter attached to every entry upon creation and updated on every
-     modification. Format: `20260904080000.000000Z#000000#000#000000` (GeneralizedTime
-     YYYYMMDDHHMMSS.ffffffZ with microseconds, server-id fragment, change-id sequence).
-     This is the per-entry causality token for ordering and deduplication. Indexed for
-     efficient polling.
-   - **`contextCSN`**: The maximum `entryCSN` achieved by the directory at a point in
-     time, maintained on the root DN entry. Used by external engines to implement
-     watermark-based change polling: query the root DN, read `contextCSN`, and in the
-     next sync run, retrieve only entries with `entryCSN` greater than the previously
-     stored watermark. This enables partial, resumed, and idempotent sync recovery
-     after connector restart.
+   - **`entryUUID`** (direct LDAP protocol mode): Globally unique, immutable per-entry
+     identifier generated and maintained by OpenLDAP (`entryUUID` attribute). This is the
+     authoritative identity key for deduplication across syncs and is returned in all LDAP
+     search responses unless the caller lacks read permission on the attribute. The audit
+     NDJSON export also carries an `entryUUID`/`objectId` field on `auditlog`-sourced
+     (write) events, but `accesslog`-sourced (read/bind) events carry no `entryUUID`-equivalent
+     (`docs/audit-event-schema.md`).
+   - **`entryCSN`** and **`contextCSN`** (direct LDAP protocol mode only — **not** present
+     in the audit NDJSON export envelope; see `docs/audit-event-schema.md` for the export's
+     actual field set). `entryCSN` (Change Sequence Number) is OpenLDAP-assigned, a
+     server-unique timestamp and sequence counter attached to every entry upon creation and
+     updated on every modification. Format: `20260904080000.000000Z#000000#000#000000`
+     (GeneralizedTime YYYYMMDDHHMMSS.ffffffZ with microseconds, server-id fragment,
+     change-id sequence) — the per-entry causality token for ordering and deduplication,
+     indexed for efficient polling. `contextCSN` is the maximum `entryCSN` achieved by the
+     directory at a point in time, maintained on the root DN entry. An engine consuming
+     ldapium over LDAP protocol (not audit export) uses these for watermark-based change
+     polling: query the root DN, read `contextCSN`, and in the next sync run, retrieve only
+     entries with `entryCSN` greater than the previously stored watermark. This enables
+     partial, resumed, and idempotent sync recovery after connector restart. An engine
+     consuming only the audit export must instead correlate on `entryUUID`/target DN and
+     event timestamp, per the "Limits and non-guarantees" below.
    - **Audit `source` field** (NDJSON export only): When consuming audit export via
      `scripts/export-audit-log.sh`, each event carries a `source` field identifying
      whether the change originated in `auditlog` (a write operation initiated by an
