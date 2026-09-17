@@ -139,9 +139,14 @@ jobs:
         run: |
           set -euo pipefail
           docker network create kcfed
+          # LDAP_AUDIT_ENABLED so the disable/revocation-latency check below
+          # (#159) can read the auditlog record's bind-DN line straight off
+          # `docker logs ldap` — no separate audit pipeline needed for a
+          # single actor-correlation assertion.
           docker run -d --name ldap --network kcfed \
             -e LDAP_ROOT_DN="${LDAP_ROOT_DN}" \
             -e LDAP_ADMIN_PASSWORD="${LDAP_ADMIN_PASSWORD}" \
+            -e LDAP_AUDIT_ENABLED=true \
             -v /tmp/ldapium-seed:/opt/ldifs:ro \
             ldapium:e2e
           # Bootstrap admin via KC_BOOTSTRAP_ADMIN_* (KEYCLOAK_ADMIN/
@@ -423,6 +428,77 @@ jobs:
           [ "$alice_groups" = '["developers","marketing"]' ] \
             || { echo "::error::alice's groups claim was ${alice_groups}, expected developers+marketing"; exit 1; }
           echo "PASS: alice's token groups claim lists both LDAP groups she is a member of"
+
+      - name: Disable alice and measure Keycloak auth-failure propagation latency
+        # #159 (part of the #25 umbrella): revocation/deprovision propagation
+        # latency, offline-reproducible on this same two-container network.
+        # Uses the exact mechanism ui/backend/internal/ldapclient/users.go's
+        # Lock() sends (Replace pwdAccountLockedTime with the ppolicy
+        # "locked indefinitely" sentinel) rather than the UI itself, since
+        # this workflow only runs the bare ldapium/Keycloak containers.
+        # Keycloak's LDAP federation (no credential caching configured here)
+        # re-binds to LDAP on every password grant, so a lock takes effect
+        # on ldapium's side immediately — what this measures is the
+        # wall-clock time until Keycloak's own login path actually observes
+        # and rejects it, not a synthetic delay.
+        run: |
+          set -euo pipefail
+          t0=$(date +%s)
+          docker exec -i ldap ldapmodify -x -D "cn=admin,${LDAP_ROOT_DN}" -w "${LDAP_ADMIN_PASSWORD}" <<EOF
+          dn: uid=alice,ou=people,${LDAP_ROOT_DN}
+          changetype: modify
+          replace: pwdAccountLockedTime
+          pwdAccountLockedTime: 000001010000Z
+          EOF
+          echo "DISABLE_T0=${t0}" >> "$GITHUB_ENV"
+
+          status=401
+          for i in $(seq 1 30); do
+            status=$(curl -s -o /tmp/token-after-disable.json -w '%{http_code}' \
+              -d "client_id=k8s-oidc-test" -d "grant_type=password" -d "scope=openid" \
+              -d "username=alice" -d "password=${ALICE_PASSWORD}" \
+              "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
+            [ "$status" = "401" ] && break
+            echo "poll ${i}: still HTTP ${status}, retrying"
+            sleep 1
+          done
+          t1=$(date +%s)
+          latency=$((t1 - t0))
+          echo "disable->auth-failure propagation latency: ${latency}s (status=${status})"
+          [ "$status" = "401" ] \
+            || { echo "::error::alice's auth still succeeded (HTTP ${status}) after disabling her LDAP account"; cat /tmp/token-after-disable.json; exit 1; }
+          echo "PASS: disabling alice's ldapium account propagated to a rejected Keycloak login within ${latency}s"
+
+      - name: Assert human-actor correlation between the disable and the auth failure
+        # Acceptance criterion: the audit trail lets a reviewer tie the
+        # human actor who disabled the account to the downstream identity
+        # (workload/service auth path) that started failing — without
+        # building new correlation infrastructure. auditlog already carries
+        # exactly this (docs/audit-event-schema.md's `actor`/`target`,
+        # sourced from auditlog's own "# <op> <ts> <db> <bind-dn>" comment
+        # line + the record's own `dn:`), so this reads it straight from
+        # `docker logs ldap` rather than adding a new field or library.
+        run: |
+          set -euo pipefail
+          docker logs ldap > /tmp/ldap-audit.log 2>&1
+          # The record immediately preceding "replace: pwdAccountLockedTime"
+          # for alice's dn is this disable's own auditlog entry.
+          record=$(awk '/^# modify [0-9]+ /{hdr=$0} /^dn: uid=alice,ou=people,/{dn=$0} /^replace: pwdAccountLockedTime$/{print hdr; print dn; exit}' /tmp/ldap-audit.log)
+          echo "matched auditlog record: ${record}"
+          [ -n "${record}" ] || { echo "::error::no auditlog record found for alice's pwdAccountLockedTime change"; exit 1; }
+
+          actor=$(printf '%s\n' "${record}" | awk '/^# modify /{print $NF}')
+          target=$(printf '%s\n' "${record}" | awk '/^dn: /{print $2}')
+          echo "actor=${actor} target=${target}"
+
+          [ "${actor}" = "cn=admin,${LDAP_ROOT_DN}" ] \
+            || { echo "::error::disable audit record's actor was '${actor}', expected the admin bind DN"; exit 1; }
+          [ "${target}" = "uid=alice,ou=people,${LDAP_ROOT_DN}" ] \
+            || { echo "::error::disable audit record's target was '${target}', expected alice's DN"; exit 1; }
+          # target's RDN (uid=alice) is the same identity Keycloak federation
+          # authenticates as username "alice" — this is the actor -> target
+          # -> downstream-workload-identity correlation the issue asks for.
+          echo "PASS: auditlog ties actor '${actor}' to target '${target}', the same identity whose federated Keycloak login then started failing"
 
       - name: Modify LDAP group membership and re-verify after sync
         # The mapping-consistency check (#19): a real LDAP membership change
