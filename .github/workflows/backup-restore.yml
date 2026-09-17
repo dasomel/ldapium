@@ -169,16 +169,20 @@ jobs:
           # produce byte-identical directory state. Must run before "Start
           # restored directory" below — once slapd owns /tmp/restore-data,
           # its state is no longer a clean offline snapshot to diff against.
-          docker run --rm --user 999:999 \
-            -v /tmp/restore-config:/etc/openldap/slapd.d:ro \
-            -v /tmp/restore-data:/var/lib/openldap/data:ro \
+          # No :ro / --user override: back-mdb's LMDB env creates/updates a
+          # lock file even for a read-only slapcat, and restore.sh (run as
+          # --user 0 above) leaves these dirs root-owned — same pattern as
+          # scripts/bench-profile.sh's slapcat invocation.
+          docker run --rm --entrypoint slapcat \
+            -v /tmp/restore-config:/etc/openldap/slapd.d \
+            -v /tmp/restore-data:/var/lib/openldap/data \
             ldapium:e2e \
-            slapcat -n 1 -F /etc/openldap/slapd.d > /tmp/restore-1-dump.ldif
-          docker run --rm --user 999:999 \
-            -v /tmp/restore-config-2:/etc/openldap/slapd.d:ro \
-            -v /tmp/restore-data-2:/var/lib/openldap/data:ro \
+            -n 1 -F /etc/openldap/slapd.d > /tmp/restore-1-dump.ldif
+          docker run --rm --entrypoint slapcat \
+            -v /tmp/restore-config-2:/etc/openldap/slapd.d \
+            -v /tmp/restore-data-2:/var/lib/openldap/data \
             ldapium:e2e \
-            slapcat -n 1 -F /etc/openldap/slapd.d > /tmp/restore-2-dump.ldif
+            -n 1 -F /etc/openldap/slapd.d > /tmp/restore-2-dump.ldif
           if ! diff -u /tmp/restore-1-dump.ldif /tmp/restore-2-dump.ldif; then
             echo '::error::repeated restore of the same backup produced different directory state'
             exit 1
@@ -250,7 +254,10 @@ jobs:
         run: |
           docker rm -f ldapium-source ldapium-restored 2>/dev/null || true
           docker network rm ldapium-e2e 2>/dev/null || true
-          rm -rf /tmp/restore-config-2 /tmp/restore-data-2
+          # root-owned (restore.sh ran as --user 0 above): a plain rm -rf as
+          # the runner user can't remove these.
+          docker run --rm --user 0 -v /tmp:/tmp busybox \
+            rm -rf /tmp/restore-config-2 /tmp/restore-data-2
 
   dr-3node:
     name: 3-node backup → bad delete → restore → resync
