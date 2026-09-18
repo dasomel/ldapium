@@ -540,6 +540,94 @@ ldapium, the same boundary already drawn for Keycloak and Kubernetes OIDC.
   only ldapium's existing `LDAP_TLS_CA_FILE` / `cn=config` mechanism, no SPIRE
   server involved.
 
+### Multi-directory topology and source-of-authority contract (issue #155)
+
+ldapium is a single LDAPv3 directory and does not ship a multi-directory
+federation/sync engine or a Source-of-Authority (SoA) matching/merge engine
+(see [product-boundary.md](product-boundary.md)). This section documents the
+contract an operator's own external synchronization or federation tooling
+implements when running ldapium alongside another directory (Active
+Directory, Entra ID, a second OpenLDAP instance, Keycloak-brokered sources,
+or similar) — the same "boundary is the deliverable" pattern already used
+above for SCIM and SPIFFE/SPIRE. It is a **documentation contract, not an
+ldapium subsystem**: ldapium resolves no cross-directory conflicts and
+performs no matching or merge itself.
+
+- **Supported topology shapes**, given ldapium has no multi-master-to-external
+  sync code and only replicates with itself (`olcMultiProvider`, see
+  AGENTS.md):
+  - **Separate realms**: ldapium and the other directory each own disjoint
+    populations with no shared identities. No SoA declaration is needed —
+    this is the same "treat them as separate directory realms" guidance
+    already given for Active Directory coexistence above.
+  - **ldapium as one authoritative source among several for disjoint
+    attributes**: the same entry exists in both directories, but each
+    attribute has exactly one authoritative writer, and an external sync
+    tool (an IGA suite, an IdP's user-federation sync, or custom tooling)
+    pushes that writer's values into the other directory over ordinary
+    LDAPv3 `modify` operations. This is the shape the "verification"
+    scenario below assumes.
+  - **ldapium as a downstream/read-through target**: an external directory
+    (e.g. an HR system via an IGA pipeline) is authoritative for the whole
+    entry, and ldapium only ever receives already-reconciled writes.
+  - **Not supported**: bidirectional live multi-master sync between ldapium
+    and a foreign directory. ldapium's only multi-master replication is
+    `olcMultiProvider` between ldapium nodes themselves, which resolves
+    conflicts by `entryCSN` (last-write-wins by timestamp) — a mechanism
+    that requires a shared `entryCSN` space and does not exist across
+    separate directory products.
+
+- **Source-of-authority declaration convention**: for a shared entry, the
+  operator declares, per objectClass/attribute, exactly one authoritative
+  system. Typical categories:
+
+  | Attribute category | Example attributes | Typical authoritative system |
+  |---|---|---|
+  | Correlation key | `entryUUID`, or an externally-sourced immutable ID stored in an attribute such as `employeeNumber` | Whichever system minted the identity first; never re-derived by the other side |
+  | HR/organizational data | `employeeNumber`, `departmentNumber`, `title`, `manager` | External HR/IGA system; ldapium is a write target only |
+  | Credential and lockout state | `userPassword`, `pwdAccountLockedTime`, `pwdChangedTime`, `pwdFailureTime` (all `slapo-ppolicy`-managed) | ldapium always, when ldapium is the bind target — these are computed/enforced by ldapium's own overlays and must never be overwritten by an external sync run |
+  | Group membership (computed) | `memberOf` | ldapium always — it is a `slapo-memberof`-maintained operational attribute (`01-cn-config.ldif:104-109`), not something any external system should write |
+  | Group membership (declared) | `groupOfNames.member` | Whichever system is declared authoritative for group provisioning; matches the SCIM/Keycloak group-mapper contracts above |
+
+  This table is illustrative, not exhaustive or mandatory: the actual
+  declaration is the operator's own IGA/sync-tool policy, not an ldapium
+  configuration artifact — ldapium has no attribute-ownership metadata or
+  enforcement mechanism of its own.
+
+- **Precedence and determinism**: the "change the same attribute on both
+  sides simultaneously" verification in issue #155 is deterministic by
+  *prevention*, not by resolution after the fact, because there is no
+  shared `entryCSN` (or any other shared clock/version vector) across two
+  separate directory products for a cross-directory race to be resolved
+  against:
+  - For conflicts **within** ldapium's own replication set, `entryCSN`
+    last-write-wins already applies today and is unrelated to this
+    contract — see the multi-provider replication gotcha in AGENTS.md.
+  - For conflicts **between** ldapium and an external directory, the SoA
+    declaration above is what makes the outcome deterministic: the
+    non-authoritative side's sync tooling must not accept inbound writes to
+    an attribute it does not own, so a simultaneous edit on both sides
+    never produces two competing writes to the same system for that
+    attribute in the first place. If an attribute genuinely needs more than
+    one writer, that is a sync-tool-level tiebreaker policy (e.g. "last
+    sync run wins", timestamp comparison, manual reconciliation queue) that
+    belongs entirely in the operator's external tooling, never in ldapium.
+  - **Enforcement mechanism**: ldapium's own contribution to making a
+    declared boundary hold is its existing ACL model — an operator can
+    restrict write access to an SoA-external attribute (e.g. `title`,
+    `employeeNumber`) to only the dedicated sync service account's bind DN,
+    so a human admin or a different integration cannot accidentally write a
+    value that the external system will overwrite on its next sync pass
+    anyway. This is standard `olcAccess` configuration, not a new ldapium
+    feature.
+
+- **What this does not change**: the "Multi-directory federation / directory
+  connectors | Not applicable" row in the compatibility matrix below stays
+  correct — ldapium still performs no matching, merging, or conflict
+  resolution across directories. This section only gives an operator's own
+  federation/sync tooling a documented, stable convention to implement
+  against.
+
 ## TLS cipher suite baseline
 
 `olcTLSCipherSuite` is fixed to the Mozilla "Intermediate" profile's TLS 1.2
@@ -587,5 +675,5 @@ A TLS 1.3 client sees no behavior change from this baseline at all.
 | Kubernetes API server OIDC via Keycloak | Supported via external IdP | `kube-apiserver` validates OIDC tokens issued by Keycloak; ldapium serves as the backing LDAP user/group directory. |
 | Kubernetes RBAC via OIDC groups claim | Supported via external OIDC provider | This chart provides the directory; the OIDC provider and API server config are the operator's |
 | SPIFFE / SPIRE | Not supported | Out of scope; ldapium contains no workload-identity code, SVID issuance, or attestation endpoints. See "SPIFFE/SPIRE integration profile" above for the documented trust-domain/issuer/audience mapping contract when an external SPIRE deployment is used alongside ldapium. |
-| Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [product-boundary.md](product-boundary.md). |
+| Multi-directory federation / directory connectors | Not applicable | ldapium is a single LDAPv3 directory and will not ship a multi-directory sync or conflict-resolution engine; see [product-boundary.md](product-boundary.md). See "Multi-directory topology and source-of-authority contract" above for the documented topology shapes and attribute-ownership convention an operator's own external sync/federation tooling implements against. |
 | SCIM (RFC 7643 / RFC 7644) | Not applicable | ldapium does not implement a SCIM server or client; see [product-boundary.md](product-boundary.md). See "Standard attribute mapping and schema versioning contract for SCIM bridges" above for the documented LDAP-attribute mapping and offline schema-version compatibility gate an external SCIM bridge integrates against. |
