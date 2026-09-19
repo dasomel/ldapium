@@ -2,6 +2,15 @@
 
 ldapium follows the OpenForge model-agnostic agent engineering model. Inspect `README.md`, `ui/README.md`, `image/README.md`, `charts/ldapium/README.md`, `CONTRIBUTING.md`, `RELEASING.md`, project skills, and the relevant issue/spec only when they apply to the current task. This file carries the high-value gotchas that are not safely derivable from those sources.
 
+## Instruction routing
+
+- `AGENTS.md` is the canonical portable repository contract.
+- Load detailed documents and `.agents/skills/` only when relevant to the current task.
+- Tool-specific adapters contain runtime-specific behavior only and must not duplicate this contract.
+- Prefer scripts, tests, linters, policy, or CI for deterministic enforcement.
+
+For OpenLDAP configuration, directory operations, replication, LDAP auth, backup/restore, upgrade, or LDAP-backed API/UI behavior, load `.agents/skills/ldapium-directory-change/SKILL.md`.
+
 ## Rules
 
 - Make the smallest coherent change that solves the requested problem.
