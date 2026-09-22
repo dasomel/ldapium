@@ -309,6 +309,36 @@ governed by the identity mechanism used:
      vault lease management and mandatory post-event credential rotation per the break-glass policy
      contract (`docs/pam-boundary.md:214-220`).
 
+### Offline policy import and deterministic validation
+
+ldapium does not ship a PAM policy engine or an approval workflow (see "JIT and JEA request and
+elevation boundary" above), so it has no bespoke "PAM policy bundle" format to import. What it
+does provide is a way to provision and validate the LDAP-side artifacts a PAM policy is actually
+built from — `ou=policies` ppolicy entries (e.g. a short-`pwdMaxAge` policy for JIT elevation,
+per "Automatic expiration and renewal lifecycle" above) and privileged group/ACL definitions —
+entirely offline, with deterministic pre-import validation:
+
+- **Offline import**: `LDAP_SEED_DIR` LDIF files (default `/opt/ldifs`,
+  `image/entrypoint.sh:103`) are applied via `ldapadd` against a **temporary local `slapd`
+  instance** started for bootstrap only (`image/entrypoint.sh:916-925`) — no network dependency
+  or external LDAP server is contacted. This is the same mechanism used to seed any other entry,
+  including a custom `ou=policies` ppolicy definition for privileged/JIT identities. Seed
+  application is gated by `NEEDS_BOOTSTRAP` (`image/entrypoint.sh:916`), so it runs at most once
+  per fresh data volume — re-running the container against an already-provisioned volume does not
+  re-import the policy bundle, consistent with the idempotent-provisioning behavior documented in
+  `docs/client-compatibility.md`'s "Idempotent provisioning" subsection.
+- **Deterministic pre-import validation**: `scripts/migration-dryrun.sh` /
+  `scripts/lib/migration-report.py` parses an LDIF file offline against ldapium's known schema
+  (`KNOWN_OBJECT_CLASSES`) and produces a structured JSON reconciliation report without writing
+  anything to a live directory. `scripts/test/test-migration-dryrun.sh:123-128` proves this is
+  deterministic: two dry-run executions against the identical LDIF input produce byte-identical
+  reports (`diff -u` on the two JSON outputs). An operator can validate a policy/ACL LDIF bundle
+  this way before ever applying it via `LDAP_SEED_DIR` or a manual `ldapadd`.
+- **What this does not cover**: schema-level validation only — it cannot verify that a policy's
+  *semantics* (e.g. an intended JIT expiry window, an approver list encoded in an external
+  system) match operator intent. That review remains the external PAM/IGA system's
+  responsibility, consistent with the request-metadata boundary above.
+
 ## Privileged session metadata
 
 ldapium does not model privileged session metadata:
