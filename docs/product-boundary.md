@@ -321,11 +321,149 @@ at its boundary:
      must be assembled and retained on its own side, with ldapium's export
      as one cited input, not the system of record for the decision itself.
 
+   **Deterministic matching and merge/split policy**: ldapium **does not
+   ship an identity matching, merge, or split engine** — deciding whether
+   records across disjoint systems represent the same physical person
+   (matching), synthesizing composite profiles across multiple data
+   sources (merging), or disentangling previously coalesced records upon
+   discovering an identity collision or divergence (splitting) are
+   Source-of-Authority (SoA) and Identity Governance (IGA) responsibilities
+   that belong to an external IdP, IGA platform, or synchronization broker,
+   consistent with "ldapium does not ship a loop-prevention or
+   conflict-resolution engine" above. What ldapium guarantees is the set
+   of stable correlation keys and write-time constraints on its LDAPv3
+   surface that an external engine can deterministically evaluate against,
+   alongside the explicit non-goals of the directory:
+
+   - **Correlation keys exposed by ldapium**:
+     - **Immutable hard-match key (`entryUUID`)**: RFC 4530 operational
+       attribute (`1.3.6.1.1.16.1.4`), server-generated upon entry creation
+       and indexed for equality searches (`image/ldifs/01-cn-config.ldif:77`).
+       Immutable across entry modifications, attribute updates, and tree
+       moves (`modrdn`). Returned in LDAP search responses when requested
+       explicitly or via `+` operational attribute requests (subject to
+       standard ACLs; `image/ldifs/01-cn-config.ldif:86-102` and
+       `image/entrypoint.sh:563-588`). An external sync engine uses
+       `entryUUID` as the authoritative anchor for 1:1 hard matching.
+     - **Mutable uniqueness-enforced soft-match keys (`uid`, `mail`)**:
+       Enforced at write time on a single node via OpenLDAP's `unique`
+       overlay (`image/entrypoint.sh:166,599-630`,
+       `image/ldifs/01-cn-config.ldif:30`), indexed via `olcDbIndex: uid eq`
+       and `olcDbIndex: mail eq` (`image/ldifs/01-cn-config.ldif:79,81`).
+       Guarantees that a write-time soft match on `(uid=<val>)` or
+       `(mail=<val>)` resolves to at most one `(objectClass=inetOrgPerson)`
+       entry on that node. The cluster-wide and offline limits documented
+       under "Duplicate/collision preflight gate" above apply equally here.
+     - **External immutable correlation attributes (e.g. `employeeNumber`)**:
+       Included in ldapium's standard schema set via `cosine.ldif` and
+       `inetorgperson.ldif` (`image/ldifs/01-cn-config.ldif:53,55`). An
+       external IGA system can populate corporate employee identifiers into
+       `employeeNumber` under the per-attribute single-writer convention
+       ("Multi-directory topology and source-of-authority contract",
+       `docs/client-compatibility.md`), using it as a secondary immutable
+       correlation key without requiring schema changes.
+
+   - **What ldapium explicitly does NOT decide (non-goals and engine limits)**:
+     - **No fuzzy or heuristic matching**: ldapium provides no phonetic
+       matching (Soundex, Metaphone), Levenshtein string distance, or
+       probabilistic identity scoring algorithms. LDAP filter evaluation
+       strictly adheres to RFC 4517 matching rules (exact equality or
+       standard substring matching).
+     - **No automated merge execution or attribute blending**: ldapium does
+       not synthesize a composite entry from conflicting upstream records.
+       When an external engine determines that two records match, that
+       engine calculates the merged attribute values and writes them to
+       ldapium via standard LDAP `modify` or `add` operations under the
+       declared single-writer authority model (`docs/client-compatibility.md`).
+     - **No automated record splitting**: If an external engine discovers
+       that two distinct identities were erroneously merged into the same
+       `entryUUID` (an identity conflation), ldapium provides no in-place
+       splitting or un-merge primitive. The external engine must resolve the
+       split by explicitly provisioning a new entry (which receives a new
+       server-generated `entryUUID`) and pruning/updating attributes on the
+       original entry via standard LDAPv3 operations.
+     - **No cross-directory join queries**: ldapium never initiates queries
+       to external directories (Active Directory, Entra ID, HR databases)
+       to correlate records. All identity correlation is orchestrated by the
+       external consumer before issuing writes to ldapium.
+
+   - **Recommended pattern**: An external sync/federation engine implements
+     a two-phase deterministic matching pipeline:
+     1. *Phase 1 (Hard match)*: Query ldapium with `(entryUUID=<stored_uuid>)`.
+        If found, link the identity directly without altering naming
+        attributes.
+     2. *Phase 2 (Soft match fallback)*: If no `entryUUID` matches, query
+        uniqueness-enforced attributes `(uid=<username>)` or `(mail=<email>)`.
+        If exactly one entry matches and satisfies the external engine's
+        admission criteria, record its `entryUUID` as the persistent link.
+     3. *Conflict routing*: If multiple entries match (e.g. if entries
+        predate overlay activation or uniqueness scope was customized), or if
+        correlated attributes disagree with upstream authority, route the
+        candidate to external quarantine (see "Quarantine of
+        ambiguous/conflicting objects" above); never attempt automated
+        heuristic merging in ldapium.
+
+   **Offline reproducible federation and convergence verification**: ldapium
+   **does not ship an internal multi-directory federation engine or
+   bidirectional synchronization daemon** (per "Deliberate non-goals" above
+   and "Multi-directory topology and source-of-authority contract",
+   `docs/client-compatibility.md`). Therefore, federation convergence cannot
+   be verified as an internal OpenLDAP daemon loop. Instead, federation
+   convergence is verified at the integration boundary against an external
+   Identity Provider (Keycloak) via an offline, fully reproducible
+   two-container end-to-end test suite
+   (`.github/workflows/keycloak-federation-e2e.yml`):
+
+   - **Offline reproducibility without external dependencies**: The test
+     suite runs entirely on an isolated Docker bridge network (`kcfed`,
+     `.github/workflows/keycloak-federation-e2e.yml:141-160`) combining
+     `ldapium:e2e` with pinned Keycloak (`quay.io/keycloak/keycloak:26.0.7`,
+     `.github/workflows/keycloak-federation-e2e.yml:41`), requiring no
+     external internet connectivity, cloud infrastructure, or Kubernetes
+     cluster.
+   - **Initial federation and attribute/group convergence**: Keycloak
+     configures an LDAP user storage provider (`uuidLDAPAttribute=["entryUUID"]`,
+     `usernameLDAPAttribute=["uid"]`,
+     `.github/workflows/keycloak-federation-e2e.yml:228-249`) with group and
+     attribute mappers (`.github/workflows/keycloak-federation-e2e.yml:281-328`).
+     Triggering initial sync (`triggerFullSync`,
+     `.github/workflows/keycloak-federation-e2e.yml:355-360`) proves that
+     federated user attributes (`alice`, `bob`,
+     `.github/workflows/keycloak-federation-e2e.yml:364-376`) and group
+     memberships (`developers`, `marketing`,
+     `.github/workflows/keycloak-federation-e2e.yml:378-397`) converge
+     deterministically with LDAP directory state, resulting in verified OIDC
+     tokens and `groups` claims (`.github/workflows/keycloak-federation-e2e.yml:405-430`).
+   - **Update convergence across sync**: Modifying group membership in
+     ldapium (removing `bob` from `cn=developers` via `ldapmodify`,
+     `.github/workflows/keycloak-federation-e2e.yml:514-520`) followed by
+     re-sync (`triggerFullSync`,
+     `.github/workflows/keycloak-federation-e2e.yml:525-528`) proves that
+     Keycloak's federated group membership converges to `alice` only
+     (`.github/workflows/keycloak-federation-e2e.yml:531-539`), demonstrating
+     deterministic convergence of live directory updates upon re-sync.
+   - **Deprovisioning and revocation convergence**: Locking an account in
+     ldapium using the `pwdAccountLockedTime` sentinel (`000001010000Z`,
+     `.github/workflows/keycloak-federation-e2e.yml:447-452`) deterministically
+     propagates to authentication rejection (HTTP 401) on Keycloak's token
+     endpoint within measured latency
+     (`.github/workflows/keycloak-federation-e2e.yml:455-470`).
+   - **Honest limits of convergence verification**: This workflow proves
+     external IdP user storage federation and convergence; it deliberately
+     does *not* test multi-master bidirectional synchronization against
+     third-party directory servers (such as Active Directory or Entra ID),
+     which is unsupported and excluded by Decision D1 ("Multi-directory
+     topology and source-of-authority contract",
+     `docs/client-compatibility.md:676-681`). Genuine cross-directory
+     multi-master synchronization requires external IGA/broker tooling, as
+     OpenLDAP replication (`olcMultiProvider`) operates strictly between
+     ldapium peer nodes.
+
 ## Capability touchpoint matrix
 
 | External capability | External product class | ldapium touchpoint | Evidence / Reference |
 |---|---|---|---|
-| Multi-directory sync & federation | IdP (Keycloak, Ping, Okta) | LDAPv3 bind, search, modify | `ui/README.md`, `charts/ldapium/README.md` |
+| Multi-directory sync & federation | IdP (Keycloak, Ping, Okta) | LDAPv3 bind, search, modify | `ui/README.md`, `charts/ldapium/README.md`, `.github/workflows/keycloak-federation-e2e.yml` |
 | Source of Authority & merge | HRIS / IGA engine | LDAPv3 add, modify, delete | `image/entrypoint.sh`, `image/ldifs/01-cn-config.ldif` |
 | SCIM protocol gateway | SCIM server / bridge | Standard LDAPv3 CRUD | `image/ldifs/01-cn-config.ldif` |
 | IGA connector & reconciliation | IGA suite (MidPoint, SailPoint) | LDAPv3 + NDJSON audit export | `scripts/export-audit-log.sh` |
