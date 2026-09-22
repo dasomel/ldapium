@@ -13,12 +13,12 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
-
-concurrency:
-  group: backup-restore-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   backup-restore:

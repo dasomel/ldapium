@@ -6,6 +6,13 @@ on:
       - "v*"
   workflow_dispatch: {}
 
+# cancel-in-progress is false: this publishes images, a chart, and a GitHub
+# release, so an in-flight run must finish rather than be killed mid-publish.
+# The group still dedupes queued runs for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 # Top level is read-only. Every job that needs to write — pushing images or
 # a chart to GHCR, minting an attestation, creating a release — declares that
 # itself, so a job added later starts with no write access rather than

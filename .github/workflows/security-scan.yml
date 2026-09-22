@@ -17,12 +17,12 @@ on:
     - cron: "0 7 * * 4"
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
-
-concurrency:
-  group: security-scan-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   dependencies:

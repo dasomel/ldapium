@@ -10,12 +10,12 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
-
-concurrency:
-  group: upgrade-e2e-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   upgrade:
