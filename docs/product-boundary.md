@@ -193,6 +193,46 @@ at its boundary:
      server-side cursor or subscription. Consumers implement their own watermarking
      and retry logic (see `scripts/ship-audit-log.sh` for a reference implementation).
 
+   **Live-verified: ldapium's own replication layer under conflict and restart**: The
+   two subsections above are guidance for an *external* federation engine building its
+   own loop detection and idempotent replay against ldapium's LDAP/audit surface — no
+   such engine ships with ldapium (see "Deliberate non-goals" above), so that guidance
+   itself is untested by definition. What ldapium **does** ship, and does test in CI, is
+   its own N-way multi-provider replication (`syncrepl` between ldapium peers), which is
+   the closest thing to a "connector" ldapium has any control over. Two scenarios in
+   `.github/workflows/replication-chaos-e2e.yml` exercise exactly the properties an
+   external engine would otherwise have to take on faith:
+   - **Bidirectional same-entry conflict**: "Partition one provider and modify the SAME
+     entry on both sides" (`replication-chaos-e2e.yml:437-473`) partitions one of three
+     providers with `iptables`, writes a different `description` value to the *same*
+     entry on the majority and minority sides while genuinely partitioned (verified by
+     reading both sides back and asserting they disagree, not just trusting the
+     partition held), then "Heal the partition and confirm the conflict resolved
+     silently" (`replication-chaos-e2e.yml:482-521`) heals it and polls all three
+     providers until they agree. The outcome — confirmed live, not assumed — is
+     `entryCSN` last-write-wins: exactly one of the two writes survives on every
+     provider, never a merge or corruption, and this happens with **no error and no
+     conflict record** (`replication-chaos-e2e.yml:520`, tracked as a detectability gap
+     in #22, not a correctness bug).
+   - **Replay/idempotency after a provider restart**: "Delete one provider"
+     (`replication-chaos-e2e.yml:213-221`) kills one of three providers, "Continue writes
+     while one provider is down" (`replication-chaos-e2e.yml:224-238`) issues five new
+     entries against the *surviving* providers during the outage, "Wait for failed
+     provider to rejoin" (`replication-chaos-e2e.yml:240-262`) waits for the killed pod
+     to become Ready again (its `syncrepl` consumer reconnects and replays from its
+     last `contextCSN` watermark on its own — nothing in the test drives that replay
+     manually), and "Verify convergence on all three providers"
+     (`replication-chaos-e2e.yml:319-328`) then asserts all three providers report
+     **exactly 5** matching entries — not fewer (proving the replay wasn't lost) and not
+     more (proving the rejoin didn't duplicate anything already applied before the
+     restart). This is real restart-and-replay idempotency, live-verified, not a design
+     claim.
+   - **Scope**: both scenarios prove ldapium's own peer-to-peer replication is robust to
+     partition and restart. They do **not** prove anything about a third-party federation
+     connector's replay logic against ldapium's LDAP/audit surface — that remains the
+     external engine's own responsibility per the guidance above, and per "Deliberate
+     non-goals", ldapium ships no such connector to test in the first place.
+
    **Quarantine of ambiguous/conflicting objects**: ldapium **does not ship a
    quarantine mechanism** (a holding state that withholds an ambiguous or
    conflicting object from normal read/sync paths pending manual or policy-driven
