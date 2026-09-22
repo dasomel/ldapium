@@ -312,11 +312,12 @@ parses or enforces:
   identities enforces this externally (e.g. a scheduled job that rotates the
   Secret and directory password together) and must not rely on ldapium to
   reject an aged credential.
-- **Revoke/deprovision**: revoking a service identity's access is a directory
-  `delete` (or password invalidation) of that entry plus removal of the
-  corresponding Secret; there is no soft-disable flag (same "no disable
-  attribute" boundary documented for `active` in the SCIM mapping table
-  below).
+- **Revoke/deprovision**: revoking a service identity's access is an
+  administrative lockout (`pwdAccountLockedTime: 000001010000Z`, see lifecycle
+  operations below), a directory `delete` (or password invalidation) of that
+  entry plus removal of the corresponding Secret; there is no dedicated boolean
+  disable attribute (same "no disable attribute" boundary documented for
+  `active` in the SCIM mapping table below).
 
 This mirrors ldapium's stated non-goal of not shipping an IGA/PAM identity
 lifecycle product (see "Deliberate non-goals" in
@@ -325,7 +326,57 @@ primitives (entries, `userPassword`, `delete`) an operator or external IGA
 tool composes into an owner/expiry/rotation policy, rather than owning that
 policy itself.
 
-#### Idempotent provisioning and audit evidence for machine identities
+#### Machine identity lifecycle: create, rotate, revoke, and deprovision
+
+Consistent with the deliberate non-goal of not shipping an IGA/PAM identity
+lifecycle workflow engine ([product-boundary.md](product-boundary.md)), ldapium
+does not automate lifecycle transitions. Instead, each lifecycle state is
+explicitly executed via standard LDAPv3 protocol operations, providing
+deterministic directory states and full audit traceability:
+
+- **Create (Provisioning)**: Initiated via standard LDAP `add` (`ldapadd -x` or
+  seed LDIF files under `LDAP_SEED_DIR` applied at bootstrap,
+  `image/entrypoint.sh:916-929`). The entry is defined with structural
+  `objectClass: organizationalRole` and auxiliary `objectClass: simpleSecurityObject`
+  (RFC 4519, `image/ldifs/03-base-structure.ldif:35-42`,
+  `.github/workflows/keycloak-federation-e2e.yml:91-96`), set with an initial
+  `userPassword` and optional `description` (owner and purpose metadata).
+  Attempting to add an existing DN fails with `ldap_add: Already exists (68)`.
+  Bootstrap seed loading is guarded by `NEEDS_BOOTSTRAP`
+  (`image/entrypoint.sh:916`), guaranteeing that restarts against existing
+  volumes do not duplicate or overwrite directory entries.
+- **Rotate (Credential update)**: Initiated via standard LDAP `modify` replacing
+  `userPassword` (`replace: userPassword`) or the RFC 3062 `PasswordModify`
+  extended operation (`ui/backend/internal/ldapclient/users.go:207-219`). The
+  password change executes synchronously and is captured in `auditlog` on
+  `{1}mdb` (`image/entrypoint.sh:645-654`). The operator or secret manager then
+  synchronizes the updated credential into the consuming secret store
+  (`ui.ldapServiceAccount.existingSecret`, `charts/ldapium/README.md:267-281`)
+  and reloads dependent services.
+- **Revoke (Access suspension / Lockout)**: Initiated via standard LDAP `modify`
+  setting `pwdAccountLockedTime: 000001010000Z` (`replace: pwdAccountLockedTime`,
+  `ui/backend/internal/ldapclient/users.go:271-283`,
+  `scripts/bench-lifecycle.sh:349-350`, verified in
+  `.github/workflows/keycloak-federation-e2e.yml:447-452`). Under `slapo-ppolicy`
+  (`image/entrypoint.sh:750-766`, `image/ldifs/01-cn-config.ldif:119-124`),
+  this indefinite lockout sentinel causes subsequent simple binds to be
+  rejected immediately (`Invalid credentials (49)`) without deleting the entry
+  or severing audit correlation. Revocation is symmetrically cleared (unlocked)
+  via `delete: pwdAccountLockedTime` (`ui/backend/internal/ldapclient/users.go:222-242`,
+  `image/README.md:522-525`). Alternatively, immediate revocation can be
+  achieved by overwriting `userPassword` with an unmatchable hash or purging the
+  external consumer secret.
+- **Deprovision (Permanent deletion)**: Initiated via standard LDAP `delete`
+  (`ldapdelete` or `ui/backend/internal/ldapclient/users.go:187-199`). The entry
+  is permanently purged from `{1}mdb`, causing subsequent binds to fail with
+  `Invalid credentials (49)` or `No such object (32)`. OpenLDAP's `slapo-refint`
+  overlay (`image/ldifs/01-cn-config.ldif:110-117`) automatically purges the
+  deleted DN from any group membership (`groupOfNames.member`). The deletion is
+  recorded in `auditlog` as `op: delete` (`docs/audit-event-schema.md`), and the
+  operator deletes the associated Kubernetes Secret
+  (`ui.ldapServiceAccount.existingSecret`).
+
+#### Idempotent provisioning, offline test reproducibility, and audit evidence for machine identities
 
 **Idempotent provisioning**: a machine/service identity is provisioned the
 same way any other entry is — as an LDIF `add` (either interactively via
@@ -349,6 +400,35 @@ enterprise IGA suite") — that same exclusion covers "failed provisioning
 retry/dead-letter semantics" for machine identities: an external IGA/SCIM
 gateway owns retry and dead-letter handling against ldapium's plain LDAPv3
 `add`/`modify`, which itself has no retry queue.
+
+**Offline reproducible provisioning test**: Offline batch provisioning of machine
+identities is governed by OpenLDAP's `slapadd` database loader
+(`scripts/restore.sh:145-146`), bypassing daemon runtime state, overlay
+interception, and network dependencies. Offline reproducibility is proven by
+automated test fixtures:
+1. **Full-directory offline restore determinism**: In
+   `.github/workflows/backup-restore.yml:128-191`, a directory backup is imported
+   offline twice into fresh targets (`/tmp/restore-config` + `/tmp/restore-data`,
+   and `/tmp/restore-config-2` + `/tmp/restore-data-2`) using `restore.sh
+   --confirm-offline` with `--network none` (lines 128, 152). Offline `slapcat -n 1
+   -F /etc/openldap/slapd.d` dumps of both targets are compared using `diff -u
+   /tmp/restore-1-dump.ldif /tmp/restore-2-dump.ldif` (lines 176-189), asserting
+   byte-identical directory state (`PASS: repeated offline restore of the same
+   backup is idempotent`, line 190). Because machine identity entries
+   (`organizationalRole` + `simpleSecurityObject`) reside in `{1}mdb` without
+   per-entry conditional logic, offline batch loading into fresh targets is
+   strictly deterministic.
+2. **Offline batch reconciliation and schema validation**: Offline LDIF batch
+   import and migration tooling (`scripts/migration-dryrun.sh`,
+   `scripts/lib/migration-report.py`) parses and validates machine identity
+   schemas (`KNOWN_OBJECT_CLASSES` classifies `organizationalrole` as
+   `STRUCTURAL` and `simplesecurityobject` as `AUXILIARY`, lines 50, 64),
+   asserting attribute mapping schema versions (`#
+   ldapium-attribute-mapping-schema-version: 1`). Determinism of this offline
+   provisioning dry-run is verified in
+   `scripts/test/test-migration-dryrun.sh:123-128`, where consecutive offline
+   dry-run executions against identical LDIF inputs produce byte-identical
+   reconciliation reports.
 
 **Audit record for non-human identity changes**: the `auditlog` overlay is
 attached at `olcOverlay=auditlog,olcDatabase={1}mdb,cn=config`
