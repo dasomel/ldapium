@@ -264,6 +264,66 @@ trust boundaries across four identity classes.
    issues no SPIFFE SVIDs, and accepts no Kubernetes service account tokens
    directly.
 
+### Human vs machine identity type distinction
+
+ldapium's directory schema has no dedicated "identity type" attribute — it
+does not implement an IGA-style identity governance model (see
+[product-boundary.md](product-boundary.md)). The type distinction between
+identity classes 1 and 3/4 above is instead structural, derivable by an
+external IGA/SCIM/audit tool from objectClass and DIT placement alone,
+without requiring any ldapium code change:
+
+| Signal | Human user (`inetOrgPerson`) | Machine/service identity (UI service account, class 3) |
+|---|---|---|
+| Structural objectClass | `inetOrgPerson` | `organizationalRole` + `simpleSecurityObject` (same pattern as `rootdn`, `image/ldifs/03-base-structure.ldif`) |
+| DIT location | Under `LDAP_USER_SEARCH_BASE` (e.g. `ou=people,dc=example,dc=org`) | Outside the human user search base — operator-provisioned, referenced only via `LDAP_SERVICE_ACCOUNT_DN` |
+| Credential attribute | `userPassword`, set via self-service or admin reset flows | `userPassword`, set once at provisioning time and rotated by the operator (see rotation contract below) |
+| Authentication path | Direct `SIMPLE` bind or Keycloak OIDC federation | Direct `SIMPLE` bind only, performed by the UI backend on the identity's behalf (`ui/backend/internal/httpapi/sso.go`) |
+
+A directory-wide search filtered to `LDAP_USER_SEARCH_BASE` therefore already
+excludes all machine identities structurally; an external IGA tool does not
+need ldapium to add a type flag to tell the two apart, and ldapium does not
+enforce this convention beyond documenting it — operators who provision a
+service account inside the human search base, or a human user outside it,
+bypass the distinction, matching ldapium's existing stance of not owning
+identity-governance policy.
+
+#### Owner, purpose, expiry, and rotation policy for service identities
+
+Because ldapium has no identity-governance engine, ownership and lifecycle
+metadata for a machine/service identity (class 3 above; the same applies to
+any additional service accounts an operator provisions following this
+pattern) is an operational/documentation contract, not an attribute ldapium
+parses or enforces:
+
+- **Owner and purpose**: record who owns the identity and why it exists as
+  `description` on the LDAP entry (free text, e.g.
+  `description: Owner: platform-team@example.org; Purpose: UI backend LDAP bind`),
+  and/or in the operator's secret-management system alongside the credential
+  (`ui.ldapServiceAccount.existingSecret`, `charts/ldapium/README.md`). ldapium
+  does not require or validate this field.
+- **Expiry and rotation**: ldapium has no credential-expiry enforcement or
+  scheduled rotation job. Rotation is an operator procedure: generate a new
+  password, update the entry's `userPassword` via `ldapmodify` (or admin
+  reset), then update the corresponding Kubernetes Secret
+  (`ui.ldapServiceAccount.existingSecret`) and restart/reload consumers. There
+  is no in-place "expiry" attribute — an operator wanting time-boxed service
+  identities enforces this externally (e.g. a scheduled job that rotates the
+  Secret and directory password together) and must not rely on ldapium to
+  reject an aged credential.
+- **Revoke/deprovision**: revoking a service identity's access is a directory
+  `delete` (or password invalidation) of that entry plus removal of the
+  corresponding Secret; there is no soft-disable flag (same "no disable
+  attribute" boundary documented for `active` in the SCIM mapping table
+  below).
+
+This mirrors ldapium's stated non-goal of not shipping an IGA/PAM identity
+lifecycle product (see "Deliberate non-goals" in
+[product-boundary.md](product-boundary.md)): ldapium provides the LDAPv3
+primitives (entries, `userPassword`, `delete`) an operator or external IGA
+tool composes into an owner/expiry/rotation policy, rather than owning that
+policy itself.
+
 ### LDAP group and attribute mapping contract (Keycloak)
 
 When Keycloak integrates with ldapium using LDAP user federation, it connects as
