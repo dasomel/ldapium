@@ -212,12 +212,102 @@ policy-compliant rather than an undetected admin bind:
      timestamp window and actor DN, since ldapium cannot embed a correlation ID in the LDAP
      operation itself (see "Rotation and revocation correlation" above).
 - **Post-event reconciliation**: The policy MUST require, after the break-glass window
-  closes: (a) rotating the `olcRootDN` password (an LDAP `modify` on `cn=config`, itself
-  captured in `auditlog` if enabled), (b) reviewing the accesslog/auditlog window for
+  closes: (a) rotating the `olcRootDN` password (an LDAP `modify` on `cn=config`, subject to
+  the `cn=config` audit limitation documented above), (b) reviewing the accesslog/auditlog window for
   unexpected operations, and (c) re-verifying the audit chain (`scripts/verify-audit-chain.py
   --expected-head`) to confirm no tampering occurred during the elevated-access window.
   ldapium does not automatically revoke or rotate anything on its own; this step is entirely
   an external operational obligation.
+
+## JIT and JEA request and elevation boundary
+
+Just-in-Time (JIT) privilege elevation and Just-Enough-Administration (JEA) temporary access
+involve two distinct operational phases: the request/approval workflow and the time-bounded
+access lifecycle. In accordance with product boundary D1 (`docs/product-boundary.md:58-62`),
+ldapium provides directory-level enforcement primitives but ships no workflow engine or
+request broker.
+
+### Request metadata and approval boundary
+
+OpenLDAP operates strictly as an LDAPv3 directory server: standard protocol operations (`bind`,
+`add`, `modify`, `delete`) carry target DNs and attribute modifications, but have no protocol
+fields or schema attributes to record operational request metadata.
+
+Therefore, an external PAM, IGA, or ITSM system (e.g. CyberArk, HashiCorp Vault, Keycloak
+Privileged Access, or ServiceNow) MUST own and enforce the entire request boundary:
+
+1. **Reason / Justification**: Capturing and validating the business reason, incident ticket,
+   or change management ID. ldapium's directory cannot inspect or enforce the presence of a
+   justification.
+2. **Approver / Multi-Party Approval**: Requiring dual-control or designated approver sign-off
+   before any directory write is dispatched. In ldapium, any client binding with a DN permitted
+   by `olcAccess` directives (`image/ldifs/01-cn-config.ldif:86-102`) can execute modifications;
+   slapd has no mechanism to require upstream human or multi-agent approval.
+3. **Start and End Time**: Managing the elevation schedule and expiration timers. The PAM
+   orchestrator issues the LDAP operations to activate access at `startTime` and deactivate
+   it at `endTime`.
+4. **Target Scope**: Restricting elevation to designated organizationalUnits, specific user
+   entries, or administrative groups. ldapium enforces standard ACLs (`olcAccess`) against the
+   binding actor DN, but does not calculate dynamic JEA role scopes on-the-fly.
+
+**Audit correlation**: While OpenLDAP cannot inject ticket numbers or correlation IDs into
+standard LDAP writes (`docs/pam-boundary.md:93-98`), write operations on `{1}mdb` are captured
+by `slapo-auditlog` (`image/entrypoint.sh:646`, destination `LDAP_AUDIT_FILE`) recording actor
+DN (`reqDN`), target DN, and attribute modifications, while binds are recorded in `cn=accesslog`
+(`image/entrypoint.sh:673-738`). Downstream SIEM and audit pipelines correlate external PAM
+request metadata (reason, approver, ticket ID, approved time window) with directory operations
+using the actor DN, target DN, and timestamp window.
+
+### Automatic expiration and renewal lifecycle
+
+Privileged access elevation must not persist indefinitely. The boundary between what ldapium's
+OpenLDAP overlays enforce automatically and what the external PAM system must orchestrate is
+governed by the identity mechanism used:
+
+1. **Credential expiry via `slapo-ppolicy` (`pwdMaxAge`)**:
+   - `slapo-ppolicy` is compiled and enabled on `{1}mdb` (`image/Dockerfile:65`,
+     `image/ldifs/01-cn-config.ldif:119-124`, `image/entrypoint.sh:757-837`).
+   - The default policy (`cn=default,ou=policies,<rootDN>`) sets `pwdMaxAge: 0`
+     (`image/entrypoint.sh:826`, `image/README.md:423`) to avoid forced periodic rotation for
+     standard users per NIST 800-63B.
+   - For temporary or JIT-elevated credentials, an operator or PAM platform can define a dedicated
+     policy under `ou=policies,<rootDN>` with a non-zero `pwdMaxAge` (e.g., `pwdMaxAge: 3600` for
+     a 1-hour window) and assign it to an identity via the `pwdPolicySubentry` operational
+     attribute (`ui/frontend/src/pages/ChangePasswordPage.tsx:16-17`).
+   - Under this policy, `slapo-ppolicy` evaluates `pwdChangedTime` on each bind. When
+     `currentTime > pwdChangedTime + pwdMaxAge`, subsequent binds are automatically rejected
+     at the LDAP protocol layer with `LDAP_INVALID_CREDENTIALS` (ppolicy passwordExpired).
+   - **Renewal mechanism**: To extend access before expiration, the external PAM system must
+     issue an LDAP `modify` replacing `userPassword`. This resets `pwdChangedTime` to the current
+     timestamp, renewing access for another `pwdMaxAge` interval. If not explicitly renewed,
+     access expires automatically without requiring an asynchronous directory reaper at the
+     exact expiration second.
+2. **Administrative lockout via `pwdAccountLockedTime`**:
+   - When an approved elevation window ends, or upon immediate revocation, the PAM orchestrator
+     can administratively disable the account by replacing `pwdAccountLockedTime` with the
+     ppolicy indefinite-lockout sentinel `000001010000Z` (`ui/backend/internal/ldapclient/users.go:272`,
+     `docs/pam-boundary.md:81`, `.github/workflows/keycloak-federation-e2e.yml:450-451`).
+   - Any subsequent bind fails immediately until an administrator or PAM service explicitly
+     deletes `pwdAccountLockedTime` (`image/README.md:457-464`, `ui/backend/internal/ldapclient/users.go:226-240`).
+   - In federated deployments, downstream IdPs (e.g. Keycloak) observe this revocation within
+     ≤30s (`keycloak-federation-e2e.yml:432-470`, `docs/pam-boundary.md:116-149`).
+3. **Group membership elevation (JEA) limitation**:
+   - When elevation is granted by adding an identity as a `member` of an administrative or
+     operational group, OpenLDAP's `memberof` overlay (`image/ldifs/01-cn-config.ldif:104-108`)
+     maintains static bi-directional group relationships.
+   - OpenLDAP has **no native attribute-level TTL or dynamic membership expiration** (no RFC 2589
+     dynamic directory or `entryTtl` overlay).
+   - Consequently, automatic expiration of group memberships CANNOT occur within the directory
+     engine itself. The external PAM/JEA orchestrator MUST manage the lease timer and issue an
+     LDAP `modify` deleting the `member` attribute when the approved elevation window closes,
+     unless an explicit renewal was granted.
+4. **Directory Root DN (`olcRootDN`) bypass**:
+   - As documented in `docs/pam-boundary.md:20-24`, `olcRootDN` on `{1}mdb` and `cn=admin,cn=config`
+     bypass `slapo-ppolicy` entirely.
+   - `pwdMaxAge` and `pwdAccountLockedTime` have no effect on `olcRootDN`. Temporary rootDN
+     elevation cannot auto-expire via directory password policies; it relies strictly on external
+     vault lease management and mandatory post-event credential rotation per the break-glass policy
+     contract (`docs/pam-boundary.md:214-220`).
 
 ## Privileged session metadata
 
@@ -232,10 +322,11 @@ ldapium does not model privileged session metadata:
 
 The following PAM and IdP interaction models are unverified and out of scope:
 
-- **Just-In-Time (JIT) provisioning**: ldapium has no dynamic account creation trigger;
-  entries must exist in the DIT before binding.
-- **Just-Enough-Administration (JEA) temporary escalation**: No mechanism exists to grant
-  time-bounded group memberships or dynamically adjust `olcAccess` directives.
+- **Just-In-Time (JIT) account provisioning**: ldapium has no dynamic account creation trigger;
+  entries must exist in the DIT before binding (see "JIT and JEA request and elevation boundary" above).
+- **Just-Enough-Administration (JEA) dynamic escalation**: No mechanism exists inside the directory
+  to grant time-bounded group memberships or dynamically adjust `olcAccess` directives; group
+  de-escalation must be driven externally by the PAM orchestrator.
 - **Ephemeral credential injection**: OpenLDAP expects persistent hashes in `userPassword`;
   there is no pluggable authentication module to query an external vault during bind.
 - **Push-based event hooks**: ldapium does not push webhook notifications to PAM platforms
