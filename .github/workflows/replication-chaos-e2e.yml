@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: replication-chaos-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   replication-chaos:
     runs-on: ubuntu-24.04

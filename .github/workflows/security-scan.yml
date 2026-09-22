@@ -20,6 +20,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependencies:
     name: Dependencies and manifests

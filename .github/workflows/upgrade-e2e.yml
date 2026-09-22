@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: upgrade-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   upgrade:
     name: rolling upgrade + rollback (${{ matrix.scenario }})
