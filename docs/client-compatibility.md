@@ -325,6 +325,48 @@ primitives (entries, `userPassword`, `delete`) an operator or external IGA
 tool composes into an owner/expiry/rotation policy, rather than owning that
 policy itself.
 
+#### Idempotent provisioning and audit evidence for machine identities
+
+**Idempotent provisioning**: a machine/service identity is provisioned the
+same way any other entry is — as an LDIF `add` (either interactively via
+`ldapadd`/`ldapmodify`, or as a seed file under `LDAP_SEED_DIR` applied by
+`image/entrypoint.sh`, lines 916–929). Seed application only runs when
+`NEEDS_BOOTSTRAP` is true (the data volume has no existing DB), so re-running
+the same container against an already-provisioned volume does not re-apply
+`LDAP_SEED_DIR`; a manual `ldapadd` of an entry that already exists fails with
+`ldap_add: Already exists (68)` rather than silently duplicating it — LDAP
+`add` is inherently non-duplicating, not additionally reconciled by ldapium.
+The same offline-reproducibility property already proven for full-directory
+restore (`.github/workflows/backup-restore.yml`, added in #167: two restores
+of the same backup into fresh targets produce byte-identical `slapcat`
+dumps) applies identically to a machine identity's entry, since it is
+restored as part of the same LDIF stream with no per-entry special-casing.
+Building a general-purpose reconciliation engine (diffing desired vs. actual
+state and re-applying deltas) is the explicitly excluded "IGA connector
+framework" non-goal (`product-boundary.md`, "Deliberate non-goals": "retry
+loops, reconciliation schedules, and dead-letter queues belong in an
+enterprise IGA suite") — that same exclusion covers "failed provisioning
+retry/dead-letter semantics" for machine identities: an external IGA/SCIM
+gateway owns retry and dead-letter handling against ldapium's plain LDAPv3
+`add`/`modify`, which itself has no retry queue.
+
+**Audit record for non-human identity changes**: the `auditlog` overlay is
+attached at `olcOverlay=auditlog,olcDatabase={1}mdb,cn=config`
+(`image/entrypoint.sh` lines 645–654) — the main database as a whole, not a
+subtree scoped to `LDAP_USER_SEARCH_BASE`. It therefore records every
+`add`/`modify`/`modrdn`/`delete` against a machine/service identity entry
+(e.g. the UI service account, or any other operator-provisioned service
+account outside the human search base) exactly as it does for a human user
+entry, with no branch in the overlay config or in
+`scripts/export-audit-log.sh`/`scripts/lib/audit-normalize.py` that
+distinguishes identity class — see the envelope's `target`/`actor`/`op`
+fields in [docs/audit-event-schema.md](audit-event-schema.md). Distinguishing
+"non-human identity" audit records from human ones downstream uses the same
+structural signal as the identity-type table above (DIT location /
+objectClass of `target`), applied by the consuming SIEM/IGA tool — ldapium
+does not tag records by identity class itself, consistent with its stance of
+not owning identity-governance policy.
+
 ### LDAP group and attribute mapping contract (Keycloak)
 
 When Keycloak integrates with ldapium using LDAP user federation, it connects as
