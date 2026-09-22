@@ -234,6 +234,93 @@ at its boundary:
      signal and the post-resolution write path; it performs none of steps 1–4
      itself.
 
+   **Duplicate/collision preflight gate**: ldapium **does not ship a
+   cross-directory duplicate/collision detector** — deciding whether an
+   incoming federated identity collides with one already sourced from a
+   different upstream is a source-of-authority/merge-policy decision that
+   belongs to the external federation engine, consistent with "ldapium does
+   not ship a loop-prevention or conflict-resolution engine" above. What
+   ldapium provides is a same-node, write-time uniqueness check the external
+   engine can use as one input to its own preflight gate, plus the honest
+   limits of that check:
+
+   - **Signal available**: the `unique` overlay (`LDAP_UNIQUE_ATTRIBUTES`,
+     default `uid,mail`; `image/entrypoint.sh:599-630`,
+     `image/ldifs/01-cn-config.ldif:30`) rejects an `Add`/`Modify` on a
+     single node that would create a second `(objectClass=inetOrgPerson)`
+     entry sharing a value with an existing entry, on any attribute listed
+     (`image/README.md`, "Uniqueness enforcement"). Each listed attribute is
+     its own independent uniqueness domain — one `olcUniqueURI` per
+     attribute, not a combined-key check.
+   - **Not a cross-directory gate**: the overlay only ever sees entries
+     written to the local ldapium node; it has no knowledge of identities
+     held by peer directories, upstream IdPs, or other federation
+     endpoints. An external engine cannot rely on it to catch a collision
+     between an incoming synced identity and a record that originates
+     entirely outside ldapium — that comparison has to happen in the
+     engine's own identity store before it ever issues the write.
+   - **Not a cluster-wide gate under multi-provider replication**: per
+     `image/README.md`, "Uniqueness enforcement", two nodes accepting writes
+     for the same value at the same time each pass their own local check
+     before either write has replicated, so both can succeed and the
+     duplicate surfaces only after sync — visible afterward as a
+     `replication-conflict-raw` discard (see "Quarantine of
+     ambiguous/conflicting objects" above), not prevented up front.
+   - **Bypassed by offline paths**: `slapadd`-based bootstrap and restore
+     (`scripts/restore.sh`) write straight to the database file with no
+     overlay in the path, so bulk/offline loads carry no duplicate
+     protection at all — the external engine's own preflight check is the
+     only gate for those paths.
+   - **Recommended pattern**: an external federation engine performs its own
+     duplicate/collision check against its cross-directory identity store
+     *before* issuing a write to ldapium (using `entryUUID`/target DN
+     correlation per the change-origin contract above), and treats
+     ldapium's `unique` overlay purely as a same-node backstop — a rejected
+     write is evidence a check was missed, not the primary detection
+     mechanism, and per-attribute `LDAP_UNIQUE_ATTRIBUTES` scope
+     (`uid,mail` by default) must match the attributes the engine's own
+     collision policy actually cares about or the backstop silently doesn't
+     cover them.
+
+   **Audit evidence for authority/conflict decisions**: every metadata
+   element an external engine needs to justify *why* it made a given
+   authority or conflict decision is already covered above and in
+   `docs/audit-event-schema.md`; this subsection collects the pointers so
+   the evidence trail doesn't have to be reconstructed from scratch:
+
+   - **Which change fired the decision**: the audit envelope's `source`,
+     `actor`, `target`, `op`, and `correlationId` fields
+     (`docs/audit-event-schema.md`, "The envelope") identify the write
+     (`auditlog`), read/bind (`accesslog`), or discard
+     (`replication-conflict-raw`) that a downstream decision was based on.
+     `correlationId` is deterministic and reproducible across re-export
+     (`docs/audit-event-schema.md`, "correlationId"), so a logged decision
+     can be traced back to the exact record that triggered it even after a
+     re-run.
+   - **Which entry was affected**: `objectId` (resolved `entryUUID`) is
+     populated for `auditlog` writes when the LDIF body carries it, and for
+     `replication-conflict-raw` discards via
+     `scripts/lib/resolve-conflict-objectid.py`'s DN-to-`entryUUID`
+     resolution at export time (`docs/audit-event-schema.md`, "objectId").
+     `accesslog` reads carry no `entryUUID`-equivalent — a decision based
+     solely on a read/search record cannot cite a resolved object identity
+     and must fall back to `target` (the requested DN).
+   - **Why a write was accepted or rejected as a duplicate**: an `Add`
+     rejected by the `unique` overlay (see "Duplicate/collision preflight
+     gate" above) is itself a failed write; ldapium's audit surfaces show
+     the attempt via the normal `auditlog`/`accesslog` path exactly as any
+     other operation, with no separate "rejection reason" field — the
+     external engine records *why* it attempted or blocked a write in its
+     own decision log, using ldapium's `correlationId`/`objectId` only to
+     cite *which* ldapium-side event the decision corresponds to.
+   - **What ldapium does not provide as evidence**: no built-in
+     signature/attestation over audit records, no server-side decision or
+     approval log, and no request-scoped correlation id shared across LDAP
+     protocol and audit export (see "Limits and non-guarantees" above) — an
+     external engine's audit trail for its own authority/conflict decisions
+     must be assembled and retained on its own side, with ldapium's export
+     as one cited input, not the system of record for the decision itself.
+
 ## Capability touchpoint matrix
 
 | External capability | External product class | ldapium touchpoint | Evidence / Reference |
