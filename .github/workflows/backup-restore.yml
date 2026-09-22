@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: backup-restore-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backup-restore:
     name: backup → verify → corrupt-check → restore

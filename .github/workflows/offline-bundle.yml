@@ -16,6 +16,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: offline-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bundle:
     name: Build offline bundle
