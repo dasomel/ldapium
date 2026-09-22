@@ -71,9 +71,13 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # This job's own check run ("Verify the tagged commit was tested") is
+          # attached to the same SHA it is inspecting and is still in_progress
+          # while this step runs, so the API always reports it back as
+          # "pending" - excluded here, or this job would fail itself on every run.
           gh api --paginate \
             "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-            --jq '.check_runs[] | "\(.conclusion // "pending") \(.name)"' \
+            --jq '.check_runs[] | select(.name != "Verify the tagged commit was tested") | "\(.conclusion // "pending") \(.name)"' \
             | sort -u > /tmp/checks.txt
           echo "::group::check runs on $SHA"
           cat /tmp/checks.txt
