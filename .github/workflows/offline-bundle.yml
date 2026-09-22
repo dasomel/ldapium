@@ -2,9 +2,16 @@ name: Air-gap bundle
 
 on:
   pull_request:
-  push:
-    tags:
-      - "v*"
+  # Not push:tags — that fires at the same instant as Release, before Release
+  # has published anything for this tag to bundle (the bundle job's own first
+  # run on v0.1.0 failed with "ghcr.io/dasomel/ldapium:0.1.0: not found" for
+  # exactly this reason, and raced Release's own preflight into failing too by
+  # sitting "pending" on the tagged SHA while Release checked whether every
+  # check on that SHA had already passed). workflow_run waits for Release to
+  # actually finish, same pattern as supply-chain.yml.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -25,12 +32,20 @@ jobs:
     name: Build offline bundle
     runs-on: ubuntu-24.04
     # Needs published images and a chart in GHCR, so it cannot run on a pull
-    # request. The offline-e2e job below is the part that can, and it exercises
-    # the same script through --from-local-images.
-    if: github.event_name != 'pull_request'
+    # request (the offline-e2e job below is the part that can, and it
+    # exercises the same script through --from-local-images), and for a
+    # Release-triggered run it must wait for Release to have actually
+    # succeeded and published, not merely completed (a failed Release has
+    # nothing in GHCR yet for this tag).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -45,17 +60,26 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      # Same tag-from-SHA lookup as supply-chain.yml's "Determine release
+      # identity" — a workflow_run event's head_branch is not documented to
+      # carry the tag name reliably, so ask git instead.
       - name: Determine version
         id: version
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ "$REF_TYPE" = "tag" ]; then
-            version="${REF_NAME#v}"
-          else
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             version="$INPUT_VERSION"
+          else
+            tag="$(git tag --points-at "$WORKFLOW_SHA" 'v*' | head -n1 || true)"
+            if [ -z "$tag" ]; then
+              echo "::error::no release tag points at $WORKFLOW_SHA"
+              exit 1
+            fi
+            version="${tag#v}"
           fi
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -95,6 +119,11 @@ jobs:
   offline-e2e:
     name: Install from a bundle with no registry
     runs-on: ubuntu-24.04
+    # Builds its own local images and never touches GHCR, so it doesn't need
+    # to wait for Release — it already gets full coverage on every pull
+    # request. Re-running it after every Release would just be a duplicate
+    # of that same coverage against unrelated commit content.
+    if: github.event_name != 'workflow_run'
     env:
       BUNDLE_VERSION: 0.0.0-e2e
     steps:
