@@ -140,11 +140,22 @@ policy-compliant rather than an undetected admin bind:
   "Credential material and external vault integration" above is a precondition for this,
   not an alternative to it.
 - **Immutable evidence production**: Every break-glass use produces, at minimum:
-  1. A bind record in `cn=accesslog` (`reqDN: <adminDN>`) and any resulting write in
-     `auditlog`, per "Break-glass procedures and evidence integrity" above.
+  1. A bind record in `cn=accesslog` (`reqDN: <adminDN>`) for the `olcRootDN` or
+     `cn=admin,cn=config` bind itself, and any resulting write to the directory's own
+     entries (not `cn=config`) captured in `auditlog`. `slapo-auditlog` is configured
+     only on `olcDatabase={1}mdb` (`image/entrypoint.sh:646`), so modifications made
+     directly against `cn=config` (the `{0}config` backend) are **not** captured in
+     `auditlog`, and administrative operations performed over the local domain socket
+     (`ldapi://`) bypass `accesslog` entirely (`docs/audit-event-schema.md:464`). A
+     break-glass session that only rotates `olcRootDN` or otherwise limits itself to
+     `cn=config` changes over `ldapi://` therefore produces **no accesslog or auditlog
+     evidence** — operators relying on this contract for such sessions must add an
+     external control (e.g. session recording on the admin bastion, or shell audit on
+     the container) rather than assume the directory's own logs will show it.
   2. A `--chain` export (`scripts/export-audit-log.sh --chain`) run before and after the
      break-glass window, with the resulting chain head hash recorded out-of-band (backup
-     manifest or external SIEM) via `--expected-head`, so tail truncation of the
+     manifest or external SIEM); `scripts/verify-audit-chain.py --expected-head` is then
+     used afterward to assert against that recorded hash, so tail truncation of the
      break-glass records is detectable.
   3. Cross-reference of the operator-side checkout ticket/incident ID against the bind
      timestamp window and actor DN, since ldapium cannot embed a correlation ID in the LDAP
