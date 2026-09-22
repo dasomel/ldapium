@@ -193,6 +193,47 @@ at its boundary:
      server-side cursor or subscription. Consumers implement their own watermarking
      and retry logic (see `scripts/ship-audit-log.sh` for a reference implementation).
 
+   **Quarantine of ambiguous/conflicting objects**: ldapium **does not ship a
+   quarantine mechanism** (a holding state that withholds an ambiguous or
+   conflicting object from normal read/sync paths pending manual or policy-driven
+   resolution) — that responsibility belongs to the external federation/IGA engine,
+   consistent with "ldapium does not ship a loop-prevention or conflict-resolution
+   engine" above. ldapium's role is limited to supplying the raw signal a quarantine
+   decision is built on, and to never silently hiding a quarantined object from an
+   authorized reader:
+
+   - **Signal available**: the `replication-conflict-raw` audit source
+     (`docs/audit-event-schema.md`) reports discarded CSNs from OpenLDAP's
+     multi-provider `entryCSN`-based conflict resolution, resolved to an `objectId`
+     (`entryUUID`) at export time. As documented above, this is a *discard*
+     diagnostic, not a confirmed-conflict detector — it mixes genuine same-entry
+     conflicts with harmless syncrepl relay duplicates. An external engine treats
+     each `replication-conflict-raw` event as a candidate for quarantine
+     triage, not a verdict.
+   - **No suppression of quarantined entries**: ldapium has no concept of a
+     "quarantined" object state. An object an external engine has flagged
+     ambiguous or conflicting remains fully readable/writable in ldapium under
+     normal ACLs — LDAP protocol reads are not filtered based on any
+     external-engine quarantine decision. The external engine owns holding that
+     object out of *its own* propagation/sync pipeline; it must not expect
+     ldapium to enforce that hold.
+   - **Marking pattern**: ldapium provides no dedicated attribute for
+     recording quarantine state. An external engine that needs to persist a
+     quarantine marker on the ldapium side does so the same way any other
+     externally-owned attribute is written — as an ordinary `modify` under the
+     per-attribute single-writer convention ("Multi-directory topology and
+     source-of-authority contract", `docs/client-compatibility.md`), using an attribute the
+     engine itself owns (e.g. a custom auxiliary class/attribute registered by
+     the operator), never a resident ldapium schema attribute.
+   - **Recommended pattern**: on receiving a `replication-conflict-raw` event
+     (or observing divergent `entryCSN`/attribute state for the same
+     `entryUUID` across providers), the external engine (1) holds that object
+     out of outbound propagation, (2) resolves the conflict per its own
+     precedence/merge policy, (3) applies the resolved state via a normal
+     LDAP `modify`, and (4) releases the hold. ldapium supplies the discard
+     signal and the post-resolution write path; it performs none of steps 1–4
+     itself.
+
 ## Capability touchpoint matrix
 
 | External capability | External product class | ldapium touchpoint | Evidence / Reference |
