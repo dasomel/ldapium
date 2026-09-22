@@ -268,17 +268,18 @@ trust boundaries across four identity classes.
 
 ldapium's directory schema has no dedicated "identity type" attribute — it
 does not implement an IGA-style identity governance model (see
-[product-boundary.md](product-boundary.md)). The type distinction between
-identity classes 1 and 3/4 above is instead structural, derivable by an
-external IGA/SCIM/audit tool from objectClass and DIT placement alone,
+[product-boundary.md](product-boundary.md)). The type distinction between identity classes 1 and 3 above (class 4, the
+Kubernetes ServiceAccount, never exists as an LDAP entry and so has no
+objectClass/DIT signal to derive from) is instead structural, derivable by
+an external IGA/SCIM/audit tool from objectClass and DIT placement alone,
 without requiring any ldapium code change:
 
 | Signal | Human user (`inetOrgPerson`) | Machine/service identity (UI service account, class 3) |
 |---|---|---|
-| Structural objectClass | `inetOrgPerson` | `organizationalRole` + `simpleSecurityObject` (same pattern as `rootdn`, `image/ldifs/03-base-structure.ldif`) |
+| objectClass | `inetOrgPerson` (structural) | `organizationalRole` (structural) + `simpleSecurityObject` (auxiliary, adds `userPassword`) — same pattern as `rootdn`, `image/ldifs/03-base-structure.ldif` |
 | DIT location | Under `LDAP_USER_SEARCH_BASE` (e.g. `ou=people,dc=example,dc=org`) | Outside the human user search base — operator-provisioned, referenced only via `LDAP_SERVICE_ACCOUNT_DN` |
 | Credential attribute | `userPassword`, set via self-service or admin reset flows | `userPassword`, set once at provisioning time and rotated by the operator (see rotation contract below) |
-| Authentication path | Direct `SIMPLE` bind or Keycloak OIDC federation | Direct `SIMPLE` bind only, performed by the UI backend on the identity's behalf (`ui/backend/internal/httpapi/sso.go`) |
+| Authentication path | Direct `SIMPLE` bind or Keycloak OIDC federation | The UI backend binds to LDAP using this identity's own credentials (`LDAP_SERVICE_ACCOUNT_DN`/password) to perform lookups and operations on behalf of the logged-in human or SSO principal (`ui/backend/internal/httpapi/sso.go`); it is not a delegated/proxy bind as the human identity |
 
 A directory-wide search filtered to `LDAP_USER_SEARCH_BASE` therefore already
 excludes all machine identities structurally; an external IGA tool does not
