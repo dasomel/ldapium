@@ -221,7 +221,8 @@ at its boundary:
      recording quarantine state. An external engine that needs to persist a
      quarantine marker on the ldapium side does so the same way any other
      externally-owned attribute is written — as an ordinary `modify` under the
-     per-attribute single-writer convention (PR #171), using an attribute the
+     per-attribute single-writer convention ("Multi-directory topology and
+     source-of-authority contract", `docs/client-compatibility.md`), using an attribute the
      engine itself owns (e.g. a custom auxiliary class/attribute registered by
      the operator), never a resident ldapium schema attribute.
    - **Recommended pattern**: on receiving a `replication-conflict-raw` event
