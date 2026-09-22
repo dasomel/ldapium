@@ -120,6 +120,54 @@ workflow enforcement:
   either run `scripts/ship-audit-log.sh` or stream container stdout immediately to an external,
   write-once/immutable (WORM) SIEM or log aggregator, and store the chain head hash out-of-band.
 
+### Break-glass policy contract
+
+ldapium does not enforce a break-glass workflow, but the following contract defines what
+an operator's external policy and the directory's evidence trail must jointly satisfy for
+a break-glass use of `olcRootDN` (or the `cn=admin,cn=config` identity) to be considered
+policy-compliant rather than an undetected admin bind:
+
+- **Explicit trigger condition**: The operator's break-glass policy (external to ldapium,
+  e.g. an incident runbook or PAM vault checkout policy) MUST define the conditions under
+  which the admin credential may be checked out — typically "central authentication (SSO/
+  Keycloak) or the standard privileged-access path is unavailable." ldapium has no way to
+  verify this condition was true; it can only show *that* the admin identity bound, not
+  *why*.
+- **Dual-control custody**: Because ldapium has no MFA or approval-workflow hooks (see
+  "Unsupported PAM and IdP combinations" below), dual control must be enforced upstream —
+  e.g. a vault that requires two operators to release the `olcRootDN` password, or a
+  sealed/split credential procedure. Storing the credential in an external vault per
+  "Credential material and external vault integration" above is a precondition for this,
+  not an alternative to it.
+- **Immutable evidence production**: Every break-glass use produces, at minimum:
+  1. A bind record in `cn=accesslog` (`reqDN: <adminDN>`) for the `olcRootDN` or
+     `cn=admin,cn=config` bind itself, and any resulting write to the directory's own
+     entries (not `cn=config`) captured in `auditlog`. `slapo-auditlog` is configured
+     only on `olcDatabase={1}mdb` (`image/entrypoint.sh:646`), so modifications made
+     directly against `cn=config` (the `{0}config` backend) are **not** captured in
+     `auditlog`, and administrative operations performed over the local domain socket
+     (`ldapi://`) bypass `accesslog` entirely (`docs/audit-event-schema.md:464`). A
+     break-glass session that only rotates `olcRootDN` or otherwise limits itself to
+     `cn=config` changes over `ldapi://` therefore produces **no accesslog or auditlog
+     evidence** — operators relying on this contract for such sessions must add an
+     external control (e.g. session recording on the admin bastion, or shell audit on
+     the container) rather than assume the directory's own logs will show it.
+  2. A `--chain` export (`scripts/export-audit-log.sh --chain`) run before and after the
+     break-glass window, with the resulting chain head hash recorded out-of-band (backup
+     manifest or external SIEM); `scripts/verify-audit-chain.py --expected-head` is then
+     used afterward to assert against that recorded hash, so tail truncation of the
+     break-glass records is detectable.
+  3. Cross-reference of the operator-side checkout ticket/incident ID against the bind
+     timestamp window and actor DN, since ldapium cannot embed a correlation ID in the LDAP
+     operation itself (see "Rotation and revocation correlation" above).
+- **Post-event reconciliation**: The policy MUST require, after the break-glass window
+  closes: (a) rotating the `olcRootDN` password (an LDAP `modify` on `cn=config`, itself
+  captured in `auditlog` if enabled), (b) reviewing the accesslog/auditlog window for
+  unexpected operations, and (c) re-verifying the audit chain (`scripts/verify-audit-chain.py
+  --expected-head`) to confirm no tampering occurred during the elevated-access window.
+  ldapium does not automatically revoke or rotate anything on its own; this step is entirely
+  an external operational obligation.
+
 ## Privileged session metadata
 
 ldapium does not model privileged session metadata:
