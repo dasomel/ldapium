@@ -96,6 +96,57 @@ numbers, or correlation IDs in standard LDAP write operations. An audit record i
 external PAM checkout ticket or change request ID. Downstream SIEM or audit pipelines
 must correlate events using the timestamp window and the actor DN used by the PAM system.
 
+### Actor-to-identity correlation, live-verified
+
+`.github/workflows/keycloak-federation-e2e.yml:472-503` ("Assert human-actor correlation
+between the disable and the auth failure") demonstrates the actor-DN correlation described
+above end-to-end rather than only asserting it in the abstract: it locks `uid=alice`'s
+account with an `ldapmodify` bind as `cn=admin,<rootDN>` (`:447-452`), reads that write back
+out of the `auditlog` overlay's own stdout record (`docker logs ldap`, `:483-488`), and
+asserts both fields the record carries — `actor` (the auditlog header's bind-DN field,
+`:492`, equals `cn=admin,<rootDN>`) and `target` (the record's `dn:` line, `:493`, equals
+`uid=alice,ou=people,<rootDN>`) — matching what changed and who changed it (`:496-499`).
+That target DN's RDN (`uid=alice`) is the same identity Keycloak's LDAP federation
+authenticates against, so the auditlog record ties the revoking actor to the same identity
+whose downstream (federated) access then fails — see "Revocation propagation latency,
+measured" below for that failure. This is `slapo-auditlog`'s existing per-write
+`actor`/`target` fields (already documented above and in `docs/audit-event-schema.md`)
+consumed as-is; no new correlation ID field or library was added to produce this evidence.
+
+## Revocation propagation latency, measured
+
+ldapium itself has no downstream-revocation SLA to declare — it applies a `modify` to
+`pwdAccountLockedTime` synchronously and has no queue, cache, or async fan-out of its own.
+The SLA that matters operationally is end-to-end: how long a *downstream* identity
+consumer (an IdP doing LDAP federation, in this case) keeps honoring the now-revoked
+identity. `.github/workflows/keycloak-federation-e2e.yml:432-470` ("Disable alice and
+measure Keycloak auth-failure propagation latency") measures exactly this, live against a
+running ldapium + Keycloak pair rather than asserting it as a claim:
+
+- It locks `uid=alice`'s account the same way the UI does (`ui/backend/internal/ldapclient/users.go`'s
+  `Lock()` — replacing `pwdAccountLockedTime` with the ppolicy "locked indefinitely"
+  sentinel `000001010000Z`) via `ldapmodify` (`:447-452`) and records `t0` immediately
+  before that write (`:446`).
+- It then polls Keycloak's OIDC password-grant token endpoint with alice's real password,
+  once per second for up to 30 attempts, until the response is `401` (`:455-464`), and
+  records `t1` at that point (`:465`).
+- `latency=$((t1 - t0))` (`:466`) is printed to the job log every run
+  (`echo "disable->auth-failure propagation latency: ${latency}s"`, `:467`); the job fails
+  if 30 polls (30s) elapse without a `401` (`:468-469`).
+- Because this Keycloak federation is configured without credential caching, Keycloak
+  re-binds to ldapium on every password grant, so the measured latency reflects Keycloak's
+  own login-path wall-clock time to observe the lock, not a synthetic delay injected by the
+  test (`:439-443` comment).
+
+This gives ldapium's revocation SLA claim a concrete, CI-reproduced upper bound (currently
+asserted as ≤30s, with the actual per-run value logged rather than hard-coded) for the one
+downstream consumer this repository's test suite integrates with. It does not generalize to
+every possible PAM/IdP combination's own caching or polling behavior — an IdP or PAM system
+with its own credential cache or longer poll interval will have a longer effective
+revocation latency than what this workflow measures, and that gap is the operator's to
+close (e.g. by disabling federation-side credential caching, as this workflow's Keycloak
+realm already does).
+
 ## Break-glass procedures and evidence integrity
 
 Break-glass access (e.g., using `olcRootDN` when SSO or central authentication is offline)
