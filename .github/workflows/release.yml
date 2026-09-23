@@ -100,8 +100,13 @@ jobs:
           # A commit whose e2e never started has no failures to find, so ask
           # branch protection which checks a merge had to pass and require each
           # of them by name.
-          if ! gh api "repos/$REPO/branches/main/protection/required_status_checks" \
-            --jq '.checks[].context' > /tmp/required.txt 2>/tmp/protection-error.txt; then
+          # The dedicated .../protection/required_status_checks endpoint needs
+          # repository admin, which GITHUB_TOKEN cannot be granted (403). The
+          # branch object carries the same contexts and is readable with
+          # contents: read.
+          if ! gh api "repos/$REPO/branches/main" \
+            --jq '.protection.required_status_checks.contexts // [] | .[]' \
+            > /tmp/required.txt 2>/tmp/protection-error.txt; then
             echo "::error::could not read branch protection for main, so the required checks are unknown"
             cat /tmp/protection-error.txt
             exit 1
