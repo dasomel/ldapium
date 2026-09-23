@@ -102,6 +102,29 @@ jobs:
             "ghcr.io/${{ github.repository_owner }}/charts/ldapium:${VERSION}" \
             --format '{{.Manifest.Digest}}' > /tmp/evidence/chart.digest
 
+      # licenses.sh reads the npm tree from node_modules. Without `npm ci` it
+      # sees zero frontend dependencies, regenerates a file that no longer
+      # matches the committed one, and fails as "out of date".
+      - name: Set up Go
+        if: steps.identity.outputs.skip != 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      - name: Set up Node
+        if: steps.identity.outputs.skip != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        if: steps.identity.outputs.skip != 'true'
+        working-directory: ui/frontend
+        run: npm ci
+
       - name: Verify dependency/license gate
         if: steps.identity.outputs.skip != 'true'
         run: ./scripts/licenses.sh --check
