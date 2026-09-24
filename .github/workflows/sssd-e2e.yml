@@ -20,11 +20,11 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # PRs still cancel superseded runs of themselves, but a push to main
-  # never does: a late-starting run for an older commit sharing this
-  # group previously cancelled HEAD's in-progress E2E run (observed
-  # 2026-09-24, four PRs merged back-to-back).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/schedule/dispatch
+  # runs are grouped per commit SHA and never cancel each other. Grouping
+  # main pushes by ref once let an older commit's late run cancel or
+  # displace HEAD's run, losing checks release.yml requires (2026-09-24).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
