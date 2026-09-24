@@ -16,8 +16,13 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # This workflow has no pull_request trigger to cancel; every trigger
+  # here (push/schedule/branch_protection_rule/dispatch) is grouped per
+  # commit SHA and none cancel each other. Grouping main pushes by ref
+  # once let an older commit's late run cancel or displace HEAD's run
+  # (observed 2026-09-24).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: read-all
 

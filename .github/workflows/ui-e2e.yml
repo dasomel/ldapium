@@ -8,16 +8,30 @@ name: UI E2E (browser)
 
 on:
   pull_request:
+    # Not a required check, so skip it on docs-only PRs.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "research/**"
   push:
     branches: [main]
+    # Not a required check, so skip it on docs-only pushes to main.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "research/**"
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: ui-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: ui-e2e-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/schedule/dispatch
+  # runs are grouped per commit SHA and never cancel each other. Grouping
+  # main pushes by ref once let an older commit's late run cancel or
+  # displace HEAD's run, losing checks release.yml requires (2026-09-24).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   browser:

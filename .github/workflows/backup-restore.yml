@@ -2,6 +2,9 @@ name: Backup and restore E2E
 
 on:
   pull_request:
+    # Already docs-only-safe: this allow-list has no .md/docs/research
+    # pattern, so a docs-only PR never matches it. No paths-ignore added
+    # here — paths and paths-ignore cannot coexist on one event.
     paths:
       - "image/**"
       - "scripts/backup.sh"
@@ -11,11 +14,20 @@ on:
       - ".github/workflows/backup-restore.yml"
   push:
     branches: [main]
+    # No paths-ignore here: release.yml's release-critical checks require
+    # "backup → verify → corrupt-check → restore" and "3-node backup → bad
+    # delete → restore → resync" to have succeeded on every tagged main SHA,
+    # including docs-only ones, or the release step fails with no run to
+    # point to.
   workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/schedule/dispatch
+  # runs are grouped per commit SHA and never cancel each other. Grouping
+  # main pushes by ref once let an older commit's late run cancel or
+  # displace HEAD's run, losing checks release.yml requires (2026-09-24).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

@@ -76,7 +76,7 @@ packages exist before using the commands below as published-artifact instruction
 
 ```bash
 helm install directory oci://ghcr.io/dasomel/charts/ldapium \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
   --set ldap.rootDN=dc=example,dc=org
@@ -126,8 +126,8 @@ has the runbook, including the two-step procedure for changing the CA itself.
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/dasomel/ldapium:0.1.0` | OpenLDAP 2.6.14 server |
-| `ghcr.io/dasomel/ldapium-ui:0.1.0` | Management UI |
+| `ghcr.io/dasomel/ldapium:0.1.1` | OpenLDAP 2.6.15 server |
+| `ghcr.io/dasomel/ldapium-ui:0.1.1` | Management UI |
 
 Both are designed for `linux/amd64` + `linux/arm64` and carry build provenance attestations
 when the release workflow completes successfully.
@@ -230,7 +230,7 @@ provenance attestation** and an **SBOM attestation**, signed by GitHub's OIDC id
 when the release workflow completes successfully.
 
 ```bash
-gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.0 \
+gh attestation verify oci://ghcr.io/dasomel/ldapium:0.1.1 \
   --repo dasomel/ldapium
 ```
 
