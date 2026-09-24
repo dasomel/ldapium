@@ -2,6 +2,9 @@ name: Backup and restore E2E
 
 on:
   pull_request:
+    # Already docs-only-safe: this allow-list has no .md/docs/research
+    # pattern, so a docs-only PR never matches it. No paths-ignore added
+    # here — paths and paths-ignore cannot coexist on one event.
     paths:
       - "image/**"
       - "scripts/backup.sh"
@@ -11,11 +14,20 @@ on:
       - ".github/workflows/backup-restore.yml"
   push:
     branches: [main]
+    # Not a required check, so skip it on docs-only pushes to main.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "research/**"
   workflow_dispatch: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PRs still cancel superseded runs of themselves, but a push to main
+  # never does: a late-starting run for an older commit sharing this
+  # group previously cancelled HEAD's in-progress E2E run (observed
+  # 2026-09-24, four PRs merged back-to-back).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

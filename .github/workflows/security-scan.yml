@@ -19,7 +19,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PRs still cancel superseded runs of themselves, but a push to main
+  # never does: a late-starting run for an older commit sharing this
+  # group previously cancelled HEAD's in-progress E2E run (observed
+  # 2026-09-24, four PRs merged back-to-back).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

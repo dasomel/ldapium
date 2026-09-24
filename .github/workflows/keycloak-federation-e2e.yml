@@ -16,6 +16,12 @@ name: Keycloak LDAP federation E2E
 # role/group mapping contract, validation side).
 
 on:
+  # Deliberately excluded from the repo-wide docs-only paths-ignore: this
+  # workflow's own paths allow-list intentionally treats
+  # docs/client-compatibility.md and charts/ldapium/README.md as trigger
+  # inputs (they document the exact RBAC mapping chain this suite proves),
+  # so a blanket "**.md"/"docs/**" exclusion would silently stop testing
+  # changes to those files.
   pull_request:
     paths:
       - "image/**"
@@ -31,7 +37,11 @@ permissions:
 
 concurrency:
   group: keycloak-federation-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  # PRs still cancel superseded runs of themselves, but a push to main
+  # never does: a late-starting run for an older commit sharing this
+  # group previously cancelled HEAD's in-progress E2E run (observed
+  # 2026-09-24, four PRs merged back-to-back).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Exact tag, per this repo's own pinning convention for third-party images

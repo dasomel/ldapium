@@ -29,6 +29,15 @@ changes; upgrading from 0.1.0 is an image/chart version bump.
 - GitHub Actions bumped: `docker/setup-buildx-action` 4.4.1,
   `docker/build-push-action` 7.4.0 (includes an upstream fix for workflow
   command injection through metadata logs), `github/codeql-action` 4.38.1.
+- Workflow concurrency groups no longer cancel `main` push runs: a
+  late-starting run for an older commit had cancelled HEAD's in-progress E2E
+  after four PRs merged back-to-back (2026-09-24), leaving HEAD with no
+  completed E2E. `cancel-in-progress` is now scoped to `pull_request` only
+  across every affected workflow. Docs-only changes (`**.md`, `docs/**`,
+  `research/**`) also no longer trigger the non-required E2E suites
+  (backup/restore, metrics, replication chaos, security, SSSD, UI); `ci.yml`
+  and `e2e.yml` still run on everything, since branch protection requires
+  their checks.
 
 ### Note on the dependency policy
 

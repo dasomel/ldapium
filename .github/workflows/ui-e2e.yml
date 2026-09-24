@@ -8,8 +8,18 @@ name: UI E2E (browser)
 
 on:
   pull_request:
+    # Not a required check, so skip it on docs-only PRs.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "research/**"
   push:
     branches: [main]
+    # Not a required check, so skip it on docs-only pushes to main.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "research/**"
   workflow_dispatch: {}
 
 permissions:
@@ -17,7 +27,11 @@ permissions:
 
 concurrency:
   group: ui-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  # PRs still cancel superseded runs of themselves, but a push to main
+  # never does: a late-starting run for an older commit sharing this
+  # group previously cancelled HEAD's in-progress E2E run (observed
+  # 2026-09-24, four PRs merged back-to-back).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   browser:
