@@ -33,6 +33,13 @@ permissions:
 jobs:
   replication-chaos:
     runs-on: ubuntu-24.04
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale (why throttle, why
+    # queue: max instead of the default queue: single).
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

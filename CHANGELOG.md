@@ -8,6 +8,21 @@ releases may break compatibility, and the release notes will say so when they do
 A single git tag `vX.Y.Z` publishes the chart and both images under the same
 version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
+## [Unreleased]
+
+### CI
+
+- Heavy E2E jobs (anything that builds the OpenLDAP server image and/or
+  creates a kind cluster) now share one of three job-level concurrency
+  lanes (`heavy-e2e-lane-a`/`b`/`c`, keyed per PR/commit) across
+  `e2e.yml`, `backup-restore.yml`, `keycloak-federation-e2e.yml`,
+  `metrics-e2e.yml`'s `metrics` job, `replication-chaos-e2e.yml`,
+  `security-e2e.yml`, `sssd-e2e.yml`, `ui-e2e.yml`, `upgrade-e2e.yml`, and
+  `offline-bundle.yml`'s `offline-e2e` job. A single push previously
+  started up to ~16 of these image-build/cluster-create jobs at once; each
+  lane now caps that at three concurrent heavy jobs, queued (not
+  cancelled) via `queue: max`. Required status check names are unchanged.
+
 ## [0.1.1] — 2026-09-24
 
 Maintenance release: dependency and base-image refreshes, plus the release

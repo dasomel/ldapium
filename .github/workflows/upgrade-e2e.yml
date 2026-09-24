@@ -32,6 +32,13 @@ jobs:
   upgrade:
     name: rolling upgrade + rollback (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale (why throttle, why
+    # queue: max instead of the default queue: single).
+    concurrency:
+      group: heavy-e2e-lane-b-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     env:
       # The release immediately before image/Dockerfile's OPENLDAP_VERSION.
       # Bump both together; scripts/check-versions.sh does not police this one
