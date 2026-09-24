@@ -8,6 +8,34 @@ releases may break compatibility, and the release notes will say so when they do
 A single git tag `vX.Y.Z` publishes the chart and both images under the same
 version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
+## [0.1.1] — 2026-09-24
+
+Maintenance release: dependency and base-image refreshes, plus the release
+pipeline fix that let 0.1.0's supply-chain evidence run. No behaviour or configuration
+changes; upgrading from 0.1.0 is an image/chart version bump.
+
+### Images
+
+- Base images re-pinned to new digests: `debian:trixie-slim` (`a99cfc5`, builder
+  and runtime) and `golang:1.27.1-bookworm` (`69a7b97`, exporter builder). Both
+  still cover `linux/amd64` and `linux/arm64`.
+- UI frontend dependencies: `lucide-react` 1.47.0, `react-router` /
+  `react-router-dom` 7.18.4, `@types/node` 26.6.2, `oxlint` 1.83.0.
+
+### Release pipeline and CI
+
+- The supply-chain licence gate installs Go/Node dependencies before running,
+  so it no longer regenerates an empty inventory and fails (#191).
+- GitHub Actions bumped: `docker/setup-buildx-action` 4.4.1,
+  `docker/build-push-action` 7.4.0 (includes an upstream fix for workflow
+  command injection through metadata logs), `github/codeql-action` 4.38.1.
+
+### Note on the dependency policy
+
+These updates were merged before the seven-day cooling window in
+`docs/dependency-policy.md` had elapsed, at the maintainer's request, after a
+review of each upstream release (see #192–#195).
+
 ## [0.1.0] — 2026-08-18
 
 First release, and a prototype: everything below was verified against
@@ -85,4 +113,5 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.1.1]: https://github.com/dasomel/ldapium/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dasomel/ldapium/releases/tag/v0.1.0

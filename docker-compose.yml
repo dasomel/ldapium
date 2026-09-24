@@ -20,7 +20,7 @@ services:
     # in .env to something else if you want both side by side.
     build:
       context: ./image
-    image: ${OPENLDAP_IMAGE:-ghcr.io/dasomel/ldapium:0.1.0}
+    image: ${OPENLDAP_IMAGE:-ghcr.io/dasomel/ldapium:0.1.1}
     environment:
       LDAP_ROOT_DN: ${LDAP_ROOT_DN:?set LDAP_ROOT_DN in .env, e.g. dc=example,dc=org — see .env.example}
       LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?set LDAP_ADMIN_PASSWORD in .env — this image ships no default admin password, see .env.example}
@@ -39,7 +39,7 @@ services:
   ui:
     build:
       context: ./ui
-    image: ${UI_IMAGE:-ghcr.io/dasomel/ldapium-ui:0.1.0}
+    image: ${UI_IMAGE:-ghcr.io/dasomel/ldapium-ui:0.1.1}
     environment:
       APP_VERSION: ${APP_VERSION:-development}
       LDAP_URL: ldap://ldap:389
