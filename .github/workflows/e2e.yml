@@ -32,6 +32,26 @@ jobs:
   migration-dryrun:
     name: migration dry-run (live image validation)
     runs-on: ubuntu-24.04
+    # One PR run spans 14 workflows / 34 jobs with up to 28 running at once,
+    # and every E2E-family workflow builds the OpenLDAP server image and/or
+    # stands up its own kind cluster independently (18 image builds per PR).
+    # Rather than restructure those workflows, each heavy job (image build
+    # and/or kind cluster) shares one of three lanes (lane-a/b/c) keyed by
+    # PR number or push SHA, so at most three such jobs run at once per
+    # commit across the whole repo. queue: max is mandatory here: the
+    # default queue: single cancels/replaces whatever is already pending in
+    # the group, which would silently drop queued heavy jobs instead of
+    # running them later; queue: max processes up to 100 pending runs per
+    # group FIFO instead. cancel-in-progress stays false at job level
+    # (queue: max + cancel-in-progress: true is a GitHub Actions validation
+    # error) — superseded PR runs are still cancelled by each workflow's own
+    # top-level concurrency block above, which is unchanged. Lane totals are
+    # balanced using measured job durations; see other heavy-E2E workflows
+    # for the same pattern with a short pointer back here.
+    concurrency:
+      group: heavy-e2e-lane-a-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,6 +112,12 @@ jobs:
             replicas: 1
           - scenario: replicated
             replicas: 3
+    # Short pointer: shares one of three heavy-E2E lanes per PR/commit (full
+    # rationale on the migration-dryrun job above).
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -217,6 +243,12 @@ jobs:
             replicas: 1
           - scenario: replicated
             replicas: 3
+    # Short pointer: shares one of three heavy-E2E lanes per PR/commit (full
+    # rationale on the migration-dryrun job above).
+    concurrency:
+      group: heavy-e2e-lane-a-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

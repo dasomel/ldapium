@@ -124,6 +124,14 @@ jobs:
     # request. Re-running it after every Release would just be a duplicate
     # of that same coverage against unrelated commit content.
     if: github.event_name != 'workflow_run'
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale (why throttle, why
+    # queue: max instead of the default queue: single). The `bundle` job
+    # above is not throttled: it only builds/pushes to GHCR, no kind cluster.
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
     env:
       BUNDLE_VERSION: 0.0.0-e2e
     steps:
