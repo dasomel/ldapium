@@ -434,9 +434,7 @@ stop_temp_slapd() {
 #    background slapd that is stopped again before the final `exec slapd`
 #    below — so slapd still ends up PID 1 for the life of the container.
 # ---------------------------------------------------------------------------
-NEEDS_BOOTSTRAP=0
 if [ ! -f "$MARKER" ]; then
-  NEEDS_BOOTSTRAP=1
   log "no bootstrap marker at ${MARKER} — bootstrapping a new directory"
 
   if [ -n "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]; then
@@ -451,6 +449,12 @@ if [ ! -f "$MARKER" ]; then
   # failure. This only ever runs on a path where this process found CONFIG_DIR
   # empty, so it cannot delete a directory it did not create itself.
   rollback_bootstrap() {
+    # Seeding (below) runs a temporary slapd against CONFIG_DIR/MDB_DIR
+    # while this trap is armed, so it must be stopped before those files
+    # are touched — otherwise rollback races a still-running slapd holding
+    # them open. Unconditional and harmless when no temp slapd was started
+    # (stop_temp_slapd no-ops on an empty TEMP_SLAPD_PID).
+    stop_temp_slapd
     if [ -f "$MARKER" ]; then
       return 0
     fi
@@ -912,27 +916,41 @@ d}" "$base_structure"
   rm -rf "$work"
   trap 'rollback_bootstrap' EXIT
 
+  # Seeding runs here, before the marker is written, while rollback_bootstrap
+  # is still armed: a failing seed (set -eu kills ldapadd on a non-zero exit)
+  # now discards the whole partial bootstrap instead of leaving a
+  # marked-complete volume with a half-applied seed, so the next boot retries
+  # the real bootstrap and reports the real error again instead of silently
+  # coming up "healthy" with a partial seed (issue #203).
+  #
+  # Only the node that actually created the base DIT (LOAD_BASE_DIT=1) has a
+  # local base entry to seed under. On any other replica the base DN doesn't
+  # exist locally yet — it arrives later via syncrepl — so ldapadd there
+  # fails with noSuchObject; skip seeding entirely and let replication supply
+  # the data instead.
+  if [ "$LOAD_BASE_DIT" -eq 1 ] && [ -d "$LDAP_SEED_DIR" ] && [ -n "$(ls -A "$LDAP_SEED_DIR"/*.ldif 2>/dev/null)" ]; then
+    log "seeding: starting temporary slapd to apply ${LDAP_SEED_DIR}/*.ldif"
+    start_temp_slapd
+
+    for f in "$LDAP_SEED_DIR"/*.ldif; do
+      [ -e "$f" ] || continue
+      log "applying seed file: ${f}"
+      ldapadd -x -H "$SETUP_LDAPI_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -f "$f"
+    done
+
+    log "seeding complete — stopping temporary slapd"
+    stop_temp_slapd
+  elif [ -d "$LDAP_SEED_DIR" ] && [ -n "$(ls -A "$LDAP_SEED_DIR"/*.ldif 2>/dev/null)" ]; then
+    log "seed files present in ${LDAP_SEED_DIR} but this replica receives the base DIT via replication — skipping seeding"
+  else
+    log "seed dir ${LDAP_SEED_DIR} is empty or absent — nothing to seed"
+  fi
+
   date -u +%FT%TZ > "$MARKER"
   trap - EXIT
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
-fi
-
-if [ "$NEEDS_BOOTSTRAP" -eq 1 ] && [ -d "$LDAP_SEED_DIR" ] && [ -n "$(ls -A "$LDAP_SEED_DIR"/*.ldif 2>/dev/null)" ]; then
-  log "seeding: starting temporary slapd to apply ${LDAP_SEED_DIR}/*.ldif"
-  start_temp_slapd
-
-  for f in "$LDAP_SEED_DIR"/*.ldif; do
-    [ -e "$f" ] || continue
-    log "applying seed file: ${f}"
-    ldapadd -x -H "$SETUP_LDAPI_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -f "$f"
-  done
-
-  log "seeding complete — stopping temporary slapd"
-  stop_temp_slapd
-elif [ "$NEEDS_BOOTSTRAP" -eq 1 ]; then
-  log "seed dir ${LDAP_SEED_DIR} is empty or absent — nothing to seed"
 fi
 
 # ---------------------------------------------------------------------------
