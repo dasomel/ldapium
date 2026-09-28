@@ -44,7 +44,7 @@ dump_tail() {
   docker logs --tail 20 "$1" >&2 2>&1 || true
 }
 
-# shellcheck disable=SC2329 # invoked via the EXIT trap below
+# shellcheck disable=SC2317,SC2329 # invoked via the EXIT trap below (code differs by shellcheck version)
 cleanup() {
   local c i
   for c in ${containers[@]+"${containers[@]}"}; do
