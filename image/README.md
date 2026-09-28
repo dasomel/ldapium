@@ -197,9 +197,10 @@ is enabled):
    equal `LDAP_SERVER_ID` — rather than kept and relied on `slapd` to
    recognize and ignore a self-referencing provider.
 
-This uses a short-lived background `slapd` on the local `ldapi://` socket,
-the same mechanism used for first-launch seeding — it's stopped again before
-the real, PID-1 `slapd` starts.
+This uses a short-lived background `slapd` on a separate setup-only `ldapi://`
+socket, the same mechanism used for first-launch seeding — it's stopped again
+before the real, PID-1 `slapd` starts. The health-check socket appears only once
+the final `slapd` is up and serving all listeners.
 
 Replication binds as `LDAP_REPLICATION_BIND_DN` (default: `$LDAP_ADMIN_DN`,
 i.e. the database rootDN), not a dedicated account — the baseline ACL denies
