@@ -32,13 +32,10 @@ metadata:
 
 1. Read `AGENTS.md` and the relevant README/release documentation before editing.
 2. Preserve directory-service, API, auth/authz, audit, and credential boundaries. Treat schema/operation semantics, destructive/bulk directory actions, and privilege handling as design changes.
-3. For `image/entrypoint.sh` changes, rebuild the E2E image used by the matching workflow; most use `ldapium:e2e`, with specialized chaos/security tags where documented.
-4. On macOS/Colima, do not assume a host file bind-mounted into a non-root LDAP container will be readable. When UID mapping blocks it, use a throwaway derived image with explicit ownership rather than weakening permissions blindly.
-5. When piping LDIF to a container command, use `docker exec -i`; without stdin attachment the operation can exit successfully while applying nothing.
-6. Preserve OpenLDAP-specific semantics documented in `AGENTS.md`: accesslog success/failure behavior, bind operation groups, multi-provider conflict behavior, and ACL `search` vs `read` distinctions.
-7. Never expose `userPassword` in HTTP responses, even hashed; enforce the application-side denylist independently of LDAP ACLs/admin binds.
-8. Unit-test pure helpers with LDAP entry fixtures. For Bind/Ping/search/dial and other LDAP-wire behavior, verify against a running LDAP server rather than introducing mocks that cannot prove protocol behavior.
-9. Run the repository's relevant check/CI/E2E path and state which real directory behavior was exercised.
+3. Apply `AGENTS.md` "Local Docker/LDAP verification" (E2E image tags and rebuilds, Colima bind-mount workaround, `docker exec -i`) and "Non-obvious OpenLDAP / entrypoint.sh behavior"; never weaken filesystem permissions to get past a bind-mount failure.
+4. Never expose `userPassword` in HTTP responses, even hashed; enforce the application-side denylist independently of LDAP ACLs/admin binds.
+5. Unit-test pure helpers with LDAP entry fixtures. For Bind/Ping/search/dial and other LDAP-wire behavior, verify against a running LDAP server rather than introducing mocks that cannot prove protocol behavior.
+6. Run the repository's relevant check/CI/E2E path and state which real directory behavior was exercised.
 
 ## Verification
 
