@@ -101,6 +101,11 @@ jobs:
           assert "AnotherSecretPassword!" not in raw, "Password should be redacted"
           PYCHECK
 
+      # Reuses the plain-docker ldapium:e2e image built above rather than a
+      # kind cluster: bootstrap/seed ordering is container-local behavior.
+      - name: Bootstrap seed semantics (failed seed retried, replicas skip) — #203
+        run: ./scripts/test/test-bootstrap-seed.sh ldapium:e2e
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
