@@ -100,8 +100,8 @@ not a blocking gate.
 
 ## Issue tracker convention
 
-Open issues in the low-teens-to-20s range are large RFP-derived umbrella issues, each
-intentionally scoped down across multiple PRs rather than done in one shot. PR bodies say
+Large RFP-derived umbrella issues are intentionally scoped down across multiple PRs
+rather than done in one shot. PR bodies say
 "Related to #N (not closing yet)" until a PR covers everything an issue asks for. Don't close
 one of these on a partial PR; when an issue's remaining scope needs reorganizing, split it into
 focused successor issues instead.
