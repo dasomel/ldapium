@@ -216,7 +216,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `replication.interval` | `00:00:00:10` | → `LDAP_REPLICATION_INTERVAL`. |
 | `replication.bindDN` | `""` | → `LDAP_REPLICATION_BIND_DN` (defaults to the admin DN in the image — see design contract D3). |
 | `replication.existingSecret` / `existingSecretKey` | `""` / `replication-password` | Only needed if `bindDN` overrides the admin identity. |
-| `seed.enabled` | `false` | Mount `seed.ldifs` as a ConfigMap at `LDAP_SEED_DIR`, applied on first boot only. This project ships no sample data by default. |
+| `seed.enabled` | `false` | Mount `seed.ldifs` as a ConfigMap at `LDAP_SEED_DIR`, applied once on the first bootstrap of the node that creates the base DIT (a failed seed rolls back and retries on the next start; replicas skip seeding and receive the data by replication). This project ships no sample data by default. |
 | `seed.ldifs` | `{}` | Map of filename → LDIF content. |
 | `persistence.config.size` / `persistence.data.size` | `1Gi` / `2Gi` | PVC sizes for `slapd.d` and `mdb` data respectively. |
 | `persistence.*.storageClassName` | `""` | |

@@ -85,7 +85,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_TLS_MUTUAL_AUTH` | no | `false` | `true`/`1` enables client-certificate verification and SASL `EXTERNAL`; requires `LDAP_TLS_ENABLED=true` and `LDAP_TLS_CA_FILE`. Uses `olcTLSVerifyClient: try`, so a client certificate is requested but not required and existing password binds remain available. |
 | `LDAP_TLS_AUTHZ_REGEXP` | if mutual auth enabled | `^cn=([^,]+)$` | `olcAuthzRegexp` match expression for OpenLDAP's normalized SASL EXTERNAL certificate-subject DN. Override for the subject DN shape issued by your CA; an explicitly empty value is rejected. |
 | `LDAP_TLS_AUTHZ_DN` | if mutual auth enabled | `uid=$1,${LDAP_ROOT_DN}` | `olcAuthzRegexp` replacement DN. The default maps the matching certificate CN to a `uid` below the base DN; override it for your DIT. An explicitly empty value is rejected. |
-| `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on first launch only**. Your extension point for OUs, groups, real users, ACLs, etc. |
+| `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on the first bootstrap of the node that creates the base DIT**. A failed seed rolls back the whole bootstrap and is retried on the next start; replicas skip seeding and receive the data by replication. Your extension point for OUs, groups, real users, ACLs, etc. |
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_HASH` | no | `{ARGON2}` | `olcPasswordHash` on the frontend database, and the scheme used to mint the bootstrap admin hash. Any `{SCHEME}`-shaped value slapd supports (e.g. `{SSHA}`). Applied at bootstrap only (see below). |
@@ -164,8 +164,12 @@ it lives inside the `slapd.d` volume:
    `cn=config` (schema, modules, the `mdb` database, `memberof`/`refint`
    overlays), `slapmodify -n 0` grants the `cn=admin,cn=config` identity
    (see below), `slapadd -n 1` loads the root suffix + admin entry directly
-   into the database, then (if `LDAP_SEED_DIR` has `*.ldif` files) a temporary
-   `slapd` is started long enough to `ldapadd` them, then stopped.
+   into the database, then (if `LDAP_SEED_DIR` has `*.ldif` files and this
+   node created the base DIT) a temporary `slapd` is started long enough to
+   `ldapadd` them, then stopped. The marker is written only after all of this
+   succeeds: a failure at any step, seeding included, discards the partial
+   state so the next start retries the whole bootstrap and reports the error
+   again.
 2. **Marker present** → bootstrap and seeding are both skipped entirely; the
    container just execs `slapd` against the existing config/data.
 
