@@ -258,6 +258,11 @@ case "$LDAP_DB_MAX_SIZE" in
   ''|*[!0-9]*) die "LDAP_DB_MAX_SIZE must be a byte count in digits (got: ${LDAP_DB_MAX_SIZE})" ;;
 esac
 
+# Health probes poll LDAPI_SOCK; keep setup operations on a separate socket
+# so probes do not answer until the final slapd serves all listeners.
+SETUP_LDAPI_SOCK="${RUN_DIR}/ldapi-setup"
+SETUP_LDAPI_URL="ldapi://$(printf '%s' "$SETUP_LDAPI_SOCK" | sed 's|/|%2F|g')"
+
 LDAPI_SOCK="${RUN_DIR}/ldapi"
 LDAPI_URL="ldapi://$(printf '%s' "$LDAPI_SOCK" | sed 's|/|%2F|g')"
 LISTEN_URLS="ldap:/// ${LDAPI_URL}"
@@ -396,11 +401,11 @@ mkdir -p "$RUN_DIR"
 TEMP_SLAPD_PID=""
 
 start_temp_slapd() {
-  slapd -F "$CONFIG_DIR" -h "$LDAPI_URL" -d "$LDAP_LOG_LEVEL" &
+  slapd -F "$CONFIG_DIR" -h "$SETUP_LDAPI_URL" -d "$LDAP_LOG_LEVEL" &
   TEMP_SLAPD_PID=$!
 
   i=0
-  until ldapwhoami -x -H "$LDAPI_URL" >/dev/null 2>&1; do
+  until ldapwhoami -x -H "$SETUP_LDAPI_URL" >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -ge 30 ]; then
       die "temporary slapd did not become ready within 30s"
@@ -416,6 +421,7 @@ stop_temp_slapd() {
     wait "$TEMP_SLAPD_PID" 2>/dev/null || true
     TEMP_SLAPD_PID=""
   fi
+  rm -f "$SETUP_LDAPI_SOCK"
 }
 
 # ---------------------------------------------------------------------------
@@ -920,7 +926,7 @@ if [ "$NEEDS_BOOTSTRAP" -eq 1 ] && [ -d "$LDAP_SEED_DIR" ] && [ -n "$(ls -A "$LD
   for f in "$LDAP_SEED_DIR"/*.ldif; do
     [ -e "$f" ] || continue
     log "applying seed file: ${f}"
-    ldapadd -x -H "$LDAPI_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -f "$f"
+    ldapadd -x -H "$SETUP_LDAPI_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -f "$f"
   done
 
   log "seeding complete — stopping temporary slapd"
@@ -957,7 +963,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     printf 'olcServerID: %s\n' "$LDAP_SERVER_ID"
   } > "$server_id_ldif"
   log "applying olcServerID"
-  ldapmodify -x -H "$LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$server_id_ldif"
+  ldapmodify -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$server_id_ldif"
 
   # Detect an existing syncprov overlay by SEARCHING FOR ITS objectClass, not
   # by reading a fixed DN. slapd stores overlays with an ordering prefix in
@@ -971,7 +977,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   # SECOND start. Observed as "Exited (80)". The one-level objectClass search
   # is prefix-agnostic.
   syncprov_dn="olcOverlay=syncprov,olcDatabase={1}mdb,cn=config"
-  syncprov_found=$(ldapsearch -LLL -x -H "$LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" \
+  syncprov_found=$(ldapsearch -LLL -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" \
     -b "olcDatabase={1}mdb,cn=config" -s one -o nettimeout=3 '(objectClass=olcSyncProvConfig)' dn 2>/dev/null \
     | grep -c '^dn:' || true)
   if [ "${syncprov_found:-0}" -gt 0 ]; then
@@ -994,7 +1000,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
       printf 'olcSpSessionlog: 100\n'
     } > "$syncprov_ldif"
     log "adding syncprov overlay"
-    ldapadd -x -H "$LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$syncprov_ldif"
+    ldapadd -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$syncprov_ldif"
   fi
 
   # olcSyncrepl is replaced wholesale (not incrementally) so the set also
@@ -1051,7 +1057,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     fi
   } > "$repl_ldif"
   log "applying olcMultiProvider + olcSyncrepl (${emitted_count} peer(s), self excluded)"
-  ldapmodify -x -H "$LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$repl_ldif"
+  ldapmodify -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$repl_ldif"
 
   rm -rf "$rc_work"
   stop_temp_slapd
