@@ -1,0 +1,4 @@
+dn: uid=broken,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: broken
+cn: Broken Entry

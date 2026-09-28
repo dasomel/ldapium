@@ -1,0 +1,5 @@
+dn: uid=alice,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Example
+sn: Example
