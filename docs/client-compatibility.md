@@ -336,15 +336,16 @@ deterministic directory states and full audit traceability:
 
 - **Create (Provisioning)**: Initiated via standard LDAP `add` (`ldapadd -x` or
   seed LDIF files under `LDAP_SEED_DIR` applied at bootstrap,
-  `image/entrypoint.sh:916-929`). The entry is defined with structural
+  `image/entrypoint.sh:931-941`). The entry is defined with structural
   `objectClass: organizationalRole` and auxiliary `objectClass: simpleSecurityObject`
   (RFC 4519, `image/ldifs/03-base-structure.ldif:35-42`,
   `.github/workflows/keycloak-federation-e2e.yml:91-96`), set with an initial
   `userPassword` and optional `description` (owner and purpose metadata).
   Attempting to add an existing DN fails with `ldap_add: Already exists (68)`.
-  Bootstrap seed loading is guarded by `NEEDS_BOOTSTRAP`
-  (`image/entrypoint.sh:916`), guaranteeing that restarts against existing
-  volumes do not duplicate or overwrite directory entries.
+  Bootstrap seed loading runs only inside the first bootstrap, before the
+  bootstrap marker is written (`image/entrypoint.sh:437`, `:931`), guaranteeing
+  that restarts against existing volumes do not duplicate or overwrite directory
+  entries.
 - **Rotate (Credential update)**: Initiated via standard LDAP `modify` replacing
   `userPassword` (`replace: userPassword`) or the RFC 3062 `PasswordModify`
   extended operation (`ui/backend/internal/ldapclient/users.go:207-219`). The
@@ -381,8 +382,8 @@ deterministic directory states and full audit traceability:
 **Idempotent provisioning**: a machine/service identity is provisioned the
 same way any other entry is — as an LDIF `add` (either interactively via
 `ldapadd`/`ldapmodify`, or as a seed file under `LDAP_SEED_DIR` applied by
-`image/entrypoint.sh`, lines 916–929). Seed application only runs when
-`NEEDS_BOOTSTRAP` is true (the data volume has no existing DB), so re-running
+`image/entrypoint.sh`, lines 931–941). Seed application only runs during the
+first bootstrap of the node that creates the base DIT, so re-running
 the same container against an already-provisioned volume does not re-apply
 `LDAP_SEED_DIR`; a manual `ldapadd` of an entry that already exists fails with
 `ldap_add: Already exists (68)` rather than silently duplicating it — LDAP

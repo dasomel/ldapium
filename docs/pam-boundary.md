@@ -320,11 +320,11 @@ entirely offline, with deterministic pre-import validation:
 
 - **Offline import**: `LDAP_SEED_DIR` LDIF files (default `/opt/ldifs`,
   `image/entrypoint.sh:103`) are applied via `ldapadd` against a **temporary local `slapd`
-  instance** started for bootstrap only (`image/entrypoint.sh:916-925`) — no network dependency
+  instance** started for bootstrap only (`image/entrypoint.sh:931-941`) — no network dependency
   or external LDAP server is contacted. This is the same mechanism used to seed any other entry,
   including a custom `ou=policies` ppolicy definition for privileged/JIT identities. Seed
-  application is gated by `NEEDS_BOOTSTRAP` (`image/entrypoint.sh:916`), so it runs at most once
-  per fresh data volume — re-running the container against an already-provisioned volume does not
+  application runs inside the first bootstrap, before the bootstrap marker is written
+  (`image/entrypoint.sh:437`, `:931`), so it completes at most once per fresh data volume — re-running the container against an already-provisioned volume does not
   re-import the policy bundle, consistent with the idempotent-provisioning behavior documented in
   `docs/client-compatibility.md`'s "Idempotent provisioning" subsection.
 - **Deterministic pre-import validation**: `scripts/migration-dryrun.sh` /
