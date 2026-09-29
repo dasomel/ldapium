@@ -129,9 +129,18 @@ spec:
             - name: OPENLDAP_UNIQUE_ATTRIBUTES
               value: {{ .Values.ldap.uniqueAttributes | quote }}
             # These are the ONLY source for what the settings page shows, and
-            # they are a hand-kept copy of what image/Dockerfile builds and
-            # image/ldifs/01-cn-config.ldif loads. Keep them in step by hand:
-            # the list had already drifted once (back_mdb was missing).
+            # they are a hand-kept copy of what image/Dockerfile builds,
+            # image/ldifs/01-cn-config.ldif loads and image/entrypoint.sh
+            # (section 3c) enables at runtime from the ldap.modules.* values.
+            # Keep them in step by hand: the list had already drifted twice
+            # (back_mdb, then nestgroup/ppm, were missing).
+            #
+            # MODULES: the bootstrap ldif loads the fixed list below on every
+            # volume; nestgroup is loaded by the entrypoint only when enabled,
+            # and ppm is a ppolicy check module (ppm.so via
+            # olcPPolicyCheckModule, not an olcModuleLoad), listed only while
+            # enabled. OVERLAYS: what is really active for these values.
+            # lastbind is a database option, not an overlay, so it is omitted.
             #
             # Reading the real values from the server is the obvious fix and
             # does not work: they live in cn=config, which has its own admin
@@ -142,9 +151,9 @@ spec:
             # mean giving the UI a second, cn=config-capable service account,
             # which is exactly the thing this project avoids.
             - name: OPENLDAP_MODULES
-              value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp"
+              value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp{{ if .Values.ldap.modules.nestgroupEnabled }},nestgroup{{ end }}{{ if .Values.ldap.modules.ppmEnabled }},ppm{{ end }}"
             - name: OPENLDAP_OVERLAYS
-              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "ldapium.replicationEnabled" .) "true" }},syncprov{{ end }}"
+              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "ldapium.replicationEnabled" .) "true" }},syncprov{{ end }}{{ if .Values.ldap.modules.derefEnabled }},deref{{ end }}{{ if .Values.ldap.modules.constraintEnabled }},constraint{{ end }}{{ if .Values.ldap.modules.nestgroupEnabled }},nestgroup{{ end }}{{ if .Values.ldap.modules.dynlistEnabled }},dynlist{{ end }}{{ if .Values.ldap.modules.otpEnabled }},otp{{ end }}{{ if .Values.ldap.modules.sssvlvMainEnabled }},sssvlv{{ end }}"
             - name: LDAP_URL
               value: {{ $ldapURL | quote }}
             - name: LDAP_BASE_DN

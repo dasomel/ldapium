@@ -72,6 +72,7 @@ RUN ./configure \
         --enable-dynlist=mod \
         --enable-sssvlv=mod \
         --enable-otp=mod \
+        --enable-nestgroup=mod \
         --enable-argon2 \
         --with-tls=openssl \
         --with-cyrus-sasl \
@@ -79,6 +80,14 @@ RUN ./configure \
     && make depend \
     && make -j"$(nproc)" \
     && make install
+
+# ppm (password-quality checker for ppolicy) ships in the same, already
+# SHA-verified tarball under contrib/, so no third-party source is fetched.
+# Built without cracklib (CRACK=no): the runtime image carries no dictionary
+# and no libcrack. The result is a plain shared object that slapo-ppolicy
+# dlopen()s by path (olcPPolicyCheckModule), not a slapd module (.la).
+RUN make -C contrib/slapd-modules/ppm ppm CRACK=no \
+    && install -m 755 contrib/slapd-modules/ppm/ppm.so /usr/lib/openldap/ppm.so
 
 # Keep the exporter build isolated from the OpenLDAP source toolchain so the
 # application build cache is not invalidated when exporter code changes.
@@ -179,6 +188,6 @@ VOLUME ["/etc/openldap/slapd.d", "/var/lib/openldap/data"]
 EXPOSE 389 636
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ldapwhoami -x -H "ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi" || exit 1
+    CMD ldapwhoami -Y EXTERNAL -H "ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

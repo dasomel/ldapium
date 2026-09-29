@@ -72,7 +72,9 @@ search() {
 # ---------------------------------------------------------------- reachable
 log "waiting for $LDAP_URL (up to ${TIMEOUT_SECONDS}s)"
 waited=0
-until ldapsearch -x -o nettimeout=5 -H "$LDAP_URL" -b "" -s base namingContexts >/dev/null 2>&1; do
+# Authenticated as admin, not anonymous: ldap.hardening.disallowAnonBind /
+# requireAuthc reject anonymous searches, which must not fail `helm test`.
+until search "$LDAP_URL" -o nettimeout=5 -b "" -s base namingContexts >/dev/null 2>&1; do
 	waited=$((waited + 2))
 	if [ "$waited" -ge "$TIMEOUT_SECONDS" ]; then
 		fail "server did not answer within ${TIMEOUT_SECONDS}s"
@@ -80,7 +82,7 @@ until ldapsearch -x -o nettimeout=5 -H "$LDAP_URL" -b "" -s base namingContexts 
 	fi
 	sleep 2
 done
-pass "server answers an anonymous root DSE search"
+pass "server answers an authenticated root DSE search"
 
 # ------------------------------------------------------------------- bind
 whoami=$(ldapwhoami -x -o nettimeout=10 -H "$LDAP_URL" \

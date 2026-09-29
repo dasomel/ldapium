@@ -212,6 +212,138 @@ case "$LDAP_PASSWORD_LOCKOUT_DURATION" in
   ''|*[!0-9]*) die "LDAP_PASSWORD_LOCKOUT_DURATION must be a number of seconds (got: ${LDAP_PASSWORD_LOCKOUT_DURATION})" ;;
 esac
 
+# pwdFailureCountInterval: how long a failed bind is remembered toward
+# pwdMaxFailure. Left unset the counter never ages out, so five typos spread
+# over a year lock an account; 900 matches the lockout duration above.
+LDAP_PASSWORD_FAILURE_INTERVAL="${LDAP_PASSWORD_FAILURE_INTERVAL:-900}"
+case "$LDAP_PASSWORD_FAILURE_INTERVAL" in
+  ''|*[!0-9]*) die "LDAP_PASSWORD_FAILURE_INTERVAL must be a number of seconds (got: ${LDAP_PASSWORD_FAILURE_INTERVAL})" ;;
+esac
+
+# OpenLDAP 2.6 hardening (see docs/changes/openldap-2.6-hardening/CHANGE.md).
+# Group A: connection/resource limits and lastbind, on by default with the
+# values below; Group B: opt-in transport/authentication requirements, off
+# by default so an unset variable changes nothing. All of it is reconciled
+# into cn=config on EVERY start (section 3b), unlike bootstrap-only settings,
+# so an existing volume picks the values up on upgrade.
+require_number() {
+  eval "_rn_val=\${$1}"
+  # shellcheck disable=SC2154 # assigned by the eval above
+  case "$_rn_val" in
+    ''|*[!0-9]*) die "$1 must be a number (got: ${_rn_val})" ;;
+  esac
+}
+LDAP_IDLE_TIMEOUT="${LDAP_IDLE_TIMEOUT:-600}"
+LDAP_WRITE_TIMEOUT="${LDAP_WRITE_TIMEOUT:-30}"
+LDAP_CONN_MAX_PENDING="${LDAP_CONN_MAX_PENDING:-100}"
+LDAP_CONN_MAX_PENDING_AUTH="${LDAP_CONN_MAX_PENDING_AUTH:-1000}"
+LDAP_SOCKBUF_MAX_INCOMING="${LDAP_SOCKBUF_MAX_INCOMING:-262143}"
+LDAP_SOCKBUF_MAX_INCOMING_AUTH="${LDAP_SOCKBUF_MAX_INCOMING_AUTH:-4194303}"
+LDAP_MAX_FILTER_DEPTH="${LDAP_MAX_FILTER_DEPTH:-20}"
+LDAP_LASTBIND_PRECISION="${LDAP_LASTBIND_PRECISION:-3600}"
+for _rn_name in LDAP_IDLE_TIMEOUT LDAP_WRITE_TIMEOUT LDAP_CONN_MAX_PENDING LDAP_CONN_MAX_PENDING_AUTH \
+  LDAP_SOCKBUF_MAX_INCOMING LDAP_SOCKBUF_MAX_INCOMING_AUTH LDAP_MAX_FILTER_DEPTH LDAP_LASTBIND_PRECISION; do
+  require_number "$_rn_name"
+done
+unset _rn_name _rn_val
+# Unset = olcTLSECName not emitted (OpenSSL's own curve negotiation). Set only
+# after checking the value: it lands verbatim in cn=config and a bad curve
+# name makes slapd refuse to start on the next boot.
+LDAP_TLS_EC_NAME="${LDAP_TLS_EC_NAME:-}"
+case "$LDAP_TLS_EC_NAME" in
+  '') ;;
+  *[!A-Za-z0-9_-]*) die "LDAP_TLS_EC_NAME must match [A-Za-z0-9_-]+ (got: ${LDAP_TLS_EC_NAME})" ;;
+  *)
+    if command -v openssl >/dev/null 2>&1 \
+      && ! openssl ecparam -list_curves 2>/dev/null | grep -qE "^[[:space:]]*${LDAP_TLS_EC_NAME}[[:space:]]*:"; then
+      die "LDAP_TLS_EC_NAME is not a curve known to this OpenSSL (see: openssl ecparam -list_curves): ${LDAP_TLS_EC_NAME}"
+    fi
+    ;;
+esac
+# Opt-in: whether pwdLastSuccess replicates cleanly under multi-provider has
+# not been verified (Change Package D4), so it stays off until the
+# replication-chaos E2E has been run with it on.
+LDAP_LASTBIND_ENABLED="${LDAP_LASTBIND_ENABLED:-false}"
+LDAP_REQUIRE_TLS="${LDAP_REQUIRE_TLS:-false}"
+LDAP_DISALLOW_ANON_BIND="${LDAP_DISALLOW_ANON_BIND:-false}"
+LDAP_REQUIRE_AUTHC="${LDAP_REQUIRE_AUTHC:-false}"
+
+# Optional modules (Change Package D6..D9). ppm/deref/constraint default on;
+# nestgroup/dynlist/sssvlv-on-main/otp are opt-in and add nothing when off.
+# Reconciled into cn=config (and the default policy entry for ppm) on every
+# start in section 3b, so flipping a flag off removes the overlay again.
+flag_on() { [ "$1" = "true" ] || [ "$1" = "1" ]; }
+require_bool() {
+  eval "_rb_val=\${$1}"
+  # shellcheck disable=SC2154 # assigned by the eval above
+  case "$_rb_val" in
+    true|1|false|0) ;;
+    *) die "$1 must be true, false, 1 or 0 (got: ${_rb_val})" ;;
+  esac
+}
+LDAP_PPM_ENABLED="${LDAP_PPM_ENABLED:-true}"
+LDAP_DEREF_ENABLED="${LDAP_DEREF_ENABLED:-true}"
+LDAP_CONSTRAINT_ENABLED="${LDAP_CONSTRAINT_ENABLED:-true}"
+LDAP_NESTGROUP_ENABLED="${LDAP_NESTGROUP_ENABLED:-false}"
+LDAP_DYNLIST_ENABLED="${LDAP_DYNLIST_ENABLED:-false}"
+LDAP_SSSVLV_MAIN_ENABLED="${LDAP_SSSVLV_MAIN_ENABLED:-false}"
+LDAP_OTP_ENABLED="${LDAP_OTP_ENABLED:-false}"
+for _rb_name in LDAP_PPM_ENABLED LDAP_DEREF_ENABLED LDAP_CONSTRAINT_ENABLED LDAP_NESTGROUP_ENABLED \
+  LDAP_DYNLIST_ENABLED LDAP_SSSVLV_MAIN_ENABLED LDAP_OTP_ENABLED LDAP_LASTBIND_ENABLED \
+  LDAP_REQUIRE_TLS LDAP_DISALLOW_ANON_BIND LDAP_REQUIRE_AUTHC; do
+  require_bool "$_rb_name"
+done
+unset _rb_name _rb_val
+# Number of ppm character classes (upper, lower, digit, special) a password
+# must touch. 1 is effectively permissive: only a password with no ASCII
+# letter, digit or punctuation at all (e.g. only spaces) is refused.
+# Remember whether the operator set it: only an explicit value is re-applied
+# to the policy entry on later starts (see the ppm block in section 3c).
+_ppm_min_classes_explicit=${LDAP_PPM_MIN_CLASSES:+1}
+LDAP_PPM_MIN_CLASSES="${LDAP_PPM_MIN_CLASSES:-1}"
+case "$LDAP_PPM_MIN_CLASSES" in
+  0|1|2|3|4) ;;
+  *) die "LDAP_PPM_MIN_CLASSES must be 0-4 (got: ${LDAP_PPM_MIN_CLASSES})" ;;
+esac
+# Applies to mail only, and only to writes made by clients (replication
+# updates bypass slapo-constraint). Permissive on purpose: one @, no
+# whitespace, non-empty both sides.
+LDAP_CONSTRAINT_MAIL_REGEX="${LDAP_CONSTRAINT_MAIL_REGEX:-^[^@[:space:]]+@[^@[:space:]]+\$}"
+LDAP_NESTGROUP_BASE="${LDAP_NESTGROUP_BASE:-$LDAP_ROOT_DN}"
+LDAP_NESTGROUP_FLAGS="${LDAP_NESTGROUP_FLAGS:-member-filter memberof-filter}"
+for _ng_flag in $LDAP_NESTGROUP_FLAGS; do
+  case "$_ng_flag" in
+    member-filter|memberof-filter|member-values|memberof-values) ;;
+    *) die "LDAP_NESTGROUP_FLAGS entries must be member-filter, memberof-filter, member-values or memberof-values (got: ${_ng_flag})" ;;
+  esac
+done
+unset _ng_flag
+LDAP_DYNLIST_ATTRSET="${LDAP_DYNLIST_ATTRSET:-groupOfURLs memberURL member}"
+LDAP_SSSVLV_MAX="${LDAP_SSSVLV_MAX:-10}"
+LDAP_SSSVLV_MAX_KEYS="${LDAP_SSSVLV_MAX_KEYS:-5}"
+LDAP_SSSVLV_MAX_PER_CONN="${LDAP_SSSVLV_MAX_PER_CONN:-5}"
+for _rn_name in LDAP_SSSVLV_MAX LDAP_SSSVLV_MAX_KEYS LDAP_SSSVLV_MAX_PER_CONN; do
+  require_number "$_rn_name"
+done
+unset _rn_name _rn_val
+case "$LDAP_CONSTRAINT_MAIL_REGEX$LDAP_DYNLIST_ATTRSET$LDAP_NESTGROUP_BASE" in
+  *"
+"*) die "LDAP_CONSTRAINT_MAIL_REGEX / LDAP_DYNLIST_ATTRSET / LDAP_NESTGROUP_BASE must be single-line" ;;
+esac
+
+# LDAP_ANONYMOUS_READ_BASE exists to serve anonymous searches; refusing
+# anonymous binds / unauthenticated operations makes it dead config at best
+# and a silently broken root-base lookup at worst, so reject the combination
+# instead of picking a winner.
+if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
+  if [ "$LDAP_DISALLOW_ANON_BIND" = "true" ] || [ "$LDAP_DISALLOW_ANON_BIND" = "1" ]; then
+    die "LDAP_DISALLOW_ANON_BIND=true contradicts LDAP_ANONYMOUS_READ_BASE (anonymous read needs anonymous binds) — unset one of them"
+  fi
+  if [ "$LDAP_REQUIRE_AUTHC" = "true" ] || [ "$LDAP_REQUIRE_AUTHC" = "1" ]; then
+    die "LDAP_REQUIRE_AUTHC=true contradicts LDAP_ANONYMOUS_READ_BASE (anonymous read needs unauthenticated operations) — unset one of them"
+  fi
+fi
+
 # slapd sizes its connection table from RLIMIT_NOFILE at startup: it allocates
 # one Connection struct per possible file descriptor, up front, and touches
 # them. Measured on this build: 680 bytes per fd, exactly linear. Container
@@ -364,8 +496,28 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   for ldap_peer_scan in $LDAP_REPLICATION_PEERS; do
     ldap_peer_scan=$(printf '%s' "$ldap_peer_scan" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     [ -n "$ldap_peer_scan" ] && ldap_peer_total=$((ldap_peer_total + 1))
+    # olcSecurity ssf=128 (LDAP_REQUIRE_TLS) refuses plaintext TCP on every
+    # node, so a plain ldap:// peer URL means syncrepl and the first-boot peer
+    # check are refused by the very peers they target.
+    if flag_on "$LDAP_REQUIRE_TLS"; then
+      case "$ldap_peer_scan" in
+        ''|ldaps://*) ;;
+        *) die "LDAP_REQUIRE_TLS=true requires every LDAP_REPLICATION_PEERS entry to use ldaps:// (got: ${ldap_peer_scan}) — peers refuse plaintext connections" ;;
+      esac
+    fi
   done
   IFS=$OLDIFS
+  # dynlist and nestgroup *-values rewrite entries as they are returned; a
+  # syncrepl consumer search goes through the same path, so computed values
+  # would be replicated as if they were stored. Not verified safe -> refuse.
+  if flag_on "$LDAP_DYNLIST_ENABLED"; then
+    die "LDAP_DYNLIST_ENABLED=true is not supported with LDAP_REPLICATION_ENABLED (dynamic values would enter the syncrepl stream)"
+  fi
+  if flag_on "$LDAP_NESTGROUP_ENABLED"; then
+    case " $LDAP_NESTGROUP_FLAGS " in
+      *" member-values "*|*" memberof-values "*) die "LDAP_NESTGROUP_FLAGS with member-values/memberof-values is not supported with LDAP_REPLICATION_ENABLED (expanded values would enter the syncrepl stream); use member-filter/memberof-filter" ;;
+    esac
+  fi
   [ "$ldap_peer_total" -gt 0 ] || die "LDAP_REPLICATION_PEERS resolved to zero entries"
   [ "$LDAP_SERVER_ID" -le "$ldap_peer_total" ] || die "LDAP_SERVER_ID (${LDAP_SERVER_ID}) exceeds the number of entries in LDAP_REPLICATION_PEERS (${ldap_peer_total}) — a node's serverID must be its 1-based position in the peer list"
 
@@ -405,7 +557,10 @@ start_temp_slapd() {
   TEMP_SLAPD_PID=$!
 
   i=0
-  until ldapwhoami -x -H "$SETUP_LDAPI_URL" >/dev/null 2>&1; do
+  # SASL EXTERNAL, not an anonymous simple bind: a previous boot's
+  # LDAP_DISALLOW_ANON_BIND / LDAP_REQUIRE_AUTHC persists in cn=config and
+  # would otherwise make this probe fail forever.
+  until ldapwhoami -Y EXTERNAL -H "$SETUP_LDAPI_URL" >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -ge 30 ]; then
       die "temporary slapd did not become ready within 30s"
@@ -827,6 +982,7 @@ d}" "$cn_config"
       printf 'pwdLockout: TRUE\n'
       printf 'pwdMaxFailure: %s\n' "$LDAP_PASSWORD_MAX_FAILURE"
       printf 'pwdLockoutDuration: %s\n' "$LDAP_PASSWORD_LOCKOUT_DURATION"
+      printf 'pwdFailureCountInterval: %s\n' "$LDAP_PASSWORD_FAILURE_INTERVAL"
       # 0 = no forced expiry. Forced periodic rotation is the thing NIST
       # 800-63B specifically recommends AGAINST — it measurably pushes
       # users toward weaker, more predictable passwords (password1,
@@ -893,18 +1049,27 @@ d}" "$base_structure"
       LOAD_BASE_DIT=0
     else
       log "replication enabled and serverID is 1 — checking peers for an existing base DIT before creating one (D5b)"
+      peer_pw_file="${work}/peer-pw"
+      (umask 077; printf '%s' "$LDAP_REPLICATION_PASSWORD" > "$peer_pw_file")
       OLDIFS=$IFS
       IFS=','
       for peer in $LDAP_REPLICATION_PEERS; do
         peer=$(printf '%s' "$peer" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         [ -n "$peer" ] || continue
-        if ldapsearch -x -H "$peer" -b "$LDAP_ROOT_DN" -s base -o nettimeout=3 -l 5 '(objectClass=*)' 1.1 >/dev/null 2>&1; then
+        # Authenticated with the replication identity (the one syncrepl itself
+        # uses): an anonymous probe is refused by peers running
+        # LDAP_DISALLOW_ANON_BIND / LDAP_REQUIRE_AUTHC, which reads as "no base
+        # DIT" and would mint a second, conflicting one. Any failure — refused,
+        # unreachable, wrong credentials — still counts as "no base DIT found",
+        # exactly as before (#203/#204 semantics unchanged).
+        if ldapsearch -x -H "$peer" -D "$LDAP_REPLICATION_BIND_DN" -y "$peer_pw_file" -b "$LDAP_ROOT_DN" -s base -o nettimeout=3 -l 5 '(objectClass=*)' 1.1 >/dev/null 2>&1; then
           log "peer already has the base DIT: ${peer} — skipping local slapadd -n 1"
           LOAD_BASE_DIT=0
           break
         fi
       done
       IFS=$OLDIFS
+      rm -f "$peer_pw_file"
     fi
   fi
 
@@ -951,6 +1116,267 @@ d}" "$base_structure"
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
+fi
+
+# ---------------------------------------------------------------------------
+# 3b. Hardening reconciliation. Runs on every boot (bootstrap or not) as an
+#     OFFLINE slapmodify on cn=config — no temporary slapd needed — so a
+#     changed env var or an upgraded image takes effect on an existing volume.
+#     Ownership rule: Group A limits (and every opt-in that is switched ON)
+#     are env-owned and overwritten each start. When an opt-in is switched
+#     OFF, its attribute is removed only if its current value is exactly what
+#     this script writes (hd_clear); any other value was set by an operator
+#     via ldapmodify and is left alone, with a log line.
+# ---------------------------------------------------------------------------
+hardening_ldif=$(mktemp)
+hd_dump=$(mktemp)
+hd_db=$(mktemp)
+slapcat -n 0 -F "$CONFIG_DIR" -l "$hd_dump"
+
+# hd_clear <entry dn> <attr> <value we write>: emit a delete for <attr> only
+# when it is present with exactly that single value.
+hd_clear() {
+  _hd_cur=$(sed -n "/^dn: $1\$/,/^\$/p" "$hd_dump" | grep "^$2: " || true)
+  if [ -z "$_hd_cur" ]; then
+    return 0
+  elif [ "$_hd_cur" = "$2: $3" ]; then
+    printf 'delete: %s\n-\n' "$2"
+  else
+    log "leaving operator-set $2 on $1 untouched (${_hd_cur})"
+  fi
+}
+{
+  printf 'dn: cn=config\nchangetype: modify\n'
+  printf 'replace: olcIdleTimeout\nolcIdleTimeout: %s\n-\n' "$LDAP_IDLE_TIMEOUT"
+  printf 'replace: olcWriteTimeout\nolcWriteTimeout: %s\n-\n' "$LDAP_WRITE_TIMEOUT"
+  printf 'replace: olcConnMaxPending\nolcConnMaxPending: %s\n-\n' "$LDAP_CONN_MAX_PENDING"
+  printf 'replace: olcConnMaxPendingAuth\nolcConnMaxPendingAuth: %s\n-\n' "$LDAP_CONN_MAX_PENDING_AUTH"
+  printf 'replace: olcSockbufMaxIncoming\nolcSockbufMaxIncoming: %s\n-\n' "$LDAP_SOCKBUF_MAX_INCOMING"
+  printf 'replace: olcSockbufMaxIncomingAuth\nolcSockbufMaxIncomingAuth: %s\n-\n' "$LDAP_SOCKBUF_MAX_INCOMING_AUTH"
+  printf 'replace: olcMaxFilterDepth\nolcMaxFilterDepth: %s\n-\n' "$LDAP_MAX_FILTER_DEPTH"
+  if { [ "$LDAP_TLS_ENABLED" = "true" ] || [ "$LDAP_TLS_ENABLED" = "1" ]; } && [ -n "$LDAP_TLS_EC_NAME" ]; then
+    # ECDHE curve only: no DH parameter file, since the cipher suite baseline
+    # is ECDHE-only and a DH file would add nothing but a weak-param foot-gun.
+    printf 'replace: olcTLSECName\nolcTLSECName: %s\n-\n' "$LDAP_TLS_EC_NAME"
+  else
+    # env-owned like Group A: the curve is only ever written from
+    # LDAP_TLS_EC_NAME, and a stale one silently narrows key exchange.
+    printf 'replace: olcTLSECName\n-\n'
+  fi
+  if [ "$LDAP_REQUIRE_TLS" = "true" ] || [ "$LDAP_REQUIRE_TLS" = "1" ]; then
+    # ssf=128 alone, not "ssf=128 tls=128": `tls=` counts only the TLS layer,
+    # which a unix socket never has, so it refuses ldapi:// even with
+    # olcLocalSSF raised (verified live: err=13 on the HEALTHCHECK). ssf=
+    # still rejects plaintext TCP (ssf 0) and accepts TLS >=128 bits.
+    # ldapi:// is rated at olcLocalSSF (default 71), below ssf=128, so the
+    # HEALTHCHECK, this script's own ldapi calls and the backup scripts would
+    # be refused; raising it to 128 declares that local socket trusted.
+    printf 'replace: olcSecurity\nolcSecurity: ssf=128\n-\n'
+    printf 'replace: olcLocalSSF\nolcLocalSSF: 128\n-\n'
+  else
+    hd_clear cn=config olcSecurity 'ssf=128'
+    hd_clear cn=config olcLocalSSF 128
+  fi
+  if [ "$LDAP_DISALLOW_ANON_BIND" = "true" ] || [ "$LDAP_DISALLOW_ANON_BIND" = "1" ]; then
+    printf 'replace: olcDisallows\nolcDisallows: bind_anon\n-\n'
+  else
+    hd_clear cn=config olcDisallows bind_anon
+  fi
+  if [ "$LDAP_REQUIRE_AUTHC" = "true" ] || [ "$LDAP_REQUIRE_AUTHC" = "1" ]; then
+    printf 'replace: olcRequires\nolcRequires: authc\n-\n'
+  else
+    hd_clear cn=config olcRequires authc
+  fi
+  # lastbind: pwdLastSuccess is written on the entry a bind succeeded on, and
+  # under multi-provider replication that write replicates like any other
+  # modify (see the Change Package for the entryCSN caveat). The precision
+  # bounds it to at most one write per user per interval.
+  # Off: remove the pair only when olcLastBind is the TRUE this script writes.
+  if [ "$LDAP_LASTBIND_ENABLED" = "true" ] || [ "$LDAP_LASTBIND_ENABLED" = "1" ]; then
+    printf 'replace: olcLastBind\nolcLastBind: TRUE\n-\n' > "$hd_db"
+    printf 'replace: olcLastBindPrecision\nolcLastBindPrecision: %s\n-\n' "$LDAP_LASTBIND_PRECISION" >> "$hd_db"
+  elif sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -qx 'olcLastBind: TRUE'; then
+    printf 'delete: olcLastBind\n-\n' > "$hd_db"
+    sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -q '^olcLastBindPrecision: ' && printf 'delete: olcLastBindPrecision\n-\n' >> "$hd_db"
+  elif sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -q '^olcLastBind'; then
+    log "leaving operator-set olcLastBind on the main database untouched"
+  fi
+  if [ -s "$hd_db" ]; then
+    printf '\ndn: olcDatabase={1}mdb,cn=config\nchangetype: modify\n'
+    cat "$hd_db"
+  fi
+} > "$hardening_ldif"
+log "reconciling hardening settings (slapmodify -n 0)"
+slapmodify -n 0 -F "$CONFIG_DIR" -l "$hardening_ldif"
+rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
+
+# ---------------------------------------------------------------------------
+# 3c. Optional modules (D6..D9). Same offline mechanism as 3b, but overlays
+#     are entries, not attributes, so each one is add / modify / delete
+#     depending on what cn=config currently holds. Existing overlays are
+#     modified in place (never deleted and re-added) to keep their {N} order
+#     stable across boots.
+# ---------------------------------------------------------------------------
+cfg_dump=$(mktemp)
+slapcat -n 0 -F "$CONFIG_DIR" -l "$cfg_dump"
+MAIN_DB_DN="olcDatabase={1}mdb,cn=config"
+
+# Prints the current DN of an overlay on the main database, or nothing.
+overlay_dn() {
+  sed -n "s/^dn: \\(olcOverlay={[0-9]*}$1,olcDatabase={1}mdb,cn=config\\)\$/\\1/p" "$cfg_dump" | head -n 1
+}
+
+# reconcile_overlay <name> <on|off> <extra objectClass or ''> <attr-lines-file>
+# attr-lines-file holds `attr: value` lines that make up the overlay's config.
+reconcile_overlay() {
+  _ro_name=$1; _ro_on=$2; _ro_oc=$3; _ro_attrs=$4
+  _ro_dn=$(overlay_dn "$_ro_name")
+  if [ "$_ro_on" = "on" ]; then
+    if [ -z "$_ro_dn" ]; then
+      log "enabling ${_ro_name} overlay"
+      printf 'dn: olcOverlay=%s,%s\nchangetype: add\nobjectClass: olcOverlayConfig\n' "$_ro_name" "$MAIN_DB_DN"
+      [ -z "$_ro_oc" ] || printf 'objectClass: %s\n' "$_ro_oc"
+      printf 'olcOverlay: %s\n' "$_ro_name"
+      cat "$_ro_attrs"
+      printf '\n'
+    elif [ -s "$_ro_attrs" ]; then
+      printf 'dn: %s\nchangetype: modify\n' "$_ro_dn"
+      # attribute names never contain whitespace, so word-splitting is safe
+      # shellcheck disable=SC2013
+      for _ro_attr in $(sed 's/:.*//' "$_ro_attrs" | sort -u); do
+        printf 'replace: %s\n' "$_ro_attr"
+        grep "^${_ro_attr}: " "$_ro_attrs"
+        printf -- '-\n'
+      done
+      printf '\n'
+    fi
+  elif [ -n "$_ro_dn" ]; then
+    log "removing ${_ro_name} overlay (disabled)"
+    printf 'dn: %s\nchangetype: delete\n\n' "$_ro_dn"
+  fi
+}
+
+attrs_tmp=$(mktemp)
+modules_ldif=$(mktemp)
+overlays_ldif=$(mktemp)
+
+# Module loads first, in their own slapmodify run, so the overlay entries in
+# the second run find their objectClasses. Only nestgroup is new to the
+# module list; the others are already in the bootstrap template but a volume
+# from an older image may predate them.
+{
+  for _mod in constraint deref dynlist sssvlv otp nestgroup; do
+    case "$_mod" in
+      constraint) _mod_on=$LDAP_CONSTRAINT_ENABLED ;;
+      deref) _mod_on=$LDAP_DEREF_ENABLED ;;
+      dynlist) _mod_on=$LDAP_DYNLIST_ENABLED ;;
+      sssvlv) _mod_on=$LDAP_SSSVLV_MAIN_ENABLED ;;
+      otp) _mod_on=$LDAP_OTP_ENABLED ;;
+      nestgroup) _mod_on=$LDAP_NESTGROUP_ENABLED ;;
+    esac
+    if flag_on "$_mod_on" && ! grep -q "^olcModuleLoad: {[0-9]*}${_mod}\\.la\$" "$cfg_dump"; then
+      printf 'dn: cn=module{0},cn=config\nchangetype: modify\nadd: olcModuleLoad\nolcModuleLoad: %s.la\n\n' "$_mod"
+    fi
+  done
+} > "$modules_ldif"
+if [ -s "$modules_ldif" ]; then
+  log "loading missing overlay modules (slapmodify -n 0)"
+  slapmodify -n 0 -F "$CONFIG_DIR" -l "$modules_ldif"
+fi
+
+# dynlist needs groupOfURLs/memberURL, which live in dyngroup.schema — not in
+# the core/cosine/inetorgperson/nis set the bootstrap loads. Loaded only when
+# enabled and left in place if the flag is later turned off: removing a schema
+# out from under entries that may use it is not something a reconcile should do.
+if flag_on "$LDAP_DYNLIST_ENABLED" && ! grep -qi '^dn: cn={[0-9]*}dyngroup,cn=schema,cn=config$' "$cfg_dump"; then
+  log "loading dyngroup schema (groupOfURLs, memberURL) for dynlist"
+  slapadd -n 0 -F "$CONFIG_DIR" -l /etc/openldap/schema/dyngroup.ldif
+fi
+
+# Re-dump so the overlay pass sees the module/schema changes above.
+slapcat -n 0 -F "$CONFIG_DIR" -l "$cfg_dump"
+
+{
+  # deref: no configuration; presence of the overlay is the feature.
+  : > "$attrs_tmp"
+  if flag_on "$LDAP_DEREF_ENABLED"; then reconcile_overlay deref on '' "$attrs_tmp"; else reconcile_overlay deref off '' "$attrs_tmp"; fi
+
+  # constraint: mail only. One attribute, one regex; see LDAP_CONSTRAINT_MAIL_REGEX.
+  printf 'olcConstraintAttribute: mail regex %s\n' "$LDAP_CONSTRAINT_MAIL_REGEX" > "$attrs_tmp"
+  if flag_on "$LDAP_CONSTRAINT_ENABLED"; then reconcile_overlay constraint on olcConstraintConfig "$attrs_tmp"; else reconcile_overlay constraint off '' "$attrs_tmp"; fi
+
+  printf 'olcNestGroupBase: %s\n' "$LDAP_NESTGROUP_BASE" > "$attrs_tmp"
+  for _ng_flag in $LDAP_NESTGROUP_FLAGS; do printf 'olcNestGroupFlags: %s\n' "$_ng_flag" >> "$attrs_tmp"; done
+  if flag_on "$LDAP_NESTGROUP_ENABLED"; then reconcile_overlay nestgroup on olcNestGroupConfig "$attrs_tmp"; else reconcile_overlay nestgroup off '' "$attrs_tmp"; fi
+
+  printf 'olcDynListAttrSet: %s\n' "$LDAP_DYNLIST_ATTRSET" > "$attrs_tmp"
+  if flag_on "$LDAP_DYNLIST_ENABLED"; then reconcile_overlay dynlist on olcDynListConfig "$attrs_tmp"; else reconcile_overlay dynlist off '' "$attrs_tmp"; fi
+
+  printf 'olcSssVlvMax: %s\nolcSssVlvMaxKeys: %s\nolcSssVlvMaxPerConn: %s\n' \
+    "$LDAP_SSSVLV_MAX" "$LDAP_SSSVLV_MAX_KEYS" "$LDAP_SSSVLV_MAX_PER_CONN" > "$attrs_tmp"
+  if flag_on "$LDAP_SSSVLV_MAIN_ENABLED"; then reconcile_overlay sssvlv on olcSssVlvConfig "$attrs_tmp"; else reconcile_overlay sssvlv off '' "$attrs_tmp"; fi
+
+  # otp: no olc* attributes; the oath* schema is compiled into the module.
+  : > "$attrs_tmp"
+  if flag_on "$LDAP_OTP_ENABLED"; then reconcile_overlay otp on '' "$attrs_tmp"; else reconcile_overlay otp off '' "$attrs_tmp"; fi
+
+  # ppm hooks into the existing ppolicy overlay via its check-module path.
+  _pp_dn=$(overlay_dn ppolicy)
+  if [ -n "$_pp_dn" ]; then
+    _pp_cur=$(sed -n "/^dn: ${_pp_dn}\$/,/^\$/p" "$cfg_dump" | grep '^olcPPolicyCheckModule: ' || true)
+    if flag_on "$LDAP_PPM_ENABLED"; then
+      printf 'dn: %s\nchangetype: modify\nreplace: olcPPolicyCheckModule\nolcPPolicyCheckModule: /usr/lib/openldap/ppm.so\n\n' "$_pp_dn"
+    elif [ "$_pp_cur" = 'olcPPolicyCheckModule: /usr/lib/openldap/ppm.so' ]; then
+      printf 'dn: %s\nchangetype: modify\ndelete: olcPPolicyCheckModule\n\n' "$_pp_dn"
+    elif [ -n "$_pp_cur" ]; then
+      log "leaving operator-set olcPPolicyCheckModule untouched (${_pp_cur})"
+    fi
+  fi
+} > "$overlays_ldif"
+if [ -s "$overlays_ldif" ]; then
+  log "reconciling optional overlays (slapmodify -n 0)"
+  slapmodify -n 0 -F "$CONFIG_DIR" -l "$overlays_ldif"
+fi
+rm -f "$cfg_dump" "$attrs_tmp" "$modules_ldif" "$overlays_ldif"
+
+# ppm's arguments and the switch that makes ppolicy consult it live on the
+# default policy entry (directory data, not cn=config). Written when the
+# wiring is missing (fresh bootstrap or a volume from an older image); after
+# that the operator's ldapmodify tuning wins, and the arguments are re-applied
+# only when LDAP_PPM_MIN_CLASSES is explicitly set in the environment. Removal
+# when LDAP_PPM_ENABLED=false always applies. These are offline writes without
+# -S/-w: slapmodify stamps them with sid 000 and does not update contextCSN,
+# so they are NOT replicated and each node applies its own. A replica that has
+# not yet received the entry skips this; run it again after the entry arrives.
+if flag_on "$LDAP_PASSWORD_POLICY_ENABLED"; then
+  policy_dn="cn=default,ou=policies,${LDAP_ROOT_DN}"
+  policy_dump=$(mktemp)
+  slapcat -n 1 -F "$CONFIG_DIR" -s "$policy_dn" -a '(objectClass=pwdPolicy)' -l "$policy_dump" 2>/dev/null || true
+  if [ -s "$policy_dump" ]; then
+    policy_ldif=$(mktemp)
+    policy_want_arg="minQuality ${LDAP_PPM_MIN_CLASSES}"
+    if flag_on "$LDAP_PPM_ENABLED"; then
+      if ! grep -qi '^objectClass: pwdPolicyChecker$' "$policy_dump" \
+        || ! grep -q '^pwdUseCheckModule: TRUE$' "$policy_dump" \
+        || ! grep -q '^pwdCheckModuleArg:' "$policy_dump" \
+        || { [ -n "$_ppm_min_classes_explicit" ] && ! grep -qxF "pwdCheckModuleArg: ${policy_want_arg}" "$policy_dump"; }; then
+        {
+          printf 'dn: %s\nchangetype: modify\n' "$policy_dn"
+          grep -qi '^objectClass: pwdPolicyChecker$' "$policy_dump" || printf 'add: objectClass\nobjectClass: pwdPolicyChecker\n-\n'
+          printf 'replace: pwdUseCheckModule\npwdUseCheckModule: TRUE\n-\n'
+          printf 'replace: pwdCheckModuleArg\npwdCheckModuleArg: %s\n-\n' "$policy_want_arg"
+        } > "$policy_ldif"
+      fi
+    elif grep -q '^pwdUseCheckModule: TRUE$' "$policy_dump"; then
+      printf 'dn: %s\nchangetype: modify\nreplace: pwdUseCheckModule\n-\nreplace: pwdCheckModuleArg\n-\n' "$policy_dn" > "$policy_ldif"
+    fi
+    if [ -s "$policy_ldif" ]; then
+      log "reconciling ppm settings on ${policy_dn} (slapmodify -n 1)"
+      slapmodify -n 1 -F "$CONFIG_DIR" -l "$policy_ldif"
+    fi
+    rm -f "$policy_ldif"
+  fi
+  rm -f "$policy_dump"
 fi
 
 # ---------------------------------------------------------------------------

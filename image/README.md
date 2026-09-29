@@ -94,6 +94,33 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_PASSWORD_MIN_LENGTH` | no | `8` | `pwdMinLength` on the default policy. Digits only. |
 | `LDAP_PASSWORD_MAX_FAILURE` | no | `5` | `pwdMaxFailure` — failed binds before lockout. Digits only. |
 | `LDAP_PASSWORD_LOCKOUT_DURATION` | no | `900` | `pwdLockoutDuration` in seconds. Digits only. |
+| `LDAP_PASSWORD_FAILURE_INTERVAL` | no | `900` | `pwdFailureCountInterval` in seconds: how long a failed bind counts toward `LDAP_PASSWORD_MAX_FAILURE`. Digits only. Bootstrap only. |
+| `LDAP_IDLE_TIMEOUT` | no | `600` | `olcIdleTimeout` (seconds; `0` disables). Reconciled on every start. Digits only. |
+| `LDAP_WRITE_TIMEOUT` | no | `30` | `olcWriteTimeout` (seconds; `0` disables). Reconciled on every start. |
+| `LDAP_CONN_MAX_PENDING` | no | `100` | (`olcConnMaxPending*` and `olcSockbufMaxIncoming*` pin slapd's compiled defaults explicitly; they do not newly cap.) `olcConnMaxPending`: queued requests per anonymous connection. |
+| `LDAP_CONN_MAX_PENDING_AUTH` | no | `1000` | `olcConnMaxPendingAuth`: queued requests per authenticated connection. |
+| `LDAP_SOCKBUF_MAX_INCOMING` | no | `262143` | `olcSockbufMaxIncoming`: max incoming PDU size, anonymous. |
+| `LDAP_SOCKBUF_MAX_INCOMING_AUTH` | no | `4194303` | `olcSockbufMaxIncomingAuth`: max incoming PDU size, authenticated (bulk `ldapmodify`/large member lists need this headroom). |
+| `LDAP_MAX_FILTER_DEPTH` | no | `20` | `olcMaxFilterDepth`: rejects deeply nested search filters. |
+| `LDAP_TLS_EC_NAME` | no | `""` (unset) | `olcTLSECName` (ECDHE curve), written only when `LDAP_TLS_ENABLED` and non-empty; empty removes it (OpenSSL negotiates). Validated at startup against `[A-Za-z0-9_-]+` and `openssl ecparam -list_curves`, since a bad name would stop slapd on the next boot. No DH parameter file. Reconciled on every start. |
+| `LDAP_LASTBIND_ENABLED` | no | `false` | `true`/`1` sets `olcLastBind: TRUE` on the main `mdb` database, so a successful bind records `pwdLastSuccess`. Opt-in. **WARNING: keep it off with multi-provider replication** (see below): in one observed run it silently reverted a password change made on another node during a partition. |
+| `LDAP_LASTBIND_PRECISION` | no | `3600` | `olcLastBindPrecision` (seconds): `pwdLastSuccess` is rewritten at most once per user per interval. Only applied when `LDAP_LASTBIND_ENABLED`. Digits only. |
+| `LDAP_REQUIRE_TLS` | no | `false` | `true`/`1` sets `olcSecurity: ssf=128` (plaintext TCP binds/operations are refused) and `olcLocalSSF: 128` so `ldapi://` keeps working. Only `ssf=` is used, not `tls=`: `tls=` refuses `ldapi://` outright. Requires clients on `ldaps://`/StartTLS, so pair with `LDAP_TLS_ENABLED=true`. Refused at startup if any `LDAP_REPLICATION_PEERS` entry is not `ldaps://` (peers would refuse plaintext syncrepl). Opt-in. |
+| `LDAP_DISALLOW_ANON_BIND` | no | `false` | `true`/`1` sets `olcDisallows: bind_anon`. Refused at startup together with `LDAP_ANONYMOUS_READ_BASE`. Opt-in. |
+| `LDAP_REQUIRE_AUTHC` | no | `false` | `true`/`1` sets `olcRequires: authc` (no operation before an authenticated bind). Refused at startup together with `LDAP_ANONYMOUS_READ_BASE`. Opt-in. |
+| `LDAP_PPM_ENABLED` | no | `true` | Rollback: set `false` and restart once before downgrading to an older image (see [Rollback](#rollback-and-downgrade)). Sets `olcPPolicyCheckModule: /usr/lib/openldap/ppm.so` on `ppolicy` and, when `LDAP_PASSWORD_POLICY_ENABLED`, `pwdUseCheckModule`/`pwdCheckModuleArg` on `cn=default,ou=policies`. ppm is built without cracklib (no dictionary check). Reconciled on every start. |
+| `LDAP_PPM_MIN_CLASSES` | no | `1` | `0`-`4`: character classes (upper, lower, digit, special) a password must touch (`minQuality`). `1` is nearly permissive (only a password with no ASCII letter, digit or punctuation is refused). ppm counts ASCII character classes only, so a Hangul-only passphrase is rejected when this is above 1. Written to the policy at bootstrap; re-applied on later starts only when this variable is explicitly set (unset leaves the operator's `ldapmodify` value alone). |
+| `LDAP_DEREF_ENABLED` | no | `true` | `true`/`1`/`false`/`0`: `deref` overlay (member dereference in the search round-trip). |
+| `LDAP_CONSTRAINT_ENABLED` | no | `true` | `constraint` overlay enforcing `LDAP_CONSTRAINT_MAIL_REGEX` on `mail`. Client writes only; replication updates bypass it. |
+| `LDAP_CONSTRAINT_MAIL_REGEX` | no | `^[^@[:space:]]+@[^@[:space:]]+$` | Regex for `mail`. Single line. |
+| `LDAP_NESTGROUP_ENABLED` | no | `false` | `nestgroup` overlay (nested groups). Opt-in. |
+| `LDAP_NESTGROUP_BASE` | no | `$LDAP_ROOT_DN` | `olcNestGroupBase`. Single line. |
+| `LDAP_NESTGROUP_FLAGS` | no | `member-filter memberof-filter` | Space-separated `olcNestGroupFlags`: `member-filter`, `memberof-filter`, `member-values`, `memberof-values`. The `*-values` flags are refused with `LDAP_REPLICATION_ENABLED` (expanded values would enter the syncrepl stream; reasoned, not verified). |
+| `LDAP_DYNLIST_ENABLED` | no | `false` | `dynlist` overlay; also loads `dyngroup.schema` (`groupOfURLs`, `memberURL`). Refused with `LDAP_REPLICATION_ENABLED` (same syncrepl reasoning). Opt-in. |
+| `LDAP_DYNLIST_ATTRSET` | no | `groupOfURLs memberURL member` | `olcDynListAttrSet`. Single line. |
+| `LDAP_SSSVLV_MAIN_ENABLED` | no | `false` | `sssvlv` overlay on the main database (server-side sort / VLV). Opt-in. |
+| `LDAP_SSSVLV_MAX` / `_MAX_KEYS` / `_MAX_PER_CONN` | no | `10` / `5` / `5` | `olcSssVlvMax`, `olcSssVlvMaxKeys`, `olcSssVlvMaxPerConn`. Digits only. |
+| `LDAP_OTP_ENABLED` | no | `false` | `otp` overlay (TOTP; needs per-user enrollment). Opt-in. |
 | `LDAP_REPLICATION_ENABLED` | no | `false` | `true`/`1` enables N-way multi-provider replication. See [Replication](#replication) below. |
 | `LDAP_REPLICATION_PEERS` | if replication enabled | — | Comma-separated LDAP URLs of **every** node, including this one, e.g. `ldap://ols-0.ols-hl.ns.svc.cluster.local:389,ldap://ols-1.ols-hl.ns.svc.cluster.local:389`. |
 | `LDAP_SERVER_ID` | no | hostname's numeric ordinal suffix + 1 | `1`..`4095`. Auto-derivation expects a hostname ending in `-<N>` (e.g. `ols-0`); if it doesn't, the container refuses to start rather than risk two nodes silently sharing an ID. |
@@ -134,6 +161,75 @@ full verification and #76 for the ACL this depends on) — so **any**
 certificate from that CA gets this directory's baseline read access, whether
 or not `LDAP_TLS_AUTHZ_REGEXP` was ever meant to cover its subject. There is
 no way to scope this down with `LDAP_TLS_AUTHZ_REGEXP` alone.
+
+### Hardening settings are reconciled on every start
+
+Unlike the bootstrap-only settings below, the OpenLDAP 2.6 hardening and
+optional-module variables (`LDAP_IDLE_TIMEOUT` through `LDAP_OTP_ENABLED`,
+plus `LDAP_TLS_EC_NAME` when TLS is on) are re-applied to `cn=config` on every
+start by offline `slapmodify` (entrypoint sections 3b/3c, no temporary slapd),
+so changing one, or upgrading the image over an existing volume, takes effect
+on the next restart. Turning an opt-in back off removes the attribute, and
+for overlays (`deref`, `constraint`, `nestgroup`, `dynlist`, `sssvlv`, `otp`)
+removes the overlay entry. Two things are deliberately left behind: the
+`olcModuleLoad` line and, for `dynlist`, the `dyngroup` schema stay in
+`cn=config` (removing a schema from under entries that may use it is not a
+reconcile's call). The ppm arguments on `cn=default,ou=policies` are only
+written when the ppm wiring is missing (fresh bootstrap, or a volume from an
+older image) and afterwards left to the operator's `ldapmodify` tuning; they are
+re-applied only when `LDAP_PPM_MIN_CLASSES` is explicitly set in the
+environment. These are offline writes (no `-S`/`-w`): stamped with server ID
+000, no `contextCSN` update, so they are **not replicated** and each node
+applies its own.
+
+**Ownership rule.** Group A limits and any opt-in switched ON are env-owned and
+overwritten each start. An opt-in switched OFF removes its attribute
+(`olcSecurity: ssf=128`, `olcLocalSSF: 128`, `olcDisallows: bind_anon`,
+`olcRequires: authc`, `olcLastBind: TRUE` + precision, the ppm module path,
+`pwdUseCheckModule: TRUE`) only when the current value is exactly what the
+entrypoint writes; any other value was set by an operator and is left in place
+with a `leaving operator-set ...` log line. `olcTLSECName` is env-driven: it is
+removed when `LDAP_TLS_EC_NAME` is empty or TLS is off.
+
+### Rollback and downgrade
+
+An older image does **not** ignore what a newer one wrote. With
+`LDAP_PPM_ENABLED=true` (default) the upgraded volume holds
+`olcPPolicyCheckModule: /usr/lib/openldap/ppm.so` (plus `nestgroup.la` when
+enabled); an image without `ppm.so` fails at config load
+(`lt_dlopen(/usr/lib/openldap/ppm.so) failed: file not found`) and slapd
+crash-loops. Before rolling back to an image that predates these modules,
+restart once on the NEW image with `LDAP_PPM_ENABLED=false` (and every opt-in
+module, e.g. `LDAP_NESTGROUP_ENABLED`, `false`) so the reconcile removes the
+wiring, then roll back. Verified live: this removes `olcPPolicyCheckModule` from
+the ppolicy overlay and `pwdUseCheckModule`/`pwdCheckModuleArg` from
+`cn=default,ou=policies`, and the older image then started healthy on the same
+volume. Restoring from backup also works.
+
+- The container `HEALTHCHECK` now uses `ldapwhoami -Y EXTERNAL` over `ldapi://`
+  instead of an anonymous simple bind, which `LDAP_DISALLOW_ANON_BIND` /
+  `LDAP_REQUIRE_AUTHC` would otherwise make fail. Custom probes against the
+  socket must do the same (or bind as an admin) when either is enabled.
+  The entrypoint's own temporary-slapd readiness probe does the same.
+- `LDAP_REQUIRE_TLS`, `LDAP_DISALLOW_ANON_BIND` and `LDAP_REQUIRE_AUTHC` fail
+  fast at startup against `LDAP_ANONYMOUS_READ_BASE` (the latter two) and
+  against plain `ldap://` replication peers (the first). The first-boot
+  peer check for an existing base DIT binds as `LDAP_REPLICATION_BIND_DN`, not
+  anonymously.
+- `LDAP_LASTBIND_ENABLED` records the `pwdLastSuccess` attribute. With
+  `LDAP_REPLICATION_ENABLED` it is an ordinary write that replicates and
+  refreshes the user entry's `entryCSN`, so a concurrent edit of that entry on
+  another node can lose last-write-wins to a bind. **WARNING:** in one observed
+  2-node run (single run, not repeated), a partitioned node A accepted a bind
+  with the OLD password after node B had an admin change it to NEW; A's
+  `pwdLastSuccess` write carried the newer `entryCSN`, so after reconnect NEW
+  failed (err=49) and OLD succeeded on both nodes. Keep lastbind off on
+  multi-provider deployments (single node or single writer only). Not
+  verified against the replication-chaos E2E; it defaults to off for this reason.
+
+The new indexes (`uidNumber`, `gidNumber`, `memberUid`, `uniqueMember`) and
+`pwdFailureCountInterval` are bootstrap-only like the other indexes/policy
+entries; on an existing volume add them with `ldapmodify` and run `slapindex`.
 
 ### Other bootstrap-only settings
 
@@ -489,8 +585,8 @@ rejected the correct password on node 2.)
 
 ## Modules and overlays
 
-`memberof`, `refint`, `ppolicy`, and `unique` are loaded **and enabled** on
-the `mdb` database by default (`unique`'s attribute set is configurable —
+`memberof`, `refint`, `ppolicy`, `unique`, `deref` and `constraint` are loaded **and enabled** on
+the `mdb` database by default (`deref`/`constraint` via `LDAP_DEREF_ENABLED`/`LDAP_CONSTRAINT_ENABLED`, reconciled every start) (`unique`'s attribute set is configurable —
 see [Uniqueness enforcement](#uniqueness-enforcement)). `syncprov` is
 loaded as a module but left uninstantiated — it needs a replication
 topology no image can guess; it's either enabled by hand against
@@ -511,11 +607,10 @@ you rather than leaving them for a manual `ldapmodify`.
 
 | Module | What it's for | Why it isn't on by default |
 |---|---|---|
-| `constraint` | Per-attribute value constraints (regex, size, count, ...). | The constraints themselves are entirely deployment-specific. |
-| `deref` | Resolves a grouping attribute (e.g. `member`) in the same round-trip as the search that returns it, instead of one lookup per member. | Only worth enabling once member-list sizes make N+1 lookups actually hurt — no downside to leaving it off otherwise. |
-| `dynlist` | Dynamic groups (`memberURL`-based). | Needs a group schema decision (which objectClass carries `memberURL`). |
-| `sssvlv` | Server-side sort + virtual list view — paging through large result sets without pulling all of them. | No config needed beyond enabling it; left off by default only because it's paired with the other scale-prep modules here, not because it's risky. |
-| `otp` | TOTP 2FA (RFC 6238). | Needs per-user enrollment before it can gate anything — enabling the module alone changes no behavior. |
+| `dynlist` | Dynamic groups (`memberURL`-based). | Opt-in via `LDAP_DYNLIST_ENABLED`; not allowed with replication. |
+| `sssvlv` | Server-side sort + virtual list view. | Opt-in via `LDAP_SSSVLV_MAIN_ENABLED`. |
+| `nestgroup` | Nested group membership. | Opt-in via `LDAP_NESTGROUP_ENABLED`; `*-values` flags not allowed with replication. |
+| `otp` | TOTP 2FA (RFC 6238). | Opt-in via `LDAP_OTP_ENABLED`; needs per-user enrollment before it can gate anything. |
 
 The `mdb` database also gains four new indexes over the two-attribute set
 used to ship (`objectClass`, `entryUUID`, `entryCSN`, `uid`, `cn`, `mail`):
@@ -586,7 +681,7 @@ itself, so it can only be customized with an offline `slapmodify`, not
 - Data directory (`/var/lib/openldap/data`) is mode `700`.
 - `VOLUME`s: `/etc/openldap/slapd.d` (config) and `/var/lib/openldap/data` (data).
 - `EXPOSE 389 636`.
-- `HEALTHCHECK` runs `ldapwhoami` over the local `ldapi://` Unix socket.
+- `HEALTHCHECK` runs `ldapwhoami -Y EXTERNAL` over the local `ldapi://` Unix socket.
 
 ## Operational tools available in the image
 
