@@ -964,14 +964,19 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   rc_old_umask=$(umask)
   umask 077
   rc_work=$(mktemp -d)
-  trap 'rm -rf "$rc_work"; stop_temp_slapd' EXIT
+  trap 'rm -rf "$rc_work"' EXIT
 
-  # cn=admin,cn=config's password, written to a file so it never appears as
-  # a `-w` command-line argument (visible to any local user via `ps`).
-  admin_pw_file="${rc_work}/admin-pw"
-  printf '%s' "$LDAP_ADMIN_PASSWORD" > "$admin_pw_file"
-
-  start_temp_slapd
+  # Issue #206: cn=config is edited OFFLINE (slapmodify/slapadd/slapcat), never
+  # through a temporary slapd. Once olcSyncrepl exists, a running slapd starts
+  # its consumer immediately, and stopping it a moment later can interrupt the
+  # very first refresh of a wiped node after the base entry landed but before
+  # any contextCSN was stored. The real slapd's syncprov then sees a non-empty
+  # DB without a contextCSN and mints a fresh one for its OWN serverID
+  # ("syncprov_db_open: generated a new ctxcsn"), newer than every entry the
+  # peer holds for that sid. Those entries are then "not new enough" locally
+  # and absent from this node's present list, so the peer deletes them (and
+  # the wiped node never receives them). A wiped multi-provider node must reach
+  # the real slapd with a completely empty database.
 
   server_id_ldif="${rc_work}/server-id.ldif"
   {
@@ -981,7 +986,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     printf 'olcServerID: %s\n' "$LDAP_SERVER_ID"
   } > "$server_id_ldif"
   log "applying olcServerID"
-  ldapmodify -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$server_id_ldif"
+  slapmodify -n 0 -F "$CONFIG_DIR" -l "$server_id_ldif"
 
   # Detect an existing syncprov overlay by SEARCHING FOR ITS objectClass, not
   # by reading a fixed DN. slapd stores overlays with an ordering prefix in
@@ -995,8 +1000,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   # SECOND start. Observed as "Exited (80)". The one-level objectClass search
   # is prefix-agnostic.
   syncprov_dn="olcOverlay=syncprov,olcDatabase={1}mdb,cn=config"
-  syncprov_found=$(ldapsearch -LLL -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" \
-    -b "olcDatabase={1}mdb,cn=config" -s one -o nettimeout=3 '(objectClass=olcSyncProvConfig)' dn 2>/dev/null \
+  syncprov_found=$(slapcat -n 0 -F "$CONFIG_DIR" -a '(objectClass=olcSyncProvConfig)' 2>/dev/null \
     | grep -c '^dn:' || true)
   if [ "${syncprov_found:-0}" -gt 0 ]; then
     log "syncprov overlay already present — leaving as-is"
@@ -1018,7 +1022,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
       printf 'olcSpSessionlog: 100\n'
     } > "$syncprov_ldif"
     log "adding syncprov overlay"
-    ldapadd -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$syncprov_ldif"
+    slapadd -n 0 -F "$CONFIG_DIR" -l "$syncprov_ldif"
   fi
 
   # olcSyncrepl is replaced wholesale (not incrementally) so the set also
@@ -1075,10 +1079,9 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     fi
   } > "$repl_ldif"
   log "applying olcMultiProvider + olcSyncrepl (${emitted_count} peer(s), self excluded)"
-  ldapmodify -x -H "$SETUP_LDAPI_URL" -D "cn=admin,cn=config" -y "$admin_pw_file" -f "$repl_ldif"
+  slapmodify -n 0 -F "$CONFIG_DIR" -l "$repl_ldif"
 
   rm -rf "$rc_work"
-  stop_temp_slapd
   trap - EXIT
   umask "$rc_old_umask"
   log "replication reconciliation complete"
