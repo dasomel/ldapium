@@ -103,3 +103,7 @@ sbom: ## Write SBOMs for the local images to ./sbom (requires syft)
 	done
 	@echo "wrote sbom/ — released images carry the same SBOM as a signed attestation:"
 	@echo "  gh attestation verify oci://ghcr.io/dasomel/ldapium:<version> --repo dasomel/ldapium"
+
+.PHONY: research-check
+research-check:
+	python3 scripts/research/check-research-evidence.py
