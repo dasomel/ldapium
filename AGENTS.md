@@ -22,8 +22,6 @@ For OpenLDAP configuration, directory operations, replication, LDAP auth, backup
 
 ## Rules
 
-- Make the smallest coherent change that solves the requested problem.
-- Do not auto-fix unrelated findings; report them separately.
 - Preserve directory-service, API, UI, authentication, authorization, and audit boundaries.
 - Treat exported API changes, LDAP schema/operation semantics, privilege/credential handling, destructive directory actions, and bulk operations as design changes.
 - Keep DNs, identifiers, and low-level LDAP details behind the appropriate domain/service abstraction where possible.
@@ -32,7 +30,6 @@ For OpenLDAP configuration, directory operations, replication, LDAP auth, backup
 - Use integration/E2E evidence for LDAP, auth, backup/restore, upgrade, and browser behavior when unit tests cannot prove the real path.
 - Choose verification proportional to task risk and user impact; do not require live-LDAP/browser paths for unrelated trivial changes.
 - Safe local/disposable inspect-edit-build-test-fix-retest work may proceed within scope. Shared/production/destructive/release/credential/permission/external mutations require explicit authorization unless already granted.
-- Do not claim completion without stating which checks actually ran and their scope.
 - End substantive work as A) complete/verified, B) meaningful verified progress with the next blocker isolated, or C) stop with evidence when further work requires unjustified scope, fragile patches, unsupported assumptions, or unacceptable risk.
 
 ## Local Docker/LDAP verification
