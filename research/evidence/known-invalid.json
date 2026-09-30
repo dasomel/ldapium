@@ -1,0 +1,14 @@
+[
+  {
+    "file": "2026-09.jsonl",
+    "line": 1,
+    "sha256": "6e21439649abe1257d33251b361f1b85b33ada73f1304e68b6199fe112629988",
+    "reason": "environment: type; event_type: enum; metadata.checks: type; schema_version: const"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 2,
+    "sha256": "39190140ee3442f5dae5de663bb9c32275fdc6dadeafc4a5e9afece2aa3115c8",
+    "reason": "environment: type; event_type: enum; schema_version: const"
+  }
+]
