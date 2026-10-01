@@ -79,6 +79,9 @@ export function AppShell() {
               {t(item.labelKey)}
             </NavLink>
           ))}
+          <NavLink to="/applications" className="flex items-center gap-2.5 rounded-console px-2.5 py-2 text-[13px] font-medium text-muted-foreground hover:bg-muted">
+            <KeyRound className="size-4" />{language === 'ko' ? '앱 SSO 권한' : 'App SSO permissions'}
+          </NavLink>
         </nav>
         <div className="space-y-0.5 border-t border-border p-3">
           <button

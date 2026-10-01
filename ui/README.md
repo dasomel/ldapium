@@ -334,3 +334,109 @@ over HTTP, tear down. PR descriptions in this repo's history show this
 pattern — a "Test plan" section with live verification steps, not just
 `go test` output. See the repo root `AGENTS.md` ("Local Docker/LDAP verification") for specific gotchas
 (container UID/bind-mount issues on macOS/Colima, `docker exec -i`).
+
+
+## Application SSO integration profiles (first implementation slice)
+
+The **App SSO permissions** page registers arbitrary applications and their OIDC
+claim-to-native-role mappings. Keycloak remains the role authority. A saved
+profile is `configured`, not applied or verified: this slice makes no Keycloak,
+OSS ACL, or LDAP membership changes. Organization-scoped mappings and native
+roles behind gateway-only authentication are rejected.
+
+Enable persistence with both environment variables:
+
+- `APP_PROFILES_PATH`: writable JSON file on persistent storage.
+- `APP_PROFILES_ADMIN_DNS`: semicolon-separated exact session DNs permitted to
+  read and edit profiles. No administrator is granted by default; this gate is
+  independent of directory ACLs and the existing SSO login role.
+
+Storage is single-process/single-replica, at most 1,000 profiles and 4 MiB.
+Use one UI instance and back up the file. Multiple processes sharing a file are
+unsupported; PostgreSQL and HA support remain planned. Startup rejects corrupt
+files. Writes use a private temporary file and atomic rename; filesystem/power-loss
+recovery still requires a backup. Profile metadata contains no credentials.
+
+Authenticated, allowlisted session API:
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/v1/applications` | List saved profiles |
+| GET | `/api/v1/applications/{id}/integration-profile` | Read profile and ETag |
+| PUT | `/api/v1/applications/{id}/integration-profile` | Create or replace metadata |
+
+PUT requires same-origin `Origin`, `application/json`, and `If-Match: "0"` for
+creation or the current ETag for editing; stale writes return 412. Clients omit
+server-owned `revision` and `status`. Unknown fields, including secrets, are
+rejected. Profiles use HTTPS issuers, token source `id_token`/`access_token`/`userinfo`,
+`native_app` or `gateway_admission` enforcement, and only `app` scope. Issuer URLs
+are metadata and are not fetched. Role mappings describe intended configuration,
+not observed effective permissions. There is no external bearer API in this slice.
+
+Verification: build the frontend, then run
+`python3 scripts/test/test-app-profiles-local.py` from the repository root with
+Docker, `ldapium:e2e`, Go, Node and Playwright Chromium available. The test uses
+random disposable credentials and a dedicated LDAP container; it exercises real
+login, browser saving/reloading, mapping denial and backend restart persistence.
+It does not verify OIDC federation or Keycloak role application.
+
+### Keycloak delegation and application configuration exports
+
+Keycloak remains the authoritative role store. Enable optional read-through with
+`KEYCLOAK_ADMIN_URL` (HTTPS), `KEYCLOAK_ADMIN_REALM`, `KEYCLOAK_ADMIN_CLIENT_ID`,
+`KEYCLOAK_ADMIN_CLIENT_SECRET`, and semicolon-separated `KEYCLOAK_OBSERVE_CLIENTS`.
+The configured issuer must exactly match the profile issuer. Use a dedicated service
+account; never use the master realm or an administrator's password.
+
+Writes additionally require `KEYCLOAK_ISOLATED_REALM=true`, explicit
+`KEYCLOAK_DELEGATE_CLIENTS` (a subset of observed clients), and explicit
+`KEYCLOAK_MANAGED_GROUP_IDS` for group mappings. The isolated-realm flag is an
+operator assertion: coarse Keycloak service-account privileges must be confined to
+that dedicated realm. Shared-realm writes are unsupported until fine-grained admin
+permissions have been proven. Read-only access still requires suitable upstream
+Keycloak view/query permissions. Service credentials never reach browser responses.
+
+In Application SSO permissions, load the current Keycloak catalog before changing
+roles, composites or group mappings. Composite direction is explicit: a parent
+role includes a child role and therefore grants its permissions. Organization
+ancestry alone does not grant app permissions. Cross-client/realm composites and
+cycles are rejected. Existing assigned roles cannot be deleted. Changes compare
+an observed fingerprint, serialize within one process, and reread upstream state;
+Keycloak does not offer an atomic compare-and-swap transaction. After an ambiguous
+failure reload state before retrying. Existing tokens retain their old claims until
+renewal; application sessions require their own revocation policy.
+
+All endpoints require the existing login session and profile-admin DN allowlist.
+Mutation requests require same-origin `Origin` and JSON. Under `/api/v1/applications/:id`:
+
+| Endpoint | Behavior |
+| --- | --- |
+| GET `keycloak-roles` or `roles` | Current role/composite/group catalog; quoted fingerprint ETag |
+| POST `keycloak-role-operations` | `action`, `role`, optional `description`, `include`, `group_id`; `If-Match` from catalog |
+| DELETE `integration-profile` | Deletes metadata only; profile revision ETag required |
+| GET `configuration-export?adapter=generic` | Generic OIDC integration contract; no credentials |
+| GET `configuration-export?adapter=grafana\|argocd` | Supported native configuration artifact and warnings |
+| POST `mapping-preview` | `{"claim_values":["Developers"]}`; intended mapping preview, not access authorization |
+| GET `integration-status` | Configuration and delegation capability; no fabricated application verification |
+| POST `integration-verify` | Observes Keycloak catalog; does not prove claim delivery or app enforcement |
+
+Actions: `create`, `delete`, `include_add`, `include_remove`, `group_add`,
+`group_remove`. GET `/api/v1/application-profile-types` exposes the versioned
+capability/export contract. The legacy mapping field `keycloak_role` represents
+an exact source claim value (role or group). Grafana/ArgoCD exports require
+`claim_path=groups`, `token_source=id_token`, and `enforcement=native_app`.
+Grafana permits Admin/Editor/Viewer; unmatched identities are denied. ArgoCD
+permits admin/readonly and leaves the default role without grants. Review and
+merge native configuration through each app's normal deployment process.
+Generic contracts support arbitrary applications without a fixed OSS catalog;
+new native exporters implement `Profile.Export` with capability checks, escaped
+values, explicit defaults, and application-level positive/negative tests.
+Bearer automation, arbitrary remote adapter execution, organizational scoped
+permissions and native ACL provisioning are outside this implementation.
+
+Local end-to-end evidence: `python3 scripts/test/test-app-keycloak-local.py`
+uses disposable LDAP, Keycloak 26.7.4 and Grafana containers. It verifies UI changes,
+composite token claims, fresh-token revocation, conflict/privilege boundaries, and
+Grafana Editor access plus unmapped-user rejection. The Grafana image is local
+`grafana/grafana:latest`; the script reports its actual version rather than treating
+that tag as pinned. Production configuration must pin your supported image version.

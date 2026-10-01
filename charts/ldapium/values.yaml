@@ -534,6 +534,25 @@ ui:
 
   replicaCount: 1
 
+  # Optional single-process application metadata; PVC must be writable by uid 65532.
+  applicationProfiles:
+    enabled: false
+    existingClaim: ""
+    adminDNs: []
+
+  # Keycloak remains role authority. Credentials reference an existing Secret.
+  keycloakAdmin:
+    enabled: false
+    url: ""
+    realm: ""
+    clientID: ""
+    existingSecret: ""
+    secretKey: client-secret
+    observeClients: []
+    delegateClients: []
+    managedGroupIDs: []
+    isolatedRealm: false
+
   service:
     type: ClusterIP
     port: 8080

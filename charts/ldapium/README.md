@@ -1169,3 +1169,20 @@ CI runs for the default, replicated, TLS, and UI profiles.
 ## Known gaps
 
 - Not deployed to a real cluster as part of authoring this chart.
+
+### Optional application SSO permissions
+
+Set `ui.applicationProfiles.enabled=true`, supply `existingClaim` and explicit
+`adminDNs`. The existing PVC must allow uid/gid 65532 to write `/var/lib/ldapium`.
+The chart requires one UI replica and uses Recreate to prevent concurrent file
+writers. Back up the PVC; rollback by disabling the feature preserves its data.
+No PVC is implicitly created and no application role is deleted on disablement.
+
+`ui.keycloakAdmin.enabled=true` additionally requires HTTPS `url`, `realm`,
+`clientID`, `observeClients`, and `existingSecret`/`secretKey`. Service credentials
+are loaded through a Secret reference. Optional `delegateClients` require
+`isolatedRealm=true`; `managedGroupIDs` restrict group-role mutations. Use a
+dedicated isolated realm and service account as described in [UI README](../../ui/README.md).
+Shared-realm delegation and multi-replica profile persistence are unsupported.
+Exports are reviewable app configuration artifacts; installation does not apply
+native application permissions automatically.

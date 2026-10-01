@@ -1,4 +1,22 @@
 {{- if .Values.ui.enabled }}
+{{- if .Values.ui.applicationProfiles.enabled }}
+{{- /* D22: file persistence needs one writer; Recreate prevents rolling overlap. Use a database before enabling HA. */}}
+{{- if ne (int .Values.ui.replicaCount) 1 }}{{ fail "application profiles require ui.replicaCount=1" }}{{ end }}
+{{- if not .Values.ui.applicationProfiles.existingClaim }}{{ fail "application profiles require an existing PVC" }}{{ end }}
+{{- if not .Values.ui.applicationProfiles.adminDNs }}{{ fail "application profiles require explicit adminDNs" }}{{ end }}
+{{- range .Values.ui.applicationProfiles.adminDNs }}
+{{- if not (trim .) }}{{ fail "application profiles require nonempty adminDNs" }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if .Values.ui.keycloakAdmin.enabled }}
+{{- if not .Values.ui.applicationProfiles.enabled }}{{ fail "keycloakAdmin requires applicationProfiles.enabled" }}{{ end }}
+{{- range $name := list "url" "realm" "clientID" "existingSecret" "secretKey" }}
+{{- if not (index $.Values.ui.keycloakAdmin $name) }}{{ fail (printf "keycloakAdmin requires %s" $name) }}{{ end }}
+{{- end }}
+{{- if not (hasPrefix "https://" .Values.ui.keycloakAdmin.url) }}{{ fail "keycloakAdmin.url requires HTTPS" }}{{ end }}
+{{- if not .Values.ui.keycloakAdmin.observeClients }}{{ fail "keycloakAdmin requires observeClients" }}{{ end }}
+{{- if and .Values.ui.keycloakAdmin.delegateClients (not .Values.ui.keycloakAdmin.isolatedRealm) }}{{ fail "delegated writes require an isolated realm" }}{{ end }}
+{{- end }}
 {{- if .Values.ui.sso.enabled }}
 {{- /*
   Every value SSO cannot run without, checked in one pass so a misconfigured
@@ -31,6 +49,10 @@ metadata:
     {{- include "ldapium.ui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ui.replicaCount }}
+  {{- if .Values.ui.applicationProfiles.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "ldapium.ui.selectorLabels" . | nindent 6 }}
@@ -76,6 +98,12 @@ spec:
       {{- with .Values.ui.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.ui.applicationProfiles.enabled }}
+      volumes:
+        - name: application-profiles
+          persistentVolumeClaim:
+            claimName: {{ .Values.ui.applicationProfiles.existingClaim | quote }}
       {{- end }}
       containers:
         - name: ui
@@ -186,6 +214,33 @@ spec:
             {{- end }}
             - name: LDAP_TLS_INSECURE_SKIP_VERIFY
               value: {{ .Values.ui.ldap.tlsInsecureSkipVerify | quote }}
+            {{- if .Values.ui.applicationProfiles.enabled }}
+            - name: APP_PROFILES_PATH
+              value: /var/lib/ldapium/profiles.json
+            - name: APP_PROFILES_ADMIN_DNS
+              value: {{ join ";" .Values.ui.applicationProfiles.adminDNs | quote }}
+            {{- end }}
+            {{- if .Values.ui.keycloakAdmin.enabled }}
+            - name: KEYCLOAK_ADMIN_URL
+              value: {{ .Values.ui.keycloakAdmin.url | quote }}
+            - name: KEYCLOAK_ADMIN_REALM
+              value: {{ .Values.ui.keycloakAdmin.realm | quote }}
+            - name: KEYCLOAK_ADMIN_CLIENT_ID
+              value: {{ .Values.ui.keycloakAdmin.clientID | quote }}
+            - name: KEYCLOAK_ADMIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ui.keycloakAdmin.existingSecret | quote }}
+                  key: {{ .Values.ui.keycloakAdmin.secretKey | quote }}
+            - name: KEYCLOAK_OBSERVE_CLIENTS
+              value: {{ join ";" .Values.ui.keycloakAdmin.observeClients | quote }}
+            - name: KEYCLOAK_DELEGATE_CLIENTS
+              value: {{ join ";" .Values.ui.keycloakAdmin.delegateClients | quote }}
+            - name: KEYCLOAK_MANAGED_GROUP_IDS
+              value: {{ join ";" .Values.ui.keycloakAdmin.managedGroupIDs | quote }}
+            - name: KEYCLOAK_ISOLATED_REALM
+              value: {{ .Values.ui.keycloakAdmin.isolatedRealm | quote }}
+            {{- end }}
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef:
@@ -232,6 +287,11 @@ spec:
                   name: {{ .Values.ui.ldapServiceAccount.existingSecret }}
                   key: {{ .Values.ui.ldapServiceAccount.passwordKey }}
             {{- end }}
+          {{- if .Values.ui.applicationProfiles.enabled }}
+          volumeMounts:
+            - name: application-profiles
+              mountPath: /var/lib/ldapium
+          {{- end }}
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
 {{- end }}

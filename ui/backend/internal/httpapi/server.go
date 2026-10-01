@@ -13,7 +13,9 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
+	"github.com/dasomel/ldapium/ui/backend/internal/appprofile"
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/keycloak"
 	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
@@ -22,6 +24,8 @@ import (
 // plain struct (not a global) so tests can construct one with a fake
 // Dialer and an isolated Store.
 type Server struct {
+	kc           *keycloak.Client
+	profiles     *appprofile.Store
 	echo         *echo.Echo
 	cfg          config.Config
 	dialer       ldapclient.Dialer
@@ -40,6 +44,19 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		dialer:       dialer,
 		sessions:     sessions,
 		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
+	}
+	if cfg.AppProfilesPath != "" {
+		if len(cfg.AppProfilesAdminDNs) == 0 {
+			return nil, fmt.Errorf("profile admin DNs are required")
+		}
+		var err error
+		s.profiles, err = appprofile.Open(cfg.AppProfilesPath)
+		if err != nil {
+			return nil, fmt.Errorf("open application profiles: %w", err)
+		}
+	}
+	if cfg.Keycloak.URL != "" {
+		s.kc = keycloak.New(cfg.Keycloak)
 	}
 	if cfg.SSO.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -120,6 +137,8 @@ func (s *Server) routes(spa fs.FS) {
 	authed.POST("/groups/members", s.handleAddMember)
 	authed.DELETE("/groups/members", s.handleRemoveMember)
 
+	authed.GET("/v1/application-profile-types", s.handleApplicationCapabilities, s.requireProfileAdmin)
+	s.profileRoutes(authed)
 	registerSPA(s.echo, spa)
 }
 

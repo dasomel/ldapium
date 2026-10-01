@@ -15,6 +15,10 @@ import (
 
 // Config is the fully resolved runtime configuration for the server.
 type Config struct {
+	Keycloak            KeycloakConfig
+	AppProfilesPath     string
+	AppProfilesAdminDNs []string
+
 	// AppVersion identifies the management UI build. It is injected during
 	// image construction and is informational only.
 	AppVersion string
@@ -152,6 +156,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
+		AppProfilesPath:          strings.TrimSpace(getenv("APP_PROFILES_PATH")),
 		AppVersion:               orDefault(getenv("APP_VERSION"), "development"),
 		OpenLDAPVersion:          strings.TrimSpace(getenv("OPENLDAP_VERSION")),
 		OpenLDAPPasswordHash:     strings.TrimSpace(getenv("OPENLDAP_PASSWORD_HASH")),
@@ -178,7 +183,20 @@ func Load(getenv func(string) string) (Config, error) {
 		},
 	}
 
+	for _, dn := range strings.Split(getenv("APP_PROFILES_ADMIN_DNS"), ";") {
+		if dn = strings.TrimSpace(dn); dn != "" {
+			cfg.AppProfilesAdminDNs = append(cfg.AppProfilesAdminDNs, dn)
+		}
+	}
+	if cfg.AppProfilesPath != "" && len(cfg.AppProfilesAdminDNs) == 0 {
+		return Config{}, fmt.Errorf("APP_PROFILES_PATH requires APP_PROFILES_ADMIN_DNS")
+	}
+
 	var err error
+	cfg.Keycloak, err = loadKeycloak(getenv)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg.StartTLS, err = boolEnv(getenv, "LDAP_START_TLS", false)
 	if err != nil {
 		return Config{}, err

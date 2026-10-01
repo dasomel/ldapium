@@ -121,6 +121,81 @@ convergence after a partition, reused rather than reinvented so a
 `kubectl` context with Helm 3 and capacity for a 3-replica StatefulSet — a
 local `kind` cluster is enough.
 
+### Concurrent LDAP operations against all three local providers
+
+Apache JMeter's built-in LDAP Extended sampler supports per-thread bind,
+search, compare, add, modify, rename, delete and unbind operations. The
+repository uses its persistent per-thread session support for a read-only
+profile: each virtual user binds once, repeats a bounded subtree search, then
+unbinds. All three Thread Groups run together against the three local demo
+ports. JMeter writes raw sample timings/errors to JTL and an HTML dashboard.
+The password stays in an ignored properties file with mode `0600`, not in the
+JMX plan or command line.
+
+This tool choice follows Apache's [Extended LDAP test-plan guide], which
+documents thread groups, bind/search/unbind, subtree scope, search limits, and
+per-thread operation order. The CLI run and HTML dashboard use Apache's
+[non-GUI mode] and [dashboard generator]. JMeter is an optional operator tool;
+the plan file targets JMeter 5.6.3, downloaded from the [official Apache
+distribution] and checksum-verified for this validation.
+
+```sh
+brew install jmeter
+mkdir -p .local
+umask 077
+cat > .local/ldap-replication-load.properties <<'EOF'
+load.node1.host=127.0.0.1
+load.node1.port=1390
+load.node2.host=127.0.0.1
+load.node2.port=1391
+load.node3.host=127.0.0.1
+load.node3.port=1392
+load.base_dn=dc=example,dc=org
+load.search_base=
+load.search_filter=(objectClass=*)
+load.bind_dn=cn=admin,dc=example,dc=org
+load.bind_password=REPLACE_WITH_A_DEMO_BIND_PASSWORD
+EOF
+chmod 600 .local/ldap-replication-load.properties
+make ldap-replication-load LDAP_LOAD_THREADS=10 LDAP_LOAD_LOOPS=1000
+```
+
+An empty `load.search_base` searches from the base DN; set it to an existing
+relative subtree (for example, `ou=users`) to narrow the workload. Ensure the
+bind identity can search the selected base. Run the profile only against
+disposable test servers or an explicitly authorized environment. Start with
+low concurrency, capture an unloaded baseline, then
+increase threads/loops while watching node CPU, memory, disk latency, LDAP
+errors, and per-node p95/p99. Reports accumulate under the ignored
+`.local/ldap-load-results/` directory. The query returns up to 20 `uid`/`cn`
+values per search, so response size is bounded. JMeter is optional and is not
+installed or run by `make check`.
+
+Local validation on 2026-10-01 against the three healthy demo containers used
+10 concurrent users per provider, 200 searches per user, an 8-entry subtree,
+and a 20-entry response cap. The run completed 6,060 total samples (6,000
+searches plus binds/unbinds) with zero errors; each provider completed 2,000
+searches with p50 0 ms, p95 1 ms, p99 1 ms, max 2 ms. These sub-millisecond
+values are rounded to milliseconds by JMeter. This is a wiring and small-demo
+stability check, not a capacity result: the demo has only eight entries and
+does not exercise large-directory index/selectivity behavior. The ignored
+JTL and HTML report are kept under `.local/ldap-load-results/`.
+For a representative capacity run, load a realistic data volume first and set
+`load.search_filter` to an indexed equality query matching the application's
+normal request pattern; `objectClass=*` is only a convenient demo default.
+
+This complements, rather than replaces, the neighboring evidence: use
+`bench-replication.sh` for write burst throughput and 3-node contextCSN
+convergence; use `.github/workflows/replication-chaos-e2e.yml` for continuous
+write availability during provider loss, partition behavior, and post-heal
+convergence. A passing read-load run does not prove conflict correctness,
+write availability under load, or site-specific capacity.
+
+[Extended LDAP test-plan guide]: https://jmeter.apache.org/usermanual/build-ldapext-test-plan.html
+[non-GUI mode]: https://jmeter.apache.org/usermanual/get-started.html
+[dashboard generator]: https://jmeter.apache.org/usermanual/generating-dashboard.html
+[official Apache distribution]: https://downloads.apache.org/jmeter/binaries/
+
 ### The profile runner
 
 ```bash
@@ -333,6 +408,12 @@ them, so the modest improvement here is plausibly host/contention noise
 (shared VM) rather than a `-q` effect. Write-latency (single online
 connection, sequential `ldapadd`) is a new metric this profile runner adds;
 there is no prior number to compare it against.
+
+A later high-load run on the current Macmini completed the full 5M-entry
+profile with 50 concurrent search workers (10,000 searches) and 200 online
+writes, while its 10M attempt timed out at 6,316,999 loaded entries after 55
+minutes. The [Korean result report](testing/ldap-large-load-results-ko.md)
+includes the environment, percentiles, and scope limits.
 
 **1M → 10M scaling, under this profile runner specifically:**
 

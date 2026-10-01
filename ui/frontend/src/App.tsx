@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { ApplicationsPage } from '@/pages/ApplicationsPage'
 import { useAuth } from '@/context/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/pages/LoginPage'
@@ -36,6 +37,7 @@ export default function App() {
         }
       >
         <Route path="/tree" element={<TreePage />} />
+        <Route path="/applications" element={<ApplicationsPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/change-password" element={<ChangePasswordPage />} />

@@ -9,10 +9,37 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { GroupFormDialog } from '@/components/groups/GroupFormDialog'
 import { MembersDialog } from '@/components/groups/MembersDialog'
+
+function TruncatedText({ text, className = '' }: { text: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [isTruncated, setIsTruncated] = useState(false)
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    const update = () => setIsTruncated(element.scrollWidth > element.clientWidth)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [isTruncated, text])
+
+  const content = <span ref={ref} tabIndex={isTruncated ? 0 : undefined} className={`block truncate ${className}`}>{text}</span>
+  if (!isTruncated) return content
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent className="max-w-[min(32rem,90vw)] break-all">{text}</TooltipContent>
+    </Tooltip>
+  )
+}
 
 export function GroupsPage() {
   const { notify } = useToast()
@@ -95,7 +122,7 @@ export function GroupsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-6xl space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="relative w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -153,13 +180,13 @@ export function GroupsPage() {
             <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
           )}
           {filtered.length > 0 && (
-            <Table>
+            <Table className="table-fixed">
               <TableHead>
                 <tr>
-                  <TableHeadCell>cn</TableHeadCell>
-                  <TableHeadCell>{t('common.description')}</TableHeadCell>
-                  <TableHeadCell>{t('common.members')}</TableHeadCell>
-                  <TableHeadCell className="text-right">{t('common.actions')}</TableHeadCell>
+                  <TableHeadCell className="w-[38%]">cn</TableHeadCell>
+                  <TableHeadCell className="w-[40%]">{t('common.description')}</TableHeadCell>
+                  <TableHeadCell className="w-[10%]">{t('common.members')}</TableHeadCell>
+                  <TableHeadCell className="w-[12%] text-right">{t('common.actions')}</TableHeadCell>
                 </tr>
               </TableHead>
               <TableBody>
@@ -173,8 +200,10 @@ export function GroupsPage() {
                     onKeyDown={(e) => onRowKeyDown(e, i)}
                     className="focus-visible:bg-muted focus-visible:outline-none"
                   >
-                    <TableCell className="font-mono">{g.cn}</TableCell>
-                    <TableCell className="text-muted-foreground">{g.description || '—'}</TableCell>
+                    <TableCell><TruncatedText text={g.cn} className="font-mono" /></TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {g.description ? <TruncatedText text={g.description} /> : '—'}
+                    </TableCell>
                     <TableCell>
                       <button
                         onClick={() => setMembersGroup(g)}

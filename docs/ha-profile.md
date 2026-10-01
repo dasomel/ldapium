@@ -43,6 +43,30 @@ maintainers to resolve architectural scope questions regarding OpenLDAP HA:
      write acceptance, partition survival, silent conflict convergence, and post-healing agreement published by
      `.github/workflows/replication-chaos-e2e.yml`.
 
+#### Assessment of common OpenLDAP HA alternatives (2026-10-01)
+
+The current product profile remains N-way multi-provider. This matches ldapium's
+existing contract that every configured replica accepts writes, and the Helm
+chart already wires the peers and verifies a three-provider deployment. It does
+not provide quorum or strong consistency: three nodes do not vote on writes,
+and a network partition can leave multiple sides accepting conflicting writes.
+OpenLDAP resolves those same-entry updates using its replication semantics; it
+does not turn the topology into a consensus cluster.
+
+| Alternative | What it adds | Assessment for ldapium |
+|---|---|---|
+| Two-node Mirror Mode | Two providers replicate with `olcMultiProvider`, while a frontend routes writes to only one provider at a time. | Better fit when single-writer consistency is the primary requirement. The frontend must reliably control write routing and failover; Mirror Mode is not a new replication or consensus engine. It changes the supported write contract and needs a separately accepted design package before implementation. |
+| `lloadd`, HAProxy, or a VIP | LDAP-aware or network-level request routing and a stable client endpoint. | These can route client traffic, but do not replicate directory data, provide quorum, or by themselves establish that only one provider can accept writes during a partition. `lloadd` can be considered separately if client endpoint/load distribution becomes a requirement. |
+| Three-node N-way Multi-Provider | Every provider accepts writes and syncrepl propagates changes among peers. | Keep as the supported ldapium HA profile: it matches current chart behavior and the tested three-node deployment. Operators must accept last-write-wins conflict risks and use backup/restore for recovery; adding a load balancer does not remove those risks. |
+| Cross-site live syncrepl | Replication between distant sites. | Remains unsupported under D13; use asynchronous backup shipping and offline restore for cross-site DR. |
+
+This is an assessment of the existing binding D11–D13 decisions, not a topology
+change. If a deployment requires a single-writer guarantee, treat Mirror Mode,
+its write-routing/fencing behavior, chart/service changes, and its failure tests
+as a new design scope rather than enabling it by changing a syncrepl mode field.
+References: [OpenLDAP 2.6 Replication](https://www.openldap.org/doc/admin26/replication.html)
+and [OpenLDAP 2.6 Load Balancing with lloadd](https://www.openldap.org/doc/admin26/loadbalancer.html).
+
 ### D12: Formal RPO/RTO Reference SLA and Acceptance Verification
 
 - **Decision**: ldapium specifies formal reference SLAs measured on standard reference
