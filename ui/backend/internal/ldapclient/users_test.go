@@ -277,7 +277,7 @@ func TestEntryToUser_NotLocked(t *testing.T) {
 	}
 }
 
-func TestUnlockModify_DeletesOnlyPwdAccountLockedTime(t *testing.T) {
+func TestUnlockModify_ReplacesPwdAccountLockedTimeWithNothing(t *testing.T) {
 	dn := "uid=jdoe,ou=people,dc=example,dc=com"
 	mod := unlockModify(dn)
 
@@ -289,14 +289,17 @@ func TestUnlockModify_DeletesOnlyPwdAccountLockedTime(t *testing.T) {
 	}
 
 	change := mod.Changes[0]
-	if change.Operation != ldap.DeleteAttribute {
-		t.Errorf("Operation = %v, want DeleteAttribute", change.Operation)
+	// Replace, not Delete: slapd answers a Delete of an absent attribute
+	// with noSuchAttribute (16), which made unlocking a never-locked
+	// account a 500. Replace-with-no-values removes the attribute and is
+	// a no-op success when it's already absent.
+	if change.Operation != ldap.ReplaceAttribute {
+		t.Errorf("Operation = %v, want ReplaceAttribute", change.Operation)
 	}
 	if change.Modification.Type != "pwdAccountLockedTime" {
 		t.Errorf("Modification.Type = %q, want %q", change.Modification.Type, "pwdAccountLockedTime")
 	}
-	// Deleting with no values removes the attribute outright, regardless
-	// of its current value — we don't know or care what the timestamp is.
+	// No values: removes the attribute outright, whatever its timestamp.
 	if len(change.Modification.Vals) != 0 {
 		t.Errorf("Modification.Vals = %v, want none", change.Modification.Vals)
 	}
