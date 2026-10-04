@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { History, RefreshCw, ShieldAlert } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { AuditEvent } from '@/lib/types'
-import { useT } from '@/context/LanguageContext'
+import { useLanguage, useT } from '@/context/LanguageContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { Badge } from '@/components/ui/badge'
@@ -26,6 +26,7 @@ function opBadgeVariant(op: string): 'neutral' | 'accent' | 'success' | 'danger'
 
 export function HistoryPage() {
   const t = useT()
+  const { language } = useLanguage()
   const [events, setEvents] = useState<AuditEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<ApiError | Error | null>(null)
@@ -107,10 +108,11 @@ export function HistoryPage() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">{language === 'ko' ? '필터는 현재 불러온 이력에 적용됩니다. 이전 기록은 페이지를 이동해 확인하세요.' : 'Filters apply to the loaded page. Navigate to earlier pages to search older history.'}</p>
           <div className="flex flex-wrap items-center gap-3">
             <div className="w-64">
               <Input
-                placeholder={t('history.filterActor')}
+                aria-label={t('history.filterActor')} placeholder={t('history.filterActor')}
                 value={actorFilter}
                 onChange={(e) => setActorFilter(e.target.value)}
                 className="h-8 text-xs"
@@ -118,6 +120,7 @@ export function HistoryPage() {
             </div>
             <div className="w-40">
               <select
+                aria-label={t('history.allOps')}
                 value={opFilter}
                 onChange={(e) => setOpFilter(e.target.value)}
                 className="h-8 w-full rounded-console border border-border bg-surface px-2.5 text-xs text-foreground focus:border-accent focus:outline-none"

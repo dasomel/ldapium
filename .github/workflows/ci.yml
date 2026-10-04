@@ -294,13 +294,30 @@ jobs:
       - name: Check make/CI parity
         run: ./scripts/check-make-parity.sh
 
-      - name: Reject rendering with no admin password
+      - name: Admin Secret fails closed offline and is deterministic with explicit credentials
         run: |
-          if helm template t charts/ldapium >/dev/null 2>&1; then
-            echo "::error::chart rendered without an admin password; the fail() guard regressed"
+          # Offline render (no lookup) must refuse to generate a password:
+          # a fresh random value per render locks out retained LDAP data.
+          for extra in "" "--is-upgrade"; do
+            if helm template t charts/ldapium $extra >/dev/null 2>&1; then
+              echo "::error::offline render without credentials generated an admin password ($extra)"
+              exit 1
+            fi
+          done
+          a=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --show-only templates/secret-admin.yaml)
+          b=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --show-only templates/secret-admin.yaml)
+          test "$a" = "$b"
+          if helm template t charts/ldapium --set auth.existingSecret=x --show-only templates/secret-admin.yaml >/dev/null 2>&1; then
+            echo "::error::existingSecret still rendered a chart-created admin Secret"
             exit 1
           fi
-          echo "chart correctly refused to render without an admin password"
+          # Helm reads values.yaml numbers as float64, so an unconverted
+          # integer >= 1e6 renders as "4.194303e+06"; the entrypoint rejects
+          # that and the directory pod crash-loops on every install.
+          if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret | grep -E 'value: "[0-9.]+e\+[0-9]+"'; then
+            echo "::error::a numeric chart value rendered in exponent form (add | int64)"
+            exit 1
+          fi
 
   chart-schema:
     name: Chart manifests pass kubeconform

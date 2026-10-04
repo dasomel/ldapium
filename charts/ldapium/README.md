@@ -14,10 +14,40 @@ helm install ldap charts/ldapium \
   --set auth.adminPassword="$(openssl rand -base64 24)"
 ```
 
-There is **no default admin password** — the chart refuses to render
-(`helm template`/`install` fails with an explicit error) unless
-`auth.adminPassword` or `auth.existingSecret` is set. This mirrors
-`image/entrypoint.sh`, which refuses to start for the same reason.
+There is **no default admin password**: `image/entrypoint.sh` refuses to start
+without one. With neither `auth.adminPassword` nor `auth.existingSecret` set, a
+live `helm install` generates a 64-character password once into the
+`<release>-ldapium-admin` Secret and reuses it on every upgrade (via `lookup`).
+
+### GitOps, `helm template` and dry-runs: explicit credentials required
+
+`lookup` is empty in any offline render (`helm template`, ArgoCD, `--dry-run=client`,
+CI previews: anything that renders without reading the live cluster), so generating
+there would mint a different password on every sync while the data volume keeps the rootpw hashed at first bootstrap, which
+locks the directory out. The chart therefore **fails closed**: when it would
+generate and the release namespace cannot be looked up, rendering aborts. Set
+`auth.existingSecret` (preferred; the Secret is yours and is never rendered or
+deleted by the chart) or `auth.adminPassword`. `helm install/upgrade
+--dry-run=server` can look up and works without credentials;
+`--dry-run=client` needs them. A **brand-new namespace** (`helm install
+--create-namespace`) is not visible to `lookup` either, because Helm renders before
+it creates the namespace: create the namespace first or pass the password
+explicitly. A namespace-scoped RBAC user that may not read Namespaces gets the same
+failure (fail closed, never a generated password).
+
+On **upgrade** the chart also refuses to generate: if the admin Secret is missing
+(deleted by hand, or an `existingSecret` deployment upgraded with `--reset-values`),
+the data volume still holds the rootpw derived from the original password, so a new
+one would lock the directory out. Restore the Secret or pass the ORIGINAL password
+via `auth.existingSecret` / `auth.adminPassword`.
+
+The generated Secret carries `helm.sh/resource-policy: keep`, so `helm uninstall`
+leaves it, just as it leaves the PVCs. Reinstalling with the **same release name
+and namespace** reuses it and the retained data keeps working. The orphaned
+Secret is not garbage-collected: delete it (`kubectl delete secret
+<release>-ldapium-admin`) together with the PVCs when you want a clean slate. If
+you reinstall under a different release name, or lost the Secret, pass the
+original password via `auth.existingSecret`/`auth.adminPassword`.
 
 ### Three `helm` footguns, hit for real while operating this chart
 
@@ -204,7 +234,21 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ldap.adminDN` | `""` | → `LDAP_ADMIN_DN` (image derives a default when unset). |
 | `ldap.anonymousReadBase` | `""` | → `LDAP_ANONYMOUS_READ_BASE`. Empty keeps today's DIT-wide anonymous read of `entry`/`uid`/`objectClass`; set to a DN under `ldap.rootDN` to narrow it to that subtree only (`image/README.md`, "Access control (ACL)"). DN-shaped, so it hits the `--set` comma footgun above — use `--set-string` with an escaped comma (`--set-string 'ldap.anonymousReadBase=ou=people\,dc=example\,dc=org'`) or a values file. |
 | `ldap.logLevel` | `stats` | → `LDAP_LOG_LEVEL`. |
-| `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required unless `existingSecret` is set. |
+| `ldap.passwordFailureInterval` | `900` | → `LDAP_PASSWORD_FAILURE_INTERVAL` (seconds until ppolicy forgets failed binds). |
+| `ldap.limits.idleTimeout` / `writeTimeout` | `600` / `30` | → `LDAP_IDLE_TIMEOUT` / `LDAP_WRITE_TIMEOUT` (seconds). See [Hardening](#hardening). |
+| `ldap.limits.connMaxPending` / `connMaxPendingAuth` | `100` / `1000` | → `LDAP_CONN_MAX_PENDING` / `LDAP_CONN_MAX_PENDING_AUTH`. |
+| `ldap.limits.sockbufMaxIncoming` / `sockbufMaxIncomingAuth` | `262143` / `4194303` | → `LDAP_SOCKBUF_MAX_INCOMING` / `LDAP_SOCKBUF_MAX_INCOMING_AUTH` (bytes). |
+| `ldap.limits.maxFilterDepth` | `20` | → `LDAP_MAX_FILTER_DEPTH`. |
+| `ldap.lastBind.enabled` / `precision` | `false` / `3600` | → `LDAP_LASTBIND_ENABLED` / `LDAP_LASTBIND_PRECISION` (`pwdLastSuccess`; minimum seconds between updates per entry). Opt-in; **keep off with replication** (can revert a password change made during a partition; see [Hardening](#hardening)). Enabling it with replication fails the render unless `ldap.lastBind.allowWithReplication=true`. |
+| `ldap.hardening.requireTls` | `false` | → `LDAP_REQUIRE_TLS`. Opt-in; needs `tls.enabled`, conflicts with `metrics.enabled`. |
+| `ldap.hardening.disallowAnonBind` | `false` | → `LDAP_DISALLOW_ANON_BIND`. Opt-in; chart fails if `ldap.anonymousReadBase` is set, or if `ui.enabled` with a non-empty `ui.ldap.userSearchFilter`. |
+| `ldap.hardening.requireAuthc` | `false` | → `LDAP_REQUIRE_AUTHC`. Opt-in; same guard as `disallowAnonBind`. |
+| `tls.ecName` | `""` | → `LDAP_TLS_EC_NAME`, emitted only when non-empty. Pinning one curve can drop clients that lack it (X25519/P-256-only). |
+| `ldap.modules.*` | see [Overlay modules](#overlay-modules) | → `LDAP_PPM_*`, `LDAP_DEREF_ENABLED`, `LDAP_CONSTRAINT_*`, `LDAP_NESTGROUP_ENABLED`, `LDAP_DYNLIST_ENABLED`, `LDAP_SSSVLV_MAIN_ENABLED`, `LDAP_OTP_ENABLED`. |
+| `networkPolicy.enabled` | `false` | Renders a NetworkPolicy for the server pods. See [Hardening](#hardening). |
+| `networkPolicy.ingressFrom` | `[{podSelector: {}}]` | Raw NetworkPolicy `from` peers allowed on 389/636 (default: same namespace). Must be non-empty: `from: []` would mean allow-all, so the chart fails to render instead. |
+| `networkPolicy.monitoringNamespaceSelector` | `kubernetes.io/metadata.name: monitoring` | Namespace allowed to scrape port 9330 (only when `metrics.enabled`). |
+| `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required for offline renders (`helm template`, ArgoCD/Flux) unless `existingSecret` is set; a live install generates and keeps one when empty. |
 | `auth.existingSecret` | `""` | Pre-existing Secret name to source the admin password from. |
 | `auth.existingSecretKey` | `admin-password` | Key within the Secret. |
 | `tls.enabled` | `false` | Serves LDAPS on 636 and moves replication to `ldaps://`. See [TLS](#tls). |
@@ -268,6 +312,71 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ui.ldapServiceAccount.dnKey` / `passwordKey` | `ldap-service-account-dn` / `ldap-service-account-password` | Keys in `ui.ldapServiceAccount.existingSecret`. |
 | `ui.ingress.enabled` | `false` | |
 | `ui.ingress.className` / `annotations` / `hosts` / `tls` | see values.yaml | Standard `networking.k8s.io/v1` Ingress shape. |
+
+## Hardening
+
+**Group A, on by default.** `ldap.limits.*` are always rendered and the image
+reconciles them into `cn=config` on **every** start, so a values change or
+chart upgrade takes effect at the next pod restart.
+`ldap.passwordFailureInterval` is different: it lands on the default ppolicy
+entry at first bootstrap only, so changing it later needs an `ldapmodify` of
+`pwdFailureCountInterval` (or a fresh volume). Upgrades do change wire behavior
+for older installs: connections idle longer than 600 s are closed (a pooled
+client that does not health-check may see one failed request), and filters
+nested deeper than 20 are refused. `connMaxPending*` and `sockbufMaxIncoming*`
+pin slapd's compiled defaults explicitly rather than newly capping anything.
+Values switched off are removed from `cn=config` only when they still hold the
+value the image wrote; an operator's own `ldapmodify` value is left alone.
+`ldap.lastBind.*` is opt-in (`false`):
+when enabled, each successful bind updates `pwdLastSuccess` at most once per
+`ldap.lastBind.precision` seconds per entry, and that write replicates.
+**WARNING:** keep lastBind disabled on multi-provider deployments. In one
+observed run (single run, not repeated) a bind on a partitioned node wrote
+`pwdLastSuccess` with a newer `entryCSN`, and after reconnect last-write-wins
+reverted a password change made on another node (the new password failed, the
+old one worked on both nodes). It can undo password changes and lockouts made
+elsewhere during a partition. The chart refuses `ldap.lastBind.enabled=true`
+with replication unless `ldap.lastBind.allowWithReplication=true`.
+`tls.ecName` is unset by default; pinning a single curve (e.g. `secp384r1`)
+can drop clients that only offer X25519 or P-256.
+
+**Group B, opt-in, can break working clients.** All default `false`:
+
+| Flag | Breaks |
+|---|---|
+| `ldap.hardening.requireTls` | Any plain `ldap://` client, including the chart's metrics exporter sidecar. The chart fails to render unless `tls.enabled=true`, and also when `metrics.enabled=true`. The backup CronJob, `helm test` pod and UI default URL already switch to `ldaps://` when `tls.enabled`. |
+| `ldap.hardening.disallowAnonBind` / `requireAuthc` | The anonymous uid-to-DN lookup that SSSD, Keycloak federation and the UI's bare-uid login (`ui.ldap.userSearchFilter`) rely on. The chart fails to render if either is set together with `ldap.anonymousReadBase`, or with `ui.enabled` and a non-empty `ui.ldap.userSearchFilter` (set it to `""` for full-DN login); moving those clients to a bind DN is your responsibility. |
+
+With `requireTls`, the UI needs a TLS connection too. Leaving `ui.ldap.url`
+empty gives it `ldaps://` automatically (since `tls.enabled` is required). If
+you set `ui.ldap.url` to a plain `ldap://` URL, set `ui.ldap.startTLS=true`
+(and `ui.ldap.tlsCACert` if the CA is private) or the chart refuses to render.
+See `ui/README.md` (`LDAP_START_TLS`).
+
+**NetworkPolicy.** `networkPolicy.enabled=true` selects the server pods and so
+turns on default-deny ingress for them. Allowed: 389/636 from
+`networkPolicy.ingressFrom` (default: any pod in the release namespace), from
+the chart's own server pods (replication), from the UI pod when `ui.enabled`,
+from the backup pods when `backup.enabled`, and 9330 from
+`networkPolicy.monitoringNamespaceSelector` when `metrics.enabled`. Egress is
+not restricted. It has no effect on a cluster whose CNI does not enforce
+NetworkPolicy. If you narrow `ingressFrom`, list every namespace that hosts an
+LDAP client (SSSD gateways, Keycloak).
+
+## Overlay modules
+
+`ldap.modules.*` maps one-to-one to image env vars. Toggling one changes
+`cn=config` on the next restart.
+
+| Value | Default | Env | Why / when |
+|---|---|---|---|
+| `ppmEnabled` / `ppmMinClasses` | `true` / `1` | `LDAP_PPM_ENABLED` / `LDAP_PPM_MIN_CLASSES` | Password quality checks; raise `ppmMinClasses` to require more character classes. ppm counts ASCII character classes only, so a Hangul-only passphrase is rejected when `ppmMinClasses` > 1. The chart always sets the env var, so the value is re-applied to the default policy on every start (written offline, per node, not replicated). Downgrading needs `ppmEnabled=false` first, see [Rollback](#rollback-and-downgrade). |
+| `derefEnabled` | `true` | `LDAP_DEREF_ENABLED` | Lets clients fetch referenced entries (group members) in one search. |
+| `constraintEnabled` / `constraintMailRegex` | `true` / `^[^@[:space:]]+@[^@[:space:]]+$` | `LDAP_CONSTRAINT_ENABLED` / `LDAP_CONSTRAINT_MAIL_REGEX` | Rejects malformed `mail` on write. |
+| `nestgroupEnabled` | `false` | `LDAP_NESTGROUP_ENABLED` | Nested-group expansion; interacts with memberof, so verify `memberOf` results before relying on it. |
+| `dynlistEnabled` | `false` | `LDAP_DYNLIST_ENABLED` | Dynamic groups: `groupOfURLs` members computed at search time. Fails to render with replication enabled (computed values would enter the syncrepl stream). |
+| `sssvlvMainEnabled` | `false` | `LDAP_SSSVLV_MAIN_ENABLED` | Server-side sort / virtual list view; costs memory per sorted search, enable only for clients that need it. |
+| `otpEnabled` | `false` | `LDAP_OTP_ENABLED` | OTP overlay; needs its schema and per-user OTP data provisioned. |
 
 ## Keycloak SSO
 
@@ -497,6 +606,20 @@ in this order. Do the same:
 4. **Know which revision you are rolling back to.** `helm rollback <release>`
    with no revision goes to the previous one, which is what you want after a
    failed upgrade. Naming a number gets stale.
+
+### Rollback and downgrade
+
+An older image does **not** ignore attributes a newer image wrote into
+`cn=config`. With `ldap.modules.ppmEnabled=true` (the default) the upgraded
+volume holds `olcPPolicyCheckModule: /usr/lib/openldap/ppm.so` (and
+`nestgroup.la` when enabled); an older image without `ppm.so` fails to start
+slapd (`lt_dlopen ... file not found` at config load, crash loop). Before
+rolling back to an image that predates these modules: upgrade values to
+`ldap.modules.ppmEnabled=false` (and every opt-in module `false`), restart once
+on the NEW image so the reconcile removes the wiring, then roll back. Verified
+live: the reconcile removes `olcPPolicyCheckModule` from the ppolicy overlay and
+`pwdUseCheckModule`/`pwdCheckModuleArg` from the default policy; the older image
+then started healthy on the same volume.
 
 ### What a rolling upgrade costs
 
@@ -1076,3 +1199,54 @@ CI runs for the default, replicated, TLS, and UI profiles.
 ## Known gaps
 
 - Not deployed to a real cluster as part of authoring this chart.
+
+### Optional application SSO permissions
+
+Set `ui.applicationProfiles.enabled=true`, supply `existingClaim` and explicit
+`adminDNs`. The existing PVC must allow uid/gid 65532 to write `/var/lib/ldapium`.
+The chart requires one UI replica and uses Recreate to prevent concurrent file
+writers. Back up the PVC; rollback by disabling the feature preserves its data.
+No PVC is implicitly created and no application role is deleted on disablement.
+
+`ui.keycloakAdmin.enabled=true` additionally requires HTTPS `url`, `realm`,
+`clientID`, `observeClients`, and `existingSecret`/`secretKey`. Service credentials
+are loaded through a Secret reference. Optional `delegateClients` require
+`isolatedRealm=true`; `managedGroupIDs` restrict group-role mutations. Use a
+dedicated isolated realm and service account as described in [UI README](../../ui/README.md).
+Shared-realm delegation and multi-replica profile persistence are unsupported.
+Exports are reviewable app configuration artifacts; installation does not apply
+native application permissions automatically.
+
+### UI-managed backup policies
+
+Opt-in `ui.backups` adds independent scheduled data/log backup execution and local,
+S3, FTP/FTPS and SSH/SFTP destinations. Build the optional `backup-runtime` target
+in `ui/Dockerfile`, point `ui.image` at that image, then configure:
+
+```yaml
+ui:
+  enabled: true
+  image:
+    repository: your-registry/ldapium-ui-backup
+    tag: your-pinned-tag
+  backups:
+    enabled: true
+    runtimeConfirmed: true
+    existingClaim: ldapium-backup-archives
+    existingSecret: ldapium-backup-operator
+    adminDNs: ["cn=admin,dc=example,dc=org"]
+    logExistingClaim: "" # optional log-only PVC, never live LDAP MDB
+```
+
+Enabling requires one UI replica and selects Recreate strategy. PVC must be writable
+by uid/gid 65532. Secret mounted read-only at /etc/ldapium-backup provides operator.json,
+rclone.conf, LDAP password and any SSH keys/known_hosts/CA certificates it references.
+Operator root must be /var/lib/ldapium-backups. Optional log claim is mounted read-only
+at /var/log/ldapium-backup; register exact file paths there. Logs must be made available
+through a log-only claim with suitable access mode/topology, not the live MDB volume.
+Use separate remote prefixes and unique stable instance IDs; credentials need limited
+read/write/list/delete rights for owned-backup retention. No Secret values are rendered.
+The runtimeConfirmed setting is an operator assertion; Helm cannot inspect image contents.
+
+Backups UI policies default disabled. Select one scheduler owner: existing `backup`
+CronJob and this controller otherwise operate independently. See [UI operating guide](../../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).

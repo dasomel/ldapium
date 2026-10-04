@@ -23,6 +23,10 @@ ldapium packages upstream OpenLDAP 2.6.15 compiled directly from source
   `accesslog`, and `auditlog` (`image/ldifs/01-cn-config.ldif`).
 - Packaging for Kubernetes via a Helm chart (`charts/ldapium`) supporting single-node
   operation and N-way multi-provider replication (`image/entrypoint.sh`).
+- Optional single-instance application SSO profile metadata is stored in a local JSON
+  file when explicitly enabled. Profiles describe OIDC/native-role mappings; they do
+  not define authoritative roles or apply Keycloak/OSS policies. See [UI profile
+  setup](../ui/README.md#application-sso-integration-profiles-first-implementation-slice).
 - A lightweight management web application (`ui/backend`) providing a DIT browser,
   user/group management, and password controls. The UI operates with no local database:
   it proxies actions over direct LDAP binds or gates access via Keycloak OIDC SSO.
@@ -531,3 +535,15 @@ ldapium provides no dual-write engine, no live synchronization proxy, and no sta
 canary cutover engine. Transitioning from an existing directory requires an external
 cutover procedure (e.g., quiesce writes on legacy directory, export final LDIF, import
 into ldapium, switch DNS or service endpoints).
+
+## Optional Keycloak application integration
+
+LDAPium can store application integration metadata and expose explicitly delegated
+Keycloak client-role/composite/group-role operations. Keycloak remains the role
+authority; application native authorization remains the enforcement authority.
+Generic OIDC contracts and Grafana/ArgoCD exports support capability-based
+integration without defining a mandatory OSS catalog. This feature is opt-in,
+single-process, admin-allowlisted and limited to app-wide mapping. It introduces
+no organization policy engine, bearer PDP, generic remote execution or distributed
+IGA database. See [UI operations](../ui/README.md) and
+[implementation evidence](changes/oidc-organization-authorization/IMPLEMENTATION.md).

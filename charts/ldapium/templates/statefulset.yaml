@@ -1,3 +1,4 @@
+{{- include "ldapium.validateHardening" . }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -97,10 +98,54 @@ spec:
               value: {{ .Values.ldap.uniqueAttributes | quote }}
             - name: LDAP_PASSWORD_POLICY_ENABLED
               value: {{ .Values.ldap.passwordPolicyEnabled | quote }}
+            - name: LDAP_PASSWORD_FAILURE_INTERVAL
+              value: {{ .Values.ldap.passwordFailureInterval | int64 | quote }}
+            - name: LDAP_IDLE_TIMEOUT
+              value: {{ .Values.ldap.limits.idleTimeout | int64 | quote }}
+            - name: LDAP_WRITE_TIMEOUT
+              value: {{ .Values.ldap.limits.writeTimeout | int64 | quote }}
+            - name: LDAP_CONN_MAX_PENDING
+              value: {{ .Values.ldap.limits.connMaxPending | int64 | quote }}
+            - name: LDAP_CONN_MAX_PENDING_AUTH
+              value: {{ .Values.ldap.limits.connMaxPendingAuth | int64 | quote }}
+            - name: LDAP_SOCKBUF_MAX_INCOMING
+              value: {{ .Values.ldap.limits.sockbufMaxIncoming | int64 | quote }}
+            - name: LDAP_SOCKBUF_MAX_INCOMING_AUTH
+              value: {{ .Values.ldap.limits.sockbufMaxIncomingAuth | int64 | quote }}
+            - name: LDAP_MAX_FILTER_DEPTH
+              value: {{ .Values.ldap.limits.maxFilterDepth | int64 | quote }}
+            - name: LDAP_LASTBIND_ENABLED
+              value: {{ .Values.ldap.lastBind.enabled | quote }}
+            - name: LDAP_LASTBIND_PRECISION
+              value: {{ .Values.ldap.lastBind.precision | quote }}
+            - name: LDAP_PPM_ENABLED
+              value: {{ .Values.ldap.modules.ppmEnabled | quote }}
+            - name: LDAP_PPM_MIN_CLASSES
+              value: {{ .Values.ldap.modules.ppmMinClasses | int64 | quote }}
+            - name: LDAP_DEREF_ENABLED
+              value: {{ .Values.ldap.modules.derefEnabled | quote }}
+            - name: LDAP_CONSTRAINT_ENABLED
+              value: {{ .Values.ldap.modules.constraintEnabled | quote }}
+            - name: LDAP_CONSTRAINT_MAIL_REGEX
+              value: {{ .Values.ldap.modules.constraintMailRegex | quote }}
+            - name: LDAP_NESTGROUP_ENABLED
+              value: {{ .Values.ldap.modules.nestgroupEnabled | quote }}
+            - name: LDAP_DYNLIST_ENABLED
+              value: {{ .Values.ldap.modules.dynlistEnabled | quote }}
+            - name: LDAP_SSSVLV_MAIN_ENABLED
+              value: {{ .Values.ldap.modules.sssvlvMainEnabled | quote }}
+            - name: LDAP_OTP_ENABLED
+              value: {{ .Values.ldap.modules.otpEnabled | quote }}
+            - name: LDAP_REQUIRE_TLS
+              value: {{ .Values.ldap.hardening.requireTls | quote }}
+            - name: LDAP_DISALLOW_ANON_BIND
+              value: {{ .Values.ldap.hardening.disallowAnonBind | quote }}
+            - name: LDAP_REQUIRE_AUTHC
+              value: {{ .Values.ldap.hardening.requireAuthc | quote }}
             - name: LDAP_MAX_OPEN_FILES
-              value: {{ .Values.ldap.maxOpenFiles | quote }}
+              value: {{ .Values.ldap.maxOpenFiles | int64 | quote }}
             - name: LDAP_DB_MAX_SIZE
-              value: {{ (default (include "ldapium.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
+              value: {{ (default (include "ldapium.dataVolumeBytes" .) (kindIs "float64" .Values.ldap.dbMaxSize | ternary (int64 .Values.ldap.dbMaxSize) .Values.ldap.dbMaxSize)) | quote }}
             - name: LDAP_AUDIT_ENABLED
               value: {{ .Values.audit.enabled | quote }}
             {{- if .Values.audit.enabled }}
@@ -111,7 +156,7 @@ spec:
               value: {{ .Values.audit.accessLog.enabled | quote }}
             {{- if .Values.audit.accessLog.enabled }}
             - name: LDAP_ACCESSLOG_PURGE_DAYS
-              value: {{ .Values.audit.accessLog.purgeDays | quote }}
+              value: {{ .Values.audit.accessLog.purgeDays | int64 | quote }}
             {{- if .Values.audit.accessLog.ops }}
             - name: LDAP_ACCESSLOG_OPS
               value: {{ .Values.audit.accessLog.ops | quote }}
@@ -123,6 +168,10 @@ spec:
             - name: LDAP_TLS_ENABLED
               value: {{ .Values.tls.enabled | quote }}
             {{- if .Values.tls.enabled }}
+            {{- if .Values.tls.ecName }}
+            - name: LDAP_TLS_EC_NAME
+              value: {{ .Values.tls.ecName | quote }}
+            {{- end }}
             - name: LDAP_TLS_CERT_FILE
               value: {{ .Values.tls.certFile | quote }}
             - name: LDAP_TLS_KEY_FILE
@@ -164,7 +213,8 @@ spec:
             exec:
               command:
                 - ldapwhoami
-                - -x
+                - -Y
+                - EXTERNAL
                 - -H
                 - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
             periodSeconds: {{ .Values.startupProbe.periodSeconds }}
@@ -173,7 +223,8 @@ spec:
             exec:
               command:
                 - ldapwhoami
-                - -x
+                - -Y
+                - EXTERNAL
                 - -H
                 - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
@@ -183,7 +234,8 @@ spec:
             exec:
               command:
                 - ldapwhoami
-                - -x
+                - -Y
+                - EXTERNAL
                 - -H
                 - ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}

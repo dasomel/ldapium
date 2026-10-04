@@ -143,3 +143,35 @@ func TestMapErr_Nil(t *testing.T) {
 		t.Errorf("mapErr('op', nil) = %v, want nil", got)
 	}
 }
+
+func TestMapMemberErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"value exists -> conflict", &ldap.Error{ResultCode: ldap.LDAPResultAttributeOrValueExists, Err: errors.New("member: value #0 provided more than once")}, domain.ErrConflict},
+		{"no such attribute -> not found", &ldap.Error{ResultCode: ldap.LDAPResultNoSuchAttribute, Err: errors.New("modify/delete: member: no such value")}, domain.ErrNotFound},
+		{"no such object -> not found", &ldap.Error{ResultCode: ldap.LDAPResultNoSuchObject}, domain.ErrNotFound},
+		{"insufficient access -> denied", &ldap.Error{ResultCode: ldap.LDAPResultInsufficientAccessRights}, domain.ErrPermissionDenied},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mapMemberErr("add member", tc.err); !errors.Is(got, tc.want) {
+				t.Errorf("mapMemberErr(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+	if got := mapMemberErr("add member", nil); got != nil {
+		t.Errorf("mapMemberErr(nil) = %v, want nil", got)
+	}
+}
+
+// Unlock deletes pwdAccountLockedTime, so NoSuchAttribute there means "not
+// locked", not "missing resource": the global mapping must stay unmapped.
+func TestMapErr_NoSuchAttributeStaysUnmapped(t *testing.T) {
+	got := mapErr("unlock user", &ldap.Error{ResultCode: ldap.LDAPResultNoSuchAttribute})
+	if errors.Is(got, domain.ErrNotFound) {
+		t.Errorf("mapErr mapped NoSuchAttribute to ErrNotFound: %v", got)
+	}
+}

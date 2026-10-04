@@ -145,6 +145,10 @@ make local-up
 make local-credentials
 ```
 
+For local Keycloak LDAP federation, run `make keycloak-up` and open
+`http://127.0.0.1:8180/admin/`. See [local Keycloak testing](docs/testing/keycloak-local.md)
+for login details, user/group synchronization, test commands, and shutdown.
+
 Then open `http://localhost:8080` (or `${UI_PORT}`) for the UI, and
 `ldap://localhost:389` (or `${LDAP_PORT}`) for direct LDAP access. Data
 persists in the named `ldap-config`/`ldap-data` volumes — deliberately named
