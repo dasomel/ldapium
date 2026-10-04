@@ -14,10 +14,40 @@ helm install ldap charts/ldapium \
   --set auth.adminPassword="$(openssl rand -base64 24)"
 ```
 
-There is **no default admin password** — the chart refuses to render
-(`helm template`/`install` fails with an explicit error) unless
-`auth.adminPassword` or `auth.existingSecret` is set. This mirrors
-`image/entrypoint.sh`, which refuses to start for the same reason.
+There is **no default admin password**: `image/entrypoint.sh` refuses to start
+without one. With neither `auth.adminPassword` nor `auth.existingSecret` set, a
+live `helm install` generates a 64-character password once into the
+`<release>-ldapium-admin` Secret and reuses it on every upgrade (via `lookup`).
+
+### GitOps, `helm template` and dry-runs: explicit credentials required
+
+`lookup` is empty in any offline render (`helm template`, ArgoCD, `--dry-run=client`,
+CI previews: anything that renders without reading the live cluster), so generating
+there would mint a different password on every sync while the data volume keeps the rootpw hashed at first bootstrap, which
+locks the directory out. The chart therefore **fails closed**: when it would
+generate and the release namespace cannot be looked up, rendering aborts. Set
+`auth.existingSecret` (preferred; the Secret is yours and is never rendered or
+deleted by the chart) or `auth.adminPassword`. `helm install/upgrade
+--dry-run=server` can look up and works without credentials;
+`--dry-run=client` needs them. A **brand-new namespace** (`helm install
+--create-namespace`) is not visible to `lookup` either, because Helm renders before
+it creates the namespace: create the namespace first or pass the password
+explicitly. A namespace-scoped RBAC user that may not read Namespaces gets the same
+failure (fail closed, never a generated password).
+
+On **upgrade** the chart also refuses to generate: if the admin Secret is missing
+(deleted by hand, or an `existingSecret` deployment upgraded with `--reset-values`),
+the data volume still holds the rootpw derived from the original password, so a new
+one would lock the directory out. Restore the Secret or pass the ORIGINAL password
+via `auth.existingSecret` / `auth.adminPassword`.
+
+The generated Secret carries `helm.sh/resource-policy: keep`, so `helm uninstall`
+leaves it, just as it leaves the PVCs. Reinstalling with the **same release name
+and namespace** reuses it and the retained data keeps working. The orphaned
+Secret is not garbage-collected: delete it (`kubectl delete secret
+<release>-ldapium-admin`) together with the PVCs when you want a clean slate. If
+you reinstall under a different release name, or lost the Secret, pass the
+original password via `auth.existingSecret`/`auth.adminPassword`.
 
 ### Three `helm` footguns, hit for real while operating this chart
 
@@ -218,7 +248,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `networkPolicy.enabled` | `false` | Renders a NetworkPolicy for the server pods. See [Hardening](#hardening). |
 | `networkPolicy.ingressFrom` | `[{podSelector: {}}]` | Raw NetworkPolicy `from` peers allowed on 389/636 (default: same namespace). Must be non-empty: `from: []` would mean allow-all, so the chart fails to render instead. |
 | `networkPolicy.monitoringNamespaceSelector` | `kubernetes.io/metadata.name: monitoring` | Namespace allowed to scrape port 9330 (only when `metrics.enabled`). |
-| `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required unless `existingSecret` is set. |
+| `auth.adminPassword` | `""` | → `LDAP_ADMIN_PASSWORD` via a chart-created Secret. Required for offline renders (`helm template`, ArgoCD/Flux) unless `existingSecret` is set; a live install generates and keeps one when empty. |
 | `auth.existingSecret` | `""` | Pre-existing Secret name to source the admin password from. |
 | `auth.existingSecretKey` | `admin-password` | Key within the Secret. |
 | `tls.enabled` | `false` | Serves LDAPS on 636 and moves replication to `ldaps://`. See [TLS](#tls). |
@@ -1186,3 +1216,37 @@ dedicated isolated realm and service account as described in [UI README](../../u
 Shared-realm delegation and multi-replica profile persistence are unsupported.
 Exports are reviewable app configuration artifacts; installation does not apply
 native application permissions automatically.
+
+### UI-managed backup policies
+
+Opt-in `ui.backups` adds independent scheduled data/log backup execution and local,
+S3, FTP/FTPS and SSH/SFTP destinations. Build the optional `backup-runtime` target
+in `ui/Dockerfile`, point `ui.image` at that image, then configure:
+
+```yaml
+ui:
+  enabled: true
+  image:
+    repository: your-registry/ldapium-ui-backup
+    tag: your-pinned-tag
+  backups:
+    enabled: true
+    runtimeConfirmed: true
+    existingClaim: ldapium-backup-archives
+    existingSecret: ldapium-backup-operator
+    adminDNs: ["cn=admin,dc=example,dc=org"]
+    logExistingClaim: "" # optional log-only PVC, never live LDAP MDB
+```
+
+Enabling requires one UI replica and selects Recreate strategy. PVC must be writable
+by uid/gid 65532. Secret mounted read-only at /etc/ldapium-backup provides operator.json,
+rclone.conf, LDAP password and any SSH keys/known_hosts/CA certificates it references.
+Operator root must be /var/lib/ldapium-backups. Optional log claim is mounted read-only
+at /var/log/ldapium-backup; register exact file paths there. Logs must be made available
+through a log-only claim with suitable access mode/topology, not the live MDB volume.
+Use separate remote prefixes and unique stable instance IDs; credentials need limited
+read/write/list/delete rights for owned-backup retention. No Secret values are rendered.
+The runtimeConfirmed setting is an operator assertion; Helm cannot inspect image contents.
+
+Backups UI policies default disabled. Select one scheduler owner: existing `backup`
+CronJob and this controller otherwise operate independently. See [UI operating guide](../../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).

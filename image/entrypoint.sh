@@ -91,7 +91,45 @@ if [ -n "${LDAP_ADMIN_PASSWORD_FILE:-}" ]; then
   [ -r "$LDAP_ADMIN_PASSWORD_FILE" ] || die "LDAP_ADMIN_PASSWORD_FILE is set but not readable: ${LDAP_ADMIN_PASSWORD_FILE}"
   LDAP_ADMIN_PASSWORD=$(cat "$LDAP_ADMIN_PASSWORD_FILE")
 fi
-: "${LDAP_ADMIN_PASSWORD:?LDAP_ADMIN_PASSWORD (or LDAP_ADMIN_PASSWORD_FILE) is required — this image ships no default admin password}"
+# D40: random credentials are created once on the durable data volume. Existing
+# directories must never acquire an unrelated password after a missing Secret.
+GENERATED_PASSWORD_DIR="${DATA_DIR}/.credentials"
+GENERATED_PASSWORD_FILE="${GENERATED_PASSWORD_DIR}/ldap-admin-password"
+if [ -n "${LDAP_ADMIN_PASSWORD_FILE:-}" ]; then
+  [ -n "$LDAP_ADMIN_PASSWORD" ] || die "LDAP_ADMIN_PASSWORD_FILE is empty"
+elif [ -z "${LDAP_ADMIN_PASSWORD:-}" ]; then
+  # D40a: replication binds as rootDN (D3) and the peer checks it against its own
+  # rootpw, so every node must share one operator-supplied admin password. A
+  # per-node generated value (or an explicit LDAP_REPLICATION_PASSWORD, which
+  # still has to match each peer's rootpw) would make syncrepl fail silently.
+  case "${LDAP_REPLICATION_ENABLED:-false}" in
+    true|1) die "LDAP_REPLICATION_ENABLED requires an explicit shared LDAP_ADMIN_PASSWORD or LDAP_ADMIN_PASSWORD_FILE on every node; a generated per-node admin password would break replication authentication" ;;
+  esac
+  [ ! -L "$GENERATED_PASSWORD_DIR" ] && [ ! -L "$GENERATED_PASSWORD_FILE" ] || die "generated credential paths must not be symlinks"
+  if [ ! -f "$GENERATED_PASSWORD_FILE" ]; then
+    [ ! -f "$MARKER" ] && [ -z "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ] || die "existing LDAP configuration requires its original admin password; supply LDAP_ADMIN_PASSWORD or LDAP_ADMIN_PASSWORD_FILE"
+    if [ ! -d "$GENERATED_PASSWORD_DIR" ]; then
+      (umask 077; mkdir -m 700 "$GENERATED_PASSWORD_DIR") || die "cannot create private credential directory"
+    fi
+    [ "$(stat -c '%a:%u' "$GENERATED_PASSWORD_DIR")" = "700:$(id -u)" ] || die "generated credential directory must be private and owned by the LDAP user"
+    (umask 077
+      temporary=$(mktemp "$GENERATED_PASSWORD_DIR/.admin-XXXXXX")
+      trap 'rm -f "$temporary"' EXIT HUP INT TERM
+      generated=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+      [ "${#generated}" = 64 ] || exit 1
+      # set -e is off inside this subshell, so check each write explicitly:
+      # an empty/short file must never reach the publish step.
+      printf '%s' "$generated" > "$temporary" || exit 1
+      [ -s "$temporary" ] && [ "$(wc -c < "$temporary" | tr -d ' ')" = 64 ] || exit 1
+      # Publishing a complete file by hard link avoids partial reads and races.
+      ln "$temporary" "$GENERATED_PASSWORD_FILE" 2>/dev/null || [ -f "$GENERATED_PASSWORD_FILE" ]
+    ) || die "cannot generate persistent admin password"
+    log "admin password generated; retrieve it with scripts/get-credentials.sh --local"
+  fi
+  [ "$(stat -c '%a:%u' "$GENERATED_PASSWORD_DIR")" = "700:$(id -u)" ] || die "generated credential directory is not private"
+  [ "$(stat -c '%a:%u' "$GENERATED_PASSWORD_FILE")" = "600:$(id -u)" ] || die "generated admin password must be private and owned by the LDAP user"
+  LDAP_ADMIN_PASSWORD=$(cat "$GENERATED_PASSWORD_FILE")
+fi
 [ -n "$LDAP_ADMIN_PASSWORD" ] || die "LDAP_ADMIN_PASSWORD is empty"
 
 LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL:-stats}"

@@ -192,11 +192,12 @@ auth:
   #    never a plaintext env var). Leave empty and use existingSecret
   #    instead for anything beyond local smoke-testing.
   #
-  #    There is intentionally NO default here: image/entrypoint.sh refuses to
-  #    start without LDAP_ADMIN_PASSWORD, and this chart enforces the same
-  #    rule at render time — `helm template`/`install` fails loudly if
-  #    neither adminPassword nor existingSecret is set, rather than silently
-  #    shipping a default credential.
+  #    There is intentionally NO default here. Left empty, a live
+  #    `helm install` generates a password once (Secret annotated
+  #    helm.sh/resource-policy: keep) and reuses it via lookup. Offline renders
+  #    (helm template, ArgoCD/Flux, --dry-run=client) cannot look it up and
+  #    FAIL rather than mint a new password per render that would lock out the
+  #    existing data: set this or existingSecret there.
   adminPassword: ""
   # -- Name of a pre-existing Secret to source the admin password from
   #    instead of adminPassword. Takes precedence when set.
@@ -533,6 +534,16 @@ ui:
     pullPolicy: IfNotPresent
 
   replicaCount: 1
+
+  # Opt-in backup-runtime image, private writable PVC and operator Secret.
+  backups:
+    enabled: false
+    runtimeConfirmed: false
+    existingClaim: ""
+    existingSecret: ""
+    adminDNs: []
+    # Optional read-only LOG-ONLY claim; never mount the live LDAP MDB here.
+    logExistingClaim: ""
 
   # Optional single-process application metadata; PVC must be writable by uid 65532.
   applicationProfiles:

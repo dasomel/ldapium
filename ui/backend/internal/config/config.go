@@ -1,6 +1,6 @@
 // Package config loads server configuration from environment variables.
-// Nothing security-relevant has a hardcoded default: LDAP URL, base DN, and
-// the session secret must always be supplied explicitly.
+// LDAP URL and base DN are explicit. Missing session secrets are generated
+// once in a private durable store; no fixed credential is shipped.
 package config
 
 import (
@@ -15,9 +15,15 @@ import (
 
 // Config is the fully resolved runtime configuration for the server.
 type Config struct {
-	Keycloak            KeycloakConfig
-	AppProfilesPath     string
-	AppProfilesAdminDNs []string
+	SessionSecretSource  string
+	BackupOperatorConfig string
+	BackupPolicyPath     string
+	BackupWorkerPath     string
+	BackupPython         string
+	BackupAdminDNs       []string
+	Keycloak             KeycloakConfig
+	AppProfilesPath      string
+	AppProfilesAdminDNs  []string
 
 	// AppVersion identifies the management UI build. It is injected during
 	// image construction and is informational only.
@@ -156,6 +162,11 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
+		BackupOperatorConfig:     strings.TrimSpace(getenv("BACKUP_OPERATOR_CONFIG")),
+		BackupPolicyPath:         strings.TrimSpace(getenv("BACKUP_POLICY_PATH")),
+		BackupWorkerPath:         strings.TrimSpace(getenv("BACKUP_WORKER_PATH")),
+		BackupPython:             orDefault(getenv("BACKUP_PYTHON"), "/usr/bin/python3"),
+		BackupAdminDNs:           splitEntries(getenv("BACKUP_ADMIN_DNS")),
 		AppProfilesPath:          strings.TrimSpace(getenv("APP_PROFILES_PATH")),
 		AppVersion:               orDefault(getenv("APP_VERSION"), "development"),
 		OpenLDAPVersion:          strings.TrimSpace(getenv("OPENLDAP_VERSION")),
@@ -192,6 +203,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("APP_PROFILES_PATH requires APP_PROFILES_ADMIN_DNS")
 	}
 
+	if cfg.BackupOperatorConfig != "" && (cfg.BackupPolicyPath == "" || cfg.BackupWorkerPath == "" || len(cfg.BackupAdminDNs) == 0) {
+		return Config{}, fmt.Errorf("BACKUP_OPERATOR_CONFIG requires policy path, worker path and admin DNs")
+	}
 	var err error
 	cfg.Keycloak, err = loadKeycloak(getenv)
 	if err != nil {
@@ -266,6 +280,13 @@ func Load(getenv func(string) string) (Config, error) {
 		cfg.GroupCreateBase = cfg.BaseDN
 	}
 
+	if cfg.LDAPURL != "" && cfg.BaseDN != "" {
+		var err error
+		cfg.SessionSecret, cfg.SessionSecretSource, err = sessionSecret(getenv)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
 	}
