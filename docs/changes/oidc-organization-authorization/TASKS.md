@@ -60,7 +60,7 @@ T-018/019의 외부 중앙 check는 선택 기능이며 T-041–044는 예시 ad
 - [x] T-062 (REQ-028 partial) Explicit admin DN gate, same-origin writes and strict JSON API.
 - [x] T-063 (AC-030 partial) Arbitrary app registration UI, role mapping and configured status.
 - [x] T-064 Persistence restart, HTTP negative tests and actual LDAP/browser journey.
-- [ ] T-065 Independent implementation review; KC-backed observe/delegate remains next.
+- [x] T-065 Independent review and finding fixes; see ui-review/FOLLOW-UP.md.
 
 Evidence: [IMPLEMENTATION.md](IMPLEMENTATION.md). G1 is partially implemented;
 no KC write, native application adapter, PostgreSQL/HA or organizational grants are complete.
@@ -79,6 +79,19 @@ alternatives and are not prerequisites to the current generic integration.
 - [x] T-067 Actual Grafana OIDC Editor and unmatched login denial.
 - [x] T-068 Helm persistence/Secret wiring and deployment guards.
 - [x] T-030 Current UI/product/Helm operation documentation synchronized.
-- [ ] T-065 Independent review remains outstanding (KC implementation is delivered).
+- [x] T-065 Independent security/compatibility review, P2 fixes and re-review completed.
 
 Evidence and explicit limits: [IMPLEMENTATION.md](IMPLEMENTATION.md).
+
+## OSS guidance UI — 2026-10-02
+
+- [x] T-070 Official OSS authorization research and reusable guidance (examples, not fixed catalog).
+- [x] T-071 Optional persisted guide metadata with legacy compatibility and capability API.
+- [x] T-072 Structured mapping UI, setup/Keycloak/delivery stages and truthful verification status.
+- [x] T-073 Browser guide persistence/export/negative checks, live Keycloak/Grafana regression.
+- [x] T-074 8080/5173 deployment with retained test-data, actual proxy-write fix and metadata cleanup.
+
+Evidence: [OSS-UI.md](OSS-UI.md). Manual guides are not native ACL provisioning.
+
+- [x] T-075 Reusable administrator-defined methods: private persistence, guarded API and UI editor.
+- [x] T-076 Custom-method browser create/edit/reuse and backend-restart persistence.

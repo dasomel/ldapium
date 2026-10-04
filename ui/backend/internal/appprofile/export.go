@@ -15,7 +15,7 @@ type Artifact struct {
 	Warnings []string `json:"warnings"`
 }
 
-var policyWord = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`)
+var policyWord = regexp.MustCompile(`^[A-Za-z0-9/][A-Za-z0-9:/_-]{0,127}$`)
 
 // Export produces data/config, never executable commands or remote mutations.
 func (p Profile) Export(adapter string) (Artifact, error) {

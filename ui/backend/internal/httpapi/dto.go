@@ -29,23 +29,24 @@ type auditActionsResponse struct {
 // administration. Connection hosts, certificate paths, and session secrets
 // remain server-only infrastructure details.
 type serverSettingsResponse struct {
-	ApplicationVersion string       `json:"applicationVersion"`
-	OpenLDAPVersion    string       `json:"openLdapVersion"`
-	OSSVersions        []ossVersion `json:"ossVersions"`
-	PasswordHash       string       `json:"passwordHash"`
-	PasswordPolicy     bool         `json:"passwordPolicy"`
-	UniqueAttributes   []string     `json:"uniqueAttributes"`
-	LoadedModules      []string     `json:"loadedModules"`
-	ActiveOverlays     []string     `json:"activeOverlays"`
-	BaseDN             string       `json:"baseDn"`
-	UserSearchBase     string       `json:"userSearchBase"`
-	UserCreateBase     string       `json:"userCreateBase"`
-	GroupSearchBase    string       `json:"groupSearchBase"`
-	GroupCreateBase    string       `json:"groupCreateBase"`
-	ConnectionSecurity string       `json:"connectionSecurity"`
-	TLSVerified        bool         `json:"tlsVerified"`
-	SessionTTLSeconds  int64        `json:"sessionTtlSeconds"`
-	CookieSecure       bool         `json:"cookieSecure"`
+	SessionSecretSource string       `json:"sessionSecretSource,omitempty"`
+	ApplicationVersion  string       `json:"applicationVersion"`
+	OpenLDAPVersion     string       `json:"openLdapVersion"`
+	OSSVersions         []ossVersion `json:"ossVersions"`
+	PasswordHash        string       `json:"passwordHash"`
+	PasswordPolicy      bool         `json:"passwordPolicy"`
+	UniqueAttributes    []string     `json:"uniqueAttributes"`
+	LoadedModules       []string     `json:"loadedModules"`
+	ActiveOverlays      []string     `json:"activeOverlays"`
+	BaseDN              string       `json:"baseDn"`
+	UserSearchBase      string       `json:"userSearchBase"`
+	UserCreateBase      string       `json:"userCreateBase"`
+	GroupSearchBase     string       `json:"groupSearchBase"`
+	GroupCreateBase     string       `json:"groupCreateBase"`
+	ConnectionSecurity  string       `json:"connectionSecurity"`
+	TLSVerified         bool         `json:"tlsVerified"`
+	SessionTTLSeconds   int64        `json:"sessionTtlSeconds"`
+	CookieSecure        bool         `json:"cookieSecure"`
 }
 
 type ossVersion struct {

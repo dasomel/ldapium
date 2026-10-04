@@ -17,13 +17,17 @@ var ErrNotFound = errors.New("profile not found")
 // Store is single-process metadata persistence. D18: atomic file replacement
 // avoids a DB dependency for this slice; shared writers require a future DB.
 type Store struct {
-	mu       sync.Mutex
-	path     string
-	profiles map[string]Profile
+	mu        sync.Mutex
+	path      string
+	profiles  map[string]Profile
+	templates map[string]Template
 }
 
 func Open(path string) (*Store, error) {
 	s := &Store{path: path, profiles: map[string]Profile{}}
+	if err := s.loadTemplates(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -71,7 +75,13 @@ func clone(p Profile) Profile { p.Mappings = append([]Mapping{}, p.Mappings...);
 func (s *Store) List() []Profile {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return list(s.profiles)
+	out := []Profile{}
+	for _, p := range list(s.profiles) {
+		if !p.Deleted {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 func list(profiles map[string]Profile) []Profile {
 	out := make([]Profile, 0, len(profiles))
@@ -85,7 +95,7 @@ func (s *Store) Get(id string) (Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.profiles[id]
-	if !ok {
+	if !ok || p.Deleted {
 		return Profile{}, ErrNotFound
 	}
 	return clone(p), nil
@@ -93,16 +103,19 @@ func (s *Store) Get(id string) (Profile, error) {
 
 // Put requires revision zero for creation, or the currently observed revision.
 func (s *Store) Put(p Profile, expected uint64) (Profile, error) {
+	if p.Deleted {
+		return Profile{}, fmt.Errorf("deleted is server-managed")
+	}
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.profiles[p.ID]
-	if old.Revision != expected {
+	if (old.Deleted && expected != 0) || (!old.Deleted && old.Revision != expected) {
 		return Profile{}, ErrConflict
 	}
-	if expected == 0 && len(s.profiles) >= 1000 {
+	if expected == 0 && !old.Deleted && len(s.profiles) >= 1000 {
 		return Profile{}, fmt.Errorf("profile limit reached")
 	}
 	p = clone(p)
@@ -120,14 +133,18 @@ func (s *Store) Put(p Profile, expected uint64) (Profile, error) {
 	return clone(p), nil
 }
 func (s *Store) persist(profiles map[string]Profile) error {
-	b, err := json.MarshalIndent(list(profiles), "", "  ")
+	return writeMetadata(s.path, list(profiles), 4<<20)
+}
+
+func writeMetadata(path string, data any, limit int) error {
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-	if len(b) > 4<<20 {
-		return fmt.Errorf("profile file exceeds 4 MiB")
+	if len(b) > limit {
+		return fmt.Errorf("metadata exceeds %d bytes", limit)
 	}
-	dir := filepath.Dir(s.path)
+	dir := filepath.Dir(path)
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
@@ -148,7 +165,7 @@ func (s *Store) persist(profiles map[string]Profile) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, s.path)
+	return os.Rename(name, path)
 }
 
 // Delete removes only metadata, preserving all Keycloak and application objects.
@@ -156,18 +173,21 @@ func (s *Store) Delete(id string, expected uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.profiles[id]
-	if !ok {
+	if !ok || p.Deleted {
 		return ErrNotFound
 	}
 	if p.Revision != expected {
 		return ErrConflict
 	}
-	next := make(map[string]Profile, len(s.profiles)-1)
+	next := make(map[string]Profile, len(s.profiles))
 	for key, v := range s.profiles {
-		if key != id {
-			next[key] = v
-		}
+		next[key] = v
 	}
+	// D28: retain a private tombstone so recreated IDs cannot reuse stale ETags.
+	// Cost: deleted IDs count toward the bounded catalog; never purge live revisions.
+	p.Deleted = true
+	p.Revision++
+	next[id] = p
 	if err := s.persist(next); err != nil {
 		return err
 	}

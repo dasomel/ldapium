@@ -73,3 +73,38 @@ func TestFailedWriteDoesNotActivate(t *testing.T) {
 		t.Fatal("failed profile activated")
 	}
 }
+
+func TestRecreatedIDRejectsOldRevisionAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.Put(fixture(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Delete(old.ID, old.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.List()) != 0 {
+		t.Fatal("deleted profile listed")
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := s.Put(fixture(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Revision <= old.Revision {
+		t.Fatal("reused revision")
+	}
+	if _, err = s.Put(fixture(), old.Revision); err != ErrConflict {
+		t.Fatalf("stale put: %v", err)
+	}
+	if err = s.Delete(fresh.ID, old.Revision); err != ErrConflict {
+		t.Fatalf("stale delete: %v", err)
+	}
+}

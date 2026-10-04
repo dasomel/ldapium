@@ -1,6 +1,7 @@
 import { ApiError } from './api'
 
 export interface ApplicationProfile {
+  integration_type?: string
   id: string
   name: string
   client_id: string
@@ -68,5 +69,25 @@ export const integration = {
   export: (id: string, adapter: string) => call<{ content: string; filename: string; warnings: string[]; status: string }>(`/${encodeURIComponent(id)}/configuration-export?adapter=${encodeURIComponent(adapter)}`),
   preview: (id: string, values: string[]) => call<{ native_roles: string[]; unmapped_values: string[] }>(`/${encodeURIComponent(id)}/mapping-preview`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claim_values: values }),
+  }),
+}
+
+export interface IntegrationMethod {
+  id: string
+  name: string
+  summary: string
+  scope_note: string
+  documentation_url: string
+  claim_path: string
+  token_source: ApplicationProfile['token_source']
+  enforcement: ApplicationProfile['enforcement']
+  roles: string[]
+  steps: string[]
+  revision?: number
+}
+export const integrationMethods = {
+  list: () => call<{ methods: IntegrationMethod[] }>('/integration-methods'),
+  save: (method: IntegrationMethod, revision: number) => call<IntegrationMethod>(`/integration-methods/${encodeURIComponent(method.id)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': `"${revision}"` }, body: JSON.stringify(method),
   }),
 }

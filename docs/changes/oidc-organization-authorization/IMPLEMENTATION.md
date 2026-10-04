@@ -64,5 +64,6 @@ chart accepted a list containing an empty admin DN. Each was fixed and the
 relevant check rerun. No skipped or placeholder feature branches added.
 
 ArgoCD export has unit/structure verification, not a live ArgoCD deployment.
-Independent review has not been performed. Existing unrelated working-tree
+Independent review and finding re-review completed on 2026-10-02; see
+[follow-up evidence](../ui-review/FOLLOW-UP.md). Existing unrelated working-tree
 changes are preserved; no production credentials or external app mutations.

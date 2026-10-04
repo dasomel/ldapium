@@ -14,23 +14,33 @@ type Mapping struct {
 }
 
 type Profile struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	ClientID    string    `json:"client_id"`
-	Issuer      string    `json:"issuer"`
-	ClaimPath   string    `json:"claim_path"`
-	TokenSource string    `json:"token_source"`
-	Enforcement string    `json:"enforcement"`
-	Scope       string    `json:"scope"`
-	Mappings    []Mapping `json:"mappings"`
-	Revision    uint64    `json:"revision"`
-	Status      string    `json:"status"`
+	Deleted         bool      `json:"deleted,omitempty"`
+	IntegrationType string    `json:"integration_type,omitempty"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	ClientID        string    `json:"client_id"`
+	Issuer          string    `json:"issuer"`
+	ClaimPath       string    `json:"claim_path"`
+	TokenSource     string    `json:"token_source"`
+	Enforcement     string    `json:"enforcement"`
+	Scope           string    `json:"scope"`
+	Mappings        []Mapping `json:"mappings"`
+	Revision        uint64    `json:"revision"`
+	Status          string    `json:"status"`
 }
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 var claimPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
 
 func (p Profile) Validate() error {
+	// D23: optional guide metadata preserves legacy profiles; authority stays native.
+	switch p.IntegrationType {
+	case "", "generic", "grafana", "argocd", "harbor", "gitea", "kubernetes", "openbao", "oauth2-proxy":
+	default:
+		if !strings.HasPrefix(p.IntegrationType, "custom-") || !idPattern.MatchString(p.IntegrationType) {
+			return fmt.Errorf("unsupported integration_type; use generic or a registered custom method")
+		}
+	}
 	if !idPattern.MatchString(p.ID) {
 		return fmt.Errorf("id must contain 1–64 lowercase letters, digits or hyphens")
 	}

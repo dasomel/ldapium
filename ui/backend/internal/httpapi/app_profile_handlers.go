@@ -17,6 +17,8 @@ import (
 func (s *Server) profileRoutes(api *echo.Group) {
 	g := api.Group("/v1/applications", s.requireProfileAdmin)
 	g.GET("", s.handleListProfiles)
+	g.GET("/integration-methods", s.handleListMethods)
+	g.PUT("/integration-methods/:method", s.handlePutMethod)
 	g.GET("/:id/integration-profile", s.handleGetProfile)
 	g.PUT("/:id/integration-profile", s.handlePutProfile)
 	g.DELETE("/:id/integration-profile", s.handleDeleteProfile)
@@ -83,11 +85,16 @@ func (s *Server) handlePutProfile(c echo.Context) error {
 	if p.ID != c.Param("id") {
 		return echo.NewHTTPError(400, "profile ID must match path")
 	}
-	if p.Revision != 0 || p.Status != "" {
+	if p.Revision != 0 || p.Status != "" || p.Deleted {
 		return echo.NewHTTPError(400, "revision and status are server-managed")
 	}
 	if err = p.Validate(); err != nil {
 		return echo.NewHTTPError(422, err.Error())
+	}
+	if strings.HasPrefix(p.IntegrationType, "custom-") {
+		if _, err := s.profiles.Template(p.IntegrationType); err != nil {
+			return echo.NewHTTPError(422, "register the custom integration method first")
+		}
 	}
 	p, err = s.profiles.Put(p, expected)
 	if errors.Is(err, appprofile.ErrConflict) {

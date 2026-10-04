@@ -1,23 +1,48 @@
+import { createContext, useContext, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { useT } from '@/context/LanguageContext'
 import { cn } from '@/lib/utils'
 
-export const Dialog = DialogPrimitive.Root
+const ReturnFocus = createContext<React.RefObject<HTMLElement | null> | null>(null)
+
+export function Dialog({ open, defaultOpen, onOpenChange, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen ?? false)
+  const active = open ?? internalOpen
+  const previous = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  // D25: native autoFocus may run before Radix's mount event. Capture the
+  // invoking control before content mounts so controlled dialogs restore focus.
+  if (active && !wasOpen.current) previous.current = document.activeElement as HTMLElement
+  wasOpen.current = active
+  return <ReturnFocus.Provider value={previous}><DialogPrimitive.Root {...props} open={active} onOpenChange={(value) => {
+    if (value) previous.current = document.activeElement as HTMLElement
+    setInternalOpen(value); onOpenChange?.(value)
+  }}>{children}</DialogPrimitive.Root></ReturnFocus.Provider>
+}
 export const DialogTrigger = DialogPrimitive.Trigger
 
 export function DialogContent({
   className,
   children,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   const t = useT()
+  const fallbackFocus = useRef<HTMLElement | null>(null)
+  const previousFocus = useContext(ReturnFocus) ?? fallbackFocus
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] data-[state=open]:animate-console-in" />
       <DialogPrimitive.Content
+        onOpenAutoFocus={(event) => { if (!previousFocus.current) previousFocus.current = document.activeElement as HTMLElement; onOpenAutoFocus?.(event) }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event)
+          if (!event.defaultPrevented && previousFocus.current?.isConnected) { event.preventDefault(); previousFocus.current.focus() }
+        }}
         className={cn(
-          'fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2',
+          'fixed left-1/2 top-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md max-h-[calc(100dvh-1.5rem)] overflow-y-auto -translate-x-1/2 -translate-y-1/2',
           'rounded-console border border-border-strong bg-surface-raised shadow-panel',
           'animate-console-in focus:outline-none',
           className,

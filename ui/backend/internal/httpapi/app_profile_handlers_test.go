@@ -64,6 +64,34 @@ func TestProfileHTTP(t *testing.T) {
 	if r := run("PUT", path, strings.TrimSuffix(profileBody, "}")+`,"client_secret":"secret"}`, "cn=admin", "http://example.com", `"1"`); r.Code != 400 {
 		t.Fatalf("secret accepted %d", r.Code)
 	}
+	methodPath := "/api/v1/applications/integration-methods/custom-analytics"
+	methodBody := `{"id":"custom-analytics","name":"Analytics","summary":"Group roles","scope_note":"Native workspace scope","documentation_url":"https://docs.example/app","claim_path":"app_roles","token_source":"userinfo","enforcement":"native_app","roles":["reader"],"steps":["Configure client"]}`
+	for _, tc := range []struct {
+		dn, origin, match string
+		code              int
+	}{
+		{"cn=user", "http://example.com", `"0"`, 403},
+		{"cn=admin", "https://evil.example", `"0"`, 403},
+		{"cn=admin", "http://example.com", "", 428},
+		{"cn=admin", "http://example.com", `"0"`, 200},
+		{"cn=admin", "http://example.com", `"0"`, 412},
+	} {
+		r := run("PUT", methodPath, methodBody, tc.dn, tc.origin, tc.match)
+		if r.Code != tc.code {
+			t.Fatalf("method boundary expected %d got %d: %s", tc.code, r.Code, r.Body.String())
+		}
+	}
+	if r := run("PUT", methodPath, strings.Replace(methodBody, "https://docs.example/app", "javascript:alert(1)", 1), "cn=admin", "http://example.com", `"1"`); r.Code != 422 {
+		t.Fatalf("unsafe method link %d", r.Code)
+	}
+	customProfile := strings.TrimSuffix(profileBody, "}") + `,"integration_type":"custom-missing"}`
+	if r := run("PUT", path, customProfile, "cn=admin", "http://example.com", `"1"`); r.Code != 422 {
+		t.Fatalf("unregistered method %d", r.Code)
+	}
+	if r := run("PUT", path, strings.Replace(customProfile, "custom-missing", "custom-analytics", 1), "cn=admin", "http://example.com", `"1"`); r.Code != 200 {
+		t.Fatalf("registered method %d %s", r.Code, r.Body.String())
+	}
+
 }
 func TestProfilesDisabled(t *testing.T) {
 	s := &Server{}

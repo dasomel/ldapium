@@ -47,3 +47,26 @@ func TestNativeExportDefaultsAndInjection(t *testing.T) {
 		t.Fatal("unsupported custom policy")
 	}
 }
+
+func TestNativeExportsAcceptNestedGroupPaths(t *testing.T) {
+	p := fixture()
+	p.ClaimPath = "groups"
+	p.TokenSource = "id_token"
+	for _, adapter := range []string{"grafana", "argocd"} {
+		role := "Viewer"
+		if adapter == "argocd" {
+			role = "readonly"
+		}
+		p.Mappings = []Mapping{{KeycloakRole: "/engineering/team", NativeRole: role}}
+		out, err := p.Export(adapter)
+		if err != nil || !strings.Contains(out.Content, "/engineering/team") {
+			t.Fatalf("%s: %v", adapter, err)
+		}
+		for _, bad := range []string{"/x' || 'Admin", "/x, role:admin", "/x\nadmin", "/x*"} {
+			p.Mappings[0].KeycloakRole = bad
+			if _, err = p.Export(adapter); err == nil {
+				t.Fatalf("accepted %q", bad)
+			}
+		}
+	}
+}

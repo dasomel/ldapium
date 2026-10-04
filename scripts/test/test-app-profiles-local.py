@@ -25,13 +25,16 @@ with tempfile.TemporaryDirectory(prefix='ldapium-profile-') as tmp:
    p.terminate();raise RuntimeError('backend failed readiness')
   backend=start()
   subprocess.run(['npx','playwright','test','e2e/applications.spec.ts'],cwd=repo/'ui/frontend',env=env,check=True)
-  profiles=json.loads(Path(env['APP_PROFILES_PATH']).read_text());assert len(profiles)==1 and profiles[0]['status']=='configured'
+  profiles=json.loads(Path(env['APP_PROFILES_PATH']).read_text());assert len(profiles)==3 and all(p['status']=='configured' for p in profiles)
+  assert any(p.get('integration_type')=='harbor' for p in profiles)
+  methods=json.loads(Path(env['APP_PROFILES_PATH']+'.templates.json').read_text());assert len(methods)==1 and methods[0]['revision']==2
   backend.terminate();backend.wait(timeout=10);backend=start()
   cookies=urllib.request.HTTPCookieProcessor();opener=urllib.request.build_opener(cookies)
   body=json.dumps({'identity':env['E2E_ADMIN_DN'],'password':env['E2E_ADMIN_PASSWORD']}).encode()
   opener.open(urllib.request.Request(env['E2E_BASE_URL']+'/api/login',body,{'Content-Type':'application/json'}))
   got=json.load(opener.open(env['E2E_BASE_URL']+'/api/v1/applications'))
-  assert got['applications'][0]['id']==profiles[0]['id']
+  assert got['applications']==profiles
+  assert json.load(opener.open(env['E2E_BASE_URL']+'/api/v1/applications/integration-methods'))['methods']==methods
   print('PASS: real LDAP login, browser save/reload, unsupported mapping denied, backend restart persistence')
  finally:
   if backend:backend.terminate();backend.wait(timeout=10)

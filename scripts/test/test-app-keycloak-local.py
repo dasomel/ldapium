@@ -89,12 +89,20 @@ with tempfile.TemporaryDirectory(prefix='ldapium-kc-role-') as tmp:
         browser_env=dict(env,E2E_ADMIN_DN='cn=admin,dc=example,dc=org',E2E_ADMIN_PASSWORD=ldap_pw,E2E_BASE_URL=ui)
         subprocess.run(['npx','playwright','test','e2e/keycloak-apps.spec.ts'],cwd=repo/'ui/frontend',env=browser_env,check=True)
         request(api+'/clients/'+client,{'redirectUris':['http://127.0.0.1:18085/login/generic_oauth'],'webOrigins':['http://127.0.0.1:18085']},admin,method='PUT')
-        request(api+'/clients/'+client+'/protocol-mappers/models',{'name':'groups','protocol':'openid-connect','protocolMapper':'oidc-group-membership-mapper','config':{'claim.name':'groups','full.path':'false','id.token.claim':'true','access.token.claim':'true','userinfo.token.claim':'true'}},admin)
+        request(api+'/clients/'+client+'/protocol-mappers/models',{'name':'groups','protocol':'openid-connect','protocolMapper':'oidc-group-membership-mapper','config':{'claim.name':'groups','full.path':'true','id.token.claim':'true','access.token.claim':'true','userinfo.token.claim':'true'}},admin)
         request(api+'/users',{'username':'unmapped','enabled':True,'email':'unmapped@example.org','emailVerified':True,'firstName':'Unmapped','lastName':'Test','credentials':[{'type':'password','value':alice_pw,'temporary':False}]},admin)
-        gf_profile=dict(profile,id='grafana-demo',name='Grafana demo',client_id='custom-client',token_source='id_token',mappings=[{'keycloak_role':'developers','native_role':'Editor'}])
+        gf_profile=dict(profile,id='grafana-demo',name='Grafana demo',client_id='custom-client',token_source='id_token',mappings=[{'keycloak_role':'/developers','native_role':'Editor'}])
         ui_call('grafana-demo/integration-profile',gf_profile,'PUT',0)
         gf_artifact=ui_call('grafana-demo/configuration-export?adapter=grafana')
-        settings=json.loads(gf_artifact['content'])['auth.generic_oauth']
+        artifact_path=Path(tmp)/'grafana-export.json';artifact_path.write_text(json.dumps(gf_artifact))
+        source_path=Path(tmp)/'grafana-existing.ini';source_path.write_text('[auth.generic_oauth]\nallow_sign_up = true\n')
+        merged_path=Path(tmp)/'grafana-merged.ini'
+        subprocess.run(['python3',str(repo/'scripts/integration/merge-app-oidc.py'),'--artifact',str(artifact_path),'--existing',str(source_path),'--output',str(merged_path)],check=True)
+        import configparser
+        parsed=configparser.ConfigParser(interpolation=None);parsed.read(merged_path)
+        settings=dict(parsed['auth.generic_oauth'])
+        assert merged_path.stat().st_mode & 0o777 == 0o600
+        assert source_path.read_text() == '[auth.generic_oauth]\nallow_sign_up = true\n'
         gf_env=Path(tmp)/'grafana.env'
         entries=['GF_SERVER_ROOT_URL=http://127.0.0.1:18085','GF_SECURITY_ADMIN_PASSWORD='+secrets.token_urlsafe(32),'GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true','GF_PLUGINS_PREINSTALL_DISABLED=true']
         for key,value in settings.items():

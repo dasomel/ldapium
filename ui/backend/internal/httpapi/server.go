@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/appprofile"
+	"github.com/dasomel/ldapium/ui/backend/internal/backup"
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 	"github.com/dasomel/ldapium/ui/backend/internal/keycloak"
 	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
@@ -24,6 +26,7 @@ import (
 // plain struct (not a global) so tests can construct one with a fake
 // Dialer and an isolated Store.
 type Server struct {
+	backups      *backup.Manager
 	kc           *keycloak.Client
 	profiles     *appprofile.Store
 	echo         *echo.Echo
@@ -32,6 +35,9 @@ type Server struct {
 	sessions     *session.Store
 	sso          *oidcAuthenticator
 	loginLimiter *loginLimiter
+	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
+	apiRoutesOnce sync.Once
+	apiRoutes     []*echo.Route
 }
 
 // New builds the Echo application: middleware, the JSON API under /api,
@@ -74,6 +80,7 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	// which any client can forge. See ipExtractorFor's doc comment for
 	// what UI_TRUSTED_PROXIES/cfg.TrustedProxies actually guarantees.
 	s.echo.IPExtractor = ipExtractorFor(cfg)
+	s.echo.HTTPErrorHandler = apiErrorHandler(s.echo.DefaultHTTPErrorHandler)
 
 	s.echo.Use(middleware.Recover())
 	// RequestID before the logger: the logger's ${id} reads whatever this
@@ -88,6 +95,13 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}))
 	s.echo.Use(middleware.Secure())
 
+	if cfg.BackupOperatorConfig != "" {
+		var err error
+		s.backups, err = backup.New(cfg.BackupPolicyPath, cfg.BackupOperatorConfig, cfg.BackupWorkerPath, cfg.BackupPython)
+		if err != nil {
+			return nil, fmt.Errorf("initialize backups: %w", err)
+		}
+	}
 	s.routes(spa)
 	return s, nil
 }
@@ -105,6 +119,7 @@ func (s *Server) routes(spa fs.FS) {
 	// signal for whoever is watching provider health, not a pod-restart
 	// trigger for a directory outage this process didn't cause.
 	api.GET("/health/ldap", s.handleLDAPHealth)
+	s.registerAPIDocs(api)
 	api.POST("/login", s.handleLogin)
 	api.POST("/logout", s.handleLogout)
 	api.GET("/sso/start", s.handleSSOStart)
@@ -139,17 +154,27 @@ func (s *Server) routes(spa fs.FS) {
 
 	authed.GET("/v1/application-profile-types", s.handleApplicationCapabilities, s.requireProfileAdmin)
 	s.profileRoutes(authed)
-	registerSPA(s.echo, spa)
+	s.backupRoutes(authed)
+	// authed's group-level catch-alls would answer an unknown /api path
+	// with 401 "not logged in"; replace them so anonymous and signed-in
+	// callers alike get the same 404 (same method key, last one wins).
+	s.echo.RouteNotFound("/api", s.handleAPINotFound)
+	s.echo.RouteNotFound("/api/*", s.handleAPINotFound)
+	registerSPA(s.echo, spa, s.handleAPINotFound)
 }
 
 // registerSPA serves the built React app and falls back unknown,
 // non-/api, non-file paths to index.html so client-side routing (e.g.
 // /users, /groups) works on a hard browser refresh.
-func registerSPA(e *echo.Echo, spa fs.FS) {
+func registerSPA(e *echo.Echo, spa fs.FS, apiNotFound echo.HandlerFunc) {
 	fileServer := http.FileServer(http.FS(spa))
 
 	e.GET("/*", func(c echo.Context) error {
 		req := c.Request()
+		// An unknown /api path is a client error, not a client-side route.
+		if isAPIPath(req.URL.Path) {
+			return apiNotFound(c)
+		}
 		if _, err := fs.Stat(spa, trimLeadingSlash(req.URL.Path)); err != nil {
 			// Not a real static asset: hand back index.html and let the
 			// SPA's router take over.
