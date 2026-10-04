@@ -311,6 +311,13 @@ jobs:
             echo "::error::existingSecret still rendered a chart-created admin Secret"
             exit 1
           fi
+          # Helm reads values.yaml numbers as float64, so an unconverted
+          # integer >= 1e6 renders as "4.194303e+06"; the entrypoint rejects
+          # that and the directory pod crash-loops on every install.
+          if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret | grep -E 'value: "[0-9.]+e\+[0-9]+"'; then
+            echo "::error::a numeric chart value rendered in exponent form (add | int64)"
+            exit 1
+          fi
 
   chart-schema:
     name: Chart manifests pass kubeconform

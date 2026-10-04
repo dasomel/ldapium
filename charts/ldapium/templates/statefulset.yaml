@@ -99,21 +99,21 @@ spec:
             - name: LDAP_PASSWORD_POLICY_ENABLED
               value: {{ .Values.ldap.passwordPolicyEnabled | quote }}
             - name: LDAP_PASSWORD_FAILURE_INTERVAL
-              value: {{ .Values.ldap.passwordFailureInterval | quote }}
+              value: {{ .Values.ldap.passwordFailureInterval | int64 | quote }}
             - name: LDAP_IDLE_TIMEOUT
-              value: {{ .Values.ldap.limits.idleTimeout | quote }}
+              value: {{ .Values.ldap.limits.idleTimeout | int64 | quote }}
             - name: LDAP_WRITE_TIMEOUT
-              value: {{ .Values.ldap.limits.writeTimeout | quote }}
+              value: {{ .Values.ldap.limits.writeTimeout | int64 | quote }}
             - name: LDAP_CONN_MAX_PENDING
-              value: {{ .Values.ldap.limits.connMaxPending | quote }}
+              value: {{ .Values.ldap.limits.connMaxPending | int64 | quote }}
             - name: LDAP_CONN_MAX_PENDING_AUTH
-              value: {{ .Values.ldap.limits.connMaxPendingAuth | quote }}
+              value: {{ .Values.ldap.limits.connMaxPendingAuth | int64 | quote }}
             - name: LDAP_SOCKBUF_MAX_INCOMING
-              value: {{ .Values.ldap.limits.sockbufMaxIncoming | quote }}
+              value: {{ .Values.ldap.limits.sockbufMaxIncoming | int64 | quote }}
             - name: LDAP_SOCKBUF_MAX_INCOMING_AUTH
-              value: {{ .Values.ldap.limits.sockbufMaxIncomingAuth | quote }}
+              value: {{ .Values.ldap.limits.sockbufMaxIncomingAuth | int64 | quote }}
             - name: LDAP_MAX_FILTER_DEPTH
-              value: {{ .Values.ldap.limits.maxFilterDepth | quote }}
+              value: {{ .Values.ldap.limits.maxFilterDepth | int64 | quote }}
             - name: LDAP_LASTBIND_ENABLED
               value: {{ .Values.ldap.lastBind.enabled | quote }}
             - name: LDAP_LASTBIND_PRECISION
@@ -121,7 +121,7 @@ spec:
             - name: LDAP_PPM_ENABLED
               value: {{ .Values.ldap.modules.ppmEnabled | quote }}
             - name: LDAP_PPM_MIN_CLASSES
-              value: {{ .Values.ldap.modules.ppmMinClasses | quote }}
+              value: {{ .Values.ldap.modules.ppmMinClasses | int64 | quote }}
             - name: LDAP_DEREF_ENABLED
               value: {{ .Values.ldap.modules.derefEnabled | quote }}
             - name: LDAP_CONSTRAINT_ENABLED
@@ -143,9 +143,9 @@ spec:
             - name: LDAP_REQUIRE_AUTHC
               value: {{ .Values.ldap.hardening.requireAuthc | quote }}
             - name: LDAP_MAX_OPEN_FILES
-              value: {{ .Values.ldap.maxOpenFiles | quote }}
+              value: {{ .Values.ldap.maxOpenFiles | int64 | quote }}
             - name: LDAP_DB_MAX_SIZE
-              value: {{ (default (include "ldapium.dataVolumeBytes" .) .Values.ldap.dbMaxSize) | quote }}
+              value: {{ (default (include "ldapium.dataVolumeBytes" .) (kindIs "float64" .Values.ldap.dbMaxSize | ternary (int64 .Values.ldap.dbMaxSize) .Values.ldap.dbMaxSize)) | quote }}
             - name: LDAP_AUDIT_ENABLED
               value: {{ .Values.audit.enabled | quote }}
             {{- if .Values.audit.enabled }}
@@ -156,7 +156,7 @@ spec:
               value: {{ .Values.audit.accessLog.enabled | quote }}
             {{- if .Values.audit.accessLog.enabled }}
             - name: LDAP_ACCESSLOG_PURGE_DAYS
-              value: {{ .Values.audit.accessLog.purgeDays | quote }}
+              value: {{ .Values.audit.accessLog.purgeDays | int64 | quote }}
             {{- if .Values.audit.accessLog.ops }}
             - name: LDAP_ACCESSLOG_OPS
               value: {{ .Values.audit.accessLog.ops | quote }}
