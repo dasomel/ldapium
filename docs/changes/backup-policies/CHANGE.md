@@ -67,7 +67,7 @@ User requested visible capacity and remote configuration. Acceptance: display lo
 completed-copy bytes/count and newest-copy bytes per data/log policy; administrator
 can add/edit/remove managed S3/FTP/FTPS/SFTP connections, then select them for a
 policy; credentials are write-only API inputs and never returned/logged. Blank
-credential edits retain saved values. Single revision, atomic private persistence,
+credential edits retain saved values only while the destination (host/port/user/known hosts/plaintext flag; S3 endpoint/region/bucket/access key) is unchanged; otherwise the save is rejected (422) so a stored secret cannot be redirected. Single revision, atomic private persistence,
 busy-job protection, explicit FTP plaintext acknowledgement and pinned SSH host keys
 remain enforced. Existing operator destinations are read-only and remain usable.
 Sources/LDAP identities/raw paths and restore behavior are outside this extension.

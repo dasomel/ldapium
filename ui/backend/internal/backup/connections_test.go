@@ -91,3 +91,75 @@ func TestStorageCountsOwnedCopiesOnly(t *testing.T) {
 		t.Fatal("foreign copy counted")
 	}
 }
+
+const testKnownHosts = "host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOldKeyOldKeyOldKeyOldKeyOldKeyOldKeyOldKeyOld"
+
+// Secrets are write-only, so a blank secret means "keep the stored one". That
+// is only safe while the destination the secret authenticates to is unchanged;
+// otherwise a blank-secret PUT redirects the stored credential to a new server.
+func TestSaveConnectionSecretInheritanceIsBoundToDestination(t *testing.T) {
+	sftp := Connection{ID: "c", Name: "SFTP", Type: "sftp", Host: "backup.example", Port: 22, User: "svc", Password: "stored-password", KnownHosts: testKnownHosts, Prefix: "backups"}
+	s3 := Connection{ID: "c", Name: "S3", Type: "s3", Endpoint: "https://s3.example", Region: "r1", Bucket: "bucket", AccessKey: "stored-access", SecretKey: "stored-secret", Prefix: "backups"}
+	ftp := Connection{ID: "c", Name: "FTP", Type: "ftp", Host: "ftp.example", Port: 21, User: "svc", Password: "stored-password", Prefix: "backups", AllowPlaintext: true}
+	blank := func(c Connection) Connection { c.Password, c.AccessKey, c.SecretKey = "", "", ""; return c }
+	cases := []struct {
+		name   string
+		stored Connection
+		edit   func(c *Connection)
+		reject bool
+		wantPW string // expected stored Password after a successful save
+		wantSK string
+	}{
+		{"rename keeps secrets", sftp, func(c *Connection) { c.Name = "Renamed" }, false, "stored-password", ""},
+		{"prefix change keeps secrets", sftp, func(c *Connection) { c.Prefix = "other/dir" }, false, "stored-password", ""},
+		{"s3 rename and prefix keep secrets", s3, func(c *Connection) { c.Name = "R"; c.Prefix = "x" }, false, "", "stored-secret"},
+		{"host changed", sftp, func(c *Connection) { c.Host = "evil.example" }, true, "", ""},
+		{"port changed", sftp, func(c *Connection) { c.Port = 2222 }, true, "", ""},
+		{"user changed", sftp, func(c *Connection) { c.User = "root" }, true, "", ""},
+		{"known hosts changed", sftp, func(c *Connection) { c.KnownHosts = strings.Replace(testKnownHosts, "OldKey", "NewKey", 1) }, true, "", ""},
+		{"ftp host changed", ftp, func(c *Connection) { c.Host = "evil.example" }, true, "", ""},
+		{"s3 endpoint changed", s3, func(c *Connection) { c.Endpoint = "https://evil.example" }, true, "", ""},
+		{"s3 endpoint cleared", s3, func(c *Connection) { c.Endpoint = "" }, true, "", ""},
+		{"s3 bucket changed", s3, func(c *Connection) { c.Bucket = "other-bucket" }, true, "", ""},
+		{"s3 region changed", s3, func(c *Connection) { c.Region = "r2" }, true, "", ""},
+		{"s3 access key changed", s3, func(c *Connection) { c.AccessKey = "new-access" }, true, "", ""},
+		{"explicit secret with new host", sftp, func(c *Connection) { c.Host = "new.example"; c.Password = "fresh" }, false, "fresh", ""},
+		{"explicit s3 keys with new endpoint", s3, func(c *Connection) {
+			c.Endpoint = "https://new.example"
+			c.AccessKey, c.SecretKey = "new-access", "new-secret"
+		}, false, "", "new-secret"},
+		{"type changed gets no inheritance", sftp, func(c *Connection) { c.Type = "ftps" }, true, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testManager(t)
+			if err := m.SaveConnection(tc.stored, 0); err != nil {
+				t.Fatal(err)
+			}
+			rev := m.policies.Revision
+			req := blank(tc.stored)
+			tc.edit(&req)
+			err := m.SaveConnection(req, rev)
+			if tc.reject {
+				if err == nil {
+					t.Fatal("redirected stored secret accepted")
+				}
+				for _, s := range []string{"stored-password", "stored-secret", "stored-access"} {
+					if strings.Contains(err.Error(), s) {
+						t.Fatalf("secret in error: %v", err)
+					}
+				}
+				if m.connections[0] != tc.stored || m.policies.Revision != rev {
+					t.Fatal("rejected save changed stored connection or revision")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := m.connections[0]; got.Password != tc.wantPW || got.SecretKey != tc.wantSK {
+				t.Fatalf("stored secrets = %q/%q", got.Password, got.SecretKey)
+			}
+		})
+	}
+}

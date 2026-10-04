@@ -112,6 +112,41 @@ func (m *Manager) allDestinations() []Destination {
 	}
 	return out
 }
+
+// inheritSecrets fills blank write-only secrets from the stored connection, but
+// only while everything the secret authenticates to is unchanged (fail closed).
+// Otherwise a caller could repoint Host/Endpoint at a server they control, leave
+// the secret blank and have the next job send the stored secret there. Name and
+// Prefix are not destination-bound and may change freely. A refused inheritance
+// leaves the field blank so validateConnection rejects it.
+func inheritSecrets(old, c Connection) Connection {
+	if old.Type != c.Type {
+		return c
+	}
+	switch c.Type {
+	case "s3":
+		if old.Endpoint != c.Endpoint || old.Region != c.Region || old.Bucket != c.Bucket {
+			return c
+		}
+		if c.AccessKey == "" {
+			c.AccessKey = old.AccessKey
+		}
+		// A secret must stay paired with the identity it was issued for.
+		if c.SecretKey == "" && c.AccessKey == old.AccessKey {
+			c.SecretKey = old.SecretKey
+		}
+	default:
+		if old.Host != c.Host || old.Port != c.Port || old.User != c.User ||
+			old.KnownHosts != c.KnownHosts || old.AllowPlaintext != c.AllowPlaintext {
+			return c
+		}
+		if c.Password == "" {
+			c.Password = old.Password
+		}
+	}
+	return c
+}
+
 func (m *Manager) SaveConnection(c Connection, expected uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,17 +166,7 @@ func (m *Manager) SaveConnection(c Connection, expected uint64) error {
 	for i, old := range next {
 		if old.ID == c.ID {
 			index = i
-			if old.Type == c.Type {
-				if c.Password == "" {
-					c.Password = old.Password
-				}
-				if c.AccessKey == "" {
-					c.AccessKey = old.AccessKey
-				}
-				if c.SecretKey == "" {
-					c.SecretKey = old.SecretKey
-				}
-			}
+			c = inheritSecrets(old, c)
 			break
 		}
 	}
