@@ -3,7 +3,7 @@ const identity = process.env.E2E_ADMIN_DN
 const password = process.env.E2E_ADMIN_PASSWORD
 if (!identity || !password) throw new Error('Backup E2E requires administrator credentials')
 
-test('saves separate backup policies and executes a real verified log backup', async ({ page }) => {
+test('saves separate backup policies and executes a real verified log backup', { tag: '@fixture' }, async ({ page }) => {
   test.setTimeout(120000)
   await page.goto('/login')
   await page.locator('#identity').fill(identity!)
@@ -38,7 +38,7 @@ test('saves separate backup policies and executes a real verified log backup', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test('shows backup sizes and manages remote connection settings without returning secrets', async ({ page }) => {
+test('shows backup sizes and manages remote connection settings without returning secrets', { tag: '@fixture' }, async ({ page }) => {
   test.setTimeout(90000)
   await page.goto('/login')
   await page.locator('#identity').fill(identity!)

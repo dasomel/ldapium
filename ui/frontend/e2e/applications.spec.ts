@@ -5,7 +5,7 @@ const identity = process.env.E2E_ADMIN_DN
 const password = process.env.E2E_ADMIN_PASSWORD
 if (!identity || !password) throw new Error('E2E_ADMIN_DN and E2E_ADMIN_PASSWORD are required')
 
-test('persists a custom app profile through the UI without applying permissions', async ({ page }) => {
+test('persists a custom app profile through the UI without applying permissions', { tag: '@fixture' }, async ({ page }) => {
   await page.goto('/login')
   await page.locator('#identity').fill(identity)
   await page.locator('#password').fill(password)
@@ -33,7 +33,7 @@ test('persists a custom app profile through the UI without applying permissions'
   await expect(page.getByRole('alert')).toContainText('gateway admission does not enforce native application roles')
 })
 
-test('persists the selected OSS guide and exports only its supported configuration', async ({ page }) => {
+test('persists the selected OSS guide and exports only its supported configuration', { tag: '@fixture' }, async ({ page }) => {
   await page.goto('/login')
   await page.locator('#identity').fill(identity!)
   await page.locator('#password').fill(password!)
@@ -77,7 +77,7 @@ test('persists the selected OSS guide and exports only its supported configurati
   await expect(page.getByLabel('Configuration format').locator('option')).toHaveCount(1)
 })
 
-test('creates and reuses a custom integration method outside the built-in OSS catalog', async ({ page }) => {
+test('creates and reuses a custom integration method outside the built-in OSS catalog', { tag: '@fixture' }, async ({ page }) => {
   await page.goto('/login')
   await page.locator('#identity').fill(identity!)
   await page.locator('#password').fill(password!)

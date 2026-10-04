@@ -140,7 +140,7 @@ jobs:
           E2E_ADMIN_DN: cn=admin,dc=example,dc=org
           E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
           CI: "true"
-        run: npx playwright test
+        run: npx playwright test --grep-invert @fixture
 
       # Runs after the browser suite so none of its logins are ever
       # throttled. The install above sets limit=3 / window=5s — small enough

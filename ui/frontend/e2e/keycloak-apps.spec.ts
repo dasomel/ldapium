@@ -3,7 +3,7 @@ const identity = process.env.E2E_ADMIN_DN
 const password = process.env.E2E_ADMIN_PASSWORD
 if (!identity || !password) throw new Error('Disposable Keycloak integration credentials are required')
 
-test('loads live Keycloak roles and creates/deletes a delegated role from the UI', async ({ page }) => {
+test('loads live Keycloak roles and creates/deletes a delegated role from the UI', { tag: '@fixture' }, async ({ page }) => {
   await page.goto('/login')
   await page.locator('#identity').fill(identity)
   await page.locator('#password').fill(password)

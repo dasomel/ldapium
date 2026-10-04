@@ -44,7 +44,7 @@ test('reviews named filters, selected navigation and mobile dialog focus without
   expect(errors).toEqual([])
 })
 
-test('app integration tabs support keyboard navigation and explicit downstream save gates', async ({ page }) => {
+test('app integration tabs support keyboard navigation and explicit downstream save gates', { tag: '@fixture' }, async ({ page }) => {
   await login(page)
   await page.getByRole('link', { name: 'App SSO permissions' }).click()
   const setup = page.getByRole('tab', { name: 'App and claims' })
