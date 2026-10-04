@@ -332,5 +332,5 @@ stand up real containers/clusters) and as standard practice when
 changing this code: rebuild the image, run it, exercise the actual API
 over HTTP, tear down. PR descriptions in this repo's history show this
 pattern — a "Test plan" section with live verification steps, not just
-`go test` output. See the repo root `CLAUDE.md` for specific gotchas
+`go test` output. See the repo root `AGENTS.md` ("Local Docker/LDAP verification") for specific gotchas
 (container UID/bind-mount issues on macOS/Colima, `docker exec -i`).

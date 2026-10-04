@@ -730,7 +730,7 @@ jobs:
           #
           # `kubectl exec` needs -i to forward local stdin into the
           # container — same gotcha as `docker exec -i` documented in this
-          # repo's CLAUDE.md. Without it this cat silently wrote an empty
+          # repo's AGENTS.md. Without it this cat silently wrote an empty
           # file, so openssl failed immediately on "no certificate or crl
           # found" before ever attempting the handshake this step exists to
           # test — a false pass in disguise, not the real assertion.
