@@ -74,7 +74,7 @@ log "waiting for $LDAP_URL (up to ${TIMEOUT_SECONDS}s)"
 waited=0
 # Authenticated as admin, not anonymous: ldap.hardening.disallowAnonBind /
 # requireAuthc reject anonymous searches, which must not fail `helm test`.
-until search "$LDAP_URL" -o nettimeout=5 -b "" -s base namingContexts >/dev/null 2>&1; do
+until search "$LDAP_URL" -b "" -s base namingContexts >/dev/null 2>&1; do
 	waited=$((waited + 2))
 	if [ "$waited" -ge "$TIMEOUT_SECONDS" ]; then
 		fail "server did not answer within ${TIMEOUT_SECONDS}s"
