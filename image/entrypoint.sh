@@ -105,9 +105,9 @@ elif [ -z "${LDAP_ADMIN_PASSWORD:-}" ]; then
   case "${LDAP_REPLICATION_ENABLED:-false}" in
     true|1) die "LDAP_REPLICATION_ENABLED requires an explicit shared LDAP_ADMIN_PASSWORD or LDAP_ADMIN_PASSWORD_FILE on every node; a generated per-node admin password would break replication authentication" ;;
   esac
-  [ ! -L "$GENERATED_PASSWORD_DIR" ] && [ ! -L "$GENERATED_PASSWORD_FILE" ] || die "generated credential paths must not be symlinks"
+  if [ -L "$GENERATED_PASSWORD_DIR" ] || [ -L "$GENERATED_PASSWORD_FILE" ]; then die "generated credential paths must not be symlinks"; fi
   if [ ! -f "$GENERATED_PASSWORD_FILE" ]; then
-    [ ! -f "$MARKER" ] && [ -z "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ] || die "existing LDAP configuration requires its original admin password; supply LDAP_ADMIN_PASSWORD or LDAP_ADMIN_PASSWORD_FILE"
+    if [ -f "$MARKER" ] || [ -n "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]; then die "existing LDAP configuration requires its original admin password; supply LDAP_ADMIN_PASSWORD or LDAP_ADMIN_PASSWORD_FILE"; fi
     if [ ! -d "$GENERATED_PASSWORD_DIR" ]; then
       (umask 077; mkdir -m 700 "$GENERATED_PASSWORD_DIR") || die "cannot create private credential directory"
     fi

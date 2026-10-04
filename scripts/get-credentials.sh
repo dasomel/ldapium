@@ -244,7 +244,7 @@ if [ "$credential_key" = SESSION_SECRET ]; then
   ref='{range .spec.template.spec.containers[0].env[?(@.name=="SESSION_SECRET")]}'
   secret_name=$(kubectl -n "$ns" get deployment "$deployment" -o jsonpath="${ref}{.valueFrom.secretKeyRef.name}{end}")
   secret_key=$(kubectl -n "$ns" get deployment "$deployment" -o jsonpath="${ref}{.valueFrom.secretKeyRef.key}{end}")
-  [ -n "$secret_name" ] && [ -n "$secret_key" ] || { echo "UI session Secret reference unavailable" >&2;exit 1; }
+  if [ -z "$secret_name" ] || [ -z "$secret_key" ]; then echo "UI session Secret reference unavailable" >&2; exit 1; fi
   encoded=$(kubectl -n "$ns" get secret "$secret_name" -o jsonpath="{.data.${secret_key}}")
   [ -n "$encoded" ] || { echo "UI session Secret value unavailable" >&2;exit 1; }
   password=$(printf '%s' "$encoded" | base64 -d)

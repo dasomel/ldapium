@@ -60,7 +60,7 @@ manifest=$(realpath -- "$manifest")
 [ "$(dirname "$manifest")" = "$backup_dir" ] || { echo "refusing restore: manifest must belong to backup-dir" >&2; exit 1; }
 while read -r _ filename; do
   case "$filename" in ''|*[!a-zA-Z0-9._-]*) echo "refusing restore: manifest must name direct files only" >&2; exit 1;; esac
-  [ -f "$backup_dir/$filename" ] && [ ! -L "$backup_dir/$filename" ] || { echo "refusing restore: manifest source must be a regular non-symlink file" >&2; exit 1; }
+  if [ ! -f "$backup_dir/$filename" ] || [ -L "$backup_dir/$filename" ]; then echo "refusing restore: manifest source must be a regular non-symlink file" >&2; exit 1; fi
 done < "$manifest"
 "$(dirname "$0")/verify-backup.sh" "$manifest"
 
@@ -80,9 +80,9 @@ command -v realpath >/dev/null 2>&1 || { echo "GNU realpath is required" >&2; ex
 target_config="${target_config%/}"
 target_data="${target_data%/}"
 for target in "$target_config" "$target_data"; do
-  [ -n "$target" ] && [ "$target" != "/" ] && [ "$target" = "$(realpath -m -- "$target")" ] || {
-    echo "refusing restore: targets must be canonical absolute non-root paths without symlink parents" >&2; exit 1;
-  }
+  if [ -z "$target" ] || [ "$target" = "/" ] || [ "$target" != "$(realpath -m -- "$target")" ]; then
+    echo "refusing restore: targets must be canonical absolute non-root paths without symlink parents" >&2; exit 1
+  fi
 done
 case "$target_config/" in "$target_data/"*) echo "refusing nested restore targets" >&2; exit 1;; esac
 case "$target_data/" in "$target_config/"*) echo "refusing nested restore targets" >&2; exit 1;; esac
