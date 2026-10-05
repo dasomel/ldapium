@@ -46,8 +46,19 @@ go_licenses() {
 # the repo root, above the Go module), so they are excluded rather than
 # silencing Unknown in general — an actually unknown dependency must still fail.
 go_csv=$(cd ui/backend && go_licenses csv ./... 2>/dev/null | grep -v '^github.com/dasomel/ldapium' | sort)
+# license-checker reads ui/frontend/node_modules. Without it (a fresh checkout
+# or worktree) it exits quietly with a partial list, the regenerated inventory
+# silently loses dependencies, and --check then agrees with itself. Refuse.
+if [ ! -d ui/frontend/node_modules ]; then
+	echo "ui/frontend/node_modules is missing: run 'npm ci' in ui/frontend first" >&2
+	exit 2
+fi
 npm_csv=$(cd ui/frontend && npx --yes license-checker-rseidelsohn@5.0.1 \
 	--production --excludePrivatePackages --csv --nopeer 2>/dev/null | tail -n +2 | sort)
+if [ -z "$npm_csv" ]; then
+	echo "license-checker returned no npm dependencies; refusing to write an empty inventory" >&2
+	exit 2
+fi
 
 {
 	cat <<EOF
