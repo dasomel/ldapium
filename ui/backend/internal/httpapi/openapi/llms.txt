@@ -30,6 +30,7 @@ In the OpenAPI document, `security: []` means public, operations with `x-admin: 
 ## Conventions
 
 - Errors are JSON in one of two shapes: {"error": "..."} (directory/auth handlers; 500s add "requestId") or {"message": "..."} (validation, session, admin gates, profiles, backups). Read `error` first, then `message`. Unknown /api paths return 404 and wrong methods 405, both as {"error": "..."}.
+- HEAD mirrors GET (with an empty body) on every route that has a GET handler, and OPTIONS on routed /api paths returns 204 with an Allow header.
 - Writes to application profiles, integration methods and backups are conditional: read the resource, take the ETag response header, send it as If-Match (quoted integer revision; "0" creates). Missing If-Match is 428, stale is 412. Keycloak role operations use the quoted 64-hex fingerprint ETag instead.
 - Those same write endpoints also require an `Origin` header equal to the server's own origin and `Content-Type: application/json` (403 / 415 otherwise).
 - GET /api/users and /api/groups return at most 5000 entries; `truncated: true` means more exist and there is no cursor yet.

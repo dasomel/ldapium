@@ -66,6 +66,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `{"message": "..."}` | 입력 검증, 세션(401), 관리자 게이트, 프로필, 백업, Keycloak, 로그인 429 |
 
 존재하지 않는 `/api` 경로는 404, 허용되지 않는 메서드는 405 (`Allow` 헤더 포함)이며 둘 다 `{"error": "..."}` 형태입니다.
+HEAD는 GET 핸들러가 있는 모든 경로에서 본문 없이 GET과 동일하게 동작하며, OPTIONS는 등록된 `/api` 경로에서 204 No Content와 `Allow` 헤더를 반환합니다.
 
 ## ETag / If-Match
 
