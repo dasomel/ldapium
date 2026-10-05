@@ -12,7 +12,8 @@ export default defineConfig({
   // ui-review) need chart features this job's stock install does not enable
   // (application profiles, backups, a live Keycloak). ui-e2e.yml passes
   // `--grep-invert @fixture`; the scripts/test/test-app-*-local.py fixtures
-  // run those files explicitly and so still execute them.
+  // (and test-backup-ui-local.py) run those files explicitly and so still
+  // execute them; CI wires them in .github/workflows/ui-fixture-e2e.yml.
   // grafana-permissions.spec.ts needs a live Keycloak + Grafana fixture that
   // only scripts/test/test-app-keycloak-local.py stands up (it sets
   // E2E_GRAFANA_URL). Without the fixture the spec throws at import time,

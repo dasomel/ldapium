@@ -381,6 +381,8 @@ Docker, `ldapium:e2e`, Go, Node and Playwright Chromium available. The test uses
 random disposable credentials and a dedicated LDAP container; it exercises real
 login, browser saving/reloading, mapping denial and backend restart persistence.
 It does not verify OIDC federation or Keycloak role application.
+Set `LDAPIUM_IMAGE` to use another server image tag. The same run also executes the
+`@fixture` test in `e2e/ui-review.spec.ts`; CI runs it in `.github/workflows/ui-fixture-e2e.yml`.
 
 ### Keycloak delegation and application configuration exports
 
@@ -442,6 +444,9 @@ composite token claims, fresh-token revocation, conflict/privilege boundaries, a
 Grafana Editor access plus unmapped-user rejection. The Grafana image is local
 `grafana/grafana:latest`; the script reports its actual version rather than treating
 that tag as pinned. Production configuration must pin your supported image version.
+CI sets `GRAFANA_IMAGE=grafana/grafana:13.2.3` and `LDAPIUM_KC_BIND=0.0.0.0` (on Linux, Grafana
+reaches Keycloak through the docker bridge, so a loopback-only publish is unreachable);
+`LDAPIUM_IMAGE` selects the server image. Defaults are unchanged for local runs.
 
 The application UI includes research-backed setup guides for Grafana, Argo CD,
 Harbor, Gitea, Kubernetes, OpenBao and OAuth2 Proxy plus Custom OIDC app. Guides
@@ -585,6 +590,11 @@ Health's LDAP-recorded last-backup field continues to describe legacy CronJob
 backups; Backups is authoritative for this controller's job history.
 
 Evidence: [backup change](../docs/changes/backup-policies/CHANGE.md).
+
+Browser fixture: `LDAPIUM_UI_IMAGE=ldapium-ui:backup python3 scripts/test/test-backup-ui-local.py`
+(after building the `backup-runtime` image above and the server image; `LDAPIUM_IMAGE` selects it)
+starts disposable LDAP and backup-runtime UI containers with a local destination and runs
+`e2e/backups.spec.ts`; CI runs it in `.github/workflows/ui-fixture-e2e.yml`.
 
 Optional `metadata_files` include operator-allowlisted regular files (for example
 application mappings and backup policies) in `metadata.tar.gz`. Register only

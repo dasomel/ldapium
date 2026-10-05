@@ -3,6 +3,11 @@
 import json,os,secrets,subprocess,tempfile,time,urllib.request,urllib.error,urllib.parse
 from pathlib import Path
 repo=Path(__file__).resolve().parents[2]
+ldap_image=os.environ.get('LDAPIUM_IMAGE','ldapium:e2e')
+grafana_image=os.environ.get('GRAFANA_IMAGE','grafana/grafana:latest')
+# Grafana reaches Keycloak through host.docker.internal. On Linux that is the docker bridge gateway, which a
+# 127.0.0.1-only publish does not serve, so CI sets LDAPIUM_KC_BIND=0.0.0.0; the default keeps local runs loopback-only.
+kc_bind=os.environ.get('LDAPIUM_KC_BIND','127.0.0.1')
 
 def request(url,data=None,token=None,method=None):
     headers={}
@@ -20,8 +25,8 @@ with tempfile.TemporaryDirectory(prefix='ldapium-kc-role-') as tmp:
     backend=None
     grafana='ldapium-profile-grafana-'+suffix
     try:
-        subprocess.run(['docker','run','--rm','-d','--name',ldap,'--env-file',str(ldap_env),'-p','127.0.0.1:13891:389','ldapium:e2e'],check=True,stdout=subprocess.DEVNULL)
-        subprocess.run(['docker','run','--rm','-d','--name',kc,'--env-file',str(kc_env),'-p','127.0.0.1:18185:8080','quay.io/keycloak/keycloak:26.7.4','start-dev'],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','run','--rm','-d','--name',ldap,'--env-file',str(ldap_env),'-p','127.0.0.1:13891:389',ldap_image],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','run','--rm','-d','--name',kc,'--env-file',str(kc_env),'-p',kc_bind+':18185:8080','quay.io/keycloak/keycloak:26.7.4','start-dev'],check=True,stdout=subprocess.DEVNULL)
         for _ in range(120):
             try:request(base+'/realms/master');break
             except Exception:time.sleep(.5)
@@ -110,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='ldapium-kc-role-') as tmp:
             if isinstance(value,bool):value=str(value).lower()
             entries.append('GF_AUTH_GENERIC_OAUTH_'+key.upper()+'='+str(value))
         gf_env.write_text('\n'.join(entries)+'\n');gf_env.chmod(0o600)
-        subprocess.run(['docker','run','--rm','-d','--name',grafana,'--env-file',str(gf_env),'-p','127.0.0.1:18085:3000','grafana/grafana:latest'],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','run','--rm','-d','--name',grafana,'--add-host','host.docker.internal:host-gateway','--env-file',str(gf_env),'-p','127.0.0.1:18085:3000',grafana_image],check=True,stdout=subprocess.DEVNULL)
         for _ in range(100):
             try:health=request('http://127.0.0.1:18085/api/health');break
             except Exception:time.sleep(.5)
