@@ -133,7 +133,7 @@ func (c *client) AddMember(ctx context.Context, groupDN, memberDN string) error 
 	mod := ldap.NewModifyRequest(groupDN, nil)
 	mod.Add("member", []string{memberDN})
 	if err := c.conn.Modify(mod); err != nil {
-		return mapErr("add member", err)
+		return mapMemberErr("add member", err)
 	}
 	return nil
 }
@@ -151,7 +151,7 @@ func (c *client) RemoveMember(ctx context.Context, groupDN, memberDN string) err
 	mod := ldap.NewModifyRequest(groupDN, nil)
 	mod.Delete("member", []string{memberDN})
 	if err := c.conn.Modify(mod); err != nil {
-		return mapErr("remove member", err)
+		return mapMemberErr("remove member", err)
 	}
 	return nil
 }

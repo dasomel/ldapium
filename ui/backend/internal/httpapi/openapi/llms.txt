@@ -1,0 +1,44 @@
+# ldapium
+
+> ldapium is an OpenLDAP distribution with a web console. The console's JSON HTTP API (under /api) can be driven by scripts and AI agents. This file is an index; the authoritative contract is the OpenAPI 3.1 document.
+
+- OpenAPI spec (machine-readable, always matches the running build): /api/v1/openapi.json
+- Server/API discovery (public): /api/v1/meta
+- Human-readable API page: /api-docs
+- Longer guide with curl examples: docs/api.md in the repository
+
+## Authentication
+
+- A signed session cookie named `ldapium_session` is the only credential. There are no API tokens, no OAuth client credentials and no CORS headers.
+- LDAP mode (GET /api/v1/meta -> authMode "ldap"): POST /api/login with {"identity","password"} using a cookie jar, then reuse the jar. Failed logins are rate-limited per IP (429 + Retry-After).
+- SSO mode (authMode "sso"): login is a browser OIDC flow; scripted login is not possible.
+- Directory operations run as the logged-in identity (LDAP mode) or the configured service account (SSO mode), under that identity's LDAP ACLs. 403 usually means the ACL denies it.
+
+## Endpoint groups
+
+- Discovery (public): /api/v1/meta, /api/v1/openapi.json, /api/auth/config, /api/health/ldap
+- Auth: /api/login, /api/logout, /api/me, /api/sso/start, /api/sso/callback
+- Server: /api/server-settings, /api/monitor, /api/audit/actions
+- Directory: /api/tree, /api/entry, /api/entry/move, /api/password-policies
+- Users: /api/users (GET/POST/PUT/DELETE), /api/users/password, /api/users/lock, /api/users/unlock
+- Groups: /api/groups (GET/POST/PUT/DELETE), /api/groups/members (POST/DELETE)
+- Application profiles (profile admins only; 404 when disabled): /api/v1/applications/...
+- Backups (backup admins only; 404 when disabled): /api/v1/backups/...
+
+In the OpenAPI document, `security: []` means public, operations with `x-admin: true` need an administrator DN, everything else needs a session.
+
+## Conventions
+
+- Errors are JSON in one of two shapes: {"error": "..."} (directory/auth handlers; 500s add "requestId") or {"message": "..."} (validation, session, admin gates, profiles, backups). Read `error` first, then `message`. Unknown /api paths return 404 and wrong methods 405, both as {"error": "..."}.
+- Writes to application profiles, integration methods and backups are conditional: read the resource, take the ETag response header, send it as If-Match (quoted integer revision; "0" creates). Missing If-Match is 428, stale is 412. Keycloak role operations use the quoted 64-hex fingerprint ETag instead.
+- Those same write endpoints also require an `Origin` header equal to the server's own origin and `Content-Type: application/json` (403 / 415 otherwise).
+- GET /api/users and /api/groups return at most 5000 entries; `truncated: true` means more exist and there is no cursor yet.
+- GET /api/audit/actions pages with `limit` (1-200, default 50) and `before` (use `nextBefore` while `hasMore` is true).
+- Backup runs are asynchronous without job IDs: POST /api/v1/backups/jobs/{kind} returns 202; poll GET /api/v1/backups.
+
+## Safety
+
+- `userPassword` is never returned by any endpoint, even hashed.
+- POST /api/users/password without `password` returns a server-generated `generatedPassword` once; treat it as a secret and never log it.
+- Destructive operations (DELETE users/groups/profiles/connections, entry move, Keycloak role operations, backup runs) are not reversible. Confirm intent before calling them and do not retry blindly.
+- Never assume a truncated list is complete. Prefer read-only calls unless the task requires a change.

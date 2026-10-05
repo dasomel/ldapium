@@ -8,6 +8,16 @@ import { defineConfig, devices } from '@playwright/test'
 // E2E_BASE_URL at it.
 export default defineConfig({
   testDir: './e2e',
+  // Tests tagged @fixture (applications, backups, keycloak-apps, one in
+  // ui-review) need chart features this job's stock install does not enable
+  // (application profiles, backups, a live Keycloak). ui-e2e.yml passes
+  // `--grep-invert @fixture`; the scripts/test/test-app-*-local.py fixtures
+  // run those files explicitly and so still execute them.
+  // grafana-permissions.spec.ts needs a live Keycloak + Grafana fixture that
+  // only scripts/test/test-app-keycloak-local.py stands up (it sets
+  // E2E_GRAFANA_URL). Without the fixture the spec throws at import time,
+  // which aborts the whole run, so it is excluded unless the fixture exists.
+  testIgnore: process.env.E2E_GRAFANA_URL ? [] : ['**/grafana-permissions.spec.ts'],
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',

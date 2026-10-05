@@ -1,0 +1,56 @@
+{
+  "instance_id": "directory-primary",
+  "root": "/var/lib/ldapium-backups",
+  "ldap": {
+    "url": "ldaps://ldap.example.org:636",
+    "base_dn": "dc=example,dc=org",
+    "admin_dn": "cn=backup,ou=services,dc=example,dc=org",
+    "config_admin_dn": "cn=admin,cn=config",
+    "password_file": "/etc/ldapium-backup/ldap-password",
+    "include_config": true
+  },
+  "log_paths": [
+    "/var/log/ldapium/audit.log"
+  ],
+  "rclone_config": "/etc/ldapium-backup/rclone.conf",
+  "destinations": [
+    {
+      "id": "local",
+      "name": "Local archive",
+      "type": "local"
+    },
+    {
+      "id": "s3-primary",
+      "name": "S3 archive",
+      "type": "s3",
+      "remote": "s3-primary",
+      "prefix": "directory-backups/ldapium"
+    },
+    {
+      "id": "ftp-secondary",
+      "name": "FTP archive",
+      "type": "ftp",
+      "remote": "ftp-secondary",
+      "prefix": "ldapium",
+      "allow_plaintext": false
+    },
+    {
+      "id": "ftps-secondary",
+      "name": "FTPS archive",
+      "type": "ftps",
+      "remote": "ftps-secondary",
+      "prefix": "ldapium"
+    },
+    {
+      "id": "ssh-secondary",
+      "name": "SSH archive",
+      "type": "sftp",
+      "remote": "ssh-secondary",
+      "prefix": "ldapium"
+    }
+  ],
+  "metadata_files": [
+    "/var/lib/ldapium/profiles.json",
+    "/var/lib/ldapium/profiles.json.templates.json"
+  ]
+}

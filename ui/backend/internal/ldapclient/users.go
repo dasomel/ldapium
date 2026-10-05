@@ -223,7 +223,14 @@ func (c *client) SetPassword(ctx context.Context, dn, oldPassword, newPassword s
 // exact set of attributes it touches is unit-testable without a live LDAP
 // connection.
 //
-// It deletes ONLY pwdAccountLockedTime. Do not also delete pwdFailureTime
+// It clears ONLY pwdAccountLockedTime, via Replace with no values rather
+// than Delete: slapd answers a Delete of an absent attribute with
+// noSuchAttribute (16), which would turn unlocking an already-unlocked
+// account into an error. Replace-with-nothing removes the attribute when
+// present and is a successful no-op when absent, making Unlock idempotent
+// without globally mapping code 16 (see mapErr/mapMemberErr).
+//
+// It touches ONLY pwdAccountLockedTime. Do not also delete pwdFailureTime
 // here, even though it accumulates alongside the lock: pwdFailureTime is
 // declared NO-USER-MODIFICATION by the password policy schema, and slapd
 // rejects the whole modify — deleting nothing — if it's included:
@@ -237,17 +244,13 @@ func (c *client) SetPassword(ctx context.Context, dn, oldPassword, newPassword s
 // the next successful bind) passes.
 func unlockModify(dn string) *ldap.ModifyRequest {
 	mod := ldap.NewModifyRequest(dn, nil)
-	mod.Delete("pwdAccountLockedTime", nil)
+	mod.Replace("pwdAccountLockedTime", nil)
 	return mod
 }
 
 // Unlock clears a password-policy lockout on dn (see unlockModify for
 // exactly what it does and does not touch). Calling it on an account that
-// isn't currently locked is not specially handled: slapd rejects deleting
-// an attribute that isn't present, and that rejection is surfaced as an
-// ordinary error via mapErr rather than treated as a no-op success. That's
-// fine in practice — the frontend only offers Unlock for accounts it
-// already knows are locked.
+// isn't locked succeeds as a no-op (idempotent).
 func (c *client) Unlock(ctx context.Context, dn string) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -11,6 +11,8 @@ vendor/
 # local env / secrets
 .env
 .env.local
+.local/ldap-replication-load.properties
+.local/ldap-load-results/
 *.key
 *.crt
 *.pem

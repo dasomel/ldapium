@@ -9,10 +9,38 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { GroupFormDialog } from '@/components/groups/GroupFormDialog'
+import { GroupPagination } from '@/components/groups/GroupPagination'
 import { MembersDialog } from '@/components/groups/MembersDialog'
+
+function TruncatedText({ text, className = '' }: { text: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [isTruncated, setIsTruncated] = useState(false)
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    const update = () => setIsTruncated(element.scrollWidth > element.clientWidth)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [isTruncated, text])
+
+  const content = <span ref={ref} tabIndex={isTruncated ? 0 : undefined} className={`block truncate ${className}`}>{text}</span>
+  if (!isTruncated) return content
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent className="max-w-[min(32rem,90vw)] break-all">{text}</TooltipContent>
+    </Tooltip>
+  )
+}
 
 export function GroupsPage() {
   const { notify } = useToast()
@@ -21,6 +49,8 @@ export function GroupsPage() {
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Group | null>(null)
@@ -48,6 +78,10 @@ export function GroupsPage() {
     if (!q) return groups
     return groups.filter((g) => g.cn.toLowerCase().includes(q) || g.description?.toLowerCase().includes(q))
   }, [groups, query])
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageGroups = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   async function handleCreateOrUpdate(input: GroupFormInput) {
     if (editing) {
@@ -82,27 +116,29 @@ export function GroupsPage() {
   }
 
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
+    if (e.target !== e.currentTarget) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      rowRefs.current[index + 1]?.focus()
+      if (index + 1 < pageGroups.length) rowRefs.current[index + 1]?.focus()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       rowRefs.current[index - 1]?.focus()
     } else if (e.key === 'Enter') {
-      setEditing(filtered[index])
+      e.preventDefault()
+      setEditing(pageGroups[index])
       setFormOpen(true)
     }
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="relative w-72">
+    <div className="max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder={t('groups.filterPlaceholder')}
+            aria-label={t('groups.filterPlaceholder')} placeholder={t('groups.filterPlaceholder')}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setPage(1) }}
             className="pl-8"
           />
         </div>
@@ -153,17 +189,17 @@ export function GroupsPage() {
             <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
           )}
           {filtered.length > 0 && (
-            <Table>
+            <Table className="table-fixed">
               <TableHead>
                 <tr>
-                  <TableHeadCell>cn</TableHeadCell>
-                  <TableHeadCell>{t('common.description')}</TableHeadCell>
-                  <TableHeadCell>{t('common.members')}</TableHeadCell>
-                  <TableHeadCell className="text-right">{t('common.actions')}</TableHeadCell>
+                  <TableHeadCell className="w-[38%]">cn</TableHeadCell>
+                  <TableHeadCell className="w-[40%]">{t('common.description')}</TableHeadCell>
+                  <TableHeadCell className="w-[10%]">{t('common.members')}</TableHeadCell>
+                  <TableHeadCell className="w-[12%] text-right">{t('common.actions')}</TableHeadCell>
                 </tr>
               </TableHead>
               <TableBody>
-                {filtered.map((g, i) => (
+                {pageGroups.map((g, i) => (
                   <TableRow
                     key={g.dn}
                     ref={(el) => {
@@ -173,8 +209,10 @@ export function GroupsPage() {
                     onKeyDown={(e) => onRowKeyDown(e, i)}
                     className="focus-visible:bg-muted focus-visible:outline-none"
                   >
-                    <TableCell className="font-mono">{g.cn}</TableCell>
-                    <TableCell className="text-muted-foreground">{g.description || '—'}</TableCell>
+                    <TableCell><TruncatedText text={g.cn} className="font-mono" /></TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {g.description ? <TruncatedText text={g.description} /> : '—'}
+                    </TableCell>
                     <TableCell>
                       <button
                         onClick={() => setMembersGroup(g)}
@@ -220,6 +258,8 @@ export function GroupsPage() {
               </TableBody>
             </Table>
           )}
+          {!error && filtered.length > 0 && <GroupPagination page={currentPage} pageSize={pageSize} total={filtered.length}
+            onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1) }} />}
         </CardContent>
       </Card>
 

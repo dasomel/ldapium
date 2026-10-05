@@ -94,8 +94,15 @@ done
 if command -v helm >/dev/null 2>&1; then
 	rendered=$(helm template versioncheck charts/ldapium \
 		--set auth.adminPassword=render-only-not-a-secret \
-		--set ui.enabled=true |
+		--set ui.enabled=true \
+		--set-string ui.session.secret=render-only-session-secret-not-a-secret-0123456789 |
 		sed -n 's/^[[:space:]]*image:[[:space:]]*//p' | sort -u)
+	# A failed render leaves `rendered` empty and the loop below would pass
+	# having checked nothing (this hid a chart guard once); treat it as an error.
+	if [ -z "$rendered" ]; then
+		echo "helm template rendered no images; the chart no longer renders with render-only values" >&2
+		exit 1
+	fi
 	for ref in $rendered; do
 		case "$ref" in
 		*":$chart_version") ;;

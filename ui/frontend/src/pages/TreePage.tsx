@@ -56,8 +56,8 @@ export function TreePage() {
   }, [selectedDn])
 
   return (
-    <div className="grid h-full grid-cols-[320px_1fr] gap-4">
-      <Card className="flex flex-col overflow-hidden">
+    <div className="grid min-h-full grid-cols-1 gap-4 lg:h-full lg:grid-cols-[300px_minmax(0,1fr)]">
+      <Card className="flex min-w-0 flex-col overflow-hidden">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FolderTree className="size-4 text-accent" />
@@ -78,7 +78,7 @@ export function TreePage() {
         </CardContent>
       </Card>
 
-      <Card className="flex flex-col overflow-hidden">
+      <Card className="flex min-w-0 flex-col overflow-hidden">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileSearch className="size-4 text-accent" />

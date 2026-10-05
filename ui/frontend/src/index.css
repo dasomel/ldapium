@@ -21,6 +21,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-muted: var(--accent-muted);
 
+  --color-destructive: var(--danger);
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
   --color-success: var(--success);
@@ -42,9 +43,9 @@
   --muted: oklch(93% 0.008 85);
   --muted-foreground: oklch(46% 0.016 60);
 
-  --accent: oklch(64% 0.16 55);
+  --accent: oklch(55% 0.16 55);
   --accent-foreground: oklch(99% 0.005 90);
-  --accent-muted: oklch(90% 0.04 60);
+  --accent-muted: oklch(97% 0.02 60);
 
   --danger: oklch(56% 0.2 25);
   --danger-foreground: oklch(99% 0.005 90);
@@ -153,4 +154,13 @@ body::before {
 }
 .animate-console-in {
   animation: console-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Keyboard focus is shared by native controls as well as reusable components. */
+:where(button, a, select, textarea):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-console-in { animation: none; }
 }

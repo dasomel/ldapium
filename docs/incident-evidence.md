@@ -93,7 +93,7 @@ arithmetic as a real, previously-hit hazard this project avoids on purpose.
 
 `userPassword` and any attribute whose name matches
 `(?i)password|secret|credential|token` are stripped everywhere in the
-bundle — this is the same denylist principle `CLAUDE.md` already applies to
+bundle — this is the same denylist principle `AGENTS.md` already applies to
 the UI's HTTP responses (`entryRedactedAttrs` in
 `ui/backend/internal/ldapclient/tree.go`), extended to this export path.
 Concretely:

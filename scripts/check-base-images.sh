@@ -31,7 +31,14 @@ dockerfiles=(image/Dockerfile ui/Dockerfile)
 
 # `FROM <repo>:<tag>@sha256:<hex>` — the tag stays for humans, the digest is
 # what docker actually resolves.
-pins=$(grep -hE '^FROM ' "${dockerfiles[@]}" | awk '{print $2}' | sort -u)
+# A `FROM <stage>` that names an earlier `AS <stage>` in the same Dockerfile
+# is a reference to a build stage, not a registry image, so it is not a pin.
+pins=$(for dockerfile in "${dockerfiles[@]}"; do
+	awk '$1 == "FROM" {
+		if (!($2 in stage)) print $2
+		for (i = 3; i < NF; i++) if (toupper($i) == "AS") stage[$(i + 1)] = 1
+	}' "$dockerfile"
+done | sort -u)
 
 if [ -z "$pins" ]; then
 	echo "no FROM lines found; check the parsing in this script" >&2

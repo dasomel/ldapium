@@ -175,3 +175,32 @@ TLS for clients while silently using plaintext for syncrepl.
 {{- fail (printf "persistence.data.size %q is not a plain byte count or a Ki/Mi/Gi/Ti quantity; set ldap.dbMaxSize explicitly (in bytes) if you need another form" $s) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Refuse hardening combinations that would silently break the deployment.
+Rendered from statefulset.yaml, so every `helm template`/`install` runs it.
+*/}}
+{{- define "ldapium.validateHardening" -}}
+{{- $h := .Values.ldap.hardening -}}
+{{- if and (or $h.disallowAnonBind $h.requireAuthc) .Values.ldap.anonymousReadBase -}}
+{{- fail "ldap.hardening.disallowAnonBind / requireAuthc contradict ldap.anonymousReadBase: anonymous uid lookups (SSSD, Keycloak federation, the UI's bare-uid login) would be rejected. Unset ldap.anonymousReadBase and move those clients to a bind DN, or leave both hardening flags false." -}}
+{{- end -}}
+{{- if and (or $h.disallowAnonBind $h.requireAuthc) .Values.ui.enabled .Values.ui.ldap.userSearchFilter -}}
+{{- fail "ldap.hardening.disallowAnonBind / requireAuthc break the UI's bare-uid login: ui.ldap.userSearchFilter resolves uid to DN with an ANONYMOUS search, which the server would now reject. Set ui.ldap.userSearchFilter=\"\" (users log in with their full DN), disable ui.enabled, or leave both hardening flags false." -}}
+{{- end -}}
+{{- if and $h.requireTls (not .Values.tls.enabled) -}}
+{{- fail "ldap.hardening.requireTls requires tls.enabled=true (and tls.existingSecret); otherwise no client could connect at all." -}}
+{{- end -}}
+{{- if and $h.requireTls .Values.metrics .Values.metrics.enabled -}}
+{{- fail "ldap.hardening.requireTls conflicts with metrics.enabled: the exporter sidecar binds over plaintext ldap://127.0.0.1:389 and would be refused. Disable metrics or leave requireTls false." -}}
+{{- end -}}
+{{- if and $h.requireTls .Values.ui.enabled .Values.ui.ldap.url (hasPrefix "ldap://" .Values.ui.ldap.url) (not .Values.ui.ldap.startTLS) -}}
+{{- fail "ldap.hardening.requireTls with ui.ldap.url on plain ldap:// needs ui.ldap.startTLS=true (or an ldaps:// URL); the UI could not bind otherwise." -}}
+{{- end -}}
+{{- if and .Values.ldap.lastBind.enabled (not .Values.ldap.lastBind.allowWithReplication) (eq (include "ldapium.replicationEnabled" .) "true") -}}
+{{- fail "ldap.lastBind.enabled with replication can silently undo a password change or lockout made on another node during a partition (the bind's pwdLastSuccess write carries a newer entryCSN and wins last-write-wins). Keep lastBind disabled on multi-provider deployments, or set ldap.lastBind.allowWithReplication=true to accept that risk." -}}
+{{- end -}}
+{{- if and .Values.ldap.modules.dynlistEnabled (eq (include "ldapium.replicationEnabled" .) "true") -}}
+{{- fail "ldap.modules.dynlistEnabled is not supported with replication: computed dynlist values would enter the syncrepl stream (the image entrypoint refuses to start). Disable dynlistEnabled or replication." -}}
+{{- end -}}
+{{- end -}}

@@ -44,10 +44,13 @@ today = datetime.datetime.now(datetime.timezone.utc).date()
 print(max((target - today).days, 1))
 " "$1"
 }
+# The expiring cert is "10 days from the real clock", so the cert-expiring run below must also
+# use the real clock as --fixed-time: an absolute target date (the old 2026-09-15) drifts into
+# the past and silently turns the finding off. Every other run keeps the pinned 2026-09-03.
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "${work}/cert-key.pem" -out "${work}/cert-expiring.pem" \
   -subj "/CN=ldap.example.org" \
-  -days "$(days_until 2026-09-15)" >/dev/null 2>&1
+  -days 10 >/dev/null 2>&1
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "${work}/cert-key2.pem" -out "${work}/cert-healthy.pem" \
   -subj "/CN=ldap.example.org" \
@@ -64,7 +67,7 @@ run() {
   local name="$1" out="$2"; shift 2
   if ! "$script" -b dc=example,dc=org --skip-health \
     --monitor-ldif "${fixtures}/monitor.ldif" \
-    --fixed-time 2026-09-03T00:00:00Z \
+    --fixed-time "${FIXED_TIME:-2026-09-03T00:00:00Z}" \
     -o "$out" "$@" > "${out}.log" 2>&1; then
     bad "${name}: export-incident-evidence.sh exited non-zero"
     cat "${out}.log" >&2
@@ -107,7 +110,7 @@ run backup-fresh "${work}/backup-fresh" \
   --cert-file "${work}/cert-healthy.pem"
 if has_finding "${work}/backup-fresh" backup-stale; then bad "backup-fresh fixture unexpectedly has backup-stale finding"; else ok "backup-fresh fixture has no backup-stale finding"; fi
 
-run cert-expiring "${work}/cert-expiring" \
+FIXED_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" run cert-expiring "${work}/cert-expiring" \
   --replication-ldif "${fixtures}/replication-healthy.ldif" \
   --audit-log-file "${fixtures}/audit-healthy.ndjson" \
   --backup-dir "${fixtures}/backup-fresh" \
