@@ -2,7 +2,7 @@
 
 - Change class: `D` (replication / data safety)
 - Related issue: #206
-- Status: `Implementing` (needs acceptance before merge)
+- Status: `Done` — implemented in #226 (164fad4) and verified in CI (`e2e.yml`, job "migration dry-run (live image validation)": `test-wiped-node-resync.sh` and `test-bootstrap-seed.sh`, green on #228). Acceptance was recorded after the merge: the maintainer instructed on 2026-10-06 to process and close #206.
 
 ## Problem
 
