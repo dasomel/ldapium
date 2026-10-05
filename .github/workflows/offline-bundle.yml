@@ -237,6 +237,7 @@ jobs:
             --kind-cluster offline \
             --set replicaCount=1 \
             --set ui.enabled=true \
+            --set ui.session.secret=offline-e2e-session-secret-not-a-secret-0123 \
             --set auth.adminPassword=offline-e2e-password
           kubectl -n directory rollout status statefulset/directory-ldapium --timeout=10m
           kubectl -n directory rollout status deployment/directory-ldapium-ui --timeout=10m

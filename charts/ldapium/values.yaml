@@ -602,11 +602,16 @@ ui:
 
   session:
     # -- Secret to source SESSION_SECRET from. When empty, the chart
-    #    generates a random 48-byte value and reuses it across upgrades
-    #    (via `lookup`, so this only holds on a live cluster — `helm
-    #    template` alone regenerates it every render).
+    #    creates one: from `secret` if set, else a random 48-byte value
+    #    generated once and reused across upgrades (via `lookup`). Offline
+    #    renders (`helm template`, ArgoCD/Flux, --dry-run=client) cannot
+    #    look up, so they fail unless `secret` or `existingSecret` is set.
     existingSecret: ""
     existingSecretKey: session-secret
+    # -- Explicit SESSION_SECRET value (chart-created Secret). Required for
+    #    offline renders when `existingSecret` is unset; prefer `existingSecret`
+    #    so the value stays out of values files.
+    secret: ""
     ttl: 30m
     # -- COOKIE_SECURE. Disable only for local HTTP development.
     cookieSecure: true

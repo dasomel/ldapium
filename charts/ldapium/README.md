@@ -41,6 +41,14 @@ the data volume still holds the rootpw derived from the original password, so a 
 one would lock the directory out. Restore the Secret or pass the ORIGINAL password
 via `auth.existingSecret` / `auth.adminPassword`.
 
+The **UI session Secret** (`<release>-ldapium-ui-session`, `ui.enabled=true`) follows
+the same offline rule: with no `ui.session.existingSecret` and no `ui.session.secret`,
+an offline render fails (same new-namespace caveat), because each render would mint a
+new `SESSION_SECRET` and log every user out at every sync. Unlike the admin password
+this is never a lockout, so on **upgrade** with the namespace visible but the Secret
+missing the chart regenerates it: the only effect is one forced re-login. It carries
+no `resource-policy: keep`, so `helm uninstall` deletes it and nothing is orphaned.
+
 The generated Secret carries `helm.sh/resource-policy: keep`, so `helm uninstall`
 leaves it, just as it leaves the PVCs. Reinstalling with the **same release name
 and namespace** reuses it and the retained data keeps working. The orphaned
@@ -296,7 +304,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ui.ldap.startTLS` | `false` | → `LDAP_START_TLS`. |
 | `ui.ldap.tlsCACert` | `""` | → `LDAP_TLS_CA_CERT`. |
 | `ui.ldap.tlsInsecureSkipVerify` | `false` | → `LDAP_TLS_INSECURE_SKIP_VERIFY`. |
-| `ui.session.existingSecret` / `existingSecretKey` | `""` / `session-secret` | → `SESSION_SECRET`. Auto-generated (48 bytes) and reused across upgrades via `lookup` when unset. |
+| `ui.session.existingSecret` / `existingSecretKey` / `secret` | `""` / `session-secret` / `""` | → `SESSION_SECRET`. When `existingSecret` and `secret` are unset a live install generates 48 bytes once and reuses them via `lookup`; offline renders (`helm template`, ArgoCD/Flux) fail unless `existingSecret` or `secret` is set. An explicit `secret` must be at least 32 bytes (the UI refuses to start with less). |
 | `ui.session.ttl` | `30m` | → `SESSION_TTL`. |
 | `ui.session.cookieSecure` | `true` | → `COOKIE_SECURE`. Disable only for local HTTP dev. |
 | `ui.session.loginFailureLimit` | `10` | → `UI_LOGIN_FAILURE_LIMIT`. Failed `POST /api/login` attempts per client IP within the window before a `429`; `0` disables. Per pod, not cluster-wide — ppolicy lockout is the backstop across replicas. |

@@ -249,7 +249,8 @@ jobs:
           helm template t charts/ldapium \
             --set auth.adminPassword=ci-render-only-not-a-secret \
             --set replicaCount=3 \
-            --set ui.enabled=true
+            --set ui.enabled=true \
+            --set ui.session.secret=ci-render-only-session-secret-not-a-secret-0123
 
       # TLS is off by default and unverified at runtime (see values.yaml), so
       # nothing else here would notice it stopped rendering. Rendering is not
@@ -309,6 +310,28 @@ jobs:
           test "$a" = "$b"
           if helm template t charts/ldapium --set auth.existingSecret=x --show-only templates/secret-admin.yaml >/dev/null 2>&1; then
             echo "::error::existingSecret still rendered a chart-created admin Secret"
+            exit 1
+          fi
+          # UI session Secret: same offline rule (a fresh SESSION_SECRET per
+          # render logs every user out at every sync).
+          for extra in "" "--is-upgrade"; do
+            if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true $extra >/dev/null 2>&1; then
+              echo "::error::offline render with ui.enabled generated a session secret ($extra)"
+              exit 1
+            fi
+          done
+          a=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true --set ui.session.secret=ci-render-only-session-secret-not-a-secret-0123)
+          b=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true --set ui.session.secret=ci-render-only-session-secret-not-a-secret-0123)
+          test "$a" = "$b"
+          # An explicit session secret under 32 bytes is rejected at render time (the UI refuses to start with it).
+          if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true --set ui.session.secret=short >/dev/null 2>&1; then
+            echo "::error::a session secret shorter than 32 bytes rendered"
+            exit 1
+          fi
+          helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true --set ui.session.existingSecret=x --show-only templates/ui-secret.yaml >/dev/null 2>&1 && { echo "::error::existingSecret still rendered a UI session Secret"; exit 1; } || true
+          # UI disabled: no session Secret, admin-only render unaffected.
+          if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret | grep -q -- '-session'; then
+            echo "::error::session Secret rendered with the UI disabled"
             exit 1
           fi
           # Helm reads values.yaml numbers as float64, so an unconverted
