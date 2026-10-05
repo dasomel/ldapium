@@ -254,7 +254,10 @@ jobs:
           echo "writes during the upgrade: $ok/$total, longest consecutive failure run: $streak"
           printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$total" "$ok" "$streak" \
             | tee /tmp/upgrade-evidence/write-availability-summary.txt
-          if [ "$total" -lt 20 ]; then
+          # 10, not 20: a 3-pod roll now takes ~20s (startup no longer runs a
+          # temporary slapd, 164fad4), so 1/s sampling yields ~20 and 20 was a
+          # coin flip. A probe that missed the roll still collects ~0-3.
+          if [ "$total" -lt 10 ]; then
             echo "::error::upgrade finished too quickly to measure write availability ($total samples)"
             exit 1
           fi

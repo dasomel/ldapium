@@ -91,7 +91,7 @@ Useful from there:
 
 ```bash
 --set replicaCount=3      # N-way multi-provider replication, peers wired automatically
---set ui.enabled=true     # the management UI
+--set ui.enabled=true     # the management UI; first install also needs --set ui.session.secret="$(openssl rand -base64 48)"
 --set backup.enabled=true # scheduled dumps of the data tree and cn=config
 ```
 
@@ -144,6 +144,10 @@ one step, instead of two `docker run`s and a hand-built Docker network:
 make local-up
 make local-credentials
 ```
+
+For local Keycloak LDAP federation, run `make keycloak-up` and open
+`http://127.0.0.1:8180/admin/`. See [local Keycloak testing](docs/testing/keycloak-local.md)
+for login details, user/group synchronization, test commands, and shutdown.
 
 Then open `http://localhost:8080` (or `${UI_PORT}`) for the UI, and
 `ldap://localhost:389` (or `${LDAP_PORT}`) for direct LDAP access. Data

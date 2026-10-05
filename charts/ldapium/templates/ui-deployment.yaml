@@ -1,4 +1,30 @@
 {{- if .Values.ui.enabled }}
+{{- if .Values.ui.backups.enabled }}
+{{- if not .Values.ui.backups.runtimeConfirmed }}{{ fail "backups require runtimeConfirmed and a backup-runtime image" }}{{ end }}
+{{- if ne (int .Values.ui.replicaCount) 1 }}{{ fail "backups require ui.replicaCount=1" }}{{ end }}
+{{- if not .Values.ui.backups.existingClaim }}{{ fail "backups require an existing PVC" }}{{ end }}
+{{- if not .Values.ui.backups.existingSecret }}{{ fail "backups require an operator Secret" }}{{ end }}
+{{- if not .Values.ui.backups.adminDNs }}{{ fail "backups require explicit adminDNs" }}{{ end }}
+{{- range .Values.ui.backups.adminDNs }}{{- if not (trim .) }}{{ fail "backups require nonempty adminDNs" }}{{ end }}{{ end }}
+{{- end }}
+{{- if .Values.ui.applicationProfiles.enabled }}
+{{- /* D22: file persistence needs one writer; Recreate prevents rolling overlap. Use a database before enabling HA. */}}
+{{- if ne (int .Values.ui.replicaCount) 1 }}{{ fail "application profiles require ui.replicaCount=1" }}{{ end }}
+{{- if not .Values.ui.applicationProfiles.existingClaim }}{{ fail "application profiles require an existing PVC" }}{{ end }}
+{{- if not .Values.ui.applicationProfiles.adminDNs }}{{ fail "application profiles require explicit adminDNs" }}{{ end }}
+{{- range .Values.ui.applicationProfiles.adminDNs }}
+{{- if not (trim .) }}{{ fail "application profiles require nonempty adminDNs" }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if .Values.ui.keycloakAdmin.enabled }}
+{{- if not .Values.ui.applicationProfiles.enabled }}{{ fail "keycloakAdmin requires applicationProfiles.enabled" }}{{ end }}
+{{- range $name := list "url" "realm" "clientID" "existingSecret" "secretKey" }}
+{{- if not (index $.Values.ui.keycloakAdmin $name) }}{{ fail (printf "keycloakAdmin requires %s" $name) }}{{ end }}
+{{- end }}
+{{- if not (hasPrefix "https://" .Values.ui.keycloakAdmin.url) }}{{ fail "keycloakAdmin.url requires HTTPS" }}{{ end }}
+{{- if not .Values.ui.keycloakAdmin.observeClients }}{{ fail "keycloakAdmin requires observeClients" }}{{ end }}
+{{- if and .Values.ui.keycloakAdmin.delegateClients (not .Values.ui.keycloakAdmin.isolatedRealm) }}{{ fail "delegated writes require an isolated realm" }}{{ end }}
+{{- end }}
 {{- if .Values.ui.sso.enabled }}
 {{- /*
   Every value SSO cannot run without, checked in one pass so a misconfigured
@@ -31,6 +57,10 @@ metadata:
     {{- include "ldapium.ui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ui.replicaCount }}
+  {{- if or .Values.ui.applicationProfiles.enabled .Values.ui.backups.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "ldapium.ui.selectorLabels" . | nindent 6 }}
@@ -76,6 +106,31 @@ spec:
       {{- with .Values.ui.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.ui.applicationProfiles.enabled .Values.ui.backups.enabled }}
+      volumes:
+        {{- if .Values.ui.applicationProfiles.enabled }}
+        - name: application-profiles
+          persistentVolumeClaim:
+            claimName: {{ .Values.ui.applicationProfiles.existingClaim | quote }}
+        {{- end }}
+        {{- if .Values.ui.backups.enabled }}
+        - name: backup-archives
+          persistentVolumeClaim:
+            claimName: {{ .Values.ui.backups.existingClaim | quote }}
+        - name: backup-operator
+          secret:
+            secretName: {{ .Values.ui.backups.existingSecret | quote }}
+            defaultMode: 0440
+        - name: backup-tmp
+          emptyDir: {}
+        {{- if .Values.ui.backups.logExistingClaim }}
+        - name: backup-logs
+          persistentVolumeClaim:
+            claimName: {{ .Values.ui.backups.logExistingClaim | quote }}
+            readOnly: true
+        {{- end }}
+        {{- end }}
       {{- end }}
       containers:
         - name: ui
@@ -129,9 +184,18 @@ spec:
             - name: OPENLDAP_UNIQUE_ATTRIBUTES
               value: {{ .Values.ldap.uniqueAttributes | quote }}
             # These are the ONLY source for what the settings page shows, and
-            # they are a hand-kept copy of what image/Dockerfile builds and
-            # image/ldifs/01-cn-config.ldif loads. Keep them in step by hand:
-            # the list had already drifted once (back_mdb was missing).
+            # they are a hand-kept copy of what image/Dockerfile builds,
+            # image/ldifs/01-cn-config.ldif loads and image/entrypoint.sh
+            # (section 3c) enables at runtime from the ldap.modules.* values.
+            # Keep them in step by hand: the list had already drifted twice
+            # (back_mdb, then nestgroup/ppm, were missing).
+            #
+            # MODULES: the bootstrap ldif loads the fixed list below on every
+            # volume; nestgroup is loaded by the entrypoint only when enabled,
+            # and ppm is a ppolicy check module (ppm.so via
+            # olcPPolicyCheckModule, not an olcModuleLoad), listed only while
+            # enabled. OVERLAYS: what is really active for these values.
+            # lastbind is a database option, not an overlay, so it is omitted.
             #
             # Reading the real values from the server is the obvious fix and
             # does not work: they live in cn=config, which has its own admin
@@ -142,9 +206,9 @@ spec:
             # mean giving the UI a second, cn=config-capable service account,
             # which is exactly the thing this project avoids.
             - name: OPENLDAP_MODULES
-              value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp"
+              value: "back_mdb,argon2,memberof,refint,ppolicy,unique,syncprov,accesslog,auditlog,constraint,deref,dynlist,sssvlv,otp{{ if .Values.ldap.modules.nestgroupEnabled }},nestgroup{{ end }}{{ if .Values.ldap.modules.ppmEnabled }},ppm{{ end }}"
             - name: OPENLDAP_OVERLAYS
-              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "ldapium.replicationEnabled" .) "true" }},syncprov{{ end }}"
+              value: "memberof,refint,ppolicy{{ if .Values.ldap.uniqueAttributes }},unique{{ end }}{{ if eq (include "ldapium.replicationEnabled" .) "true" }},syncprov{{ end }}{{ if .Values.ldap.modules.derefEnabled }},deref{{ end }}{{ if .Values.ldap.modules.constraintEnabled }},constraint{{ end }}{{ if .Values.ldap.modules.nestgroupEnabled }},nestgroup{{ end }}{{ if .Values.ldap.modules.dynlistEnabled }},dynlist{{ end }}{{ if .Values.ldap.modules.otpEnabled }},otp{{ end }}{{ if .Values.ldap.modules.sssvlvMainEnabled }},sssvlv{{ end }}"
             - name: LDAP_URL
               value: {{ $ldapURL | quote }}
             - name: LDAP_BASE_DN
@@ -177,6 +241,49 @@ spec:
             {{- end }}
             - name: LDAP_TLS_INSECURE_SKIP_VERIFY
               value: {{ .Values.ui.ldap.tlsInsecureSkipVerify | quote }}
+            {{- if .Values.ui.backups.enabled }}
+            - name: BACKUP_OPERATOR_CONFIG
+              value: /etc/ldapium-backup/operator.json
+            - name: BACKUP_POLICY_PATH
+              value: /var/lib/ldapium-backups/policies.json
+            - name: BACKUP_WORKER_PATH
+              value: /opt/ldapium/backup-tools/backup_worker.py
+            - name: BACKUP_PYTHON
+              value: /usr/bin/python3
+            - name: BACKUP_ADMIN_DNS
+              value: {{ join ";" .Values.ui.backups.adminDNs | quote }}
+            - name: RCLONE_CACHE_DIR
+              value: /tmp/rclone
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            {{- end }}
+            {{- if .Values.ui.applicationProfiles.enabled }}
+            - name: APP_PROFILES_PATH
+              value: /var/lib/ldapium/profiles.json
+            - name: APP_PROFILES_ADMIN_DNS
+              value: {{ join ";" .Values.ui.applicationProfiles.adminDNs | quote }}
+            {{- end }}
+            {{- if .Values.ui.keycloakAdmin.enabled }}
+            - name: KEYCLOAK_ADMIN_URL
+              value: {{ .Values.ui.keycloakAdmin.url | quote }}
+            - name: KEYCLOAK_ADMIN_REALM
+              value: {{ .Values.ui.keycloakAdmin.realm | quote }}
+            - name: KEYCLOAK_ADMIN_CLIENT_ID
+              value: {{ .Values.ui.keycloakAdmin.clientID | quote }}
+            - name: KEYCLOAK_ADMIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ui.keycloakAdmin.existingSecret | quote }}
+                  key: {{ .Values.ui.keycloakAdmin.secretKey | quote }}
+            - name: KEYCLOAK_OBSERVE_CLIENTS
+              value: {{ join ";" .Values.ui.keycloakAdmin.observeClients | quote }}
+            - name: KEYCLOAK_DELEGATE_CLIENTS
+              value: {{ join ";" .Values.ui.keycloakAdmin.delegateClients | quote }}
+            - name: KEYCLOAK_MANAGED_GROUP_IDS
+              value: {{ join ";" .Values.ui.keycloakAdmin.managedGroupIDs | quote }}
+            - name: KEYCLOAK_ISOLATED_REALM
+              value: {{ .Values.ui.keycloakAdmin.isolatedRealm | quote }}
+            {{- end }}
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef:
@@ -223,6 +330,27 @@ spec:
                   name: {{ .Values.ui.ldapServiceAccount.existingSecret }}
                   key: {{ .Values.ui.ldapServiceAccount.passwordKey }}
             {{- end }}
+          {{- if or .Values.ui.applicationProfiles.enabled .Values.ui.backups.enabled }}
+          volumeMounts:
+            {{- if .Values.ui.applicationProfiles.enabled }}
+            - name: application-profiles
+              mountPath: /var/lib/ldapium
+            {{- end }}
+            {{- if .Values.ui.backups.enabled }}
+            - name: backup-archives
+              mountPath: /var/lib/ldapium-backups
+            - name: backup-operator
+              mountPath: /etc/ldapium-backup
+              readOnly: true
+            - name: backup-tmp
+              mountPath: /tmp
+            {{- if .Values.ui.backups.logExistingClaim }}
+            - name: backup-logs
+              mountPath: /var/log/ldapium-backup
+              readOnly: true
+            {{- end }}
+            {{- end }}
+          {{- end }}
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
 {{- end }}

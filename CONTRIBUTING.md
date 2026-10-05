@@ -105,7 +105,7 @@ reconstruct it from two sets of files.
 | `make check` | lint, unit tests, build, `check-versions.sh`, `check-modules.sh`, `licenses.sh --check` | `ci.yml`: `backend`, `frontend`, `helm`, `licenses`, `shellcheck` — same commands, same order |
 | `make licenses` | regenerate `THIRD-PARTY-LICENSES.md` | `ci.yml`'s `licenses` job runs the check form (`--check`), not the regenerating one — CI verifies the file, it never writes it |
 | `make sbom` | SBOM for the images this build produced, written to `./sbom` | `build-multiarch.yml`'s SBOM step — same tool (syft), against the image the workflow just built rather than one you built locally |
-| `make local-init` / `local-up` / `local-down` / `local-logs` / `local-credentials` / `frontend-dev` / `k8s-credentials` / `k8s-ui-forward` | local dev loop | none — these exist because CI cannot give you a directory to click through |
+| `make local-init` / `local-up` / `local-down` / `local-logs` / `local-credentials` / `frontend-dev` / `ldap-replication-load` / `k8s-credentials` / `k8s-ui-forward` | local dev loop; optional JMeter LDAP load profile is documented in `docs/scale-benchmarks.md` | none — these exist because CI cannot give you a directory to click through |
 
 The other direction — CI stages nothing in `make` reaches:
 

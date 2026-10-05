@@ -29,7 +29,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   const t = useT()
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+    <div role="alert" className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <div className="flex size-11 items-center justify-center rounded-full border border-danger/30 bg-danger/10 text-danger">
         !
       </div>
@@ -49,8 +49,9 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
 }
 
 export function Spinner({ className }: { className?: string }) {
+  const t = useT()
   return (
-    <div
+    <div role="status" aria-label={t('common.working')}
       className={cn(
         'size-4 animate-spin rounded-full border-2 border-border-strong border-t-accent',
         className,

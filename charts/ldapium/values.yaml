@@ -74,17 +74,130 @@ ldap:
   uniqueAttributes: "uid,mail"
   # -- Enables the default ppolicy entry (lockout, history, and safe modify).
   passwordPolicyEnabled: true
+  # -- LDAP_PASSWORD_FAILURE_INTERVAL: seconds after which ppolicy forgets
+  #    earlier failed binds (pwdFailureCountInterval). Matches the image
+  #    default; only meaningful while passwordPolicyEnabled is true. A failure
+  #    count that never expires would let a slow attacker eventually lock any
+  #    account out, so 0 (never) is deliberately not the default.
+  passwordFailureInterval: 900
+
+  # Connection/operation limits (slapd olcIdleTimeout, olcWriteTimeout,
+  # olcConnMaxPending*, olcSockbufMaxIncoming*, filter depth). Values equal
+  # the image defaults. The image reconciles them into cn=config on EVERY
+  # start, so an upgrade or a values change takes effect on the next pod
+  # restart, and the limits below are new wire behavior for older installs.
+  limits:
+    # -- LDAP_IDLE_TIMEOUT (seconds): close connections idle this long, so a
+    #    leaked or abandoned client cannot pin a slot in the connection table
+    #    (sized by maxOpenFiles) forever. 0 disables. Clients that hold a
+    #    long-lived pooled connection (SSSD, Keycloak) reconnect transparently,
+    #    but a pool that does not health-check may surface one failed request.
+    idleTimeout: 600
+    # -- LDAP_WRITE_TIMEOUT (seconds): drop a client that stops reading its
+    #    responses, instead of letting a stalled socket hold a worker.
+    writeTimeout: 30
+    # -- LDAP_CONN_MAX_PENDING: queued (unprocessed) requests allowed per
+    #    anonymous connection before it is throttled.
+    connMaxPending: 100
+    # -- LDAP_CONN_MAX_PENDING_AUTH: same, for authenticated connections.
+    connMaxPendingAuth: 1000
+    # -- LDAP_SOCKBUF_MAX_INCOMING (bytes): max PDU size accepted from an
+    #    anonymous connection. Bounds memory an unauthenticated peer can make
+    #    slapd buffer.
+    sockbufMaxIncoming: 262143
+    # -- LDAP_SOCKBUF_MAX_INCOMING_AUTH (bytes): same, authenticated. Large
+    #    on purpose: bulk adds and big group modifies are legitimate.
+    sockbufMaxIncomingAuth: 4194303
+    # -- LDAP_MAX_FILTER_DEPTH: reject search filters nested deeper than
+    #    this, so a hostile client cannot force deep recursion in the filter
+    #    evaluator. Real filters (SSSD, Keycloak, this UI) stay well under 10.
+    #    (connMaxPending*/sockbufMaxIncoming* pin slapd's compiled defaults
+    #    explicitly; idle/write timeouts and maxFilterDepth are the new caps.)
+    maxFilterDepth: 20
+
+  # -- Last-bind tracking (slapo-lastbind -> pwdLastSuccess): records when each
+  #    entry last authenticated, so stale accounts can be found. Opt-in until
+  #    replication-chaos E2E proves it under multi-provider load. Each
+  #    successful bind then costs one write, which replicates; `precision` is
+  #    the minimum seconds between updates per entry, which keeps a busy
+  #    service account from turning every bind into a replicated write.
+  #    WARNING: with replication, keep this off. In one observed run a bind on
+  #    a partitioned node wrote pwdLastSuccess with a newer entryCSN and, after
+  #    reconnect, last-write-wins silently reverted another node's password
+  #    change. The chart refuses enabled=true with replication unless
+  #    allowWithReplication=true.
+  lastBind:
+    enabled: false
+    # -- Explicit acknowledgement of the warning above; only read when
+    #    replication is on.
+    allowWithReplication: false
+    # -- LDAP_LASTBIND_PRECISION (seconds).
+    precision: 3600
+
+  # Opt-in hardening (all default false = today's behavior). Each one CAN
+  # break clients that work now, which is why none is on by default and why
+  # they are reconciled into cn=config on every start, so flipping one on an
+  # existing install takes effect at the next pod restart (see README,
+  # "Hardening").
+  hardening:
+    # -- LDAP_REQUIRE_TLS: refuse every simple bind and every operation on a
+    #    connection that is not protected by TLS (ldaps:// or StartTLS).
+    #    Breaks any client speaking plain ldap:// on 389 — including this
+    #    chart's own metrics exporter sidecar (loopback ldap://), so the
+    #    chart refuses metrics.enabled together with it. Requires tls.enabled.
+    requireTls: false
+    # -- LDAP_DISALLOW_ANON_BIND: reject anonymous (empty-DN) binds. Also
+    #    breaks the anonymous uid->DN lookup that SSSD, Keycloak federation
+    #    and this UI's bare-uid login use (see userSearchFilter), so the chart
+    #    refuses this together with anonymousReadBase — that setting exists
+    #    precisely to keep anonymous lookups working, and the two contradict.
+    disallowAnonBind: false
+    # -- LDAP_REQUIRE_AUTHC: require authentication for every operation, not
+    #    just binds. Same anonymous-lookup breakage and same chart guard as
+    #    disallowAnonBind; stricter, because it also blocks anonymous
+    #    rootDSE/schema discovery some clients do before binding.
+    requireAuthc: false
+
+  # Optional slapd overlays, mapped 1:1 to image env vars. The first group is
+  # on by default (image default); the second is opt-in.
+  modules:
+    # -- LDAP_PPM_ENABLED: password quality checks (ppm) on top of ppolicy.
+    ppmEnabled: true
+    # -- LDAP_PPM_MIN_CLASSES: minimum character classes a password must use.
+    ppmMinClasses: 1
+    # -- LDAP_DEREF_ENABLED: slapo-deref, lets clients fetch referenced
+    #    entries (e.g. group members) in a single search.
+    derefEnabled: true
+    # -- LDAP_CONSTRAINT_ENABLED: slapo-constraint, validates the mail
+    #    attribute against constraintMailRegex on write.
+    constraintEnabled: true
+    # -- LDAP_CONSTRAINT_MAIL_REGEX: POSIX ERE mail values must match. Quoted
+    #    with `quote` in the template, so brackets, ^ and $ pass through.
+    constraintMailRegex: '^[^@[:space:]]+@[^@[:space:]]+$'
+    # -- LDAP_NESTGROUP_ENABLED: opt-in. Nested-group membership expansion.
+    #    Interacts with memberof: verify memberOf results on your clients.
+    nestgroupEnabled: false
+    # -- LDAP_DYNLIST_ENABLED: opt-in. Dynamic lists (groupOfURLs members
+    #    computed from an LDAP URL at search time).
+    dynlistEnabled: false
+    # -- LDAP_SSSVLV_MAIN_ENABLED: opt-in. Server-side sort and virtual list
+    #    view on the main DB. Uses memory per paged/sorted search.
+    sssvlvMainEnabled: false
+    # -- LDAP_OTP_ENABLED: opt-in. One-time-password overlay; needs its schema
+    #    and per-user OTP data to be provisioned.
+    otpEnabled: false
 
 auth:
   # -- Admin password, injected via a chart-created Secret (secretKeyRef,
   #    never a plaintext env var). Leave empty and use existingSecret
   #    instead for anything beyond local smoke-testing.
   #
-  #    There is intentionally NO default here: image/entrypoint.sh refuses to
-  #    start without LDAP_ADMIN_PASSWORD, and this chart enforces the same
-  #    rule at render time — `helm template`/`install` fails loudly if
-  #    neither adminPassword nor existingSecret is set, rather than silently
-  #    shipping a default credential.
+  #    There is intentionally NO default here. Left empty, a live
+  #    `helm install` generates a password once (Secret annotated
+  #    helm.sh/resource-policy: keep) and reuses it via lookup. Offline renders
+  #    (helm template, ArgoCD/Flux, --dry-run=client) cannot look it up and
+  #    FAIL rather than mint a new password per render that would lock out the
+  #    existing data: set this or existingSecret there.
   adminPassword: ""
   # -- Name of a pre-existing Secret to source the admin password from
   #    instead of adminPassword. Takes precedence when set.
@@ -108,6 +221,11 @@ tls:
   keyFile: /etc/openldap/tls/tls.key
   # -- Set to a path (e.g. /etc/openldap/tls/ca.crt) to also set LDAP_TLS_CA_FILE.
   caFile: ""
+  # -- LDAP_TLS_EC_NAME: pin the single elliptic curve slapd uses for ECDHE
+  #    (olcTLSECName), e.g. secp384r1. Empty (default) leaves it unset and the
+  #    TLS library negotiates X25519/P-256/etc. Pinning one curve can drop
+  #    clients that do not support it.
+  ecName: ""
 
 replication:
   # -- Leave unset (commented out) to auto-enable replication when
@@ -382,6 +500,30 @@ readinessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
 
+# Opt-in NetworkPolicy for the server pods. Off by default: a policy that
+# selects the pods flips them to default-deny ingress, which locks out every
+# client not listed below, and it is inert without a CNI that enforces
+# NetworkPolicy. Egress is deliberately left unrestricted — the server only
+# dials its replication peers, but restricting it would also need DNS and any
+# external TLS/CA endpoints enumerated, for little gain.
+networkPolicy:
+  enabled: false
+  # -- Peers allowed to reach the LDAP (389) and LDAPS (636) ports, as raw
+  #    NetworkPolicy `from` peer objects. Default: any pod in the release
+  #    namespace. Add every namespace with an LDAP client (SSSD gateways,
+  #    Keycloak, ...), e.g.
+  #      - namespaceSelector:
+  #          matchLabels: {kubernetes.io/metadata.name: keycloak}
+  #    Replication between the chart's own pods and the chart's UI are always
+  #    allowed in addition to this list.
+  ingressFrom:
+    - podSelector: {}
+  # -- Namespace label selector for the monitoring stack (Prometheus), allowed
+  #    to scrape the metrics port 9330. Only used when metrics.enabled.
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+
 # -- Optional management UI (ui/). Off by default.
 ui:
   enabled: false
@@ -392,6 +534,35 @@ ui:
     pullPolicy: IfNotPresent
 
   replicaCount: 1
+
+  # Opt-in backup-runtime image, private writable PVC and operator Secret.
+  backups:
+    enabled: false
+    runtimeConfirmed: false
+    existingClaim: ""
+    existingSecret: ""
+    adminDNs: []
+    # Optional read-only LOG-ONLY claim; never mount the live LDAP MDB here.
+    logExistingClaim: ""
+
+  # Optional single-process application metadata; PVC must be writable by uid 65532.
+  applicationProfiles:
+    enabled: false
+    existingClaim: ""
+    adminDNs: []
+
+  # Keycloak remains role authority. Credentials reference an existing Secret.
+  keycloakAdmin:
+    enabled: false
+    url: ""
+    realm: ""
+    clientID: ""
+    existingSecret: ""
+    secretKey: client-secret
+    observeClients: []
+    delegateClients: []
+    managedGroupIDs: []
+    isolatedRealm: false
 
   service:
     type: ClusterIP
@@ -431,11 +602,16 @@ ui:
 
   session:
     # -- Secret to source SESSION_SECRET from. When empty, the chart
-    #    generates a random 48-byte value and reuses it across upgrades
-    #    (via `lookup`, so this only holds on a live cluster — `helm
-    #    template` alone regenerates it every render).
+    #    creates one: from `secret` if set, else a random 48-byte value
+    #    generated once and reused across upgrades (via `lookup`). Offline
+    #    renders (`helm template`, ArgoCD/Flux, --dry-run=client) cannot
+    #    look up, so they fail unless `secret` or `existingSecret` is set.
     existingSecret: ""
     existingSecretKey: session-secret
+    # -- Explicit SESSION_SECRET value (chart-created Secret). Required for
+    #    offline renders when `existingSecret` is unset; prefer `existingSecret`
+    #    so the value stays out of values files.
+    secret: ""
     ttl: 30m
     # -- COOKIE_SECURE. Disable only for local HTTP development.
     cookieSecure: true

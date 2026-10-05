@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "openforge-agent-skill-verification/v1",
+  "skill": "ldapium-directory-change",
+  "skillVersion": "1",
+  "freshSession": true,
+  "agentRuntime": "claude-sonnet-5-5 (Claude Code subagent)",
+  "happyPath": {
+    "status": "pass",
+    "summary": "Fresh-session replay (dasomel/openforge#54, 2026-10-04) activated the skill from its description, then verified against a live ldapium:e2e container (LDAP_ACCESSLOG_ENABLED=true) that a wrong-password bind (exit 49) is recorded in cn=accesslog as auditBind reqResult=49, read as cn=admin,cn=accesslog. Scratch-only; container removed, no source changed.",
+    "evidence": [
+      "research/issue-54-ldapium-directory-change-replay-2026-10-04.md#step-2-happy-path"
+    ]
+  },
+  "edgeCase": {
+    "status": "pass",
+    "summary": "Disabled the userPassword denylist entry (entryRedactedAttrs) in ui/backend/internal/ldapclient/tree.go; the repository's own unit tests failed with exit 1 (three TestEntryToDomainEntry_Redacts* tests), then the revert restored exit 0.",
+    "evidence": [
+      "research/issue-54-ldapium-directory-change-replay-2026-10-04.md#step-3-edge-case-boundary-userpassword-must-never-reach-an-http-response"
+    ]
+  },
+  "deterministicChecks": [
+    { "command": "make check", "status": "pass" },
+    { "command": "cd ui/backend && go test -count=1 ./internal/ldapclient/", "status": "pass" }
+  ],
+  "unverified": [
+    "Only the accesslog failed-bind behaviour was exercised against a live container; replication, Go-client LDAP-wire Bind/Ping/Search, backup/restore, upgrade, Keycloak federation and browser/UI E2E workflows were not run.",
+    "make check contains no live-LDAP step, so it provides unit/static evidence only; the olcAccessLogSuccess: TRUE mutation was not tried and is covered only by the live security-e2e workflow.",
+    "Activation was tested with a single skill in .agents/skills, so selection among competing skills was not exercised."
+  ],
+  "verifiedAt": "2026-10-04"
+}

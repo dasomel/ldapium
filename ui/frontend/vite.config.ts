@@ -33,7 +33,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
+      // D24: preserve browser Host/Origin together for same-origin write checks.
+      // Trailing slash: a bare '/api' prefix would also proxy the SPA route /api-docs.
+      '/api/': { target: 'http://127.0.0.1:8080', changeOrigin: false },
     },
   },
   build: {

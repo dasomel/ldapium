@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Activity, ShieldAlert } from 'lucide-react'
+import { Activity, RefreshCw, ShieldAlert } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { MonitorStats } from '@/lib/types'
 import { useT } from '@/context/LanguageContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
 
@@ -14,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from 
 // there) and the duplication is three lines.
 function StatRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)] gap-4 px-3 py-2.5">
+    <div className="grid grid-cols-1 gap-1 sm:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)] sm:gap-4 px-3 py-2.5">
       <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
       <dd className="font-mono text-[12.5px] tabular-nums">{value}</dd>
     </div>
@@ -60,6 +61,7 @@ export function HealthPage() {
 
   function load() {
     setError(null)
+    setStats(null)
     api.monitorStats().then(setStats).catch(setError)
   }
 
@@ -75,6 +77,7 @@ export function HealthPage() {
             <Activity className="size-4 text-accent" />
             {t('health.title')}
           </CardTitle>
+          <Button type="button" variant="outline" size="sm" disabled={!stats && !error} onClick={load} aria-label={t('history.refresh')}><RefreshCw className="size-3.5" />{t('history.refresh')}</Button>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-[12.5px] text-muted-foreground">{t('health.subtitle')}</p>

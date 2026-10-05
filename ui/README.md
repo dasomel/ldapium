@@ -219,6 +219,8 @@ to remain on it.
 
 ## HTTP API
 
+This table covers the console's core endpoints. The complete, machine-readable contract (including `/api/v1/*`) is served at `/api/v1/openapi.json`; see [`docs/api.md`](../docs/api.md) and `/llms.txt`.
+
 All endpoints under `/api` except `/api/auth/config`, `/api/health/ldap`, `/api/login`,
 and `/api/sso/*` require an active session cookie (`ldapium_session`). Which identity an
 operation runs as depends on the authentication mode (see
@@ -234,30 +236,30 @@ individual Keycloak user. See
 | `GET` | `/api/auth/config` | Configured authentication mode (`ldap` or `sso`) | `200` |
 | `GET` | `/api/health/ldap` | Unauthenticated LDAP ping reachability check | `200`, `503` |
 | `POST` | `/api/login` | Bind as directory user and start session | `200`, `400`, `401`, `429` |
-| `POST` | `/api/logout` | End session and close bound LDAP connection | `200` |
+| `POST` | `/api/logout` | End session and close bound LDAP connection (`200` with `{redirectURL}` in SSO mode) | `204`, `200` |
 | `GET` | `/api/sso/start` | Initiate OIDC authorization code flow | `302`, `400` |
-| `GET` | `/api/sso/callback` | Handle OIDC callback and create session | `302`, `400` |
+| `GET` | `/api/sso/callback` | Handle OIDC callback and create session | `303`, `400` |
 | `GET` | `/api/me` | Current session's authenticated DN | `200`, `401` |
 | `GET` | `/api/server-settings` | Directory configuration and deployment metadata | `200`, `401` |
 | `GET` | `/api/monitor` | Read `cn=Monitor` statistics | `200`, `401`, `403` |
 | `GET` | `/api/audit/actions` | List operator action history (`?limit=&before=`) from `cn=accesslog` (admin only) | `200`, `401`, `403` |
-| `GET` | `/api/tree` | List child nodes of `?dn=` (or base DN if omitted) | `200`, `400`, `401` |
-| `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `404` |
-| `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if the entry still has children) |
-| `GET` | `/api/password-policies` | List password policy entries under base | `200`, `401` |
-| `GET` | `/api/users` | List user entries under search base | `200`, `401` |
-| `POST` | `/api/users` | Create user under `LDAP_USER_CREATE_BASE` | `201`, `400`, `401`, `409` (conflict if uid exists) |
-| `PUT` | `/api/users` | Update attributes on user | `204`, `400`, `401`, `404` |
-| `DELETE` | `/api/users` | Delete user at `?dn=` | `204`, `400`, `401`, `404` (not found if already deleted) |
-| `POST` | `/api/users/password` | Change password via RFC 3062 Password Modify | `200`, `400`, `401`, `403` |
-| `POST` | `/api/users/unlock` | Clear ppolicy lockout (`pwdAccountLockedTime`) | `204`, `400`, `401`, `404` |
-| `POST` | `/api/users/lock` | Administratively disable user account | `204`, `400`, `401`, `404` |
-| `GET` | `/api/groups` | List groups under search base | `200`, `401` |
-| `POST` | `/api/groups` | Create group under `LDAP_GROUP_CREATE_BASE` | `201`, `400`, `401`, `409` (conflict if group exists) |
-| `PUT` | `/api/groups` | Update group attributes | `204`, `400`, `401`, `404` |
-| `DELETE` | `/api/groups` | Delete group at `?dn=` | `204`, `400`, `401`, `404` (not found if already deleted) |
-| `POST` | `/api/groups/members` | Add member to group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404`, `409` |
-| `DELETE` | `/api/groups/members` | Remove member from group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `404` |
+| `GET` | `/api/tree` | List child nodes of `?dn=` (or base DN if omitted) | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `403`, `404` |
+| `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `403`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if an entry with the same RDN already exists under `newParentDn` — OpenLDAP mdb moves a non-leaf entry together with its subtree, so children alone do not cause a `409`) |
+| `GET` | `/api/password-policies` | List password policy entries under base | `200`, `401`, `403` |
+| `GET` | `/api/users` | List user entries under search base | `200`, `401`, `403` |
+| `POST` | `/api/users` | Create user under `LDAP_USER_CREATE_BASE` | `201`, `400`, `401`, `403`, `409` (conflict if uid exists) |
+| `PUT` | `/api/users` | Update attributes on user | `204`, `400`, `401`, `403`, `404` |
+| `DELETE` | `/api/users` | Delete user at `?dn=` | `204`, `400`, `401`, `403`, `404` (not found if already deleted) |
+| `POST` | `/api/users/password` | Change password via RFC 3062 Password Modify | `200`, `400`, `401`, `403`, `404` |
+| `POST` | `/api/users/unlock` | Clear ppolicy lockout (`pwdAccountLockedTime`); idempotent, `204` even if not locked | `204`, `400`, `401`, `403`, `404` |
+| `POST` | `/api/users/lock` | Administratively disable user account | `204`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/groups` | List groups under search base | `200`, `401`, `403` |
+| `POST` | `/api/groups` | Create group under `LDAP_GROUP_CREATE_BASE` | `201`, `400`, `401`, `403`, `409` (conflict if group exists) |
+| `PUT` | `/api/groups` | Update group attributes | `204`, `400`, `401`, `403`, `404` |
+| `DELETE` | `/api/groups` | Delete group at `?dn=` | `204`, `400`, `401`, `403`, `404` (not found if already deleted) |
+| `POST` | `/api/groups/members` | Add member to group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `403`, `404`, `409` |
+| `DELETE` | `/api/groups/members` | Remove member from group (`?groupDn=&memberDn=` query parameters, no body) | `204`, `400`, `401`, `403`, `404` |
 
 ### `cn=accesslog` read access for the History page
 
@@ -332,5 +334,299 @@ stand up real containers/clusters) and as standard practice when
 changing this code: rebuild the image, run it, exercise the actual API
 over HTTP, tear down. PR descriptions in this repo's history show this
 pattern — a "Test plan" section with live verification steps, not just
-`go test` output. See the repo root `CLAUDE.md` for specific gotchas
+`go test` output. See the repo root `AGENTS.md` ("Local Docker/LDAP verification") for specific gotchas
 (container UID/bind-mount issues on macOS/Colima, `docker exec -i`).
+
+
+## Application SSO integration profiles (first implementation slice)
+
+The **App SSO permissions** page registers arbitrary applications and their OIDC
+claim-to-native-role mappings. Keycloak remains the role authority. A saved
+profile is `configured`, not applied or verified: this slice makes no Keycloak,
+OSS ACL, or LDAP membership changes. Organization-scoped mappings and native
+roles behind gateway-only authentication are rejected.
+
+Enable persistence with both environment variables:
+
+- `APP_PROFILES_PATH`: writable JSON file on persistent storage.
+- `APP_PROFILES_ADMIN_DNS`: semicolon-separated exact session DNs permitted to
+  read and edit profiles. No administrator is granted by default; this gate is
+  independent of directory ACLs and the existing SSO login role.
+
+Storage is single-process/single-replica, at most 1,000 profiles and 4 MiB.
+Use one UI instance and back up the file. Multiple processes sharing a file are
+unsupported; PostgreSQL and HA support remain planned. Startup rejects corrupt
+files. Writes use a private temporary file and atomic rename; filesystem/power-loss
+recovery still requires a backup. Profile metadata contains no credentials.
+
+Authenticated, allowlisted session API:
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/v1/applications` | List saved profiles |
+| GET | `/api/v1/applications/{id}/integration-profile` | Read profile and ETag |
+| PUT | `/api/v1/applications/{id}/integration-profile` | Create or replace metadata |
+
+PUT requires same-origin `Origin`, `application/json`, and `If-Match: "0"` for
+creation or the current ETag for editing; stale writes return 412. Clients omit
+server-owned `revision` and `status`. Unknown fields, including secrets, are
+rejected. Profiles use HTTPS issuers, token source `id_token`/`access_token`/`userinfo`,
+`native_app` or `gateway_admission` enforcement, and only `app` scope. Issuer URLs
+are metadata and are not fetched. Role mappings describe intended configuration,
+not observed effective permissions. There is no external bearer API in this slice.
+
+Verification: build the frontend, then run
+`python3 scripts/test/test-app-profiles-local.py` from the repository root with
+Docker, `ldapium:e2e`, Go, Node and Playwright Chromium available. The test uses
+random disposable credentials and a dedicated LDAP container; it exercises real
+login, browser saving/reloading, mapping denial and backend restart persistence.
+It does not verify OIDC federation or Keycloak role application.
+
+### Keycloak delegation and application configuration exports
+
+Keycloak remains the authoritative role store. Enable optional read-through with
+`KEYCLOAK_ADMIN_URL` (HTTPS), `KEYCLOAK_ADMIN_REALM`, `KEYCLOAK_ADMIN_CLIENT_ID`,
+`KEYCLOAK_ADMIN_CLIENT_SECRET`, and semicolon-separated `KEYCLOAK_OBSERVE_CLIENTS`.
+The configured issuer must exactly match the profile issuer. Use a dedicated service
+account; never use the master realm or an administrator's password.
+
+Writes additionally require `KEYCLOAK_ISOLATED_REALM=true`, explicit
+`KEYCLOAK_DELEGATE_CLIENTS` (a subset of observed clients), and explicit
+`KEYCLOAK_MANAGED_GROUP_IDS` for group mappings. The isolated-realm flag is an
+operator assertion: coarse Keycloak service-account privileges must be confined to
+that dedicated realm. Shared-realm writes are unsupported until fine-grained admin
+permissions have been proven. Read-only access still requires suitable upstream
+Keycloak view/query permissions. Service credentials never reach browser responses.
+
+In Application SSO permissions, load the current Keycloak catalog before changing
+roles, composites or group mappings. Composite direction is explicit: a parent
+role includes a child role and therefore grants its permissions. Organization
+ancestry alone does not grant app permissions. Cross-client/realm composites and
+cycles are rejected. Existing assigned roles cannot be deleted. Changes compare
+an observed fingerprint, serialize within one process, and reread upstream state;
+Keycloak does not offer an atomic compare-and-swap transaction. After an ambiguous
+failure reload state before retrying. Existing tokens retain their old claims until
+renewal; application sessions require their own revocation policy.
+
+All endpoints require the existing login session and profile-admin DN allowlist.
+Mutation requests require same-origin `Origin` and JSON. Under `/api/v1/applications/:id`:
+
+| Endpoint | Behavior |
+| --- | --- |
+| GET `keycloak-roles` or `roles` | Current role/composite/group catalog; quoted fingerprint ETag |
+| POST `keycloak-role-operations` | `action`, `role`, optional `description`, `include`, `group_id`; `If-Match` from catalog |
+| DELETE `integration-profile` | Deletes metadata only; profile revision ETag required |
+| GET `configuration-export?adapter=generic` | Generic OIDC integration contract; no credentials |
+| GET `configuration-export?adapter=grafana\|argocd` | Supported native configuration artifact and warnings |
+| POST `mapping-preview` | `{"claim_values":["Developers"]}`; intended mapping preview, not access authorization |
+| GET `integration-status` | Configuration and delegation capability; no fabricated application verification |
+| POST `integration-verify` | Observes Keycloak catalog; does not prove claim delivery or app enforcement |
+
+Actions: `create`, `delete`, `include_add`, `include_remove`, `group_add`,
+`group_remove`. GET `/api/v1/application-profile-types` exposes the versioned
+capability/export contract. The legacy mapping field `keycloak_role` represents
+an exact source claim value (role or group). Grafana/ArgoCD exports require
+`claim_path=groups`, `token_source=id_token`, and `enforcement=native_app`.
+Grafana permits Admin/Editor/Viewer; unmatched identities are denied. ArgoCD
+permits admin/readonly and leaves the default role without grants. Review and
+merge native configuration through each app's normal deployment process.
+Generic contracts support arbitrary applications without a fixed OSS catalog;
+new native exporters implement `Profile.Export` with capability checks, escaped
+values, explicit defaults, and application-level positive/negative tests.
+Bearer automation, arbitrary remote adapter execution, organizational scoped
+permissions and native ACL provisioning are outside this implementation.
+
+Local end-to-end evidence: `python3 scripts/test/test-app-keycloak-local.py`
+uses disposable LDAP, Keycloak 26.7.4 and Grafana containers. It verifies UI changes,
+composite token claims, fresh-token revocation, conflict/privilege boundaries, and
+Grafana Editor access plus unmapped-user rejection. The Grafana image is local
+`grafana/grafana:latest`; the script reports its actual version rather than treating
+that tag as pinned. Production configuration must pin your supported image version.
+
+The application UI includes research-backed setup guides for Grafana, Argo CD,
+Harbor, Gitea, Kubernetes, OpenBao and OAuth2 Proxy plus Custom OIDC app. Guides
+are optional examples, not a closed supported-app catalog. The optional
+`integration_type` profile field selects a guide; older profiles default to
+`generic`. `GET /api/v1/application-profile-types` includes these guide IDs,
+separately from available `export_adapters`. Only Grafana and Argo CD generate
+native configuration; other guides provide a generic contract and official
+instructions. The UI separates app/claim setup, live Keycloak operations and
+export/verification. Exact group paths are preserved, and mapping rows are ordered
+(Grafana uses first matching row). Selecting a guide changes claim/token defaults;
+review retained mappings before saving. Selecting gateway clears native mappings.
+
+Before rolling back to a build that predates `integration_type`, restore a
+compatible metadata backup or remove this optional field from profiles offline;
+strict older decoders reject unknown fields. Do not discard newer profile changes.
+Research, acceptance and verification: [OSS UI change](../docs/changes/oidc-organization-authorization/OSS-UI.md).
+
+
+Administrators can add/edit reusable integration methods in the app setup UI.
+Custom `custom-*` methods define claim path, token source, enforcement, app role
+choices, HTTPS documentation and ordered instructions; they generate only the
+generic contract. They do not execute remote APIs or introduce native exporters.
+GET `/api/v1/applications/integration-methods` lists the catalog; PUT the same
+path plus `/:method` creates/updates a method with `If-Match: "0"` for creation
+or its quoted revision for updates. Profile-admin session, same-origin Origin and
+JSON are required. Methods are not deleted while profiles may reference them.
+Back up both `APP_PROFILES_PATH` and `APP_PROFILES_PATH + ".templates.json"`;
+restore them together. Private file storage supports one backend process only.
+
+The reviewed console uses responsive navigation, named filters, keyboard tabs,
+scrollable dialogs with focus return, and light/dark contrast improvements.
+See [UI review evidence](../docs/changes/ui-review/CHANGE.md).
+
+Offline native configuration preparation:
+
+```sh
+python3 scripts/integration/merge-app-oidc.py \
+  --artifact exported-artifact.json --existing grafana.ini
+python3 scripts/integration/merge-app-oidc.py \
+  --artifact exported-artifact.json --existing grafana.ini --output grafana-merged.ini
+```
+
+`--artifact` is the complete configuration-export API response, including content,
+adapter and status. For Argo CD supply existing argocd-rbac-cm ConfigMap JSON.
+Validation mode reports managed keys without printing secrets. Output must be new
+and differs from the source; permissions are 0600. Grafana INI comments/format are
+normalized, other settings and secrets retained. Argo CD retains existing policies
+and writes only policy.ldapium.<profile-id>.csv with compatible default/scopes. Each profile has a distinct composed key. Review the private result and use your
+app's deployment path; no runtime changes occur automatically.
+
+Profile deletion now retains a private revision tombstone. Recreated IDs cannot
+accept old tabs' ETags even after restart. Deleted IDs count toward catalog limits;
+retain tombstones in backups. Older strict readers require a pre-change compatible
+backup on rollback. UI/API listing hides deleted entries.
+
+The Groups view now paginates the fetched list with 10/20/50/100 rows, numbered
+pages and first/previous/next/last controls. Search operates on the fetched list
+before paging and resets to page 1. Page size changes reset likewise; a smaller
+reloaded list clamps the current page. Existing LDAP response limits/truncation
+remain visible: UI paging does not fetch beyond that server-side result limit.
+Keyboard row editing resolves the visible group, and Enter opening a dialog does
+not submit it. Regression: `e2e/groups-pagination.spec.ts` uses synthetic read-only
+responses with real session login; it does not modify directory entries.
+
+### Scheduled local / S3 / FTP / SSH backups
+
+The **Backups** page supports manual execution and separate data/log policies:
+enabled schedule, interval in minutes, keep-days, keep-count and destinations.
+Changing one policy's retention does not reset the other's schedule. Scheduling
+is relative to completion, survives backend restart and catches overdue work once;
+there is one active job, without a missed-job backlog. This is interval scheduling,
+not wall-clock cron. Existing Helm backup CronJob remains available independently;
+select one owner to avoid duplicate schedules.
+
+Opt in with absolute operator-owned paths and an explicit administrator DN list:
+
+```sh
+BACKUP_OPERATOR_CONFIG=/etc/ldapium-backup/operator.json
+BACKUP_POLICY_PATH=/var/lib/ldapium-backups/policies.json
+BACKUP_WORKER_PATH=/opt/ldapium/backup-tools/backup_worker.py
+BACKUP_PYTHON=/usr/bin/python3
+BACKUP_ADMIN_DNS=cn=admin,dc=example,dc=org
+```
+
+Operator example: [operator.example.json](backend/backup-tools/operator.example.json).
+Register destinations with rclone (`s3`, `ftp`/FTPS, `sftp`), then reference remote
+names and a dedicated prefix in that file. Operator-mounted destinations remain read-only. UI-managed connections accept
+write-only credentials from backup administrators; no commands or source paths
+are accepted. Use `known_hosts_file` for SFTP; FTPS requires TLS;
+plaintext FTP requires explicit `allow_plaintext: true`. Protect operator/rclone
+config and password files and mount them read-only. S3 credentials should be scoped
+to the bucket/prefix, including list/read/write/delete for verified retention.
+Encryption at rest is the storage/PVC owner's responsibility; rclone obscuring
+passwords is not encryption. A stable unique `instance_id` separates writers.
+
+The original distroless image stays the default. For managed backup execution:
+
+```sh
+docker build --target backup-runtime -t ldapium-ui:backup -f ui/Dockerfile ui
+```
+
+This optional runtime includes Python, LDAP clients and rclone. Deploy one replica
+with Recreate strategy, a writable private backup volume, operator/rclone Secret
+mounts and read-only log file mounts. Enable Helm `ui.backups.enabled`, set `runtimeConfirmed: true` for your built image,
+`existingClaim`, `existingSecret` and `adminDNs`. The Secret provides operator.json,
+password/rclone config/SSH key files under /etc/ldapium-backup; the PVC is mounted at
+/var/lib/ldapium-backups. Optional `logExistingClaim` mounts read-only log files at
+/var/log/ldapium-backup. The chart enforces one replica/Recreate. Never mount the
+live MDB into UI.
+Data uses network logical LDAP export including operational UUID/CSN attributes;
+config is optional but required for standalone restore. Data/config queries are
+separate and are not a transactional point-in-time snapshot. The same password
+file currently serves both data/config binds; provision an appropriate read-only
+backup identity rather than assuming normal users can dump the whole directory.
+
+Data and logs are compressed into separate `<root>/<kind>/<run>` directories.
+Only allowlisted regular log files are archived. Policy affects backup copies,
+never live log rotation. Each archive has SHA256 metadata; data also preserves
+legacy manifest-*.sha256 for the existing offline restore script. Minimum one
+newest verified copy is retained. Local pruning follows local verification even
+if a remote transfer fails; each remote prunes only after its own verified upload.
+This prevents failed remotes from growing the local archive without bound.
+Remote candidate checksums are verified before they count toward retained copies;
+corrupt/unowned records are excluded. Corrupt complete records require operator
+cleanup. Only owned incomplete uploads/staging folders are automatically cleaned.
+
+Remote namespace: `<prefix>/<instance_id>/<data|logs>/<run>`; pending upload marker
+first, data copied and downloaded for comparison, completion marker last and
+reread. Verify/prune can consume significant read bandwidth. Use an additional
+storage quota/lifecycle backstop for outages/corrupt objects and transient staging.
+Cancellation terminates the whole worker process group. A private worker file
+lock prevents overlap; HA/multiple independent writers are unsupported.
+
+API (backup-admin session required): GET `/api/v1/backups`, PUT
+`/api/v1/backups/policies` with same-origin JSON and quoted revision `If-Match`,
+POST `/api/v1/backups/jobs/data|logs` with same-origin JSON content type and empty
+body. Accepted execution is 202; subsequent status may fail. No archive download
+endpoint: raw backup attributes/password hashes never reach an HTTP response.
+Health's LDAP-recorded last-backup field continues to describe legacy CronJob
+backups; Backups is authoritative for this controller's job history.
+
+Evidence: [backup change](../docs/changes/backup-policies/CHANGE.md).
+
+Optional `metadata_files` include operator-allowlisted regular files (for example
+application mappings and backup policies) in `metadata.tar.gz`. Register only
+existing files; missing or symlink sources fail the job. Restore these separately
+under operator control; the LDAP offline restore script does not apply UI metadata.
+If remote delivery or retention fails after local verification, the job reports
+failure and separately exposes `local_verified`, `last_local_success` and the
+local run ID. Full `last_success` advances only after all requested work succeeds.
+Offline restore preserves Base64-encoded non-ASCII DNs. Its config contract requires
+one `dc=` data suffix and plain canonical ASCII MDB paths beneath target-data;
+unsupported encoded/folded paths are rejected before clearing targets.
+
+### Backup capacity and UI-managed connections
+
+Backups shows the newest retained local copy size, total local retained bytes and
+completed-copy count separately for data/logs. Sizes include compressed archives
+and manifests, exclude staging/symlinks/other instance copies, and are actual local
+file sizes; they do not estimate remote usage or free filesystem space.
+
+Use **Remote destination settings → Add destination** for S3, FTP, FTPS or SSH/SFTP.
+S3 accepts bucket, prefix, optional HTTPS S3-compatible endpoint (blank for AWS),
+region, access key and secret key. FTP/FTPS/SFTP accept host, port, username and
+password; FTPS uses explicit TLS with certificate verification. SFTP requires
+operator-verified known_hosts public keys and rejects mismatches. Plain FTP
+requires explicit acknowledgement. Private-key SSH authentication remains available
+through operator-mounted rclone connections; UI-managed SSH currently uses passwords.
+
+The administrator can edit connection settings, retain credentials by leaving their
+fields blank, then select the new destination in independent data/log policies.
+Save does not prove connectivity: the backup job verifies archive delivery.
+Unselect and save policies before deleting a connection. Operator destinations
+cannot be modified/deleted by these APIs. IDs and transport are fixed in the UI
+when editing; create another entry to change transport.
+
+PUT `/api/v1/backups/connections` and DELETE
+`/api/v1/backups/connections/:id` require backup-admin session, same-origin JSON and
+quoted backup revision `If-Match`. Revision/busy protections are shared with policies.
+GET projects only public fields and a credential-presence flag. Credential inputs
+never appear in responses/audit logs; worker receives them over stdin, builds a
+private transient rclone config and removes it after execution. The private 0600
+policy persistence file includes managed secrets. It is not encrypted by the app:
+protect/encrypt the volume, use HTTPS for browser access and restrict administrator
+accounts/network egress. Policy metadata backups therefore also contain protected
+connection settings. A forcibly killed worker may leave a private transient folder;
+operator cleanup can remove `.connections-*` only when no worker is running.

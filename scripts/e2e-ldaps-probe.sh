@@ -14,8 +14,11 @@
 # <evidence-prefix>-availability-summary.txt, then applies the zero-downtime
 # contract the chart README promises for a rolling restart:
 #
-#   - at least 20 samples, or the rotation finished too fast to have been
-#     measured at all
+#   - at least 10 samples, or the rotation finished too fast to have been
+#     measured at all. (Was 20; a 3-pod roll now takes ~20s because startup no
+#     longer runs a temporary slapd (164fad4), so 20 one-second samples demanded
+#     a slower rollout than the product now has. A probe that missed the roll
+#     collects ~0-3 samples, so 10 still proves it overlapped.)
 #   - no more than 5 consecutive failures: a rolling restart drains one pod
 #     at a time, so a single bind landing on an endpoint already on its way
 #     out is expected, but a *run* of failures means no pod was answering
@@ -102,7 +105,7 @@ stop() {
   printf 'attempts=%s\nsucceeded=%s\nlongest_failure_run=%s\n' "$total" "$ok" "$streak" \
     > "${prefix}-availability-summary.txt"
 
-  if [ "$total" -lt 20 ]; then
+  if [ "$total" -lt 10 ]; then
     echo "::error::${label} completed too quickly to measure availability (${total} samples)"
     exit 1
   fi

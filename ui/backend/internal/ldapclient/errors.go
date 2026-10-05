@@ -56,3 +56,22 @@ func mapErr(op string, err error) error {
 	}
 	return fmt.Errorf("ldap %s: %w", op, err)
 }
+
+// mapMemberErr is mapErr plus the two group-member Modify results that only
+// mean "client conflict" in that context: adding a DN already in `member`
+// (TypeOrValueExists, 20) and deleting one that isn't (NoSuchAttribute, 16).
+// Kept out of mapErr on purpose: code 16 on any other Modify means "the
+// attribute you touched isn't there", which isn't a 404 in general (and
+// Unlock avoids it altogether by using Replace, see unlockModify).
+func mapMemberErr(op string, err error) error {
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		switch le.ResultCode {
+		case ldap.LDAPResultAttributeOrValueExists:
+			return fmt.Errorf("%w: %s", domain.ErrConflict, le.Err)
+		case ldap.LDAPResultNoSuchAttribute:
+			return fmt.Errorf("%w: %s", domain.ErrNotFound, le.Err)
+		}
+	}
+	return mapErr(op, err)
+}
