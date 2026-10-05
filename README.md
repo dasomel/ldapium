@@ -91,7 +91,7 @@ Useful from there:
 
 ```bash
 --set replicaCount=3      # N-way multi-provider replication, peers wired automatically
---set ui.enabled=true     # the management UI
+--set ui.enabled=true     # the management UI; first install also needs --set ui.session.secret="$(openssl rand -base64 48)"
 --set backup.enabled=true # scheduled dumps of the data tree and cn=config
 ```
 

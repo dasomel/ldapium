@@ -50,8 +50,6 @@ bytes) before publishing, so a full disk cannot leave an empty password file.
 cannot be read unless `--allow-env` is given, and prints bind examples that use `-y`
 instead of `-w` so the password is not on a command line.
 
-Not addressed here (follow-up): bootstrap still passes the password to `slappasswd -s`
-and `ldapadd -w` (visible in `/proc/*/cmdline` during bootstrap, pre-existing);
-`ui-secret.yaml` has the same offline-render behaviour for the session secret
+Not addressed here (follow-up): `ui-secret.yaml` has the same offline-render behaviour for the session secret
 (invalidates sessions, no lockout); no multi-process test for secret creation; the live
 credentials E2E is not wired into CI.

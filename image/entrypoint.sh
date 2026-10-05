@@ -131,6 +131,14 @@ elif [ -z "${LDAP_ADMIN_PASSWORD:-}" ]; then
   LDAP_ADMIN_PASSWORD=$(cat "$GENERATED_PASSWORD_FILE")
 fi
 [ -n "$LDAP_ADMIN_PASSWORD" ] || die "LDAP_ADMIN_PASSWORD is empty"
+# #220: the password reaches slappasswd -T / ldapadd -y through a private file,
+# which the LDAP tools read as a single line, so an embedded newline cannot be
+# represented. Refuse it rather than let it be silently truncated at bootstrap.
+nl='
+'
+case "$LDAP_ADMIN_PASSWORD" in
+  *"$nl"*) die "the admin password must not contain a newline (LDAP tools read passwords from files one line at a time)" ;;
+esac
 
 LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL:-stats}"
 LDAP_TLS_ENABLED="${LDAP_TLS_ENABLED:-false}"
@@ -570,6 +578,9 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   fi
   LDAP_REPLICATION_PASSWORD="${LDAP_REPLICATION_PASSWORD:-$LDAP_ADMIN_PASSWORD}"
   [ -n "$LDAP_REPLICATION_PASSWORD" ] || die "LDAP_REPLICATION_PASSWORD resolved empty"
+  case "$LDAP_REPLICATION_PASSWORD" in
+    *"$nl"*) die "the replication password must not contain a newline" ;;
+  esac
 
   # "5 10 30 +" = ten attempts 5s apart, then every 30s forever. A flat
   # "60 +" leaves a node that came up before its peers waiting a full minute
@@ -656,6 +667,14 @@ if [ ! -f "$MARKER" ]; then
     rm -rf "$MDB_DIR" "$ACCESSLOG_DIR"
   }
   trap 'rollback_bootstrap' EXIT
+  # dash does not run an EXIT trap when the shell is killed by a signal, so the
+  # password temp dirs below (work, seed_work) would survive a TERM/INT/HUP.
+  # Turning the signal into an `exit` makes the EXIT trap run on that path too.
+  # These stay armed (the EXIT handler is only swapped, never these) until the
+  # bootstrap ends with `trap - EXIT HUP INT TERM`.
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   # The mdb files live in a subdirectory that THIS process creates, never
   # directly on the volume's mount point. That is what makes `chmod 700`
@@ -679,10 +698,17 @@ if [ ! -f "$MARKER" ]; then
   # Verified working: `slappasswd -o module-path=/usr/lib/openldap -o
   # module-load=argon2 -h "{ARGON2}" -s ...` produces
   # {ARGON2}$argon2id$v=19$m=7168,t=5,p=1$...
-  ADMIN_PW_HASH=$(slappasswd -o module-path=/usr/lib/openldap -o module-load=argon2 -h "$LDAP_PASSWORD_HASH" -s "$LDAP_ADMIN_PASSWORD")
-
+  #
+  # #220: -T reads the password from a file, never argv, so it is not visible in
+  # /proc/*/cmdline. The file lives in the 0700 work dir (removed by the trap
+  # on every exit path) and is written with printf (a builtin in dash, so the
+  # password is on no process's command line while writing it either).
   work=$(mktemp -d)
   trap 'rm -rf "$work"; rollback_bootstrap' EXIT
+  admin_pw_file="${work}/admin-pw"
+  (umask 077; printf '%s' "$LDAP_ADMIN_PASSWORD" > "$admin_pw_file") || die "cannot write the temporary admin password file"
+  ADMIN_PW_HASH=$(slappasswd -o module-path=/usr/lib/openldap -o module-load=argon2 -h "$LDAP_PASSWORD_HASH" -T "$admin_pw_file")
+  rm -f "$admin_pw_file"
 
   cn_config="${work}/01-cn-config.ldif"
   cp "${BOOTSTRAP_DIR}/01-cn-config.ldif" "$cn_config"
@@ -1135,11 +1161,19 @@ d}" "$base_structure"
     log "seeding: starting temporary slapd to apply ${LDAP_SEED_DIR}/*.ldif"
     start_temp_slapd
 
+    # #220: -y (file), not -w (argv). Private 0700 dir, removed on every exit path.
+    seed_work=$(mktemp -d)
+    trap 'rm -rf "$seed_work"; rollback_bootstrap' EXIT
+    seed_pw_file="${seed_work}/admin-pw"
+    (umask 077; printf '%s' "$LDAP_ADMIN_PASSWORD" > "$seed_pw_file") || die "cannot write the temporary admin password file"
+
     for f in "$LDAP_SEED_DIR"/*.ldif; do
       [ -e "$f" ] || continue
       log "applying seed file: ${f}"
-      ldapadd -x -H "$SETUP_LDAPI_URL" -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -f "$f"
+      ldapadd -x -H "$SETUP_LDAPI_URL" -D "$LDAP_ADMIN_DN" -y "$seed_pw_file" -f "$f"
     done
+    rm -rf "$seed_work"
+    trap 'rollback_bootstrap' EXIT
 
     log "seeding complete — stopping temporary slapd"
     stop_temp_slapd
@@ -1150,7 +1184,7 @@ d}" "$base_structure"
   fi
 
   date -u +%FT%TZ > "$MARKER"
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
@@ -1428,7 +1462,12 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   rc_old_umask=$(umask)
   umask 077
   rc_work=$(mktemp -d)
+  # Same reason as the bootstrap traps: the dir can hold replication credentials
+  # and dash skips an EXIT trap on a fatal signal, so signals exit explicitly.
   trap 'rm -rf "$rc_work"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   # Issue #206: cn=config is edited OFFLINE (slapmodify/slapadd/slapcat), never
   # through a temporary slapd. Once olcSyncrepl exists, a running slapd starts
@@ -1546,7 +1585,7 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   slapmodify -n 0 -F "$CONFIG_DIR" -l "$repl_ldif"
 
   rm -rf "$rc_work"
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   umask "$rc_old_umask"
   log "replication reconciliation complete"
 fi

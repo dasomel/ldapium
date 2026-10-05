@@ -102,38 +102,98 @@ work_dir=$(mktemp -d)
 # set where the stash is made.
 preserved_dir="$work_dir/preserved"
 preserved_paths=()
+kept_paths=()
 wiped=0
+restored_ok=0
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+# Put one stashed item ($1 = its stash dir) back. Never overwrites and never
+# nests: `mv` into an existing directory would move INTO it, so a free name is
+# found first. Asides keep their own name (they are older than this restore);
+# the live .credentials becomes .credentials.pre-restore.<UTC ts>, and when that
+# name is taken (same-second restore, or an earlier aside already holds it) the
+# NEXT free ".N" suffix is used, so the higher the N the newer the aside.
+put_back_one() {
+  local d="$1" origin dest base k
+  origin=$(cat "${d}origin") || return 1
+  case "$(basename "$origin")" in
+    # Anything restored before the target was wiped goes back where it was
+    # (its config is still the one that password belongs to).
+    .credentials.pre-restore.*) dest="$origin";;
+    *) if [ "$wiped" = 0 ]; then dest="$origin"; else dest="$(dirname "$origin")/.credentials.pre-restore.${stamp}"; fi;;
+  esac
+  base="$dest"; k=1
+  while [ -e "$dest" ] || [ -L "$dest" ]; do k=$((k + 1)); dest="${base}.${k}"; done
+  mkdir -p "$(dirname "$dest")" || return 1
+  if (umask 077; mv -- "${d}credentials" "$dest"); then
+    chmod -R go-rwx "$dest" || true
+    preserved_paths+=("$dest")
+  else
+    return 1
+  fi
+}
 restore_preserved() {
-  local d origin dest base k
+  local d pass
   [ -d "$preserved_dir" ] || return 0
-  for d in "$preserved_dir"/*/; do
-    [ -e "${d}credentials" ] || continue
-    origin=$(cat "${d}origin")
-    case "$(basename "$origin")" in
-      # Earlier asides keep their name; so does anything restored before the
-      # target was wiped (its config is still the one that password belongs to).
-      .credentials.pre-restore.*) dest="$origin";;
-      *) if [ "$wiped" = 0 ]; then dest="$origin"; else dest="$(dirname "$origin")/.credentials.pre-restore.${stamp}"; fi;;
-    esac
-    base="$dest"; k=1
-    while [ -e "$dest" ] || [ -L "$dest" ]; do k=$((k + 1)); dest="${base}.${k}"; done
-    mkdir -p "$(dirname "$dest")"
-    if (umask 077; mv -- "${d}credentials" "$dest"); then
-      chmod -R go-rwx "$dest"
-      preserved_paths+=("$dest")
-    else
-      echo "WARNING: could not put generated credentials back; they remain in ${d}credentials" >&2
-    fi
+  # Pass 1: earlier asides (keep their names); pass 2: the live credentials.
+  for pass in aside live; do
+    for d in "$preserved_dir"/*/; do
+      [ -e "${d}credentials" ] || continue
+      case "$(basename "$(cat "${d}origin" 2>/dev/null)")" in
+        .credentials.pre-restore.*) [ "$pass" = aside ] || continue;;
+        *) [ "$pass" = live ] || continue;;
+      esac
+      put_back_one "$d" || true
+    done
   done
 }
+# Runs on EVERY exit path (success, set -e failure, INT/TERM). Order matters:
+# put preserved items back first, then delete the workdir (it holds a plaintext
+# LDIF with password hashes), keeping ONLY a stash item that could not be put
+# back. Then tell the operator the state; never prints a secret.
 cleanup() {
-  restore_preserved || true
-  # Keep the workdir (0700) if a stash could not be restored rather than delete the only copy.
-  if compgen -G "$preserved_dir/*/credentials" >/dev/null; then
-    echo "WARNING: generated credentials preserved under $preserved_dir" >&2
+  local rc=$? d kept
+  # A second INT/TERM while this runs must not abort it half-way: it would leave
+  # the 0700 workdir (plaintext LDIF with hashes, unreturned stash) and no guidance.
+  trap '' INT TERM
+  set +e
+  restore_preserved
+  if [ -d "$preserved_dir" ]; then
+    for d in "$preserved_dir"/*/; do
+      [ -d "$d" ] || continue
+      if [ -e "${d}credentials" ]; then kept_paths+=("${d}credentials"); else rm -rf "$d"; fi
+    done
+  fi
+  if [ "${#kept_paths[@]}" -gt 0 ]; then
+    find "$work_dir" -mindepth 1 -maxdepth 1 ! -name preserved -exec rm -rf {} + 2>/dev/null
   else
     rm -rf "$work_dir"
   fi
+  if [ "$wiped" = 1 ] || [ "${#kept_paths[@]}" -gt 0 ]; then
+    {
+      echo
+      if [ "$restored_ok" = 1 ]; then
+        echo "WARNING: restore completed; the restored directory uses the SOURCE directory's admin password,"
+        echo "not this target's. Supply it when starting the container, via"
+        echo "LDAP_ADMIN_PASSWORD_FILE (or LDAP_ADMIN_PASSWORD), or place the source's"
+        echo ".credentials/ldap-admin-password under DATA_DIR/.credentials (dir 0700, file"
+        echo "0600, owned by the LDAP user). Without it the entrypoint refuses to start."
+      elif [ "$wiped" = 1 ]; then
+        echo "ERROR: restore did NOT complete (exit $rc). The target config/data directories were WIPED"
+        echo "and are only half-restored; do not start slapd on them. Fix the cause and re-run"
+        echo "this script with --force-empty. A completed restore uses the SOURCE directory's"
+        echo "admin password: supply it via LDAP_ADMIN_PASSWORD_FILE (or LDAP_ADMIN_PASSWORD)."
+      fi
+      for kept in ${preserved_paths[@]+"${preserved_paths[@]}"}; do
+        echo "The target's previous generated credentials were kept (0700) at: $kept"
+        echo "They do NOT match the restored directory; delete them once no longer needed."
+      done
+      for kept in ${kept_paths[@]+"${kept_paths[@]}"}; do
+        echo "WARNING: could NOT put previous generated credentials back; they remain at: $kept"
+        echo "(original location recorded in $(dirname "$kept")/origin). Move them somewhere safe by hand."
+      done
+    } >&2
+  fi
+  return "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -230,7 +290,6 @@ mapfile -t data_suffixes < <(awk 'tolower($1) == "olcsuffix:" && tolower($2) ~ /
 # So stash it through the wipe and put it back under a clearly named, private
 # path. Backups deliberately exclude .credentials and still do.
 mkdir "$preserved_dir"; chmod 700 "$preserved_dir"
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
 n=0
 # Every .credentials* entry: the live one and any earlier .credentials.pre-restore.<ts>
 # aside, so a second restore cannot delete the first one's aside. -prune keeps
@@ -244,9 +303,12 @@ for cred in "${cred_paths[@]}"; do
   mv -- "$cred" "$preserved_dir/$n/credentials"
 done
 
+# Set BEFORE the removal: a signal landing mid-`rm` must make cleanup treat the
+# target as wiped (credentials go back as .credentials.pre-restore.<ts>, WIPED
+# warning printed), never as untouched.
+wiped=1
 rm -rf "${target_config:?}"/* "${target_config:?}"/.[!.]* "${target_config:?}"/..?* 2>/dev/null || true
 rm -rf "${target_data:?}"/* "${target_data:?}"/.[!.]* "${target_data:?}"/..?* 2>/dev/null || true
-wiped=1
 for db_dir in "${db_dirs[@]}"; do mkdir -p "$db_dir"; done
 
 restore_preserved
@@ -267,18 +329,6 @@ if [ "$(id -u)" = 0 ]; then
   chown -R 999:999 "$target_config" "$target_data"
 fi
 
+restored_ok=1
 printf 'restore completed successfully: data=%s config=%s\n' "$data_file" "$config_file"
 
-# Goes to stderr; never prints any secret value.
-{
-  echo
-  echo "WARNING: the restored directory uses the SOURCE directory's admin password,"
-  echo "not this target's. Supply it when starting the container, via"
-  echo "LDAP_ADMIN_PASSWORD_FILE (or LDAP_ADMIN_PASSWORD), or place the source's"
-  echo ".credentials/ldap-admin-password under DATA_DIR/.credentials (dir 0700, file"
-  echo "0600, owned by the LDAP user). Without it the entrypoint refuses to start."
-  for kept in "${preserved_paths[@]}"; do
-    echo "The target's previous generated credentials were kept (0700) at: $kept"
-    echo "They do NOT match the restored directory; delete them once no longer needed."
-  done
-} >&2

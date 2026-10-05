@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, FileJson, FileText, Search } from 'lucide-react'
 import { useT } from '@/context/LanguageContext'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,8 @@ export function ApiDocsPage() {
   const [query, setQuery] = useState('')
   const [methods, setMethods] = useState<ReadonlySet<Method>>(new Set())
   const [descOpen, setDescOpen] = useState(false)
+  const [descClamped, setDescClamped] = useState(false)
+  const descRef = useRef<HTMLParagraphElement>(null)
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
 
   useEffect(() => {
@@ -31,6 +33,22 @@ export function ApiDocsPage() {
     fetchOpenApi(ctl.signal).then(setDoc).catch((err: Error) => { if (err.name !== 'AbortError') setError(err.message) })
     return () => ctl.abort()
   }, [attempt])
+
+  // The toggle is only useful when the clamp actually hides text. Measured after
+  // layout while collapsed (an expanded paragraph never overflows), and again on
+  // resize and once web fonts settle, since both change the line count. The full
+  // text is always in the DOM, so nothing is hidden from assistive tech or no-JS.
+  useLayoutEffect(() => {
+    const el = descRef.current
+    if (!el || descOpen) return
+    const measure = () => setDescClamped(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    let live = true
+    void document.fonts?.ready.then(() => { if (live) measure() })
+    return () => { live = false; ro.disconnect() }
+  }, [doc, descOpen])
 
   const endpoints = useMemo(() => (doc ? collectEndpoints(doc) : []), [doc])
   const groups = useMemo(() => (doc ? groupByTag(doc, filterEndpoints(endpoints, query, methods)) : []), [doc, endpoints, query, methods])
@@ -59,8 +77,8 @@ export function ApiDocsPage() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <h1 className="text-lg font-semibold tracking-tight">{doc.info?.title ?? t('apiDocs.title')}</h1>
-          <p className={cn('text-[13px] text-muted-foreground', descOpen ? 'whitespace-pre-line' : 'line-clamp-3')}>{doc.info?.description ?? t('apiDocs.subtitle')}</p>
-          {doc.info?.description && <button type="button" aria-expanded={descOpen} onClick={() => setDescOpen((v) => !v)} className="text-[12.5px] font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{descOpen ? t('apiDocs.showLess') : t('apiDocs.showMore')}</button>}
+          <p id="api-docs-description" ref={descRef} className={cn('text-[13px] text-muted-foreground', descOpen ? 'whitespace-pre-line' : 'line-clamp-3')}>{doc.info?.description ?? t('apiDocs.subtitle')}</p>
+          {(descClamped || descOpen) && <button type="button" aria-expanded={descOpen} aria-controls="api-docs-description" onClick={() => setDescOpen((v) => !v)} className="text-[12.5px] font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{descOpen ? t('apiDocs.showLess') : t('apiDocs.showMore')}</button>}
           <div className="flex flex-wrap items-center gap-2 pt-1">
             {doc.info?.version && <Badge>{t('apiDocs.version')} {doc.info.version}</Badge>}
             {doc.openapi && <Badge>OpenAPI {doc.openapi}</Badge>}
@@ -98,7 +116,7 @@ export function ApiDocsPage() {
       {groups.map((g) => (
         <section key={g.tag} aria-labelledby={`tag-${g.tag}`} className="space-y-2">
           <div>
-            <h2 id={`tag-${g.tag}`} className="text-sm font-semibold capitalize">{g.tag} <span className="font-normal normal-case text-muted-foreground">· {g.endpoints.length} {t(g.endpoints.length === 1 ? 'apiDocs.endpointCountOne' : 'apiDocs.endpointCount')}</span></h2>
+            <h2 id={`tag-${g.tag}`} className="text-sm font-semibold capitalize">{g.tag} <span className="font-normal normal-case text-muted-foreground">· {t(g.endpoints.length === 1 ? 'apiDocs.endpointCountOne' : 'apiDocs.endpointCount', { n: g.endpoints.length })}</span></h2>
             {g.description && <p className="text-[12.5px] text-muted-foreground">{g.description}</p>}
           </div>
           <div className="space-y-1.5">

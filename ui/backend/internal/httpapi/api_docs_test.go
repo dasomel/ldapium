@@ -165,3 +165,45 @@ func TestMetaExposesOnlyDiscoveryFields(t *testing.T) {
 		})
 	}
 }
+
+// A wrong-method request on a real /api route must answer 405 with an Allow
+// header naming every method registered on that path (RFC 9110 15.5.6).
+// Compared as a set: the header order follows route registration. No
+// :param case: every param route sits behind the profile-admin group
+// middleware, which answers 401 before a 405 can be produced without a session.
+func TestWrongMethodAnswers405WithAllow(t *testing.T) {
+	s := newDocsTestServer(t, config.Config{})
+	cases := []struct {
+		name, method, path string
+		wantAllow          []string
+	}{
+		{"single-method path", "POST", "/api/auth/config", []string{"GET"}},
+		{"multi-method path", "GET", "/api/groups/members", []string{"POST", "DELETE"}},
+		{"multi-method path, other wrong verb", "PUT", "/api/groups/members", []string{"POST", "DELETE"}},
+		{"multi-method collection", "PATCH", "/api/users", []string{"GET", "POST", "PUT", "DELETE"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := serve(s, tc.method, tc.path)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want 405 (body %q)", rec.Code, rec.Body.String())
+			}
+			header := rec.Header().Get("Allow")
+			if header == "" {
+				t.Fatal("405 without an Allow header")
+			}
+			got := map[string]bool{}
+			for _, m := range strings.Split(header, ",") {
+				got[strings.TrimSpace(m)] = true
+			}
+			if len(got) != len(tc.wantAllow) {
+				t.Errorf("Allow = %q, want exactly %v", header, tc.wantAllow)
+			}
+			for _, m := range tc.wantAllow {
+				if !got[m] {
+					t.Errorf("Allow = %q, missing %s", header, m)
+				}
+			}
+		})
+	}
+}

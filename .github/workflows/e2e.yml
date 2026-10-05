@@ -155,6 +155,7 @@ jobs:
             --set-string 'ldap.adminDN=cn=admin\,dc=example\,dc=org' \
             --set auth.adminPassword="$(head -c 24 /dev/urandom | base64)" \
             --set ui.enabled=true \
+            --set ui.session.secret="$(head -c 48 /dev/urandom | base64)" \
             --set ui.image.repository=ldapium-ui \
             --set ui.image.tag=e2e \
             --set ui.image.pullPolicy=Never \
