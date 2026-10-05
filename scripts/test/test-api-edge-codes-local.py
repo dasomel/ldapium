@@ -70,6 +70,66 @@ def start_ldap():
   raise RuntimeError('LDAP server did not accept the admin bind')
 
 
+# #229 probe, run in the LDAP container with the admin password on stdin. Exit 0
+# with "names= hits= seen=" on success; any probe failure aborts with a distinct
+# status (3 pid-1 environ unreadable, 4 mktemp/empty pattern/grep error) so a
+# broken probe can never read as "no match". Messages never contain the secret.
+# Only PID 1 and its descendants are scanned: `docker exec` and HEALTHCHECK
+# processes inherit the container-configured env (the password included) and have
+# PPID 0 inside the namespace, so they are not entrypoint-started processes.
+PROCESS_ENV_PROBE = r'''
+umask 077
+f=$(mktemp) || { echo "probe-error: mktemp failed"; exit 4; }
+trap 'rm -f "$f"' EXIT HUP INT TERM
+cat > "$f"
+[ -s "$f" ] || { echo "probe-error: empty pattern file"; exit 4; }
+chk() { case $1 in 0) return 0 ;; 1) return 1 ;; *) echo "probe-error: grep status $1"; exit 4 ;; esac; }
+rd() { { tr "\0" "\n" < "$1"; } 2>/dev/null; }
+[ -r /proc/1/environ ] || { echo "probe-error: /proc/1/environ unreadable"; exit 3; }
+d=$(rd /proc/1/environ) || { echo "probe-error: cannot read /proc/1/environ"; exit 3; }
+names=0
+for v in ADMIN REPLICATION; do
+  printf '%s\n' "$d" | grep -q "^LDAP_${v}_PASSWORD="; chk $? && names=$((names+1))
+done
+desc() {
+  q=$1; i=0
+  while [ "$i" -lt 64 ]; do
+    [ "$q" = 1 ] && return 0
+    s=$(cat "/proc/$q/stat" 2>/dev/null) || return 1
+    q=$(printf '%s\n' "$s" | sed "s/^.*) [A-Za-z] //; s/ .*//")
+    case $q in ''|*[!0-9]*|0) return 1 ;; esac
+    i=$((i+1))
+  done
+  return 1
+}
+hits=0; seen=0
+for p in /proc/[0-9]*; do
+  desc "${p#/proc/}" || continue
+  for n in environ cmdline; do
+    d=$(rd "$p/$n") || continue
+    seen=$((seen+1))
+    printf '%s\n' "$d" | grep -qFf "$f"; chk $? && hits=$((hits+1))
+  done
+done
+echo "names=$names hits=$hits seen=$seen"
+'''
+
+
+def check_secret_not_in_process_env():
+  # The probe runs under `env -u` (docker exec inherits the container env, which
+  # would otherwise make the probe itself a false hit) and takes the value on
+  # stdin, so it is never in any argv. Output is counts only, never the value.
+  result = subprocess.run(['docker', 'exec', '-i', ldap, 'env', '-u', 'LDAP_ADMIN_PASSWORD', '-u', 'LDAP_REPLICATION_PASSWORD',
+                           'sh', '-c', PROCESS_ENV_PROBE], input=admin_password, capture_output=True, text=True)
+  out = mask(result.stdout).strip()
+  check(result.returncode == 0, 'process-env probe failed (exit %d): %s %s' % (result.returncode, out, mask(result.stderr).strip()))
+  fields = dict(item.split('=') for item in out.split())
+  check(int(fields['seen']) >= 2, 'process probe successfully read too few /proc entries: ' + out)
+  check(fields['names'] == '0', 'LDAP_*_PASSWORD still present in /proc/1/environ: ' + out)
+  check(fields['hits'] == '0', 'admin password value found in a container process environ/cmdline: ' + out)
+  print('ok: admin password absent from every /proc/*/environ and /proc/*/cmdline (' + out + ')')
+
+
 def scaffold():
   ldif = ''.join('dn: ou=%s,%s\nobjectClass: organizationalUnit\nou: %s\n\n' % (ou, root, ou) for ou in ('people', 'groups'))
   command(['docker', 'exec', '-i', ldap, 'sh', '-c',
@@ -105,6 +165,7 @@ def run():
   for volume in volumes:
     command(['docker', 'volume', 'create', volume])
   start_ldap()
+  check_secret_not_in_process_env()
   scaffold()
   url = start_ui()
   opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
