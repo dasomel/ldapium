@@ -3,6 +3,7 @@ package httpapi
 import (
 	"embed"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -90,14 +91,7 @@ func apiErrorHandler(fallback echo.HTTPErrorHandler) echo.HTTPErrorHandler {
 	}
 }
 
-// handleAPINotFound answers any /api request the router could not route.
-// Echo reports a wrong-method request on a real path as "not found" once a
-// catch-all exists, so 405 (with Allow) is recovered here by matching the
-// path against the registered routes of other methods.
-func (s *Server) handleAPINotFound(c echo.Context) error {
-	// Echo.Routes() copies the whole table, and this handler is reachable
-	// unauthenticated for any unmatched /api path, so filter once. Safe
-	// because routes are all registered before the server serves requests.
+func (s *Server) initAPIRoutes() {
 	s.apiRoutesOnce.Do(func() {
 		for _, r := range s.echo.Routes() {
 			if isHTTPMethod(r.Method) && !strings.HasSuffix(r.Path, "/*") && r.Path != "/api" {
@@ -105,16 +99,58 @@ func (s *Server) handleAPINotFound(c echo.Context) error {
 			}
 		}
 	})
-	var allowed []string
+}
+
+func (s *Server) hasAPIGetRoute(path string) bool {
+	s.initAPIRoutes()
 	for _, r := range s.apiRoutes {
-		if routeMatches(r.Path, c.Request().URL.Path) {
-			allowed = append(allowed, r.Method)
+		if r.Method == http.MethodGet && routeMatches(r.Path, path) {
+			return true
 		}
 	}
+	return false
+}
+
+func (s *Server) allowedMethodsFor(path string) []string {
+	s.initAPIRoutes()
+	var allowed []string
+	hasGet := false
+	for _, r := range s.apiRoutes {
+		if routeMatches(r.Path, path) {
+			if !slices.Contains(allowed, r.Method) {
+				allowed = append(allowed, r.Method)
+			}
+			if r.Method == http.MethodGet {
+				hasGet = true
+			}
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	if hasGet && !slices.Contains(allowed, http.MethodHead) {
+		allowed = append(allowed, http.MethodHead)
+	}
+	if !slices.Contains(allowed, http.MethodOptions) {
+		allowed = append(allowed, http.MethodOptions)
+	}
+	return allowed
+}
+
+// handleAPINotFound answers any /api request the router could not route.
+// Echo reports a wrong-method request on a real path as "not found" once a
+// catch-all exists, so 405 (with Allow) is recovered here by matching the
+// path against the registered routes of other methods. OPTIONS requests on
+// routed /api paths answer 204 No Content with the Allow header (and no CORS headers).
+func (s *Server) handleAPINotFound(c echo.Context) error {
+	allowed := s.allowedMethodsFor(c.Request().URL.Path)
 	if len(allowed) == 0 {
 		return echo.ErrNotFound
 	}
 	c.Response().Header().Set(echo.HeaderAllow, strings.Join(allowed, ", "))
+	if c.Request().Method == http.MethodOptions {
+		return c.NoContent(http.StatusNoContent)
+	}
 	return echo.ErrMethodNotAllowed
 }
 

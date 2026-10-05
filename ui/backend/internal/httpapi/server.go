@@ -82,6 +82,8 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	s.echo.IPExtractor = ipExtractorFor(cfg)
 	s.echo.HTTPErrorHandler = apiErrorHandler(s.echo.DefaultHTTPErrorHandler)
 
+	s.echo.Pre(s.headPreMiddleware())
+
 	s.echo.Use(middleware.Recover())
 	// RequestID before the logger: the logger's ${id} reads whatever this
 	// middleware set (an inbound X-Request-Id if present, else a fresh
@@ -93,6 +95,7 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	s.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Format: `{"time":"${time_rfc3339}","id":"${id}","method":"${method}","path":"${path}","status":${status},"latency":${latency},"bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 	}))
+	s.echo.Use(s.restoreMethodMiddleware())
 	s.echo.Use(middleware.Secure())
 
 	if cfg.BackupOperatorConfig != "" {
@@ -161,6 +164,45 @@ func (s *Server) routes(spa fs.FS) {
 	s.echo.RouteNotFound("/api", s.handleAPINotFound)
 	s.echo.RouteNotFound("/api/*", s.handleAPINotFound)
 	registerSPA(s.echo, spa, s.handleAPINotFound)
+	s.initAPIRoutes()
+}
+
+const origMethodKey = "ldapium_orig_method"
+
+// headPreMiddleware rewrites inbound HEAD requests to GET whenever a GET
+// route exists, preserving the original method for logging. Responses to HEAD
+// requests never contain a message body (RFC 9110 9.3.2).
+// Rewriting in Pre middleware, rather than registering per-route HEAD
+// handlers, keeps the route table and the OpenAPI spec in sync. net/http
+// itself discards the body of a HEAD response, so no writer wrapper is needed.
+func (s *Server) headPreMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if c.Request().Method == http.MethodHead {
+				if !isAPIPath(c.Request().URL.Path) || s.hasAPIGetRoute(c.Request().URL.Path) {
+					c.Request().Method = http.MethodGet
+					c.Set(origMethodKey, http.MethodHead)
+				}
+			}
+			return next(c)
+		}
+	}
+}
+
+// restoreMethodMiddleware restores c.Request().Method to its pre-rewrite value
+// before Echo's LoggerWithConfig middleware formats the log line.
+// Without it the access log would record HEAD requests as GET.
+func (s *Server) restoreMethodMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if orig := c.Get(origMethodKey); orig != nil {
+				defer func() {
+					c.Request().Method = orig.(string)
+				}()
+			}
+			return next(c)
+		}
+	}
 }
 
 // registerSPA serves the built React app and falls back unknown,
