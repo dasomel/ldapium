@@ -1,0 +1,171 @@
+name: UI fixture E2E (docker)
+
+# Runs the Playwright specs that ui-e2e.yml excludes with `--grep-invert @fixture`
+# (#227), each against the fixture it needs, with no kind cluster:
+#   applications  applications.spec.ts (3) + ui-review.spec.ts @fixture (1)
+#                 via scripts/test/test-app-profiles-local.py (LDAP container,
+#                 UI backend built from the tree, writable profile store, admin
+#                 DN allowlist); keycloak-apps.spec.ts (1) and
+#                 grafana-permissions.spec.ts (1) via
+#                 scripts/test/test-app-keycloak-local.py (pinned Keycloak with
+#                 a generated realm, plus a pinned Grafana for the OIDC login).
+#   backups       backups.spec.ts (2) via scripts/test/test-backup-ui-local.py
+#                 (the `backup-runtime` UI image target with python/ldap tools/
+#                 rclone, operator.json in a volume the non-root UI user can
+#                 read, writable policy dir, local destination).
+# Not covered, on purpose: the scheduled/restore/transport scripts
+# (test-backup-restore-local.py, test-backup-schedule-local.py,
+# test-backup-transports-local.py) are not Playwright specs and need a
+# host-visible backup root; they are outside #227's scope.
+
+on:
+  # No paths filter, deliberately: release-critical checks must always report
+  # (see e2e.yml for why a path-filtered check can block merging).
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-fixture-e2e-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/schedule/dispatch
+  # runs are grouped per commit SHA and never cancel each other. Grouping
+  # main pushes by ref once let an older commit's late run cancel or
+  # displace HEAD's run, losing checks release.yml requires (2026-09-24).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  applications:
+    name: app profiles + live Keycloak/Grafana specs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale (why throttle, why
+    # queue: max instead of the default queue: single).
+    concurrency:
+      group: heavy-e2e-lane-b-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    env:
+      LDAPIUM_IMAGE: ldapium:fixture-e2e
+      # Linux: Grafana reaches Keycloak through the docker bridge gateway
+      # (host.docker.internal), so Keycloak must not be loopback-only here.
+      LDAPIUM_KC_BIND: 0.0.0.0
+      GRAFANA_IMAGE: grafana/grafana:13.2.3
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The scripts `go build` the UI backend, which embeds the frontend
+      # build, so the real SPA must exist before they run.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Install and build the frontend
+        working-directory: ui/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright's Chromium
+        working-directory: ui/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build server image
+        run: docker build -t "$LDAPIUM_IMAGE" image
+
+      - name: Application profiles (applications + ui-review @fixture specs)
+        run: python3 scripts/test/test-app-profiles-local.py
+
+      - name: Live Keycloak roles and Grafana OIDC (keycloak-apps + grafana-permissions specs)
+        run: python3 scripts/test/test-app-keycloak-local.py
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-applications
+          path: ui/frontend/playwright-report/*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # The scripts remove their own containers even on failure, so this only
+      # reports leaks.
+      - name: Report leftover docker objects
+        if: always()
+        run: docker ps -a --filter name=ldapium-profile- --format '{{.Names}} {{.Status}}'
+
+  backups:
+    name: backup-runtime UI backups spec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Lane c: builds two images but needs no kind cluster.
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    env:
+      LDAPIUM_IMAGE: ldapium:fixture-e2e
+      LDAPIUM_UI_IMAGE: ldapium-ui:fixture-backup
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      # Only the Playwright runner is needed on the host: the UI under test is
+      # the container image, which builds its own frontend.
+      - name: Install frontend dependencies
+        working-directory: ui/frontend
+        run: npm ci
+
+      - name: Install Playwright's Chromium
+        working-directory: ui/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build server image
+        run: docker build -t "$LDAPIUM_IMAGE" image
+      - name: Build backup-capable UI image
+        run: docker build --target backup-runtime -t "$LDAPIUM_UI_IMAGE" -f ui/Dockerfile ui
+
+      - name: Backups spec (policies, real verified log backup, sizes, connection settings)
+        run: python3 scripts/test/test-backup-ui-local.py
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-backups
+          path: ui/frontend/playwright-report/*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Report leftover docker objects
+        if: always()
+        run: |
+          docker ps -a --filter name=ldapium-backup-ui- --format '{{.Names}} {{.Status}}'
+          docker volume ls --filter name=ldapium-backup-ui- --format '{{.Name}}'

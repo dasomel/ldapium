@@ -3,13 +3,14 @@
 import os,subprocess,tempfile,secrets,time,urllib.request,json
 from pathlib import Path
 repo=Path(__file__).resolve().parents[2]
+ldap_image=os.environ.get('LDAPIUM_IMAGE','ldapium:e2e')
 name='ldapium-profile-e2e-'+secrets.token_hex(4)
 with tempfile.TemporaryDirectory(prefix='ldapium-profile-') as tmp:
  env=dict(os.environ,LDAP_ROOT_DN='dc=example,dc=org',LDAP_ADMIN_PASSWORD=secrets.token_urlsafe(32))
  ldapenv=Path(tmp)/'ldap.env';ldapenv.write_text('LDAP_ROOT_DN='+env['LDAP_ROOT_DN']+'\nLDAP_ADMIN_PASSWORD='+env['LDAP_ADMIN_PASSWORD']+'\n');ldapenv.chmod(0o600)
  backend=None
  try:
-  subprocess.run(['docker','run','--rm','-d','--name',name,'--env-file',str(ldapenv),'-p','127.0.0.1:13890:389','ldapium:e2e'],check=True,stdout=subprocess.DEVNULL)
+  subprocess.run(['docker','run','--rm','-d','--name',name,'--env-file',str(ldapenv),'-p','127.0.0.1:13890:389',ldap_image],check=True,stdout=subprocess.DEVNULL)
   for _ in range(80):
    probe=subprocess.run(['docker','exec',name,'ldapsearch','-x','-H','ldap://127.0.0.1','-b','','-s','base','namingContexts'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    if probe.returncode==0:break
@@ -24,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='ldapium-profile-') as tmp:
     except Exception:time.sleep(.2)
    p.terminate();raise RuntimeError('backend failed readiness')
   backend=start()
-  subprocess.run(['npx','playwright','test','e2e/applications.spec.ts'],cwd=repo/'ui/frontend',env=env,check=True)
+  subprocess.run(['npx','playwright','test','e2e/applications.spec.ts','e2e/ui-review.spec.ts'],cwd=repo/'ui/frontend',env=env,check=True)
   profiles=json.loads(Path(env['APP_PROFILES_PATH']).read_text());assert len(profiles)==3 and all(p['status']=='configured' for p in profiles)
   assert any(p.get('integration_type')=='harbor' for p in profiles)
   methods=json.loads(Path(env['APP_PROFILES_PATH']+'.templates.json').read_text());assert len(methods)==1 and methods[0]['revision']==2
