@@ -1,0 +1,48 @@
+# Tasks: 코어 사용자·그룹 쓰기의 조건부 쓰기와 멱등성 규약
+
+설계: [CHANGE.md](CHANGE.md) (Status: `Accepted 2026-10-06 — maintainer instruction to process #216 …`, 이슈 #216).
+구현은 `T-002` 라이브 스파이크 완료 후 시작한다. 각 단계는 헤더 없는 호출의 동작이 변하지 않는 상태로 병합한다. LDAP 배선 변경이므로 구현 전에 `.agents/skills/ldapium-directory-change/SKILL.md`를 로드한다.
+
+## Inspect and establish evidence
+
+- [ ] `T-001` (`REQ-001`, `REQ-002`) 소스 오브 트루스 재확인: `user_handlers.go:20-182`, `group_handlers.go:20-101`, `dto.go:80-134`, `errors.go:28-47`, `ldapclient/users.go:86-305`, `groups.go:58-157`, `tree.go:106-207`, `ldapclient/errors.go:15-77`, `ui/frontend/src/lib/api.ts`, `UsersPage.tsx`, `GroupsPage.tsx`, `openapi.json`. `ldapclient.Client` 구현체·가짜 목록(`auth_handlers_test.go`, `session/store_test.go`). #218 `apiErr` 헬퍼·#215 속성 목록 병합 여부 확인.
+- [ ] `T-002` (`REQ-004`, `REQ-006`, `REQ-014`) **라이브 스파이크 — 설계 확정이 아니라 사실 확인**(`ldapium:e2e`, 필요 시 rebuild 후): (1) rootDSE `supportedControl`에 `1.3.6.1.1.12`(및 `1.3.6.1.1.13.2`), `ldapmodify -e assert='(entryCSN=…)'`로 Modify/Delete/ModifyDN 성공·실패(결과 코드 122)와 미지원 시 `unavailableCriticalExtension`; (2) 루트·일반 사용자 바인드의 `entryCSN`·`entryUUID`·`creatorsName` 읽기·필터 평가; (3) 그룹 멤버 변경·실패 바인드·비밀번호 변경이 사용자 `entryCSN`을 바꾸는지; (4) 단일 Add에 `userPassword`를 넣었을 때 해시·ppm 검사; (5) 비루트 관리자의 보상 Delete 권한; (6) **삭제 후 같은 DN 재생성한 항목에 옛 `entryUUID`를 단 assertion Delete가 122로 실패하는지**(AC-022 프리미티브). 결과를 CHANGE.md “검증하지 못한 사실”에 반영하고 가정이 틀리면 D216-2·D216-5를 개정·재검토한다. **구현 착수 전 필수.**
+- [ ] `T-003` (`REQ-010`, `REQ-011`) 다운스트림 검토: #218 코드 표에 코드 4개(`partial_failure`, `idempotency_outcome_unknown`, `idempotency_capacity`, `idempotency_unsupported`)와 선택 키 2개(`state`, `dn`) 흡수 확인(표 행은 이미 추가됨), #217 T-031 입력(D216-12 계약 표·지문 키·`key_id`), #215 목록 속성에 `entryCSN` 포함, API 소비자·`docs/api.md` 예제.
+- [ ] `T-004` (`AC-001`) 변경 전 기준선: 헤더 없는 호출(PUT 생략 필드 삭제, 생성 409, 삭제 404, 멤버 409/404, 잠금·해제, 이동)의 응답과 속성 전후, `go test ./...`(ui/backend)·UI e2e·`test-api-edge-codes-local.py` 결과 캡처.
+- [x] `T-005` (`REQ-001`–`REQ-017`) 수용 선행: 유지보수자 지시로 수용(2026-10-06). Q1·Q2는 해소 결정으로 기록(Q1 필수화 플래그 없음, Q2 단일 Add 모드는 후속).
+
+## Implement
+
+- [ ] `T-010` (`REQ-003`, `REQ-004`) `ldapclient`: assertion 제어 로컬 타입(`Encode`에 `ldap.CompileFilter` 결과), CSN 정규식 검증 후에만 필터 생성, `assertionFailed(122)`→`domain.ErrRevisionConflict`, `unavailableCriticalExtension(12)`→내부 오류. `Modify`/`Del`/`ModifyDN` 호출에 선택 제어 인자. 순수 헬퍼 단위 테스트(인코딩 바이트, 정규식 퍼즈).
+- [ ] `T-011` (`REQ-001`, `REQ-002`, `REQ-003`) `httpapi`/`ldapclient`: `userAttrs`·`groupAttrs`·`GetEntry`에 `entryCSN` 추가와 DTO `etag`·`ETag` 헤더, `If-Match` 파서(단일 강한 CSN 태그·`*`, 그 외 400, 미지원 오퍼레이션 400), 사용자 PUT/DELETE/lock/unlock·그룹 PUT/DELETE/멤버·이동에 태그 전달, 412 매핑(#218 `revision_conflict`). `Client` 인터페이스·가짜 갱신. 헤더 없는 경로는 바이트 동일.
+- [ ] `T-012` (`REQ-005`, `REQ-012`) `PATCH /api/users`·`/api/groups`: Merge Patch 디코드(없음/null/""), 엄격 필드, 키별 Replace Modify, 라우트·OpenAPI 등록. `PUT` 불변. **같은 작업에서 `PATCH` 추가로 깨지는 정확 메서드·`Allow` 단언을 갱신한다**: `ui/backend/internal/httpapi/api_docs_test.go:197`(`TestWrongMethodAnswers405WithAllow`의 “multi-method collection” 케이스: `PATCH`를 잘못된 메서드로 쓰고 `Allow`가 `GET, HEAD, POST, PUT, DELETE, OPTIONS`임을 정확히 단언 → 다른 잘못된 메서드로 바꾸고 새 `Allow` 집합에 `PATCH` 추가; `:195-196` 멤버 경로 케이스는 불변)와 `scripts/test/test-api-edge-codes-local.py:152`(`PATCH /api/users`→405 기대 → 다른 잘못된 메서드). 그 밖의 정확 메서드 단언은 `grep -rn PATCH`(httpapi 테스트·`scripts/test/*.py`·`ui/frontend/e2e`)로 두 곳뿐임을 확인했고 구현 시 재검색한다. OpenAPI 드리프트(`api_contract_test.go:39,84`)는 `PATCH`를 자동 포함하므로 스펙을 같은 변경에 넣는다.
+- [ ] `T-013` (`REQ-006`) 사용자 생성 보상(D216-5): Add → 직후 `entryUUID`·`entryCSN`·`creatorsName` 검색(Post-Read는 go-ldap `Add`가 응답 제어를 버려 사용 불가) → `creatorsName==c.dn` 확인 → Password Modify → 실패 시 `(&(entryUUID=u)(entryCSN=c0))` assertion Delete. `rolled_back`/`partial` 분기 순수 함수(신원 일치·UUID/CSN/creatorsName 불일치·읽기 실패·삭제 거부) 단위 테스트(삭제 후 재생성 경쟁 케이스 포함), 로그(`uid_fp`), 응답(`state`, `partial_failure`+`dn`). `partial`에는 비밀번호 유무 보장 문구를 쓰지 않는다.
+- [ ] `T-014` (`REQ-007`, `REQ-008`, `REQ-009`, `REQ-017`) 멱등 미들웨어·기록: 키 검증, 주체 해시 키, HMAC 지문(정규화 본문, 영속 키 파생·`key_id`, D216-9b)과 키 파일 로더(`loadOrGenerateSecret` 재사용·두 키 회전), 상태기계(`in_flight`는 시간 만료 없음), 연산을 요청 컨텍스트에서 분리해 끝까지 수행·결과 기록, 네트워크 오류·패닉→`outcome_unknown`, 저장 대상(2xx·`partial_failure`·`outcome_unknown`)과 삭제 대상, 재생 헤더, TTL, 상한(전역·주체당) 도달 시 새 키 503 `idempotency_capacity`+`Retry-After`·미만료 기록 비축출, 생성형 비밀번호+키 422, 비활성 시 422 `idempotency_unsupported`, 처리 순서(D216-10). 시계·키 주입 가능. env `UI_IDEMPOTENCY_ENABLED`·`UI_IDEMPOTENCY_TTL`·`UI_IDEMPOTENCY_KEY_FILE`.
+- [ ] `T-015` (`REQ-011`) 오류 코드: `idempotency_key_conflict`·`idempotency_key_reused`·`idempotency_outcome_unknown`·`idempotency_capacity`·`idempotency_unsupported`·`partial_failure` 생산, #218 골든 목록·OpenAPI `Error` 선택 키 반영.
+- [ ] `T-016` (`REQ-010`, `REQ-017`) #217 채택 계약 문서화: D216-12를 계약 테스트 표(같은 키→같은 job, 다른 kind→422, 타 주체 독립, 정책 변경 후 재생, 정책 ETag 비재사용, 재시작 뒤 영속 지문 인식, 키 회전·키 없음→409 `idempotency_outcome_unknown`)로 정리해 #217 T-031에 전달. job 기록에는 지문·`key_id`만 둔다. #217 구현 자체는 범위 밖.
+- [ ] `T-017` (`REQ-012`) OpenAPI·`llms.txt`·`docs/api.md`: 헤더 파라미터, 응답 헤더, `etag`, `PATCH`, `PUT` 위험 문구, 상태 코드·한계(D216-15).
+- [ ] `T-018` (`REQ-013`) 프런트: `api.ts` 헤더 인자, 편집·삭제 `If-Match`(`etag` 있을 때), `server-settings.idempotencyEnabled`가 참일 때만 시도별 `Idempotency-Key` 재사용, 412 안내·재조회·i18n, 422 `idempotency_unsupported`는 키 없이 한 번 재시도, 멤버 일괄 저장은 `If-Match` 미전송, 타입 `etag?`·`idempotencyEnabled?`.
+- [ ] `T-019` (`REQ-016`, `REQ-017`) 활성 스위치·차트: 서버 env `UI_IDEMPOTENCY_ENABLED`(기본 false)·`GET /api/server-settings`의 `idempotencyEnabled`(`dto.go:31-50` 가산); 차트 `ui.idempotency.enabled`(기본 false)·`values.yaml`·`values.schema`(있으면)·`ui-deployment.yaml`(`strategy: Recreate` 조건 `:60-63`을 `or applicationProfiles.enabled backups.enabled idempotency.enabled`로 확장, env는 `replicaCount==1`이고 Recreate일 때만 `true`, 복제본 ≥2이면 `false`+`NOTES.txt` 경고, 백업 활성 시 키 파일 경로를 백업 PVC의 개인 디렉터리로 전달), `charts/ldapium/README.md`.
+
+## Verify
+
+- [ ] `T-020` (`AC-001`–`AC-003`, `AC-005`, `AC-006`, `AC-008`, `AC-010`–`AC-013`, `AC-015`–`AC-018`, `AC-020`–`AC-023`) 단위/정적: `go test ./...`(헤더 파서·CSN 퍼즈·Merge Patch 표·지문 HMAC·키 파일·`key_id` 선택·상태기계·TTL/상한·보상 결정 함수·`outcome_unknown` 분기·계약 표 주도 412/400/409/422/503·`GET` 무헤더·봉투 골든), OpenAPI 드리프트(`api_contract_test.go:39,84`), `go vet`, 프런트 단위 테스트.
+- [ ] `T-021` (`AC-002`–`AC-004`, `AC-006`–`AC-010`, `AC-018`, `AC-019`, `AC-021`, `AC-022`) 라이브: `scripts/test/test-api-conditional-writes-local.py`(신규) — stale `If-Match`→412+무변경, 같은 태그 동시 쓰기 정확히 1성공, 응답 유실 재시도(같은 키)로 사용자 1명·잠금 재적용 없음, 요청 중 소켓 종료 후 재시도, 동시 같은 키 409 `idempotency_key_conflict`, 보상(ppm 거부)·`partial_failure` 재생, 삭제·재생성 DN에 옛 `entryUUID` assertion Delete→122와 동시 삭제·재생성 스트레스, `PATCH` 보존, assertion 미지원 거동, Playwright UI 시나리오. 복제 시험은 2노드 환경이 저렴하게 가능할 때만(`test-wiped-node-resync.sh` 형식), 아니면 “미시험” 기록.
+- [ ] `T-022` (`AC-019`) 명령·이미지 태그·실제 출력·실패 시도를 `EVIDENCE.md`에 기록.
+- [ ] `T-023` 발견한 회귀 위험(가짜 412 빈도, 보상 경합)을 가능한 한 지속 점검(테스트·경고 로그)으로 전환.
+- [ ] `T-024` (`AC-020`) 차트 렌더 단언 `scripts/test/test-chart-idempotency-render.sh`(신규, `helm template` + grep/yq): 기본(env `false`·`strategy` 없음), `ui.idempotency.enabled=true`+복제본 1(env `true`+`Recreate`), 복제본 2(env `false`), 프로필·백업 병용(`Recreate` 한 번). `ci.yml`의 `./scripts/verify-chart-schema.sh` 단계(`ci.yml:370`) 옆에 연결하고 `verify-chart-schema.sh` 프로필에 활성 설정을 추가한다.
+
+## Synchronize durable truth
+
+- [ ] `T-030` (`REQ-012`, `REQ-015`) `docs/api.md`, `ui/README.md`, `charts/ldapium/README.md`(휘발 기록·단일 복제본·복제 한계), 운영 가이드 갱신.
+- [ ] `T-031` ADR 1건(D216-1·2·5·6~9) 작성.
+- [ ] `T-032` (`REQ-015`) 릴리스·호환·롤백 노트(새 헤더·`PATCH`·`etag`, `PUT` 위험, 412 급증 점검).
+- [ ] `T-033` (`REQ-010`, `REQ-011`) #218 코드 표(4개 코드 행 추가됨)·#217 D217-9 연결·#215 속성 목록 정합 확인, 포트폴리오 상태 공개.
+
+## Completion review
+
+- [ ] Every requirement maps to an acceptance scenario and verification result (CHANGE.md 추적 매트릭스).
+- [ ] Material scope changes were reflected in the Change Package and re-reviewed.
+- [ ] Expected evidence is attached or linked.
+- [ ] Known incomplete work has an owner and tracking issue (필수화 플래그, 단일 Add 모드, 영속 기록, 일괄 멤버 연산은 후속 이슈로 분리).
+- [ ] The PR states the checks actually run and any important unverified path. PR 본문은 구현이 #216의 세 수용 기준을 모두 덮을 때만 “Closes”를 쓴다.
