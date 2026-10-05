@@ -1595,4 +1595,10 @@ fi
 #    foreground instead of daemonizing, which is what makes this exec safe.
 # ---------------------------------------------------------------------------
 log "starting slapd (pid 1) on: ${LISTEN_URLS}"
+# #229: the container runtime exports these, so exec would hand them to slapd and
+# keep them readable in /proc/1/environ for the container's lifetime. Both are
+# last used above (temp seed bind, peer probe, olcSyncrepl credentials); every
+# probe/healthcheck uses ldapi EXTERNAL or its own env. The *_FILE variables
+# hold only a path and stay. Must run immediately before the exec.
+unset LDAP_ADMIN_PASSWORD LDAP_REPLICATION_PASSWORD
 exec slapd -F "$CONFIG_DIR" -h "$LISTEN_URLS" -d "$LDAP_LOG_LEVEL"
