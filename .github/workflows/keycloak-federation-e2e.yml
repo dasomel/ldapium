@@ -48,7 +48,7 @@ env:
   # (see e.g. AGENTS.md's ldapium:e2e note) — "latest"/"nightly" would make a
   # failure here ambiguous between "this integration broke" and "upstream
   # changed under us".
-  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.0.7
+  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.7.4
   LDAP_ROOT_DN: dc=example,dc=org
   REALM: ldap-fed
 
@@ -431,7 +431,8 @@ jobs:
             -d "client_id=k8s-oidc-test" -d "grant_type=password" -d "scope=openid" \
             -d "username=alice" -d "password=wrong-password" \
             "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
-          [ "$bad_response" = 401 ] || { echo "::error::wrong password expected 401, got ${bad_response}"; cat /tmp/bad-token.json; exit 1; }
+          [ "$bad_response" = 400 ] || { echo "::error::wrong password expected 400, got ${bad_response}"; cat /tmp/bad-token.json; exit 1; }
+          jq -e '.error == "invalid_grant" and (has("access_token") | not)' /tmp/bad-token.json >/dev/null
           echo "PASS: wrong password rejected"
 
           echo "Checking the groups claim via userinfo..."
@@ -469,21 +470,22 @@ jobs:
           EOF
           echo "DISABLE_T0=${t0}" >> "$GITHUB_ENV"
 
-          status=401
+          status=400
           for i in $(seq 1 30); do
             status=$(curl -s -o /tmp/token-after-disable.json -w '%{http_code}' \
               -d "client_id=k8s-oidc-test" -d "grant_type=password" -d "scope=openid" \
               -d "username=alice" -d "password=${ALICE_PASSWORD}" \
               "http://127.0.0.1:8080/realms/${REALM}/protocol/openid-connect/token")
-            [ "$status" = "401" ] && break
+            [ "$status" = "400" ] && break
             echo "poll ${i}: still HTTP ${status}, retrying"
             sleep 1
           done
           t1=$(date +%s)
           latency=$((t1 - t0))
           echo "disable->auth-failure propagation latency: ${latency}s (status=${status})"
-          [ "$status" = "401" ] \
+          [ "$status" = "400" ] \
             || { echo "::error::alice's auth still succeeded (HTTP ${status}) after disabling her LDAP account"; cat /tmp/token-after-disable.json; exit 1; }
+          jq -e '.error == "invalid_grant" and (has("access_token") | not)' /tmp/token-after-disable.json >/dev/null
           echo "PASS: disabling alice's ldapium account propagated to a rejected Keycloak login within ${latency}s"
 
       - name: Assert human-actor correlation between the disable and the auth failure

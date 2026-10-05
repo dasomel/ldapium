@@ -83,6 +83,10 @@ olcDbIndex: memberOf eq
 olcDbIndex: member eq
 olcDbIndex: sn pres,eq,sub
 olcDbIndex: givenName eq
+olcDbIndex: uidNumber eq
+olcDbIndex: gidNumber eq
+olcDbIndex: memberUid eq
+olcDbIndex: uniqueMember eq
 olcAccess: {0}to attrs=userPassword,shadowLastChange
   by self write
   by anonymous auth

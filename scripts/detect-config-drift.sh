@@ -122,7 +122,8 @@ strip_noise() {
 # olcSyncrepl embeds the replication bind password in cleartext
 # (credentials="..." — see entrypoint.sh's olcSyncrepl rendering), so it
 # must never reach the baseline file or a diff verbatim, same principle as
-# this repo's userPassword denylist for HTTP responses (see CLAUDE.md).
+# this repo's userPassword denylist for HTTP responses (see AGENTS.md,
+# "Attribute exposure").
 # Masking it to a fixed placeholder means a legitimate password rotation
 # won't itself register as drift on this line — acceptable here since a
 # real rotation goes through Helm/the replication secret and a rolling

@@ -7,10 +7,10 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-accent text-accent-foreground hover:brightness-110 active:brightness-95',
+        default: 'bg-accent text-accent-foreground hover:brightness-95 active:brightness-90',
         outline: 'border border-border-strong bg-transparent text-foreground hover:bg-muted',
         ghost: 'text-foreground hover:bg-muted',
-        danger: 'bg-danger text-danger-foreground hover:brightness-110 active:brightness-95',
+        danger: 'bg-danger text-danger-foreground hover:brightness-95 active:brightness-90',
         subtle: 'bg-muted text-foreground hover:bg-border',
       },
       size: {

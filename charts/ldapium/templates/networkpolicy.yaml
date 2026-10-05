@@ -1,0 +1,73 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /* `from: []` in a NetworkPolicy rule means "allow all sources", the opposite of an empty allow-list. */}}
+{{- if not .Values.networkPolicy.ingressFrom }}
+{{- fail "networkPolicy.ingressFrom is empty: an empty `from` list in a NetworkPolicy rule allows ALL sources. List the peers allowed on 389/636 (default: [{podSelector: {}}] = same namespace), or set networkPolicy.enabled=false." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ldapium.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ldapium.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # LDAP/LDAPS clients. 636 is listed even when tls.enabled=false: nothing
+    # listens there, so it is harmless and avoids a policy edit when TLS is
+    # turned on later.
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+    # Replication: syncrepl between the chart's own pods. The `helm test`
+    # pod also carries the server selector labels, so it is covered here.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ldapium.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+    {{- if .Values.ui.enabled }}
+    # The management UI binds to LDAP with the user's own credentials.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ldapium.ui.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.backup.enabled }}
+    # The backup CronJob dumps over the Service as an LDAP client.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ldapium.backup.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.metrics .Values.metrics.enabled }}
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+      ports:
+        - port: 9330
+          protocol: TCP
+    {{- end }}
+{{- end }}

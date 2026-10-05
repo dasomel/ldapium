@@ -14,6 +14,9 @@ cd "$(dirname "$0")/.."
 KUBERNETES_VERSION="1.32.0"
 ADMIN_DN='cn=admin\,dc=example\,dc=org'
 ADMIN_PASSWORD="schema-validation-not-a-secret"
+# The UI session Secret is not generated in an offline render, so the ui profile
+# passes a disposable render-only value (>= 32 bytes, the UI minimum).
+SESSION_SECRET="schema-validation-session-secret-not-a-secret-0123"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || {
@@ -44,4 +47,4 @@ validate() {
 validate defaults
 validate replicated --set replicaCount=3
 validate tls --set tls.enabled=true --set-string tls.existingSecret=schema-validation-tls
-validate ui --set ui.enabled=true
+validate ui --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET"

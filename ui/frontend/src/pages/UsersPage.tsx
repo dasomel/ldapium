@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronsLeft, ChevronsRight, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, CircleAlert, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { UserFormDialog } from '@/components/users/UserFormDialog'
@@ -141,11 +142,11 @@ export function UsersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="relative w-72">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder={t('users.filterPlaceholder')}
+            aria-label={t('users.filterPlaceholder')} placeholder={t('users.filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-8 pr-8"
@@ -220,7 +221,24 @@ export function UsersPage() {
                   <TableHeadCell>{t('users.colName')}</TableHeadCell>
                   <TableHeadCell>{t('users.colMail')}</TableHeadCell>
                   <TableHeadCell>{t('nav.groups')}</TableHeadCell>
-                  <TableHeadCell>{t('users.colStatus')}</TableHeadCell>
+                  <TableHeadCell>
+                    <div className="flex items-center gap-1">
+                      {t('users.colStatus')}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" aria-label={t('users.statusHelpLabel')} className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            <CircleAlert className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-sm">
+                          <div className="space-y-2">
+                            <p><strong>{t('users.statusUnlockedTitle')}</strong> — {t('users.statusUnlockedDescription')}</p>
+                            <p><strong>{t('users.lockedBadge')}</strong> — {t('users.statusLockedDescription')}</p>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </TableHeadCell>
                   <TableHeadCell className="text-right">{t('common.actions')}</TableHeadCell>
                 </tr>
               </TableHead>
@@ -252,13 +270,6 @@ export function UsersPage() {
                         <Badge
                           variant="danger"
                           className="gap-1"
-                          title={
-                            u.lockedAt
-                              ? t('users.lockedSince', {
-                                  date: new Date(u.lockedAt).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US'),
-                                })
-                              : t('users.lockedBadge')
-                          }
                         >
                           <Lock className="size-3" />
                           {t('users.lockedBadge')}
@@ -270,47 +281,48 @@ export function UsersPage() {
                     <TableCell>
                       <div className="flex justify-end gap-1">
                         {u.locked ? (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title={t('users.unlockTitle')}
-                            onClick={() => handleUnlock(u)}
-                          >
-                            <Unlock className="size-3.5" />
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" aria-label={t('users.unlockTitle')} onClick={() => handleUnlock(u)}>
+                                <Unlock className="size-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('users.unlockTitle')}{u.lockedAt && ` · ${new Date(u.lockedAt).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US')}`}</TooltipContent>
+                          </Tooltip>
                         ) : (
-                          <Button variant="ghost" size="icon" title={t('users.lockTitle')} onClick={() => handleLock(u)}>
-                            <Lock className="size-3.5" />
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" aria-label={t('users.lockTitle')} onClick={() => handleLock(u)}>
+                                <Lock className="size-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('users.lockTitle')}</TooltipContent>
+                          </Tooltip>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t('common.edit')}
-                          onClick={() => {
-                            setEditing(u)
-                            setFormOpen(true)
-                          }}
-                        >
-                          <Pencil className="size-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t('setPasswordDialog.title')}
-                          onClick={() => setPasswordUser(u)}
-                        >
-                          <KeyRound className="size-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t('common.delete')}
-                          className="hover:bg-danger/10 hover:text-danger"
-                          onClick={() => setDeleting(u)}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" aria-label={t('common.edit')} onClick={() => { setEditing(u); setFormOpen(true) }}>
+                              <Pencil className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.edit')}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" aria-label={t('setPasswordDialog.title')} onClick={() => setPasswordUser(u)}>
+                              <KeyRound className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('setPasswordDialog.title')}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" aria-label={t('common.delete')} className="hover:bg-danger/10 hover:text-danger" onClick={() => setDeleting(u)}>
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.delete')}</TooltipContent>
+                        </Tooltip>
                       </div>
                     </TableCell>
                   </TableRow>

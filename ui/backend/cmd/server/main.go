@@ -28,6 +28,10 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "-print-session-secret" {
+		fmt.Print(cfg.SessionSecret)
+		return
+	}
 	// The final image is distroless static: no shell, no curl, nothing a
 	// Docker HEALTHCHECK could call. Kubernetes does not need this — the
 	// chart gives the Deployment an httpGet probe — but a `docker run` or
@@ -58,6 +62,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize HTTP server: %v", err)
 	}
+
+	srv.StartBackground(janitorCtx)
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,

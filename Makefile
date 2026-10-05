@@ -3,7 +3,7 @@
 KUBE_NAMESPACE ?=
 KUBE_RELEASE ?=
 
-.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev k8s-credentials k8s-ui-forward k8s-audit-export bench-profile check licenses sbom
+.PHONY: help local-init local-up local-down local-logs local-credentials frontend-dev ldap-replication-load k8s-credentials k8s-ui-forward k8s-audit-export bench-profile check licenses sbom
 
 help: ## Show local development commands
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -41,6 +41,9 @@ local-credentials: ## Print the local admin bind DN and password
 
 frontend-dev: ## Start Vite on http://127.0.0.1:5173 (requires make local-up)
 	@cd ui/frontend && npm run dev
+
+ldap-replication-load: ## Run the optional JMeter read load against all three local LDAP demo nodes
+	@./scripts/bench-ldap-replication-load.sh $(if $(JMETER_PROPERTIES),--properties "$(JMETER_PROPERTIES)") $(if $(LDAP_LOAD_THREADS),--threads "$(LDAP_LOAD_THREADS)") $(if $(LDAP_LOAD_LOOPS),--loops "$(LDAP_LOAD_LOOPS)")
 
 k8s-credentials: ## Print credentials from the deployed OpenLDAP release
 	@./scripts/get-credentials.sh $(if $(KUBE_NAMESPACE),--namespace $(KUBE_NAMESPACE)) $(if $(KUBE_RELEASE),--release $(KUBE_RELEASE))
@@ -103,3 +106,20 @@ sbom: ## Write SBOMs for the local images to ./sbom (requires syft)
 	done
 	@echo "wrote sbom/ — released images carry the same SBOM as a signed attestation:"
 	@echo "  gh attestation verify oci://ghcr.io/dasomel/ldapium:<version> --repo dasomel/ldapium"
+
+.PHONY: research-check
+research-check:
+	python3 scripts/research/check-research-evidence.py
+
+.PHONY: keycloak-up keycloak-down keycloak-status keycloak-test
+keycloak-up: ## Start local Keycloak on :8180 and configure LDAP federation
+	@bash scripts/dev/keycloak-local.sh up
+
+keycloak-down: ## Remove local Keycloak; keep LDAP data
+	@bash scripts/dev/keycloak-local.sh down
+
+keycloak-status: ## Show local Keycloak and LDAP federation status
+	@bash scripts/dev/keycloak-local.sh status
+
+keycloak-test: ## Run isolated LDAP federation checks (KC_TEST_GROUPS=basic by default)
+	@bash scripts/test/test-keycloak-federation-local.sh $${KC_TEST_IMAGE:-ldapium:e2e} $${KC_TEST_GROUPS:-basic}
