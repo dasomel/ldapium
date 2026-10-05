@@ -2,17 +2,19 @@
 """Disposable LDAP/UI containers prove generated credentials and restart reuse."""
 import http.cookiejar
 import json
+import os
 import subprocess
 import time
 import urllib.request
 import uuid
 
+ldap_image=os.environ.get('LDAPIUM_IMAGE','ldapium:e2e');ui_image=os.environ.get('LDAPIUM_UI_IMAGE','ldapium-ui:secrets-e2e')
 name='ldapium-secrets-'+uuid.uuid4().hex[:8]
 network=name+'-network';volumes=[name+'-config',name+'-data',name+'-ui']
 ldap=name+'-ldap';ui=name+'-ui';containers=[]
 def command(args): return subprocess.run(args,check=True,capture_output=True,text=True).stdout.strip()
 def start_ldap():
-  command(['docker','run','-d','--name',ldap,'--network',network,'--network-alias','generated-ldap','-e','LDAP_ROOT_DN=dc=example,dc=org','-v',volumes[0]+':/etc/openldap/slapd.d','-v',volumes[1]+':/var/lib/openldap/data','ldapium:e2e'])
+  command(['docker','run','-d','--name',ldap,'--network',network,'--network-alias','generated-ldap','-e','LDAP_ROOT_DN=dc=example,dc=org','-v',volumes[0]+':/etc/openldap/slapd.d','-v',volumes[1]+':/var/lib/openldap/data',ldap_image])
   containers.append(ldap)
   for _ in range(60):
     result=subprocess.run(['docker','exec',ldap,'ldapwhoami','-x','-H','ldap://127.0.0.1','-D','cn=admin,dc=example,dc=org','-y','/var/lib/openldap/data/.credentials/ldap-admin-password'],capture_output=True,text=True)
@@ -20,7 +22,7 @@ def start_ldap():
     time.sleep(1)
   raise RuntimeError('generated LDAP credential did not bind')
 def start_ui():
-  command(['docker','run','-d','--name',ui,'--network',network,'-p','127.0.0.1::8080','-e','LDAP_URL=ldap://generated-ldap:389','-e','LDAP_BASE_DN=dc=example,dc=org','-e','COOKIE_SECURE=false','-v',volumes[2]+':/var/lib/ldapium/secrets','ldapium-ui:secrets-e2e'])
+  command(['docker','run','-d','--name',ui,'--network',network,'-p','127.0.0.1::8080','-e','LDAP_URL=ldap://generated-ldap:389','-e','LDAP_BASE_DN=dc=example,dc=org','-e','COOKIE_SECURE=false','-v',volumes[2]+':/var/lib/ldapium/secrets',ui_image])
   containers.append(ui)
   port=command(['docker','port',ui,'8080/tcp']).rsplit(':',1)[1];url='http://127.0.0.1:'+port
   for _ in range(60):
@@ -46,7 +48,7 @@ try:
   command(['docker','rm','-f',ui]);start_ui()
   assert secret==command(['docker','exec',ui,'/server','-print-session-secret'])
   command(['docker','exec',ldap,'rm','/var/lib/openldap/data/.credentials/ldap-admin-password']);command(['docker','rm','-f',ldap])
-  command(['docker','run','-d','--name',ldap,'-e','LDAP_ROOT_DN=dc=example,dc=org','-v',volumes[0]+':/etc/openldap/slapd.d','-v',volumes[1]+':/var/lib/openldap/data','ldapium:e2e'])
+  command(['docker','run','-d','--name',ldap,'-e','LDAP_ROOT_DN=dc=example,dc=org','-v',volumes[0]+':/etc/openldap/slapd.d','-v',volumes[1]+':/var/lib/openldap/data',ldap_image])
   code=command(['docker','wait',ldap]);assert code!='0';logs=subprocess.run(['docker','logs',ldap],check=True,capture_output=True,text=True);assert 'original admin password' in logs.stdout+logs.stderr  # entrypoint errors go to stderr
   print('PASS: generated LDAP bind, private mode, no log leaks, LDAP/UI recreation reuse, authenticated safe metadata, missing original credential fails closed')
 finally:
