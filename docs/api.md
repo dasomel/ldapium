@@ -133,7 +133,7 @@ curl -sS -b jar.txt -X PUT \
   -d @profile.json "$BASE/api/v1/applications/grafana/integration-profile"
 ```
 
-- **쓰기 Origin 게이트:** 로그인·로그아웃을 포함한 모든 상태 변경 요청(POST/PUT/PATCH/DELETE)은 `Origin` 헤더가 **있으면** 서버 자신의 origin(스킴·Host)과 같아야 하고, 아니면 핸들러 실행 전에 403 `origin_mismatch`입니다(`Origin: null`, 빈 값 포함). `Origin` 헤더가 없는 요청(curl, 스크립트, 서비스)은 영향이 없어 위 로그인 예시처럼 그대로 동작합니다. 이 게이트는 끌 수 없습니다. **영향:** `Origin`을 항상 보내는 비브라우저 HTTP 클라이언트는 그 값을 서버 origin으로 맞추거나 헤더를 빼야 합니다. 리버스 프록시/Ingress는 브라우저가 보낸 `Host`를 그대로 전달하고 TLS 종단 시 `X-Forwarded-Proto: https`를 붙여야 합니다(서버는 `Host`와 `X-Forwarded-Proto` 계열 헤더로 자기 origin을 계산하며 `X-Forwarded-Host`는 쓰지 않습니다). `Host`를 재작성하면 정상 UI 쓰기도 403이 됩니다.
+- **쓰기 Origin 게이트:** 로그인·로그아웃을 포함한 모든 상태 변경 요청(POST/PUT/PATCH/DELETE)은 `Origin` 헤더가 **있으면** 서버 자신의 origin(스킴·Host)과 같아야 하고, 아니면 핸들러 실행 전에 403 `origin_mismatch`입니다(`Origin: null`, 빈 값 포함). `Origin` 헤더가 없는 요청(curl, 스크립트, 서비스)은 영향이 없어 위 로그인 예시처럼 그대로 동작합니다. 이 게이트는 끌 수 없습니다. **영향:** `Origin`을 항상 보내는 비브라우저 HTTP 클라이언트는 그 값을 서버 origin으로 맞추거나 헤더를 빼야 합니다. 리버스 프록시/Ingress는 브라우저가 보낸 `Host`를 그대로 전달하고 TLS 종단 시 `X-Forwarded-Proto: https`를 붙여야 합니다(서버는 `Host`와 `X-Forwarded-Proto` 계열 헤더로 자기 origin을 계산하고, 비교 전에 호스트 대소문자·후행 점·기본 포트(:80/:443)·IPv6 표기를 정규화하며 `X-Forwarded-Host`는 쓰지 않습니다). `Host`를 재작성하면 정상 UI 쓰기도 403이 됩니다.
 - 쓰기 엔드포인트(프로필, 방식, 백업, Keycloak, 매핑 미리보기)는 `Origin`이 서버 자신의 origin과 같아야 하고(아니면 403) `Content-Type: application/json`이어야 합니다(아니면 415).
 - `If-Match` 누락 428, revision 불일치 412, 형식 오류는 엔드포인트에 따라 400 또는 428.
 - Keycloak 역할 작업은 정수 revision 대신 스냅샷의 따옴표 붙은 64자리 hex fingerprint(ETag)를 사용합니다.

@@ -30,6 +30,30 @@ func TestSameOrigin(t *testing.T) {
 		{"query", "https://ui.example?x=1", "ui.example", "https", false},
 		{"userinfo", "https://u@ui.example", "ui.example", "https", false},
 		{"unparseable", "https://ui.example:port", "ui.example", "https", false},
+		// Authority normalisation: a proxy may upper-case the Host or add the
+		// scheme's default port, and a browser never sends either in Origin.
+		{"upper-case Host", "https://ui.example", "UI.EXAMPLE", "https", true},
+		{"upper-case Origin host", "https://UI.Example", "ui.example", "https", true},
+		{"upper-case Origin scheme", "HTTPS://ui.example", "ui.example", "https", true},
+		{"explicit default https port in Host", "https://ui.example", "ui.example:443", "https", true},
+		{"explicit default https port in Origin", "https://ui.example:443", "ui.example", "https", true},
+		{"explicit default http port in Host", "http://ui.example", "ui.example:80", "http", true},
+		{"443 is not the default for http", "http://ui.example", "ui.example:443", "http", false},
+		{"80 is not the default for https", "https://ui.example", "ui.example:80", "https", false},
+		{"non-default port still differs", "https://ui.example:8443", "ui.example:443", "https", false},
+		{"IPv6 explicit default port", "https://[::1]", "[::1]:443", "https", true},
+		{"IPv6 same with port", "http://[::1]:8080", "[::1]:8080", "http", true},
+		{"IPv6 other address", "https://[::2]", "[::1]:443", "https", false},
+		{"trailing dot in Host", "https://ui.example", "ui.example.", "https", true},
+		{"trailing dot in Origin", "https://ui.example.", "ui.example", "https", true},
+		{"suffix trick", "https://ui.example.evil.example", "ui.example", "https", false},
+		{"prefix trick", "https://evil.ui.example", "ui.example", "https", false},
+		{"userinfo trick", "https://ui.example@evil.example", "ui.example", "https", false},
+		{"userinfo with real host", "https://evil@ui.example", "ui.example", "https", false},
+		{"empty port in Host", "https://ui.example", "ui.example:", "https", false},
+		{"empty port in Origin", "https://ui.example:", "ui.example", "https", false},
+		{"empty Host", "https://ui.example", "", "https", false},
+		{"unbracketed IPv6 Host", "https://[::1]", "::1", "https", false},
 	}
 	for _, tc := range cases {
 		if got := sameOrigin(tc.origin, tc.host, tc.scheme); got != tc.want {
