@@ -288,3 +288,88 @@ Review follow-up (Codex high): the lost-response classifier, strict keyed bodies
 peer that reads the request and closes). Key persistence, stated exactly: only backup-start keys live in the durable job
 record and survive a backend restart; the keys of every other route are process memory and are forgotten on restart
 (the live script checks both: the core retry after a restart meets 409 already_exists, the backup retry returns the same job).
+
+## Part C: Live verification of remaining gaps (issue #251)
+
+Run 2026-10-06 against disposable containers using images built from this worktree:
+- OpenLDAP server: `ldapium:lane-251` (`docker build -t ldapium:lane-251 -f image/Dockerfile ./image`)
+- UI backend: `ldapium-ui:lane-251` (`docker build -t ldapium-ui:lane-251 --target backup-runtime -f ui/Dockerfile ui`)
+- Platform: macOS / Colima (Docker 27.x)
+
+This closes the four live-verification gaps highlighted in `CLOSE-OUT-2026-10.md` and Part A/B `EVIDENCE.md`:
+
+### (a) Mid-write socket drop and retry with same Idempotency-Key
+- Raw TCP socket connects to UI backend, sends complete `POST /api/users` with `Idempotency-Key` header and payload, and immediately closes with `SO_LINGER (1, 0)` to issue a TCP RST before any response byte can be read.
+- The UI backend's decoupled context (`context.WithoutCancel`) continues executing and saves the completed transaction into the idempotency store.
+- Retrying the request with the identical `Idempotency-Key` returns 201 with `Idempotent-Replayed: true` and writes nothing a second time (LDAP search confirms exactly 1 entry).
+- The same behavior is verified for user locking (`POST /api/users/{dn}/lock`): an abrupt socket RST followed by an identical keyed retry returns 204 `Idempotent-Replayed: true` and does not alter the existing lock timestamp.
+
+### (b) Wire-level go-ldap Delete with mismatching assertion control
+- Executed via `go test -tags live -v -run TestLiveAssertionDelete ./internal/ldapclient/` (`ui/backend/internal/ldapclient/assertion_live_test.go`).
+- DelRequest with RFC 4528 assertion control (`1.3.6.1.1.12`) asserting a stale `entryCSN` returns LDAP result code 122 (`LDAPResultAssertionFailed`).
+- `ldapclient.mapErr` maps LDAP 122 to `domain.ErrRevisionConflict` (yielding HTTP 412 `revision_conflict`).
+- `ldapclient.deleteOutcome` maps LDAP 122 to `domain.CreatePartial` (yielding HTTP 500 `partial_failure`).
+- The entry is confirmed to survive the mismatching assertion deletes and only is deleted when matching `(entryUUID, entryCSN)` is provided.
+
+### (c) Genuinely refused compensation observing 500 partial_failure
+- Staged without breaking slapd code by introducing an LDAP TCP proxy between the UI backend and OpenLDAP.
+- The proxy delays forwarding the RFC 3062 `PasswordModify` request (`OID 1.3.6.1.4.1.4203.1.11.1`). During this delay, a concurrent `ldapmodify` updates the newly added entry, advancing its `entryCSN`.
+- Password Modify is rejected because OpenLDAP `pwdSafeModify` enforces safe modify on non-root binds without existing passwords.
+- `compensateCreate` attempts an assertion Delete with the original `(entryUUID, entryCSN)`. Because `entryCSN` changed, slapd refuses with LDAP 122.
+- The UI backend maps this refused delete to `domain.CreatePartial` and responds with HTTP 500 `partial_failure`, `state: partial`, `dn`, leaving the uncompensated entry intact in the directory.
+
+### (d) ppolicy lastbind bumping entryCSN and If-Match in SSO mode
+- OpenLDAP instance configured with `LDAP_LASTBIND_ENABLED=true`.
+- The user performs an LDAP bind, updating `pwdLastSuccess` and bumping `entryCSN`.
+- A dedicated Mock OIDC server generates RS256 signed ID tokens for service account `ops`. The UI backend operates in SSO mode (`AUTH_MODE=sso`).
+- An update (`PUT /api/users/{dn}`) with the pre-bind `If-Match` is rejected with 412 `revision_conflict`, leaving attributes unmodified.
+- The refreshed `If-Match` header is accepted with HTTP 204, confirming end-to-end conditional writes under SSO and ppolicy lastbind.
+
+### Actual Output
+```
+$ python3 scripts/test/test-api-conditional-writes-local.py
+--- Starting conditional writes live verification suite ---
+LDAP image: ldapium:lane-251
+UI image: ldapium-ui:lane-251
+Network: ldapium-cw-251-8e99e4-net
+LDAP container: ldapium-cw-251-8e99e4-ldap (port 13893)
+Bootstrapped ou=people, ou=admins and ops user
+Granted ops operator ACL on the database
+
+--- Executing (b): wire-level go-ldap Delete with mismatching assertion control ---
+=== RUN   TestLiveAssertionDelete
+--- PASS: TestLiveAssertionDelete (0.02s)
+PASS
+ok  	github.com/dasomel/ldapium/ui/backend/internal/ldapclient	0.022s
+
+LDAP proxy listening on host port 56789
+UI container started at http://127.0.0.1:18085
+
+--- Executing (a): socket kill mid-write and retry with same Idempotency-Key ---
+PASS: (a) create retry returned 201
+PASS: (a) create retry carries Idempotent-Replayed: true
+PASS: (a) create body has correct DN
+PASS: (a) LDAP has exactly 1 entry for cw-idem-1
+PASS: (a) lock retry returned 204
+PASS: (a) lock retry carries Idempotent-Replayed: true
+PASS: (a) lock retry was idempotent (pwdAccountLockedTime unchanged)
+
+--- Executing (c): force refused compensation on user create to observe 500 partial_failure ---
+PASS: (c) create request returned 500
+PASS: (c) code is partial_failure
+PASS: (c) state is partial
+PASS: (c) dn is correct
+PASS: (c) uncompensated entry survives in LDAP
+
+--- Executing (d): ppolicy lastbind bumping entryCSN and If-Match in SSO mode ---
+PASS: (d) bind bumped entryCSN from 20261006133246.618641Z#000000#000#000000 to 20261006133246.634812Z#000000#000#000000
+PASS: (d) stale If-Match returned 412 revision_conflict
+PASS: (d) user cn unchanged after 412
+PASS: (d) fresh If-Match update succeeded with 204
+PASS: (d) user cn updated after valid If-Match
+
+ALL CHECKS PASSED: conditional writes and idempotency verified.
+```
+
+Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1).
+
