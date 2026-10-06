@@ -5,7 +5,8 @@
 # Part 1 (refusals): invalid value, non-admin modes without replication, the
 #   password hygiene check (length / distinct characters / equal to admin
 #   password), reserved-DN = admin DN, prepare + explicit password, and the
-#   staged "not implemented" refusal of prepare/dedicated. Every refusal must
+#   staged "not implemented" refusal of dedicated (prepare is T-011, covered by
+#   test-replication-identity-prepare.sh). Every refusal must
 #   exit non-zero with a fixed message and must not leak password material.
 # Part 2 (defaults byte-identical, only when a base image is given): a
 #   standalone node and a replicated 2-node pair started in `admin` mode from
@@ -178,8 +179,6 @@ refuse "dedicated password equals admin" "must differ from the admin password" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${pw}"
 refuse "dedicated good password -> staged refusal" "is not implemented in this image yet" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good}"
-refuse "prepare -> staged refusal" "is not implemented in this image yet" \
-  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=prepare
 refuse "prepare with explicit password" "replicates as the admin identity" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=prepare -e "LDAP_REPLICATION_PASSWORD=${good}"
 refuse "dedicated admin DN = reserved DN" "must not equal the reserved replication identity DN" \

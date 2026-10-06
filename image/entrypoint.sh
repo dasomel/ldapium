@@ -92,13 +92,14 @@ if [ -n "${LDAP_ADMIN_PASSWORD_FILE:-}" ]; then
   LDAP_ADMIN_PASSWORD=$(cat "$LDAP_ADMIN_PASSWORD_FILE")
 fi
 
-# D50 (docs/changes/replication-identity, #229, T-010): syncrepl bind identity
-# mode. Only `admin` (default) is effective and it changes nothing; `prepare` and
-# `dedicated` are checked and then refused until T-011/T-012 land (fail closed,
-# never a silent fallback to the admin identity). Every refusal sits BEFORE the
-# first state change (admin-password generation below creates files on the data
-# volume), so a refused start leaves the volume untouched. Messages are fixed and
-# never contain password material.
+# D50 (docs/changes/replication-identity, #229, T-010/T-011): syncrepl bind
+# identity mode. `admin` (default) changes nothing. `prepare` (T-011) installs
+# the read-only identity ACL + olcLimits in section 3a2 below and still
+# replicates as the admin identity; `dedicated` is checked and then refused until
+# T-012 lands (fail closed, never a silent fallback to the admin identity). Every
+# refusal in this block sits BEFORE the first state change (admin-password
+# generation below creates files on the data volume), so a refused start leaves
+# the volume untouched. Messages are fixed and never contain password material.
 LDAP_REPLICATION_IDENTITY="${LDAP_REPLICATION_IDENTITY:-admin}"
 case "$LDAP_REPLICATION_IDENTITY" in
   admin) ;;
@@ -108,17 +109,66 @@ case "$LDAP_REPLICATION_IDENTITY" in
       *) die "LDAP_REPLICATION_IDENTITY=${LDAP_REPLICATION_IDENTITY} requires LDAP_REPLICATION_ENABLED=true" ;;
     esac
     # REQ-014: the reserved DN must not be a rootDN (rootDN bypasses ACLs).
-    # Only LDAP_ADMIN_DN is compared here; stored olcRootDN needs the config
-    # read that T-011/T-012 add.
-    ldap_dn_norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[[:space:]]*,[[:space:]]*/,/g' -e 's/[[:space:]]*=[[:space:]]*/=/g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
-    [ "$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}")" != "$(ldap_dn_norm "$LDAP_ADMIN_DN")" ] ||
+    # LDAP_ADMIN_DN is compared here; `prepare` also compares every stored
+    # olcRootDN in section 3a2 (the config read happens there).
+    # DN equivalence is slapd's, not a string compare: `slapdn -N` prints the
+    # DN as slapd normalizes it (case, insignificant spaces, \2c vs \, vs "a,b",
+    # multivalued RDN order), so two spellings of one DN compare equal. It needs
+    # a schema, and the volumes may be empty here, so it runs on a throwaway
+    # config that only includes the stock schemas. A DN that cannot be parsed
+    # fails (callers refuse with a fixed message).
+    ldap_dn_norm() {
+      _dnc=$(mktemp) || return 1
+      printf 'include /etc/openldap/schema/core.schema\ninclude /etc/openldap/schema/cosine.schema\ninclude /etc/openldap/schema/inetorgperson.schema\n' > "$_dnc"
+      _dnr=0
+      _dno=$(slapdn -f "$_dnc" -N "$1" 2>/dev/null) || _dnr=$?
+      rm -f "$_dnc"
+      [ "$_dnr" -eq 0 ] || return 1
+      # Never trust an exit status alone: the output must be exactly one
+      # non-blank line shaped like a DN (x=y). An empty result would otherwise
+      # compare equal/unequal to anything.
+      case "$_dno" in
+        *'
+'*) return 1 ;;
+        ?*=?*) ;;
+        *) return 1 ;;
+      esac
+      [ -n "$(printf '%s' "$_dno" | tr -d '[:space:]')" ] || return 1
+      printf '%s\n' "$_dno"
+    }
+    if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
+      # The root DN is written into an ACL value and an LDIF line below: keep it
+      # to printable ASCII without quote or backslash so the rule cannot be
+      # broken out of (the filter/LDIF layers never need escaping then).
+      [ -z "$(printf '%s' "$LDAP_ROOT_DN" | LC_ALL=C tr -d ' -~')" ] ||
+        die "LDAP_REPLICATION_IDENTITY=prepare requires a printable-ASCII LDAP_ROOT_DN"
+      case "$LDAP_ROOT_DN" in
+        *\"*|*\\*) die "LDAP_REPLICATION_IDENTITY=prepare requires LDAP_ROOT_DN without double quotes or backslashes" ;;
+      esac
+    fi
+    ri_id_norm=$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}") ||
+      die "cannot normalize the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>; refusing"
+    ri_admin_norm=$(ldap_dn_norm "$LDAP_ADMIN_DN") ||
+      die "cannot normalize LDAP_ADMIN_DN; refusing"
+    [ "$ri_id_norm" != "$ri_admin_norm" ] ||
       die "LDAP_ADMIN_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN> (a rootDN bypasses ACLs)"
+    if [ -n "${LDAP_REPLICATION_BIND_DN:-}" ]; then
+      ri_bind_norm=$(ldap_dn_norm "$LDAP_REPLICATION_BIND_DN") ||
+        die "cannot normalize LDAP_REPLICATION_BIND_DN; refusing"
+      [ "$ri_id_norm" != "$ri_bind_norm" ] ||
+        die "LDAP_REPLICATION_BIND_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>"
+    fi
     ldap_repl_pw="${LDAP_REPLICATION_PASSWORD:-}"
     if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
       [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
       ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
     fi
     if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
+      # D61: mTLS client authentication (olcAuthzRegexp) can map a certificate
+      # subject onto the identity DN, so it cannot coexist with the identity.
+      case "${LDAP_TLS_MUTUAL_AUTH:-false}" in
+        true|1) die "LDAP_REPLICATION_IDENTITY=prepare cannot be combined with LDAP_TLS_MUTUAL_AUTH (a certificate subject could be mapped onto the replication identity)" ;;
+      esac
       # REQ-015: prepare still replicates as the admin identity; a separate
       # replication password would silently stall every consumer with rc 49.
       [ -z "${LDAP_REPLICATION_PASSWORD:-}${LDAP_REPLICATION_PASSWORD_FILE:-}" ] ||
@@ -140,7 +190,8 @@ case "$LDAP_REPLICATION_IDENTITY" in
       [ "$ldap_repl_pw" != "${LDAP_ADMIN_PASSWORD:-}" ] ||
         die "replication password failed the hygiene check: must differ from the admin password (a hygiene check, not proof of randomness)"
     fi
-    die "LDAP_REPLICATION_IDENTITY=${LDAP_REPLICATION_IDENTITY} is not implemented in this image yet (replication-identity change package T-011/T-012); use LDAP_REPLICATION_IDENTITY=admin"
+    [ "$LDAP_REPLICATION_IDENTITY" != "dedicated" ] ||
+      die "LDAP_REPLICATION_IDENTITY=dedicated is not implemented in this image yet (replication-identity change package T-012); use LDAP_REPLICATION_IDENTITY=admin or prepare"
     ;;
   *) die "LDAP_REPLICATION_IDENTITY must be one of: admin, prepare, dedicated" ;;
 esac
@@ -658,6 +709,12 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   fi
   [ "$ldap_peer_total" -gt 0 ] || die "LDAP_REPLICATION_PEERS resolved to zero entries"
   [ "$LDAP_SERVER_ID" -le "$ldap_peer_total" ] || die "LDAP_SERVER_ID (${LDAP_SERVER_ID}) exceeds the number of entries in LDAP_REPLICATION_PEERS (${ldap_peer_total}) — a node's serverID must be its 1-based position in the peer list"
+  # REQ-015 (T-011): serverID 1 without a marker would mint a new DIT (E8), so
+  # `prepare` never starts it; a new cluster starts in `admin`. Before any state
+  # change, like the other refusals.
+  if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ] && [ "$LDAP_SERVER_ID" -eq 1 ] && [ ! -f "$MARKER" ]; then
+    die "LDAP_REPLICATION_IDENTITY=prepare refuses to bootstrap serverID 1 (it would create a new directory tree); start new clusters with LDAP_REPLICATION_IDENTITY=admin and switch to prepare afterwards"
+  fi
 
   # D3: bind identity for replication is rootDN, not a dedicated account —
   # the baseline ACL denies userPassword to everyone but self/anonymous-auth,
@@ -1280,6 +1337,145 @@ d}" "$base_structure"
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
+fi
+
+# ---------------------------------------------------------------------------
+# 3a2. LDAP_REPLICATION_IDENTITY=prepare (D51/D52, #229 T-011). Installs the
+#      read-only replication identity's FIRST ACL rule and its olcLimits with
+#      one OFFLINE slapmodify on cn=config (like every cn=config edit here,
+#      #206). Fresh and existing volumes take this one path: a fresh volume has
+#      just been bootstrapped above and holds no identity entry, so the same
+#      conditions apply. It never creates the identity entry (the operator's
+#      `ensure` does) and replication keeps binding as the admin identity.
+#      Install only when the node holds no entry at the reserved DN, or the rule
+#      is already stored (idempotent reboot). An entry WITHOUT the rule is
+#      refused: it could be a pre-existing foreign entry that the new rule would
+#      suddenly entitle to read every hash (E14). Read-only until the single
+#      modify, and verified by reading cn=config back afterwards. Never runs in
+#      `admin`/`dedicated`: admin cn=config stays byte-identical.
+#      The new rule is {0} so it decides before every other rule whatever
+#      LDAP_ANONYMOUS_READ_BASE rendered ({1}..{4}); slapd renumbers the rest.
+# ---------------------------------------------------------------------------
+if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
+  ri_dn="cn=replicator,${LDAP_ROOT_DN}"
+  ri_sel="dn.exact=\"${ri_dn}\""
+  ri_acl="{0}to * by ${ri_sel} ssf=128 read by ${ri_sel} none by * break"
+  ri_lim="{0}${ri_sel} size=unlimited time=unlimited"
+  ri_fail="replication identity prepare: cannot read or modify cn=config offline; no change was verified"
+
+  ri_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+  # ri_scan: read cn=config (held in a variable only: it contains credentials)
+  # and set ri_cfg, ri_mdb, ri_have_acl, ri_have_lim.
+  ri_scan() {
+    ri_cfg=$(slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no) || die "$ri_fail"
+    ri_mdb=$(printf '%s\n' "$ri_cfg" | sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p')
+    # An empty read must never mean "nothing stored": the main database entry
+    # always exists, so its absence is a failed read.
+    [ -n "$ri_mdb" ] || die "$ri_fail"
+    ri_have_acl=0
+    ri_have_lim=0
+    ri_stored0=$(printf '%s\n' "$ri_mdb" | sed -n 's/^olcAccess: {0}/{0}/p')
+    [ "$(ri_lc "$ri_stored0")" != "$(ri_lc "$ri_acl")" ] || ri_have_acl=1
+    # olcLimits: the first rule whose selector matches wins, so the identity's
+    # rule must be the FIRST stored value; the stored values are read in order.
+    ri_limits=$(printf '%s\n' "$ri_mdb" | sed -n 's/^olcLimits: //p')
+    ri_first_lim=$(printf '%s\n' "$ri_limits" | sed -n '1p')
+    [ "$(ri_lc "$ri_first_lim")" != "$(ri_lc "$ri_lim")" ] || ri_have_lim=1
+  }
+  ri_scan
+
+  # REQ-014 (stored part): the identity DN must not be any rootDN (all databases:
+  # main, config, accesslog, monitor) nor the stored syncrepl bind DN. Compared
+  # as slapd-normalized DNs; an unparseable stored DN refuses.
+  ri_want_dn=$(ldap_dn_norm "$ri_dn") || die "cannot normalize the reserved replication identity DN ${ri_dn}; refusing"
+  ri_roots=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcRootDN: //p')
+  # Every database has a rootDN (main, config, ...): an empty list is a failed
+  # read, never "no collision".
+  [ -n "$ri_roots" ] || die "$ri_fail"
+  ri_binds=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcSyncrepl: .*binddn="\([^"]*\)".*$/\1/p')
+  while IFS= read -r ri_root; do
+    ri_root_norm=$(ldap_dn_norm "$ri_root") || die "cannot normalize a stored rootDN/bind DN; refusing replication identity prepare"
+    [ "$ri_root_norm" != "$ri_want_dn" ] ||
+      die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN or replication bind DN (a rootDN bypasses ACLs); refusing replication identity prepare"
+  done <<EOF
+$ri_roots
+EOF
+  if [ -n "$ri_binds" ]; then
+    while IFS= read -r ri_root; do
+      ri_root_norm=$(ldap_dn_norm "$ri_root") || die "cannot normalize a stored rootDN/bind DN; refusing replication identity prepare"
+      [ "$ri_root_norm" != "$ri_want_dn" ] ||
+        die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN or replication bind DN (a rootDN bypasses ACLs); refusing replication identity prepare"
+    done <<EOF
+$ri_binds
+EOF
+  fi
+  # D61/D64: no stored path by which another principal could be mapped onto or
+  # authorized as the identity. Fixed messages, no credential material.
+  ri_verify=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcTLSVerifyClient: //p')
+  case "$(ri_lc "$ri_verify")" in
+    ''|never) ;;
+    *) die "replication identity prepare refused: olcTLSVerifyClient is not 'never' (client certificates could be mapped onto the replication identity)" ;;
+  esac
+  [ -z "$(printf '%s\n' "$ri_cfg" | grep -m1 '^olcAuthzRegexp:' || true)" ] ||
+    die "replication identity prepare refused: olcAuthzRegexp is stored (a SASL identity could be mapped onto the replication identity)"
+  [ -z "$(printf '%s\n' "$ri_cfg" | grep -m1 '^olcAuthIDRewrite:' || true)" ] ||
+    die "replication identity prepare refused: olcAuthIDRewrite is stored (a SASL identity could be rewritten onto the replication identity)"
+  ri_policy=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcAuthzPolicy: //p')
+  case "$(ri_lc "$ri_policy")" in
+    ''|none) ;;
+    *) die "replication identity prepare refused: olcAuthzPolicy is not 'none' (proxy authorization could assume the replication identity)" ;;
+  esac
+  # authzTo/authzFrom on any entry (offline read; the DB file only exists once
+  # slapd or slapadd has created it).
+  if [ -e "${MDB_DIR}/data.mdb" ]; then
+    ri_authz=$(slapcat -n 1 -F "$CONFIG_DIR" -o ldif-wrap=no -a '(|(authzTo=*)(authzFrom=*))') || die "$ri_fail"
+    [ -z "$ri_authz" ] ||
+      die "replication identity prepare refused: an entry carries authzTo/authzFrom (proxy authorization could assume the replication identity)"
+  fi
+
+  if [ "$ri_have_acl" -eq 0 ]; then
+    # The rule must not already exist at another position (a second rule would
+    # make the stored order ambiguous).
+    [ -z "$(printf '%s\n' "$ri_mdb" | grep '^olcAccess: ' | grep -iF "$ri_sel" || true)" ] ||
+      die "replication identity prepare refused: a rule for ${ri_dn} is stored but is not the first olcAccess rule; remove it by hand and restart"
+    ri_esc=$(printf '%s' "$ri_dn" | sed -e 's/\\/\\5c/g' -e 's/\*/\\2a/g' -e 's/(/\\28/g' -e 's/)/\\29/g')
+    ri_entry=""
+    if [ -e "${MDB_DIR}/data.mdb" ]; then
+      ri_entry=$(slapcat -n 1 -F "$CONFIG_DIR" -o ldif-wrap=no -a "(entryDN=${ri_esc})") || die "$ri_fail"
+    fi
+    [ -z "$ri_entry" ] ||
+      die "replication identity prepare refused: ${ri_dn} already exists on this node but the identity ACL is not installed; delete the entry first (operator retire) and restart"
+  fi
+
+  if [ "$ri_have_acl" -eq 1 ] && [ "$ri_have_lim" -eq 1 ]; then
+    log "replication identity prepare: ACL and olcLimits for ${ri_dn} already installed — nothing to do"
+  else
+    ri_ldif=$(mktemp)
+    {
+      printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\n'
+      if [ "$ri_have_acl" -eq 0 ]; then
+        printf 'add: olcAccess\nolcAccess: %s\n-\n' "$ri_acl"
+      fi
+      if [ "$ri_have_lim" -eq 0 ]; then
+        # Drop every other stored rule for the identity (wrong values, wrong
+        # position), then put ours at the front: first match wins.
+        ri_old=$(printf '%s\n' "$ri_limits" | grep -iF "$ri_sel" || true)
+        if [ -n "$ri_old" ]; then
+          printf 'delete: olcLimits\n'
+          printf '%s\n' "$ri_old" | while IFS= read -r ri_old_line; do printf 'olcLimits: %s\n' "$ri_old_line"; done
+          printf -- '-\n'
+        fi
+        printf 'add: olcLimits\nolcLimits: %s\n-\n' "$ri_lim"
+      fi
+    } > "$ri_ldif"
+    log "replication identity prepare: installing the read-only ACL and olcLimits for ${ri_dn} (slapmodify -n 0)"
+    slapmodify -n 0 -F "$CONFIG_DIR" -l "$ri_ldif" || { rm -f "$ri_ldif"; die "replication identity prepare: installing the ACL failed; cn=config was not verified"; }
+    rm -f "$ri_ldif"
+    ri_scan
+    { [ "$ri_have_acl" -eq 1 ] && [ "$ri_have_lim" -eq 1 ]; } ||
+      die "replication identity prepare: read-back verification failed (the ACL or olcLimits is not stored as expected)"
+    log "replication identity prepare: ACL and olcLimits for ${ri_dn} installed and verified"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
