@@ -60,7 +60,7 @@ func (e liveEnv) conn(t *testing.T, dn, pw string) *ldap.Conn {
 }
 
 func newLiveClient(c *ldap.Conn) *client {
-	return &client{conn: c, mu: &sync.Mutex{}, scanSem: make(chan struct{}, 1)}
+	return &client{conn: &obsConn{Conn: c}, mu: &sync.Mutex{}, scanSem: make(chan struct{}, 1)}
 }
 
 const liveReaderPW = "Live-Reader-1!"
