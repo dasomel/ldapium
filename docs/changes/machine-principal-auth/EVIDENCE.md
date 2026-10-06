@@ -37,6 +37,13 @@
 | 미들웨어 순서 | `corsMiddleware`(설정 시) → `originGate` → … → `authed := api.Group("", s.requireSession)` | `httpapi/server.go:115-121,158` |
 | CORS | `Authorization`을 허용 헤더로 두지 않음 | `httpapi/cors.go` |
 | 기본 ACL | `to * by self write by users read`가 catch-all(`image/entrypoint.sh:894-895,905-906`); accesslog DB는 `cn=admin,cn=accesslog`만 read(`:1023`) | `image/entrypoint.sh` |
+| 메인 DB ACL 선두 규칙 | `olcAccess: {0}to attrs=userPassword,shadowLastChange by self write by anonymous auth by * none`가 템플릿에서 이미 맨 앞. 뒤따르는 렌더링(`#__ANON_READ_ACCESS__`): `LDAP_ANONYMOUS_READ_BASE` 미설정 → `{1}to attrs=entry,uid,objectClass by anonymous read by users read`, `{2}to * by self write by users read by anonymous none`; 설정 → `{1}`(base 한정 anonymous/users read), `{2}to attrs=entry by anonymous search by users read`, `{3}to attrs=uid,objectClass by users read`, `{4}to * by self write by users read by anonymous none`. 즉 인증된 모든 DN이 `by users read`로 entry/uid/objectClass를 읽는다 | `image/ldifs/01-cn-config.ldif:90-93`, `image/entrypoint.sh:884-907` |
+| rootdn 종류 | 메인 DB `olcRootDN: __LDAP_ADMIN_DN__`(기본 `cn=admin,<LDAP_ROOT_DN>`), monitor DB `cn=monitoring,cn=Monitor`, accesslog DB `cn=admin,cn=accesslog`, config DB `cn=admin,cn=config` | `01-cn-config.ldif:71,153`, `entrypoint.sh:1009`, `02-cn-config-admin.ldif:23-24` |
+| monitor·accesslog DB ACL | monitor: `to * by dn.exact="cn=monitoring,cn=Monitor" read by * none`; accesslog: `{0}to * by dn.exact="cn=admin,cn=accesslog" read by * none` → 머신 DN은 기본 거부 | `01-cn-config.ldif:156`, `entrypoint.sh:1023` |
+| DN 목록 직렬화 | `BACKUP_ADMIN_DNS`·`APP_PROFILES_ADMIN_DNS`는 **세미콜론** 구분(`splitEntries`: 공백 제거·중복 제거, 따옴표/escape 처리 없음) — DN 내부 쉼표가 있어 쉼표 목록은 쓸 수 없다 | `config/keycloak.go:69-78`, `config/config.go:206,234` |
+| Origin gate 범위 | `/api` 경로의 POST/PUT/PATCH/DELETE이면서 `Origin` 헤더가 **있을 때만** 검사; GET과 `Origin` 없는 요청은 통과 | `httpapi/origin_gate.go:37-54` |
+| SSO 초기화 실패 | `cfg.SSO.Enabled`이면 10s 컨텍스트로 `newOIDCAuthenticator`를 호출하고 실패하면 `New`가 오류를 반환(기동 실패) | `httpapi/server.go:79-86` |
+| 로그인 limiter 의미 | 기본 한도 10회/1m(`UI_LOGIN_FAILURE_LIMIT`·`_WINDOW`), 슬라이딩 윈도우, 성공 시 초기화 없음(실패가 윈도우 밖으로 밀려날 때까지), `allow`와 `recordFailure`가 분리돼 동시 시도 overshoot 가능. 상태 무상한은 이슈 #270 | `httpapi/login_limiter.go`, `config/config.go:290-302` |
 | 오류 코드 | `unavailable`(503)은 존재. `token_invalid`·`token_expired`·`scope_denied`는 예약만 되고 방출되지 않음 | `httpapi/errors.go`, api-error-envelope D218-3 |
 | `openapi.json`·`llms.txt` | 코드 생성이 아닌 수작업 관리 | `httpapi/api_docs.go` |
 
@@ -85,7 +92,7 @@ payload: {"exp":<iat+300>,"iat":<iat>,"jti":"<redacted>","iss":"http://localhost
 | Refresh token | `Refresh` | issuer URL | — | — | — | — |
 | **machine-a에서 password grant로 발급한 사람 access**(같은 client에 direct access grant 활성) | `Bearer` | `[ldapium-api, account]` | machine-a | **없음** | 있음 | `alice` |
 
-마지막 행이 핵심이다. `aud`·`azp`·`scope`가 SA 토큰과 **동일**하다. 구분 근거는 `client_id`/`clientHost`/`clientAddress` 존재, `sid` 부재, `preferred_username == "service-account-<client>"`뿐이다. JOSE `typ`는 access/ID 모두 `JWT`라 구분력이 없다.
+마지막 행이 핵심이다. `aud`·`azp`·`scope`가 SA 토큰과 **동일**하다. 구분 근거는 `client_id`/`clientHost`/`clientAddress` 존재와 `preferred_username == "service-account-<client>"`뿐이다(`sid` 부재도 이 표의 관측이지만 §2.9에서 refresh를 켠 SA 토큰은 `sid`를 가짐이 확인되어 구분 근거로 쓸 수 없다). JOSE `typ`는 access/ID 모두 `JWT`라 구분력이 없다.
 
 ### 2.4 scope
 
@@ -111,11 +118,36 @@ client scope `directory.read`(기본)·`directory.write`(optional)를 만들어 
 - secret 회전 → 옛 secret 401 `unauthorized_client`, 이미 발급된 토큰은 영향 없음.
 - introspection은 호출 client가 토큰 `aud`에 없으면 `{"active":false}` → `aud=[ldapium-api, account]`에서는 `machine-a`·`machine-b`·`ldapium-sso` 모두 introspect 불가(후속 옵션은 `aud`에 있는 별도 resource client 필요). SA 토큰으로 `userinfo`는 `openid` scope 없으면 403.
 - Keycloak 중지: JWKS 요청은 connection refused(curl exit 7).
-- token exchange: 기본 비활성(“Standard token exchange is not enabled…”), 발급 경로 미검증.
+- token exchange: 기본 설정에서는 비활성(“Standard token exchange is not enabled…”). 활성화 시 거동은 §2.9(2026-10-07 추가 실험).
 
 ### 2.8 실행하지 않음
 
-token exchange 발급, audience mapper가 `ldapium-sso`와 공유된 client scope에 있을 때의 SSO 토큰 오염, `InsecureIssuerURLContext` 분리, 실제 시계 skew·nbf 경계, introspection `active:true` 경로. 해당 항목은 [TASKS.md](TASKS.md)의 e2e 항목으로 이관됐다.
+legacy(v1) token exchange의 권한(management permissions) 경로 완성(§2.9: 이 이미지에서 `Feature not enabled`), audience mapper가 `ldapium-sso`와 공유된 client scope에 있을 때의 SSO 토큰 오염, `InsecureIssuerURLContext` 분리, 실제 시계 skew·nbf 경계, introspection `active:true` 경로. 해당 항목은 [TASKS.md](TASKS.md)의 e2e 항목으로 이관됐다.
+
+### 2.9 추가 실험 (Revision 3, 2026-10-07, 실제 Keycloak 26.7.4)
+
+같은 고정 이미지(`quay.io/keycloak/keycloak:26.7.4`, `start-dev`)에 별도 realm(`r214c`), 컨테이너·네트워크 이름 접미사 `r214c`로 실행하고 종료 후 제거했다. 모든 SA client는 §2.2의 audience mapper와 `directory.read` 기본 scope를 가진다. 서명·`jti`·시간 claim은 생략했다. 표의 “룰 (i)(ii)”는 CHANGE.md D5의 SA 판별(`client_id == azp`, `preferred_username == "service-account-" + client_id`).
+
+| # | 구성 | 관측된 access token claim (요약) | `client_id` | `preferred_username` | `sid` | 룰 (i)(ii) |
+|---|---|---|---|---|---|---|
+| 1 | 기준: SA client_credentials | `azp=machine-a`, `aud=[ldapium-api,account]`, `typ=Bearer`, `clientHost`·`clientAddress` 있음 | `machine-a` | `service-account-machine-a` | 없음 | 통과 |
+| 2 | **lightweight access token**(client 속성 `client.use.lightweight.access.token.enabled=true`) | `azp`·`scope`·`typ=Bearer`만 남음. `aud`·`client_id`·`preferred_username` 없음 | 없음 | 없음 | 없음 | **거부**(정상 SA 토큰이 깨짐 → lightweight OFF 필수) |
+| 3 | **refresh 사용 SA**(`client_credentials.use_refresh_token=true`) | 응답에 `refresh_token`·`session_state` 추가, access token에 **`sid` 있음**; refresh token `typ=Refresh`, `aud`=issuer, `sid` 동일 | `machine-d` | `service-account-machine-d` | **있음** | 통과 → **`sid` 부재를 요건으로 쓰면 정상 SA가 거부됨** |
+| 4 | 같은 refresh 사용 client에서 password grant 사람 토큰 | `azp=machine-d`, `aud`·`scope` 동일 | 없음 | `alice` | 있음 | 거부(`client_id` 없음) |
+| 5 | `profile` default scope 제거 | `preferred_username` 없음 | 있음 | 없음 | 없음 | 거부(ii) |
+| 6 | `profile`+`service_account` default scope 제거(`client_id`·`clientHost`·`clientAddress`는 `service_account` scope의 mapper가 공급) | `azp`·`scope`·`sub`만 | 없음 | 없음 | 없음 | 거부 |
+| 7 | **standard token exchange**(client 속성 `standard.token.exchange.enabled=true`), subject=그 client의 SA 토큰, 요청 audience 없음 | 새 access token: `azp=machine-a`, `preferred_username=service-account-machine-a`, `sub`=SA 사용자 | **없음**(`clientHost` 없음) | `service-account-machine-a` | 없음 | **거부(i)** — 다만 (ii)만 검사하는 OR 규칙이면 통과 |
+| 8 | standard exchange, subject=사람 토큰(`alice`, 같은 client password grant) | `azp=machine-a`, `preferred_username=alice`, `sub`=alice | 없음 | `alice` | 있음 | 거부 |
+| 9 | exchange 요청 `audience=machine-x`(해당 audience 없음) / `audience=ldapium-api` | `invalid_request: Requested audience not available` / `invalid_client: Audience not found` | — | — | — | — |
+| 10 | 다른 client(`machine-b`, standard exchange 미설정)가 machine-a의 SA 토큰으로 요청 | `access_denied: Client is not within the token audience` | — | — | — | — |
+| 11 | **legacy `token-exchange` feature를 켠 서버**(`KC_FEATURES=token-exchange`)에서 `standard.token.exchange.enabled` **미설정**인 `machine-b`가 자기 SA 토큰을 exchange | **성공**: `azp=machine-b`, `preferred_username=service-account-machine-b`, `client_id` 없음 | 없음 | `service-account-machine-b` | 없음 | 거부(i) — 서버 feature가 켜지면 client 설정 없이도 exchange가 됨 |
+
+해석:
+- 서비스 계정 판별에서 `sid` 부재는 **쓸 수 없다**(행 3). `client_id`가 있고 `azp`와 같은 것이 사람·exchange·lightweight 토큰을 가르는 관측된 유일한 기준이다. exchange로 만든 SA 토큰은 `client_id`가 없어 거부되므로, 머신 client는 exchange를 쓸 수 없다(의도적).
+- `client_id`·`preferred_username`을 공급하는 mapper(`service_account`·`profile` scope)를 지우거나 lightweight를 켜면 정상 SA 토큰이 전부 거부된다(fail closed). 운영 요건과 라이브 점검이 필요하다.
+- 기본 서버(feature 미변경)에서는 exchange가 기본 비활성이다(§2.7). legacy feature를 켜면 client 설정 없이 exchange가 된다(행 11).
+- legacy exchange의 management permissions 경로(`PUT clients/{id}/management/permissions`)는 이 서버에서 `Feature not enabled`로 완성하지 못했다(행 11 이후의 impersonation·audience 허용 시나리오는 미검증).
+- `standard.token.exchange.enabled`·lightweight·refresh 설정은 모두 client 속성이며 `ldapium`이 읽을 수 없다 → 서버 쪽 방어는 토큰 claim 규칙뿐이고 설정 점검은 운영 문서·라이브 e2e의 몫이다.
 
 ## 3. 재현
 

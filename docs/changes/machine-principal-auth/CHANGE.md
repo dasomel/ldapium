@@ -3,8 +3,9 @@
 - Change class: `D` — 인증·인가 경계 추가, 신규 자격 증명 수용 경로
 - Owner: 미지정 — 수용 전 지정
 - Related issue: 미등록 — 출처 [api-integration PLAN P0](../api-integration/PLAN.md)
-- Status: `Proposed / awaiting review`
-- Revision 2 (2026-10-07): addresses T-005 security review; re-review pending; acceptance by the maintainer instruction of 2026-10-07 follows a passing re-review
+- Status: `Proposed / awaiting review; Revision 3 re-review pending`
+- Revision 2 (2026-10-07): addresses T-005 security review round 1 (BLOCKER).
+- Revision 3 (2026-10-07): addresses T-005 round 2 (ACL order, rootdn list syntax, service-account identification, JWKS state machine, selectAuth precedence, IP throttle numbers); re-review pending; acceptance by the maintainer instruction of 2026-10-07 follows a passing re-review
 - Accepted by / date: 미수용 — 이 문서는 제안이며 Class D 수용 전 구현 착수 금지
 - 작성일: 2026-10-04 (Revision 2: 2026-10-07)
 
@@ -83,7 +84,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 
 - Covers: `REQ-001`, `REQ-011`
 - Given 아래 음성 토큰 각각(전부 서명 유효한 실제 키로 만든 토큰이되 한 항목만 위반 — 서명 변조·`alg=none`·HS256 공개키 혼동 제외):
-  `aud`에 `account`만 / `aud` 누락·null·숫자 배열 / 만료(skew 초과) / 서명 변조 / 알 수 없는 `iss`(후행 슬래시 차이 포함) / ID token(payload `typ=ID`, SA가 `scope=openid`로 받은 것) / refresh token / JOSE `typ` 누락·`JWT`·`at+jwt` 외 / payload `typ`≠`Bearer` / `kid` 누락 / 허용 목록 밖 `azp` / `azp`≠`client_id` / `client_id` 누락 / SSO 브라우저 client(`ldapium-sso`)의 access·ID token / **허용 client에서 password grant로 발급된 사람 토큰**(`sid` 있음, `client_id` 없음, `preferred_username`≠`service-account-<client>`) / `iat` 누락·비숫자·미래(skew 초과) / `exp<=iat` / `exp-iat` > MAX_TTL / `nbf` 미래(skew 초과) / `alg=none` / HS256(JWKS 공개키를 HMAC 키로 서명) / 허용 목록 밖 alg(예 RS512) / 8 KiB 초과 토큰
+  `aud`에 `account`만 / `aud` 누락·null·숫자 배열 / 만료(skew 초과) / 서명 변조 / 알 수 없는 `iss`(후행 슬래시 차이 포함) / ID token(payload `typ=ID`, SA가 `scope=openid`로 받은 것) / refresh token / JOSE `typ` 누락·`JWT`·`at+jwt` 외 / payload `typ`≠`Bearer` / `kid` 누락 / 허용 목록 밖 `azp` / `azp`≠`client_id` / `client_id` 누락 / SSO 브라우저 client(`ldapium-sso`)의 access·ID token / **허용 client에서 password grant로 발급된 사람 토큰**(`client_id` 없음, `preferred_username`≠`service-account-<client>`; `sid`는 판정에 쓰지 않음) / **exchange로 만든 토큰**(사람 subject·SA subject 둘 다, `client_id` 없음) / **lightweight access token** / `service_account`·`profile` scope 제거로 `client_id` 또는 `preferred_username`이 없는 토큰 / `preferred_username`이 같지만 `client_id`가 없는 토큰 / `iat` 누락·비숫자·미래(skew 초과) / `exp<=iat` / `exp-iat` > MAX_TTL / `nbf` 미래(skew 초과) / `alg=none` / HS256(JWKS 공개키를 HMAC 키로 서명) / 허용 목록 밖 alg(예 RS512) / 8 KiB 초과 토큰
 - When 허용 오퍼레이션 호출
 - Then 각각 401(`token_invalid`, 순수 만료만 `token_expired`), 응답 본문에 거부 사유 세부 없음(일반 메시지), LDAP bind 시도 없음(bind 카운터 0). 대응 완화: 동일 토큰 구성에서 위반만 고친 양성 대조 토큰은 200.
 
@@ -109,12 +110,12 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 - When `GET /api/entry`(사용자 DN, **accesslog DN**, `cn=config`, `cn=Monitor`), `/api/users`, `/api/groups`(+cursor 2페이지), `/api/tree`, `/api/monitor`(+`audit.read` 있음/없음), `/api/audit/actions`를 호출
 - Then 모든 응답 본문에서 시드한 비밀 **값**(평문·`{SSHA}…` 해시·base64 변형)이 없다. accesslog·config·monitor DN의 `getEntry`는 403이고, `audit.read` 없는 `getMonitor`는 `recentLogs`가 비어 있으며 accesslog 검색이 발행되지 않는다. 감사 DTO가 변경 속성 **이름** `userPassword`를 포함하는 것은 허용(전역 문자열 부재를 요구하지 않는다).
 
-### `AC-006` — 쿠키/bearer 혼용·`selectAuth` 문법
+### `AC-006` — 쿠키/bearer 혼용·`selectAuth` 매트릭스
 
 - Covers: `REQ-006`
-- Given “인증 경로 분리 규칙”의 문법 표 각 행(유효 bearer / 헤더 중복 / comma 결합 / 빈 값 / 다른 scheme / scheme 대소문자 / 공백 변형 / 유효 쿠키+bearer / 빈·무효·중복 세션 쿠키+bearer / 공개 auth 경로+bearer / foreign·null·중복 `Origin`+bearer / CORS preflight `authorization`)
-- When 보호 오퍼레이션(및 표가 지정한 공개 경로) 호출
-- Then 표의 상태 코드와 일치한다. 잘못된 `Authorization`은 어떤 경우에도 쿠키 인증으로 폴백하지 않고, 머신 요청은 `Set-Cookie`를 발행하지 않으며, bearer 헤더가 있어도 Origin gate가 먼저 판정한다.
+- Given “인증 경로 분리 규칙”의 매트릭스 전 셀(경로 P/PA/PO/N × Authorization A0/AV/AI/AD × 쿠키 C0/CV/CI/Cp)과 기능 꺼짐, 그리고 Origin 조합(foreign·`null`·중복·없음 × POST/GET)
+- When 해당 요청 호출
+- Then 각 셀이 표의 단일 결과와 일치한다. 형식이 틀리거나 중복된 `Authorization`은 어떤 경우에도 쿠키 인증으로 폴백하지 않고(401), 유효 bearer+쿠키 이름 존재는 400, PA 경로의 Authorization은 400이며 쿠키가 발행·삭제되지 않고, 머신 요청은 `Set-Cookie`를 발행하지 않는다. 상태 변경 메서드에 foreign/`null`/중복 `Origin`이 있으면 bearer가 유효해도 gate의 403이 우선하고 핸들러가 실행되지 않는다. **GET은 gate 대상이 아니므로** foreign `Origin`이어도 유효 bearer GET은 200이다(CORS 헤더 부재로 브라우저 읽기는 막힘). preflight `authorization`은 거부.
 
 ### `AC-007` — 모드 독립
 
@@ -127,30 +128,20 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 
 - Covers: `REQ-008`, `REQ-016`
 - Given Keycloak 중지 또는 JWKS 응답 불가, 주입 가능한 시계. 기본값: JWKS 캐시 TTL 10m, stale-if-error +1h, 최소 재조회 간격 30s, fetch timeout 5s, 실패 backoff 30s→최대 5m
-- When 아래 표의 조건으로 호출
-
-  | 조건 | 결과 |
-  |---|---|
-  | 캐시된 kid, 마지막 성공 조회 후 TTL(10m) 이내 | 200 |
-  | 캐시된 kid, TTL 초과·TTL+1h 이내, IdP 계속 장애 | 200(stale-if-error), 재조회는 backoff 간격당 1회 |
-  | TTL+1h 초과, IdP 장애 | 모든 토큰 503(캐시된 kid 포함) |
-  | 미캐시 kid, IdP 장애(또는 한 번도 성공 못 함) | 503 + `Retry-After`(남은 backoff 초, 1–300) — 401 아님 |
-  | 미캐시 kid, 정상 조회 직후 | 401 `token_invalid` |
-  | 캐시된 kid + 잘못된 서명 | 401, upstream 조회 0회 |
-
-- Then 위 표와 일치하고, 어떤 경우도 검증 생략 허용이 없다. `Retry-After`는 정수 초.
+- When “JWKS·discovery 상태 기계”(D8 정본)의 7개 행을 각각 fake clock으로 재현하고, 추가로 (a) Keycloak 중지 상태에서 ldapium 기동 → Keycloak 기동 (b) `FRESH`→`STALE`→`EXPIRED` 전이 (c) 키 회전 직후 새 kid
+- Then 표의 응답·동작과 일치하고, 어떤 경우도 검증 생략 허용이 없다. 구체 경계: age=TTL(10m)+1s에서 알려진 kid 200(`STALE`), age=TTL+MAX_STALE(1h10m)+1s에서 같은 토큰 503; 미지 kid는 IdP 장애 중 503(+`Retry-After`), 정상 조회 후 30s 이내 401; (a)에서 기동 직후 bearer 503이고 쿠키 로그인은 정상, Keycloak 기동 후 backoff 일정(30s·60s·120s·240s·300s·300s…) 안에서 **재시작 없이** 200으로 복구; (c)에서 새 kid 토큰은 마지막 조회 성공 후 ≥30s 시점의 첫 요청에서 200이고 그 전은 401, 성공한 조회 직후 negative cache가 비어 있음.
 
 ### `AC-016` — JWKS 폭주·전송 제한
 
 - Covers: `REQ-016`
 - Given 로컬 `httptest` JWKS 서버(조회 횟수 계수)와 live Keycloak 앞의 계수 프록시
 - When (a) 무작위 kid 토큰 1000건, (b) 알려진 kid + 잘못된 서명 1000건을 동시에 보냄 (c) 키 회전 (d) 응답 크기 1 MiB 초과·키 21개 이상·리다이렉트·5초 초과 지연 (e) `http://` 원격 issuer 설정
-- Then (a)(b) upstream 조회 횟수 ≤ 1 + ⌈관측 구간/30s⌉(fake clock 단위 테스트에서 정확히 검증, e2e에서는 상한 확인), 오류는 401이고 negative cache(≤256 kid, TTL 5m)가 상한을 넘지 않는다. (c) 새 kid 토큰은 다음 허용 조회 이후 200이며 그 전 최대 30s는 401(문서화된 비용). (d) 조회 거부·기존 캐시 유지·503. (e) 기동 실패(로컬 테스트 예외 플래그 없이), 플래그가 있으면 기동 시 WARN 로그.
+- Then (a)(b) upstream 조회 횟수 ≤ 1 + ⌈관측 구간/30s⌉(fake clock 단위 테스트에서 정확히 검증, e2e에서는 상한 확인), 오류는 401이고 negative cache(≤256 kid, TTL 30s, 성공 조회마다 비움)가 상한을 넘지 않는다. (c) 새 kid 토큰은 다음 허용 조회 이후 200이며 그 전 최대 30s는 401(문서화된 비용). (d) 조회 거부·기존 캐시 유지·503. (e) 기동 실패(로컬 테스트 예외 플래그 없이), 플래그가 있으면 기동 시 WARN 로그.
 
 ### `AC-009` — 설정 오류·bind 실패 fail closed
 
 - Covers: `REQ-004`, `REQ-008`
-- Given 머신 bind DN이 `BACKUP_ADMIN_DNS`/프로파일 관리자 DN/`LDAP_SERVICE_ACCOUNT_DN`/rootdn(`MACHINE_LDAP_ROOT_DNS`)과 ParseDN 동등(대소문자·공백·escape·hex 이스케이프·다중값 RDN 순서 변형 포함) / aud 미설정 / `UI_TRUSTED_PROXIES`가 기본 `private` / bind 비밀번호 불일치 / LDAP 응답 지연
+- Given 머신 bind DN이 `BACKUP_ADMIN_DNS`/프로파일 관리자 DN/`LDAP_SERVICE_ACCOUNT_DN`/메인 rootdn(`MACHINE_LDAP_ROOT_DNS`, `cn=admin,dc=example,dc=org`처럼 쉼표가 있는 DN 포함)/내장 rootdn 3종과 ParseDN 동등(대소문자·공백·escape·`\3B`·다중값 RDN 순서 변형 포함), `MACHINE_LDAP_ROOT_DNS`에 쉼표로 이어 쓴 값·파싱 불가 항목 / aud 미설정 / `UI_TRUSTED_PROXIES`가 기본 `private` / bind 비밀번호 불일치 / LDAP 응답 지연
 - When 서버 기동 또는 요청
 - Then 중복·필수값 누락·파싱 불가 DN은 기동 실패, bind 실패는 503 `unavailable`이며 root 폴백 없음. 지연은 `MACHINE_REQUEST_TIMEOUT`(기본 10s) 안에 503으로 끝나고 슬롯이 반환된다.
 
@@ -164,9 +155,20 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 ### `AC-011` — rate limit·동시성
 
 - Covers: `REQ-010`
-- Given 검증된 client별 한도 N rps/burst, client별·전역 동시 M, IP 실패 throttle
-- When (a) 한 client가 한도 초과 (b) 다른 client가 동시에 호출 (c) 서로 다른 수만 개 IP에서 무효 토큰 1회씩 (d) 같은 IP의 반복 무효 토큰 (e) 위조 `X-Forwarded-For`
-- Then (a) 초과분 429 `machine_rate_limited` + `Retry-After`. (b) **limiter 예산은 격리**된다 — 한 client의 소진이 다른 client의 token bucket을 줄이지 않는다(LDAP·JWKS·전역 동시성 같은 공유 자원의 격리는 보장하지 않으며 문서에 명시). (c) IP limiter 항목 수가 `MACHINE_IP_LIMITER_MAX`(기본 10000)를 넘지 않고 프로세스 메모리가 유계. (d) 임계 초과 후 서명 검증·JWKS 조회 **이전**에 429(검증기 호출 카운터 불변). (e) 신뢰 프록시 밖 피어의 XFF는 무시되고, `UI_TRUSTED_PROXIES`가 `private`(기본)이면 머신 활성 상태에서 기동 실패. unknown client는 limiter 상태를 만들지 않는다.
+- Given 검증된 client별 한도 N rps/burst, client별·전역 동시 M, IP 실패 throttle(기본 한도 10 / 윈도우 1m, 주입 가능한 시계)
+- When (a) 한 client가 한도 초과 (b) 다른 client가 동시에 호출 (c) 서로 다른 수만 개 IP에서 무효 토큰 1회씩 (d) 아래 경계 표 (e) 위조 `X-Forwarded-For`
+- Then (a) 초과분 429 `machine_rate_limited` + `Retry-After`. (b) **limiter 예산은 격리**된다 — 한 client의 소진이 다른 client의 token bucket을 줄이지 않는다(LDAP·JWKS·전역 동시성 같은 공유 자원의 격리는 보장하지 않으며 문서에 명시). (c) IP limiter 항목 수가 `MACHINE_IP_LIMITER_MAX`(기본 10000)를 넘지 않고 프로세스 메모리가 유계(#270 수정 구현). (e) 신뢰 프록시 밖 피어의 XFF는 무시되고, `UI_TRUSTED_PROXIES`가 `private`(기본)이면 머신 활성 상태에서 기동 실패. unknown client는 limiter 상태를 만들지 않는다.
+- (d) IP 실패 throttle 경계(한도 10, 윈도우 60s):
+
+  | 시나리오 | 기대 |
+  |---|---|
+  | 같은 IP에서 무효 토큰 10회 순차 → 11번째 | 429, 검증기 호출 카운터 불변(서명·JWKS 조회 없음), `Retry-After`=⌈60−가장 오래된 실패 나이⌉ ≥ 1 |
+  | 실패 9회 후 10번째 | 통과해 검증기까지 도달(401), 그 직후 11번째는 429 |
+  | 윈도우 경과 후(마지막 실패+60s+1s) | 첫 요청 통과(카운터 풀림), 가장 오래된 실패가 밀려날 때마다 1건씩 풀림 |
+  | 같은 IP에서 무효 토큰 20건 동시 | 정확히 10건만 검증기 도달(reservation), 10건 429 |
+  | 유효 토큰 성공 | 카운터 불변(초기화도 가산도 없음); 실패 10회 상태의 IP에서는 유효 토큰도 429 |
+  | 403(scope)·503(JWKS)·429 응답 | 실패로 세지 않음 |
+  | 서로 다른 IP | 서로 영향 없음(IPv6는 같은 /64를 한 키로) |
 
 ### `AC-012` — 토큰 수명·시계 오차
 
@@ -192,9 +194,9 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 ### `AC-018` — 읽기 전용 실행 신원
 
 - Covers: `REQ-004`
-- Given 문서의 ACL LDIF를 적용한 머신 DN
-- When 머신 DN으로 slapd에 직접 `ldapadd`/`ldapmodify`(자기 항목 포함)/`ldapdelete`/`ldappasswd`/`modrdn` 시도, 그리고 비허용 subtree·`userPassword`·accesslog·config 읽기 시도
-- Then 모든 쓰기·자기 수정은 `insufficient access`(50), 비밀 속성·비허용 base는 읽기 거부. 같은 LDIF가 다른 신원(사용자 self write, 관리자)의 동작을 바꾸지 않음을 같은 시나리오에서 확인한다(규칙 순서: 머신 DN 규칙이 `by self write` catch-all보다 앞).
+- Given 위 LDIF를 **새로 초기화한 컨테이너 두 구성**에 적용: (a) `LDAP_ANONYMOUS_READ_BASE` 미설정, (b) 설정(예 `ou=people,<root>`). `B`=`ou=people,<root>`, `M`은 `ou=system`에 위치, 비교용으로 일반 사용자·관리자·익명 신원
+- When 머신 DN으로 slapd에 직접: ① 자기 비밀번호 변경(`ldappasswd`, `ldapmodify`로 `userPassword`/`shadowLastChange`) ② 자기 항목의 일반 속성 수정 ③ 다른 항목 `ldapadd`/`ldapmodify`/`ldapdelete`/`modrdn` ④ `B` 밖 항목(예 `ou=system`, 루트, 다른 OU) base 검색(`(objectClass=*)`)과 `entry`/`uid`/`objectClass` 요청 ⑤ `B` 안 검색에서 `userPassword`·`shadowLastChange`를 명시 요청 ⑥ accesslog·config·Monitor 읽기
+- Then ①②③은 모두 `insufficient access`(50), ④는 항목이 반환되지 않고(`noSuchObject`/빈 결과) 두 분기에서 동일, ⑤ `B` 항목은 반환되되 비밀 속성은 없음, ⑥ 거부(opt-in 미적용 상태). 같은 LDIF 적용 전후로 일반 사용자의 자기 비밀번호 변경(성공)·관리자·익명(분기 (a)/(b)별 기존 동작)의 결과가 변하지 않는다. `M` bind 자체는 성공한다.
 
 ### `AC-019` — 긴급 차단·롤백
 
@@ -243,14 +245,14 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 | ID | 결정 | 이유 | 비용 | 탈출구 |
 |---|---|---|---|---|
 | D1 | 옵션 1을 v1로 권고. 옵션 2는 Keycloak 없는 배포용 후속, 옵션 3은 보류 | PLAN P0가 “Keycloak issuer/audience 정책 재사용”을 지정, 신규 비밀 저장소 없음, 기존 검증 코드 재사용 | LDAP 모드 배포는 별도 IdP 필요 | 인증기를 `machineAuthenticator` 인터페이스(단일 메서드: 요청→principal)로 두고 옵션 2 추가는 구현체 추가만으로 가능(구현 시 과설계 금지: 첫 구현체는 구체 타입) |
-| D2 | 기존 경로(`/api/users` 등)에 인증기 선택 방식으로 얹는다: `Authorization` 헤더 **존재** → 머신 인증기만(문법이 틀리면 401, 쿠키로 폴백 없음), 없음 → 기존 쿠키 `requireSession`. 둘 다 존재 → 400. 경로 복제 없음. 정확한 문법은 아래 “인증 경로 분리 규칙” 표 | 클라이언트·OpenAPI·SDK 변경 최소, 오퍼레이션 단일 정의 | 한 경로가 두 인증을 받아 테스트 매트릭스 증가, 선택 로직 버그가 곧 경계 약화 | 오퍼레이션 복제 `/api/v1/machine/...` 접두사(경로 분리가 더 강한 격리)로 전환 가능. 순수 함수 `selectAuth`로 격리해 단위 테스트(Q3) |
+| D2 | 기존 경로(`/api/users` 등)에 인증기 선택 방식으로 얹는다: `Authorization` 헤더 **존재** → 머신 인증기만(문법이 틀리면 401, 쿠키로 폴백 없음), 없음 → 기존 쿠키 `requireSession`. 유효 형식 `Authorization`과 세션 쿠키가 함께 있으면 400(형식이 틀린 `Authorization`은 쿠키와 무관하게 401). 경로 복제 없음. 분류·우선순위·매트릭스는 아래 “인증 경로 분리 규칙” | 클라이언트·OpenAPI·SDK 변경 최소, 오퍼레이션 단일 정의 | 한 경로가 두 인증을 받아 테스트 매트릭스 증가, 선택 로직 버그가 곧 경계 약화 | 오퍼레이션 복제 `/api/v1/machine/...` 접두사(경로 분리가 더 강한 격리)로 전환 가능. 순수 함수 `selectAuth`로 격리해 단위 테스트(Q3) |
 | D3 | scope는 서버 코드의 정적 `operation→scope` allowlist로만 해석(OpenAPI `x-machine-scope`와 1:1). client별 허용 scope 상한을 서버 설정에 두고, 유효 권한 = 토큰 scope ∩ 서버 상한. 미등록 오퍼레이션 기본 거부 | IdP 설정 실수(과다 scope 부여)가 곧바로 권한 확대가 되지 않게 함. “라우트 추가 시 자동 허용” 방지 | client 추가 시 ldapium 설정도 갱신 필요 | 상한을 `*`(토큰 scope 그대로)로 두는 모드는 두지 않음 — 필요 시 별도 결정으로 도입 |
-| D4 | 실행 신원은 배포당 하나의 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`). 요청마다 bind 후 종료. 기동 시 `BACKUP_ADMIN_DNS`·프로파일 관리자 DN·`LDAP_SERVICE_ACCOUNT_DN`·**rootdn**과 `ldap.ParseDN` 기반 동등성(문자열 비교 금지)으로 비교해 겹치면 실패. backend에는 rootdn 설정이 없으므로 활성 시 필수 입력 `MACHINE_LDAP_ROOT_DNS`(쉼표 목록; Helm은 차트가 이미 아는 관리자 DN 값에서 파생, T-016)를 신뢰 입력으로 쓴다. 읽기 전용은 **ACL이 강제**(머신 DN 규칙을 `by self write` catch-all 앞에 배치, “머신 LDAP 계정·ACL” 절)하고 실제 쓰기 시도로 증명. 실행 경계: 전역 LDAP 동시성 슬롯을 bind **이전**에 비차단으로 획득, 요청 전체 deadline(dial+bind+search, 기본 10s), 결과 상한, bind 실패 503(root 폴백 없음), 취소·패닉에서 슬롯·연결 반환. 머신 인증·bind 자격에 `SESSION_SECRET`을 쓰지 않는다(list cursor MAC 키는 HTTP 계층의 기존 `cursorKey`를 그대로 공유 — D16, **문구 변경**: 초안은 “`SESSION_SECRET` 무관”이라 cursor 키와 충돌했음) | 최소권한, 세션 저장소 무관, 연결 상태 없음(재연결 로직 부재 문제 회피) | 요청당 bind 지연, client별 신원 분리 불가(v1), rootdn 입력 설정 추가 | 연결 풀 도입, client→DN 매핑 설정 확장, subtree allowlist(Q5) |
+| D4 | 실행 신원은 배포당 하나의 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`). 요청마다 bind 후 종료. 기동 시 `BACKUP_ADMIN_DNS`·프로파일 관리자 DN·`LDAP_SERVICE_ACCOUNT_DN`·**rootdn**과 `ldap.ParseDN` 기반 동등성(문자열 비교 금지)으로 비교해 겹치면 실패. backend에는 rootdn 설정이 없으므로 활성 시 필수 입력 `MACHINE_LDAP_ROOT_DNS`를 신뢰 입력으로 쓴다: **세미콜론(`;`) 구분**(DN 내부에 쉼표가 있어 쉼표 목록은 `cn=admin,dc=example,dc=org`를 쪼개 실제 rootdn 충돌을 놓침 — `BACKUP_ADMIN_DNS`·`APP_PROFILES_ADMIN_DNS`와 같은 직렬화, `splitEntries` 재사용), 각 항목은 `ldap.ParseDN` 가능해야 하고 아니면 기동 실패, 항목 안의 리터럴 `;`는 RFC 4514 hex escape `\3B`로만 쓸 수 있음(분할이 파싱보다 먼저이므로), 빈 항목 무시·공백 제거·중복 제거. 이 이미지의 나머지 rootdn 3종(`cn=monitoring,cn=Monitor`, `cn=admin,cn=accesslog`, `cn=admin,cn=config`)은 **내장 금지 목록**으로 항상 비교하므로 운영자는 메인 DB rootdn(`LDAP_ADMIN_DN`, 기본 `cn=admin,<LDAP_ROOT_DN>`)만 넣으면 된다. Helm은 `ldap.adminDN`(기본 파생)에서 값을 만들고 `ui.machineAuth.extraRootDNs`로 추가할 수 있다(T-016). 읽기 전용은 **ACL이 강제**(머신 DN 규칙을 `by self write` catch-all 앞에 배치, “머신 LDAP 계정·ACL” 절)하고 실제 쓰기 시도로 증명. 실행 경계: 전역 LDAP 동시성 슬롯을 bind **이전**에 비차단으로 획득, 요청 전체 deadline(dial+bind+search, 기본 10s), 결과 상한, bind 실패 503(root 폴백 없음), 취소·패닉에서 슬롯·연결 반환. 머신 인증·bind 자격에 `SESSION_SECRET`을 쓰지 않는다(list cursor MAC 키는 HTTP 계층의 기존 `cursorKey`를 그대로 공유 — D16, **문구 변경**: 초안은 “`SESSION_SECRET` 무관”이라 cursor 키와 충돌했음) | 최소권한, 세션 저장소 무관, 연결 상태 없음(재연결 로직 부재 문제 회피) | 요청당 bind 지연, client별 신원 분리 불가(v1), rootdn 입력 설정 추가 | 연결 풀 도입, client→DN 매핑 설정 확장, subtree allowlist(Q5) |
 | D5 | 검증 정책은 아래 “토큰 검증 정책” 표가 **정본**이다(JOSE·payload `typ`, `aud` 정확 멤버십, `azp`==`client_id`, SA 판별, 시간 규칙, alg allowlist). 요약: `iss` 정확 일치, 허용 client만, SSO 브라우저 client·ID/refresh·같은 client의 사람 발급 토큰 거부, 미검증 claim은 신뢰하지 않음 | audience confusion·ID token 오용·브라우저/사람 토큰의 머신 경로 재사용(confused deputy) 차단. 관측([EVIDENCE §2.3](EVIDENCE.md)): 같은 client의 사람 토큰은 `aud`·`azp`·`scope`가 SA 토큰과 동일 | Keycloak에 audience mapper·전용 client 설정 필요(운영 문서화), 자체 claim 검증 코드 | 허용 알고리즘을 설정화(비대칭 한정), claim 이름 설정화는 IdP 호환 필요 시 별도 결정 |
 | D6 | v1은 GET 읽기 전용. 비-GET은 scope와 무관하게 거부 | 가장 작은 위험 표면, 쓰기는 idempotency·조건부 수정 계약(PLAN P1) 선행 필요 | 쓰기 자동화 불가 | 쓰기는 별도 Change Package(Class D) |
 | D7 | 즉시 폐기 없음. 토큰 최대 수명 `MACHINE_TOKEN_MAX_TTL`(기본 10m, 허용 범위 (0, 1h], `exp-iat` 초과 시 거부), 시계 오차 `MACHINE_CLOCK_SKEW`(기본 30s, 범위 0–60s, 밖이면 기동 실패). **긴급 차단 경로**: ① `MACHINE_ALLOWED_CLIENTS`에서 제거 또는 `MACHINE_AUTH_ENABLED=false`로 배포(v1은 리로드 없음, 재시작/롤아웃만) → ② **모든 replica 교체 완료와 이전 revision pod 0개 확인**, 진행 중 요청 종료 확인(`terminationGracePeriodSeconds` ≥ `MACHINE_REQUEST_TIMEOUT`) → ③ 그 다음 Keycloak client 비활성화·secret 회전. Keycloak client 비활성화·secret 회전만으로는 이미 발급된 JWT가 차단되지 않는다(관측: 비활성화 후에도 사전 발급 토큰 검증 통과, [EVIDENCE §2.7](EVIDENCE.md)). ①을 하지 않은 최대 노출 = 남은 TTL + skew | 요청마다 introspection 호출은 IdP 의존·지연 증가 | 탈취 토큰이 최대 TTL+오차 동안 유효, 차단에 롤아웃이 필요 | introspection 옵션(`aud`에 있는 resource client 필요, 캐시·fail-closed) 후속 |
-| D8 | JWKS: fail closed, **커스텀 `oidc.KeySet`** 사용(go-oidc `RemoteKeySet`은 알려진 kid의 잘못된 서명에도, 최소 간격 없이 재조회하므로 그대로 쓰지 않음). 정책: 캐시 TTL 10m + stale-if-error 1h, 조회 트리거는 (i) 미캐시 kid (ii) TTL 만료뿐 — 알려진 kid의 서명 실패는 조회하지 않음, issuer 단위 최소 재조회 간격 30s(성공·실패 모두 기준)·single-flight, 실패 시 지수 backoff 30s→5m, negative kid 캐시(≤256개, TTL 5m), fetch timeout 5s·응답 1 MiB·키 20개·리다이렉트 금지, `use=sig`(또는 미지정) 키만, alg는 allowlist와 일치하는 키만. 응답 매핑: 정상 조회 후 미지 kid → 401, 조회 장애·backoff 중 미캐시 kid → 503+`Retry-After`(정수 초), 캐시·stale 한도 초과 → 503. 상세 표는 AC-008 | 서명 미검증 허용 금지. 임의/위조 토큰 폭주로 IdP를 때리는 증폭 방지(관측: 변조 토큰마다 조회 발생) | 키 회전 직후 새 kid 토큰이 최대 30s 401, IdP 장애 중 키 회전 직후 토큰 거부, 자체 KeySet 코드 | 캐시 TTL·최소 간격 설정화(범위 검증), 회전 시 overlap 운영 가이드 |
-| D9 | 남용 제한 순서: ① `selectAuth` 문법·길이 검사(암호 연산 없음) → ② **IP 실패 throttle 조회(서명·JWKS 이전)** → ③ 전역 인증 동시성 슬롯(`MACHINE_MAX_AUTH_CONCURRENCY`, 기본 16, 비차단, 초과 시 503+`Retry-After`) → ④ 검증 → ⑤ **검증된 client에만** token bucket(rps/burst)·client 동시 실행 상한 → ⑥ 전역 LDAP 동시성(`MACHINE_MAX_CONCURRENCY` 전역, 기본 8) 슬롯을 bind 이전에 비차단 획득. 모든 상태는 유계: IP limiter 항목 ≤ `MACHINE_IP_LIMITER_MAX`(기본 10000, 초과 시 가장 오래된 항목 제거), client limiter는 설정된 allowlist 크기, unknown client는 상태를 만들지 않음. 대기열 없음(즉시 429/503). 클라이언트 IP는 기존 `c.RealIP()`(`ipExtractorFor`)을 재사용하되 머신 활성 시 `UI_TRUSTED_PROXIES`가 기본 `private`이면 기동 실패(내부망 client가 XFF를 위조 가능) — ingress CIDR 명시 또는 `none` 필요, ingress는 클라이언트가 보낸 XFF를 덮어쓰거나 정리해야 함(운영 문서). 기존 `loginLimiter`는 재사용하지 않고(맵 무한 증가·동시 시도 overshoot를 상속하므로) 상한이 있는 별도 구현을 쓴다. per-process 의미(replica별 한도) | 비싼 작업 앞의 값싼 거부, 상태 고갈 방지 | 다중 replica에서 pod별 한도(전역 아님), 재시작 시 초기화, 상한 도달 시 오래된 IP 한도 소실 | 공유 limiter는 ingress/게이트웨이 계층에 위임 |
+| D8 | JWKS: fail closed, **커스텀 `oidc.KeySet`** 사용(go-oidc `RemoteKeySet`은 알려진 kid의 잘못된 서명에도, 최소 간격 없이 재조회하므로 그대로 쓰지 않음). 모든 캐시·조회·응답 규칙은 아래 “JWKS·discovery 상태 기계”의 **한 개 표가 정본**이다: TTL 10m + `MAX_STALE` 1h, 최소 재조회 간격 30s, backoff 30s→5m, negative cache TTL=30s·≤256개·성공 조회 시 전체 무효화, fetch timeout 5s·응답 1 MiB·키 20개·리다이렉트 금지, `use=sig`(또는 미지정) 키·alg 일치 키만. 응답: 정상 조회 후 미지 kid 401, 조회 장애·backoff 중 미지 kid 또는 키 만료 503+`Retry-After`, 알려진 kid는 stale 한도 안에서 로컬 검증 | 서명 미검증 허용 금지. 임의/위조 토큰 폭주로 IdP를 때리는 증폭 방지(관측: 변조 토큰마다 조회 발생) | 키 회전 직후 새 kid 토큰이 최대 30s 401, IdP 장애 중 키 회전 직후 토큰 거부, stale 키가 IdP 키 제거 후 최대 1h10m 통용, 자체 KeySet 코드 | 캐시 TTL·최소 간격 설정화(범위 검증), 회전 시 overlap 운영 가이드 |
+| D9 | 남용 제한 순서: ① `selectAuth` 문법·길이 검사(암호 연산 없음) → ② **IP 실패 throttle 조회(서명·JWKS 이전)** → ③ 전역 인증 동시성 슬롯(`MACHINE_MAX_AUTH_CONCURRENCY`, 기본 16, 비차단, 초과 시 503+`Retry-After`) → ④ 검증 → ⑤ **검증된 client에만** token bucket(rps/burst)·client 동시 실행 상한 → ⑥ 전역 LDAP 동시성(`MACHINE_MAX_CONCURRENCY` 전역, 기본 8) 슬롯을 bind 이전에 비차단 획득. **IP 실패 throttle 정의**: 키는 `c.RealIP()`(IPv6는 /64 묶음, #270과 동일). 실패 = 이 IP의 요청이 `selectAuth` 문법 거부 또는 토큰 검증에서 401(`token_invalid`/`token_expired`)로 끝난 것(403·429·503은 세지 않음). 한도 `MACHINE_AUTH_FAILURE_LIMIT`=10회 / 슬라이딩 윈도우 `MACHINE_AUTH_FAILURE_WINDOW`=1m(기존 `UI_LOGIN_FAILURE_*` 기본과 동일 의미). 한도 이상이면 이후 요청은 서명·JWKS 이전에 429 `machine_rate_limited`+`Retry-After`=⌈윈도우−가장 오래된 실패의 나이⌉(최소 1). **성공은 카운터를 초기화하지도 올리지도 않는다**(실패가 윈도우 밖으로 밀려날 때만 풀림; 한도 이상인 IP는 유효 토큰이어도 검증 이전에 막힘 — 문서화된 비용). **동시 실패 reservation**: 검사와 동시에 원자적으로 슬롯 1개를 예약해 `실패 수 + 진행 중 예약 < 한도`일 때만 통과시키고, 검증이 성공하면 예약을 반납, 실패하면 실패로 확정한다(기존 `loginLimiter`의 allow/record 분리로 인한 overshoot를 없앰; 한 IP의 동시 진행 인증은 최대 한도−실패 수). 모든 상태는 유계: IP limiter 항목 ≤ `MACHINE_IP_LIMITER_MAX`(기본 10000), 항목 상한·제거·sweep은 **#270의 수정된 limiter 구현을 재사용**(그 이슈가 기존 `loginLimiter`의 무상한 맵을 다룬다; 머신 limiter가 먼저 필요하면 같은 구현을 공유 타입으로 먼저 PR), client limiter는 설정된 allowlist 크기, unknown client는 상태를 만들지 않음. 대기열 없음(즉시 429/503). 클라이언트 IP는 기존 `c.RealIP()`(`ipExtractorFor`)을 재사용하되 머신 활성 시 `UI_TRUSTED_PROXIES`가 기본 `private`이면 기동 실패(내부망 client가 XFF를 위조 가능) — ingress CIDR 명시 또는 `none` 필요, ingress는 클라이언트가 보낸 XFF를 덮어쓰거나 정리해야 함(운영 문서). 현재 `loginLimiter`는 그대로는 쓰지 않는다(맵 무한 증가·동시 시도 overshoot를 상속하므로 #270 수정본·reservation 필요). per-process 의미(replica별 한도) | 비싼 작업 앞의 값싼 거부, 상태 고갈 방지 | 다중 replica에서 pod별 한도(전역 아님), 재시작 시 초기화, 상한 도달 시 오래된 IP 한도 소실 | 공유 limiter는 ingress/게이트웨이 계층에 위임 |
 | D10 | 감사는 구조화 로그 줄(`event=machine_access`) 추가. `Authorization`을 실은 요청은 조기 반환(selectAuth 거부·Origin gate·404·429·503 포함)까지 정확히 한 줄(바깥쪽 미들웨어에서 emit). actor는 **검증 통과 후의 `azp`만**; 그 전 실패는 `actor=unknown`+토큰 fingerprint; 검증 후 scope 거부·limiter·bind 실패는 actor 기록. `reason`은 고정 enum(`bad_header`·`alg`·`typ`·`sig`·`iss`·`aud`·`azp`·`sa_claims`·`time`·`ttl`·`jwks_unavailable`·`scope`·`rate`·… ), verifier 원문 오류 문자열은 응답·로그에 쓰지 않음. `sub` 원문은 fingerprint, request id는 기존 `RequestID` 값. 토큰·`Authorization` 값 미기록 | 기존 `auth` 이벤트 스키마·`docs/audit-event-schema.md`와 같은 계열, 추가 저장소 불필요. 미검증 claim을 actor로 믿으면 로그 위조 | 로그 수집 파이프라인에 의존 | 별도 감사 저장소는 후속 |
 | D11 | 머신 인증은 UI 인증 모드와 독립. 발급자는 `MACHINE_OIDC_ISSUER_URL`, 비어 있고 SSO 활성이면 `SSO_ISSUER_URL` 상속(상속값도 D15의 HTTPS 규칙을 통과해야 함), LDAP 모드는 명시 필요 | “이미 설정된 issuer 재사용” 요구를 SSO 배포에서 충족하면서 LDAP 모드도 허용 | LDAP 모드는 issuer 추가 설정 필요 | LDAP 모드 비지원으로 축소 가능(Q4) |
 | D12 | 기본 꺼짐(`MACHINE_AUTH_ENABLED=false`). 꺼지면 bearer 경로·JWKS 조회·머신 라우팅 로직 비활성 | 기존 계약·롤백 단순화 | — | 플래그 한 줄로 롤백 |
@@ -305,7 +307,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 | `iss` | `MACHINE_OIDC_ISSUER_URL`과 byte 정확 일치 | issuer는 요청 Host 기반 |
 | `aud` | 문자열 또는 문자열 배열. `MACHINE_OIDC_AUDIENCE`가 **정확히 멤버**여야 함. 누락·null·비문자열 원소·`account`만 있는 경우 거부. go-oidc는 `SkipClientIDCheck:true`로 두고 이 규칙을 자체 검사 | 기본 `"account"` 문자열, mapper 후 `["ldapium-api","account"]` |
 | `azp` / `client_id` | **둘 다 필수**, 문자열, `azp == client_id`. 우선순위 개념 없음(한쪽만 있거나 불일치면 거부). 값은 `MACHINE_ALLOWED_CLIENTS`에 있어야 하고 SSO 브라우저 client id면 거부 | SA 토큰은 둘 다 존재, 사람 토큰엔 `client_id` 없음 |
-| 서비스 계정 판별 | `sid` **없음**, `preferred_username == "service-account-" + client_id`, `sub` 비어 있지 않은 문자열. 하나라도 어긋나면 거부(허용 client에서 발급된 사람·token exchange 토큰 차단) | 사람 토큰은 `sid` 있음·`preferred_username`=사용자 |
+| 서비스 계정 판별 | **양성 요건, 모두 충족**: (i) `client_id`가 있는 문자열이고 `== azp`; (ii) `preferred_username == MACHINE_SA_USERNAME_PREFIX(기본 "service-account-") + client_id`; (iii) `sub`가 비어 있지 않은 문자열. 규칙은 AND이며 (ii)만 보는 OR 규칙은 금지. **`sid`는 요건이 아니다**(refresh 사용 SA 토큰이 `sid`를 가짐) — 값은 감사 필드로만 기록. 이 규칙은 사람 토큰·exchange로 만든 토큰(사람·SA 모두)·lightweight 토큰을 `client_id` 부재로 거부한다. 정상 SA 토큰이 (i)–(ii)를 만족하려면 Keycloak client 설정 요건(아래 표 아래 문단)이 필요하다 | 사람 토큰·exchange 토큰은 `client_id` 없음(EVIDENCE §2.3, §2.9 행 4·7·8·11), lightweight는 `client_id`·`preferred_username` 없음(행 2), refresh SA는 `sid` 있음(행 3) |
 | `scope` | 공백 구분 문자열 필수. 유효 scope = 토큰 scope ∩ client 상한(D3). 교집합 밖은 요청 시 403 | Keycloak은 `profile`·`email`을 섞어 발급 |
 | `iat` | 필수·JSON 숫자, `iat ≤ now + skew` | `iat` 존재 |
 | `exp` | 필수·JSON 숫자, `exp > iat`, `exp − iat ≤ MAX_TTL`(기본 10m, 범위 (0,1h]), `now ≤ exp + skew` | 기본 300s |
@@ -314,31 +316,56 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 | 서명 | 커스텀 KeySet(D8)으로 검증, `use=sig`(또는 미지정) 키·alg 일치 키만 | JWKS에 `use=enc` 키 존재 |
 | `jti` | 사용하지 않음(재생 추적 없음, 위협 모델 참조) | — |
 
-null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체하지 않는다. 토큰 발급 측 요구(운영 문서): 머신 client는 service account 전용(standard flow·direct access grant 비활성화), `aud` mapper는 **그 client의 전용 scope**에만 두고 `ldapium-sso`와 공유하는 scope에 두지 않는다(공유 시 SSO 사용자 토큰에 `ldapium-api`가 들어갈 수 있음 — 미실행 가설, e2e 항목), 필요 scope는 client 기본 scope로 부여. `audience` mapper가 없으면 `aud`가 `account`뿐이라 모든 토큰이 거부된다.
+null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체하지 않는다. 토큰 발급 측 요구(운영 문서·라이브 점검 T-028; 모두 [EVIDENCE §2.9](EVIDENCE.md)의 관측에 근거): ① **lightweight access token OFF**(`client.use.lightweight.access.token.enabled`, 기본값; 켜면 `client_id`·`preferred_username`·`aud`가 사라져 모든 토큰이 거부됨) ② `service_account`(`client_id`·`clientHost`·`clientAddress`)와 `profile`(`preferred_username`) default client scope 유지 — 제거하면 모든 토큰 거부 ③ **token exchange 비허용**: client 속성 `standard.token.exchange.enabled`는 false(기본)이고 서버에 legacy `token-exchange` feature를 켜지 않는다(켜면 client 설정 없이도 same-client exchange가 성공함, 행 11; 그렇게 만든 토큰은 `client_id`가 없어 ldapium이 거부하지만 방어는 이중으로 둔다) ④ refresh token 사용은 허용(`sid`가 생겨도 거부 사유가 아님) ⑤ 머신 client는 service account 전용(standard flow·direct access grant 비활성화), `aud` mapper는 **그 client의 전용 scope**에만 두고 `ldapium-sso`와 공유하는 scope에 두지 않는다(공유 시 SSO 사용자 토큰에 `ldapium-api`가 들어갈 수 있음 — 미실행 가설, e2e 항목), 필요 scope는 client 기본 scope로 부여. `audience` mapper가 없으면 `aud`가 `account`뿐이라 모든 토큰이 거부된다.
+
+### JWKS·discovery 상태 기계 (D8 정본)
+
+단일 issuer, 상태는 프로세스 메모리. 파라미터(기본): `TTL`=10m, `MAX_STALE`=1h, `MIN`(최소 재조회 간격)=30s, backoff 30s×2^(실패−1) 상한 5m, negative cache TTL=`MIN`(≤256 kid), fetch timeout 5s. 변수: `lastSuccess`(마지막 JWKS 조회 성공 시각), `lastAttempt`, `nextAttempt`(backoff 이후 허용 시각), `fails`, 키 집합 `K`, negative cache `N`, discovery 상태 `D`∈{none, ok}.
+키 상태는 `age = now − lastSuccess`로 정한다: `NONE`(성공한 적 없음 또는 `D=none`) / `FRESH`(age ≤ TTL) / `STALE`(TTL < age ≤ TTL+MAX_STALE) / `EXPIRED`(그 이상).
+
+**평가 우선순위(위에서 첫 일치 행)**:
+
+| # | 키 상태 | kid | 추가 조건 | 응답 | 동작 |
+|---|---|---|---|---|---|
+| 1 | `NONE` 또는 `EXPIRED` | 무관 | `now < nextAttempt` | 503 `unavailable` + `Retry-After`=⌈nextAttempt−now⌉ | 조회 없음 |
+| 2 | `NONE` 또는 `EXPIRED` | 무관 | `now ≥ nextAttempt` | 조회 성공 시 아래 행 재평가(새 `FRESH`), 실패 시 503 + `Retry-After`=새 backoff | single-flight 조회, 실패: `fails++`, `nextAttempt=now+min(30s·2^(fails−1), 5m)`; `D=none`이면 discovery부터 재시도 |
+| 3 | `FRESH`/`STALE` | `K`에 있음 | — | 서명 검증 결과대로 200/401(**알려진 kid의 서명 실패는 401, 조회 0회**) | `STALE`이고 `now ≥ nextAttempt`이며 `now − lastAttempt ≥ MIN`이면 이 요청과 별개로 1회 백그라운드 조회(요청 결과에 영향 없음) |
+| 4 | `FRESH`/`STALE` | `K`에 없음 | `N`에 있음(항목이 `lastSuccess` 이후 생성, 나이 < `MIN`) | 401 `token_invalid` | 조회 없음 |
+| 5 | `FRESH`/`STALE` | `K`에 없음 | `now − lastSuccess < MIN` | 401 | `N`에 추가, 조회 없음 |
+| 6 | `FRESH`/`STALE` | `K`에 없음 | `now < nextAttempt`(직전 조회 실패 후 backoff 중) | 503 + `Retry-After`=⌈nextAttempt−now⌉ | 조회 없음 — 조회 장애 중 미지 kid는 401이 아님 |
+| 7 | `FRESH`/`STALE` | `K`에 없음 | 그 외 | 조회 성공: kid가 새 `K`에 있으면 서명 검증 결과, 없으면 401 + `N`에 추가. 조회 실패: 503 + `Retry-After` | 성공 시 `fails=0`, **`N` 전체 비움**(새 키 무효화 규칙), 실패 시 backoff 갱신 |
+
+불변식: ① issuer당 JWKS 조회 시도는 `MIN` 간격보다 촘촘하지 않다(성공·실패 모두 `lastAttempt` 기준, 실패는 backoff ≥ 30s). ② 알려진 kid의 잘못된 서명·무작위 kid 폭주는 `MIN`당 최대 1회 조회(행 5·7)로 한정된다. ③ **새 키가 거부되는 최대 시간은 마지막 조회 성공 후 `MIN`(30s)** — negative cache는 `MIN`보다 오래 거부하지 못하며 성공한 조회가 항상 비운다. ④ stale 키로 200을 주는 것은 행 3뿐이며 최대 `TTL+MAX_STALE`(1h10m)까지다; 그 뒤는 `EXPIRED`로 행 1·2(키 compromise 시 이 한계가 IdP 키 제거의 최대 지연이므로 긴급 차단은 D7의 서버측 경로). ⑤ 전 행의 `Retry-After`는 정수 초(1–300).
+
+**discovery**(`NewProvider` 상당): 기동 시 1회(timeout 5s) 시도. 실패는 기동 실패가 아니다(기존 SSO 초기화 `server.go:79-86`은 기동 실패를 유지하며 머신 인증과 독립) — 로그 ERROR 후 `D=none`이 되어 모든 bearer 요청이 행 1·2에 따라 503. `D=none`인 동안 같은 backoff 일정으로 discovery를 재시도하고, 성공하면 즉시 JWKS를 조회해 `D=ok`·`K` 설정. 설정 오류(issuer 형식·https 위반)는 기동 실패. discovery 문서의 `issuer`가 설정값과 다르면: 기동 시점 접촉에서 발견되면 기동 실패(설정 오류), 이후 재시도에서 발견되면 `D=none` 유지 + ERROR 로그(503). 쿠키 로그인·SSO는 어느 경우에도 영향받지 않는다.
 
 ### 인증 경로 분리 규칙 (D2 상세)
 
-`selectAuth`는 순수 함수이며 입력은 `Authorization` 헤더 값 목록, `ldapium_session` 쿠키 존재 여부, 기능 활성 여부, 대상 라우트 종류(보호/공개 auth/기타 공개)다. 출력은 `{cookie, bearer(token), reject(status), none}`.
+`selectAuth`는 순수 함수다. 입력: 기능 활성 여부, 메서드, 경로, `Authorization` 헤더 값 목록, `ldapium_session` 쿠키 존재 여부. 출력: `{ignore, cookie, bearer(token), reject(status)}`.
 
-| # | 입력 | 결과 |
-|---|---|---|
-| 1 | 기능 꺼짐 | `Authorization`은 완전히 무시, 기존 동작(AC-014) |
-| 2 | `Authorization` 헤더가 2줄 이상 | 401 `token_invalid` |
-| 3 | 단일 값에 `,`(comma 결합) 포함 | 401 |
-| 4 | 값이 비어 있음 / `Bearer` 뒤 토큰 없음 / 토큰이 token68 문자(`A-Za-z0-9-._~+/` 뒤 `=*`) 밖 | 401 |
-| 5 | scheme이 `Bearer`가 아님(`Basic` 등) | 401 (쿠키로 폴백하지 않음) |
-| 6 | scheme 대소문자(`bearer`·`BEARER`) | 허용(RFC 9110: scheme은 대소문자 무시) |
-| 7 | scheme과 토큰 사이가 정확히 공백 1개가 아님(탭·2개 이상), 앞뒤 공백 | 401 |
-| 8 | 유효 bearer + 보호 라우트 + 세션 쿠키 없음 | `bearer` |
-| 9 | 유효 bearer + `ldapium_session` 쿠키가 하나라도 있음(빈 값·무효·중복 포함) | 400 (혼용) |
-| 10 | 쿠키만(헤더 없음) — 빈·무효·중복 쿠키 포함 | 기존 쿠키 경로 그대로(`requireSession` 결과) |
-| 11 | `login`·`logout`·`ssoStart`·`ssoCallback`(쿠키를 발행·삭제하는 공개 auth 경로)에 `Authorization` 존재 | 400, 쿠키 미발행·미삭제 |
-| 12 | 그 외 공개 4개(`getMeta`·`getOpenAPI`·`getAuthConfig`·`getLdapHealth`)에 `Authorization` 존재 | 무시(공개 응답 그대로, 감사 줄은 남김) |
-| 13 | bearer로 비-GET 또는 allowlist 밖 라우트 | 403 `scope_denied`(bind·핸들러 이전) |
+**분류**
+- Authorization: `A0` 없음 / `AV` 형식이 유효한 단일 줄 `Bearer <token68>`(scheme 대소문자 무시, scheme과 토큰 사이 정확히 공백 1개, 앞뒤 공백·comma 없음, 토큰은 `A-Za-z0-9-._~+/` 뒤 `=*`, 8 KiB 이하) / `AI` 있으나 형식 무효(빈 값, 토큰 없음, token68 밖 문자, 다른 scheme, 공백 변형, comma 결합) / `AD` 헤더가 2줄 이상(내용 무관).
+- 쿠키: Authorization이 없을 때는 `C0` 없음 / `CV` 유효 세션 / `CI` 있으나 무효(빈 값·만료·중복 포함, 판정은 기존 `requireSession`). Authorization이 있을 때는 이름 존재 여부만 본다: `C0` / `Cp`(값·개수 무관).
+- 경로: `P` 보호 45개 / `PA` 쿠키를 발행·삭제하는 공개 auth 4개(`login`·`logout`·`ssoStart`·`ssoCallback`) / `PO` 나머지 공개 4개(`getMeta`·`getOpenAPI`·`getAuthConfig`·`getLdapHealth`) / `N` 미등록 `/api` 경로·비-`/api` 경로.
 
-미들웨어 순서(바깥→안): RequestID → (bearer 감사 emit 래퍼) → CORS(설정 시) → **Origin gate(변경 없음, 가장 바깥의 상태 변경 보호)** → `selectAuth`/인증 → deny-by-default 가드 → scope 해석 → 핸들러. Origin gate는 `Authorization` 헤더가 있어도 건너뛰지 않는다: foreign/`null`/중복 `Origin` + bearer(또는 쿠키 혼용)는 gate의 기존 응답이 우선하고 핸들러는 실행되지 않는다. CORS는 `Authorization`을 허용 헤더에 추가하지 않으며(현재도 없음) preflight의 `Access-Control-Request-Headers: authorization`은 거부된다(회귀 테스트).
+**우선순위(위에서 첫 일치)**: ① 기능 꺼짐 → `Authorization` 완전 무시, 기존 동작(AC-014). ② Origin gate(기존, 가장 바깥): `/api`의 POST/PUT/PATCH/DELETE이고 `Origin` 헤더가 있으며 단일 same-origin 값이 아니면(foreign·`null`·중복) 403 `origin_mismatch` — `Authorization` 유무와 무관하게 이후 단계 실행 없음. **GET·`Origin` 없는 요청에는 gate가 적용되지 않는다**(`origin_gate.go:37-54`; 외부 Origin의 GET을 거부하는 규칙이 아니다). ③ 경로 분류 `N` → 기존 응답(Authorization 무시). ④ `PO` → Authorization 무시. ⑤ `PA` → 아래 표. ⑥ `P` → 아래 표.
 
-1. 선택은 위 표의 순수 함수 하나가 한다.
+| 경로 | Authorization | 쿠키 | 결과(셀당 정확히 하나) |
+|---|---|---|---|
+| P | A0 | C0 | 기존 401 `unauthenticated` |
+| P | A0 | CV | 기존 경로(`requireSession` → 핸들러) |
+| P | A0 | CI | 기존 401 |
+| P | AI 또는 AD | C0·Cp | 401 `token_invalid`(쿠키 폴백 없음, 혼용 400보다 우선) |
+| P | AV | Cp | 400 `bad_request`(혼용; 토큰 검증 이전, 암호 연산 없음) |
+| P | AV | C0 | bearer 경로: IP throttle(429) → 인증 동시성(503) → 검증(401/503) → deny-by-default 가드(allowlist 밖·비-GET은 403 `scope_denied`) → scope(403) → 핸들러. **검증 실패(401)가 비-GET 거부(403)보다 먼저** |
+| PA | A0 | 무관 | 기존 동작(쿠키 발행·삭제 포함) |
+| PA | AV·AI·AD | 무관 | 400 `bad_request`, 쿠키 미발행·미삭제, 핸들러 미실행 |
+| PO | 무관 | 무관 | 기존 공개 응답(Authorization 무시, 감사 줄은 `reason=ignored_public`) |
+| N | 무관 | 무관 | 기존 404(또는 비-`/api` 정적 응답); `/api`이면 감사 줄 1개 |
+
+미들웨어 순서(바깥→안): RequestID → (Authorization 감사 emit 래퍼) → CORS(설정 시) → Origin gate → `selectAuth`/인증 → deny-by-default 가드 → scope 해석 → 핸들러. CORS는 `Authorization`을 허용 헤더에 추가하지 않으며(현재도 없음, `cors.go`) preflight의 `Access-Control-Request-Headers: authorization`은 거부된다(회귀 테스트).
+
+1. 선택은 위 분류·우선순위의 순수 함수 하나가 한다. 매트릭스의 모든 셀(+기능 꺼짐, +상태 변경 메서드×Origin 조합)이 단위 테스트의 한 행이며, 서로 다른 결과를 내는 두 규칙이 겹치는 셀이 없어야 한다.
 2. bearer 경로는 `requireSession`을 거치지 않고, `session.Store`에 항목을 만들지 않으며 `Set-Cookie`를 내지 않는다. 핸들러 재사용을 위해 요청 수명 한정의 임시 `Session{DN: 머신 bind DN, Bound: 요청별 bind}`를 컨텍스트에 두고 응답 후(취소·패닉 포함) 닫는다. 임시 `Session.ID`는 cursor 바인딩에 쓰지 않는다(D16).
 3. bearer 경로는 GET만, allowlist 안에서만 통과한다(런타임 가드, D13).
 4. 쿠키 경로는 bearer를 해석하지 않는다.
@@ -346,9 +373,33 @@ null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체�
 
 ### 머신 LDAP 계정·ACL (D4/D14 상세, Q2: 운영자 수동 + 문서 LDIF)
 
-- 계정 항목은 `getEntry`/`listUsers` 검색 base 밖(예 `ou=system`)에 둔다.
-- 머신 DN 전용 규칙은 **기존 `to * by self write by users read` catch-all(`image/entrypoint.sh` 렌더링의 `{4}`/`{2}` 규칙, ~:894·:905)보다 앞에** 와야 한다. 순서가 뒤면 `by self write`가 자기 항목 수정을 허용한다. 필수 규칙: ① `userPassword` 등 비밀 속성 `none` ② 허용 base subtree의 `entry`·검색·`read`만 부여 ③ 그 밖 DB·`cn=config`·accesslog `none`(accesslog 읽기는 `audit.read` 배포의 opt-in 조각으로만) ④ `cn=Monitor`는 `server.monitor.read` 배포에서만 `read`. 머신 전용 규칙은 slapd의 first-match 의미 때문에 다른 신원이 영향받지 않도록 `by * break` 구조여야 하며, 이 의미는 T-015에서 라이브로 확인하고 AC-018이 다른 신원 불변을 검증한다.
-- 위 LDIF·ACL 변경은 Class D이며 구현 시 `ldapium-directory-change` 스킬을 먼저 로드한다. 이 패키지는 LDIF를 확정하지 않고 위 규칙과 AC-018 수용 기준을 확정한다.
+기존 규칙이 머신 DN에 어떻게 작용하는지가 출발점이다([EVIDENCE §1](EVIDENCE.md)): 메인 DB의 `{0}to attrs=userPassword,shadowLastChange by self write …`가 이미 템플릿 맨 앞에 있고, 뒤따르는 렌더링에는 `LDAP_ANONYMOUS_READ_BASE` 미설정 시 `{1}…by users read`·`{2}to * by self write by users read`, 설정 시 `{1}`–`{4}`가 있다. 따라서 머신 규칙을 `to *` catch-all 앞에만 두는 것으로는 부족하다 — 선행 `{0}`의 `by self write`(자기 비밀번호 수정)와 선행 `by users read`(허용 subtree 밖의 `entry`/`uid`/`objectClass` 노출)가 먼저 적용된다. **요건: 머신 DN 규칙은 기존 모든 allow 규칙보다 앞(`{0}`부터)에 삽입하고, 두 렌더링 분기 모두에서 검증한다.**
+
+`M`=머신 DN, `B`=허용 subtree(기본 `LDAP_BASE_DN`; `getEntry`/`listTree` 코드 가드 D14(a)의 BASE_DN과 같거나 그 하위). 운영자는 메인 DB(`olcDatabase={1}mdb,cn=config`)에 아래를 `add: olcAccess`로 적용한다(`{n}` 명시 삽입은 기존 규칙을 뒤로 민다).
+
+```
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to attrs=userPassword,shadowLastChange
+  by dn.exact="M" none
+  by * break
+olcAccess: {1}to dn.subtree="B"
+  by dn.exact="M" read
+  by * break
+olcAccess: {2}to *
+  by dn.exact="M" none
+  by * break
+```
+
+- `{0}`: 머신 DN의 비밀 속성(이미지 스키마의 다른 비밀 속성이 있으면 같은 목록에 추가 — T-015가 스키마에서 목록을 도출) 읽기·**자기 쓰기까지** 차단. `M`이 bind할 때의 요청자는 아직 익명이므로 `by * break` 뒤 기존 `by anonymous auth`로 bind는 계속 성공한다(라이브 확인 대상).
+- `{1}`: `B` 아래 항목·속성은 `read`(검색·비교 포함, 쓰기 불가). `{0}`이 먼저라 비밀 속성은 여기서 열리지 않는다.
+- `{2}`: 그 밖 전부(`B` 밖 `entry`/`uid`/`objectClass`, `M` 자기 항목 쓰기 포함)를 `none`. `M`의 결정은 `{0}`–`{2}`에서 끝나므로 기존 `by users read`·`by self write`에 도달하지 않는다.
+- 모든 규칙이 `by * break`로 끝나 **`M`이 아닌 신원은 기존 규칙 그대로** 이어진다(first-match/`break` 의미는 slapd.access(5) 근거이며 T-015·AC-018에서 라이브로 확인한다).
+- 계정 항목은 `B` 밖(예 `ou=system`)에 둔다. 허용 subtree에 있으면 안 되는 비밀·권한 정보를 `M` 항목에 넣지 않는다.
+- 별도 DB(규칙은 서로 독립): `cn=Monitor`·accesslog DB는 기본 ACL이 `by * none`이라 `M`은 기본 거부. `server.monitor.read`를 쓰는 배포만 monitor DB에 `{0}to * by dn.exact="M" read by * break`를, `audit.read`를 쓰는 배포만 accesslog DB에 같은 형태를 opt-in으로 추가한다. `cn=config`는 `M`에게 어떤 규칙도 주지 않는다.
+- `cn=config` ACL은 복제되지 않고 컨테이너 재초기화 시 템플릿에서 다시 렌더링되므로, 모든 노드에 적용하고 재초기화 후 재적용하는 절차를 운영 문서에 두며 AC-018은 새로 초기화한 컨테이너에서 처음부터 수행한다(T-015).
+- 위 LDIF·ACL 변경은 Class D이며 구현 시 `ldapium-directory-change` 스킬을 먼저 로드한다. 이 패키지는 규칙 순서·내용과 AC-018 수용 기준을 확정하고, 속성 목록과 `break` 동작은 T-015가 라이브로 확정한다.
 
 ### 모드별 동작
 
@@ -373,7 +424,9 @@ null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체�
 | `MACHINE_TOKEN_MAX_TTL` / `MACHINE_CLOCK_SKEW` | `10m`(≤1h) / `30s`(0–60s) | D7 |
 | `MACHINE_JWKS_CACHE_TTL` / `_MAX_STALE` / `_MIN_REFRESH` | `10m` / `1h` / `30s` | D8, 범위 검증 |
 | `MACHINE_LDAP_BIND_DN` / `MACHINE_LDAP_BIND_PASSWORD` | 없음(활성 시 필수) | 비밀번호는 기존 Secret 주입 관례(`secret-admin.yaml`, `SSO_CLIENT_SECRET`)를 따르며 차트가 생성·출력하지 않음 |
-| `MACHINE_LDAP_ROOT_DNS` | 없음(활성 시 필수) | rootdn 식별 입력, D4 |
+| `MACHINE_LDAP_ROOT_DNS` | 없음(활성 시 필수) | 메인 DB rootdn 식별 입력, `;` 구분·ParseDN·`\3B` escape(D4). monitor/accesslog/config rootdn 3종은 내장 금지 |
+| `MACHINE_SA_USERNAME_PREFIX` | `service-account-` | D5 SA 판별 (ii) |
+| `MACHINE_AUTH_FAILURE_LIMIT` / `_WINDOW` | `10` / `1m` | D9 IP 실패 throttle |
 | `MACHINE_RATE_LIMIT_RPS` / `_BURST` / `MACHINE_CLIENT_CONCURRENCY` | `5` / `10` / `4` | D9, client별 |
 | `MACHINE_MAX_CONCURRENCY` / `MACHINE_MAX_AUTH_CONCURRENCY` | `8` / `16` | D9, 전역 |
 | `MACHINE_REQUEST_TIMEOUT` / `MACHINE_IP_LIMITER_MAX` | `10s` / `10000` | D4, D9 |
@@ -390,7 +443,7 @@ Helm: `ui.machineAuth.{enabled,issuerURL,audience,allowedClients,tokenMaxTTL,clo
 | 비밀 값 우회 노출 | 공유 bind의 accesslog/Monitor 권한을 `getEntry`·`getMonitor`로 사용(accesslog `reqMod`의 비밀 값) | D14: BASE_DN 한정, `audit.read` 없는 monitor 로그 제거, ACL 기본 거부 | `audit.read` 부여 배포는 감사 메타데이터(이름·DN·필터) 노출을 감수 |
 | JWKS 증폭·DoS | 무작위 kid·위조 서명으로 IdP/서명 검증 비용 유발 | D8 재조회 최소 간격·negative cache, D9 IP throttle이 서명 이전, 전역 인증 동시성 | 분산 IP 공격은 상한(전역 동시성)까지만 방어 |
 | scope 상승 | IdP에서 과다 scope 부여, 토큰 클레임 위조 | 서명 검증(D5), 서버 상한 교집합(D3), denylist·비-GET 거부(D6) | 상한 자체가 과다하면 허용 범위 내 노출(Q5) |
-| confused deputy | 사람 SSO access token·타 서비스 토큰·ID token·**허용 client에서 발급된 사람 토큰**을 머신 경로에 제시 | `aud` 정확 멤버십·`azp`==`client_id`·SA 판별(`sid` 부재, `preferred_username`)·SSO client 제외·payload `typ=Bearer`(D5) | audience mapper를 SSO와 공유 scope에 두는 오설정 — e2e 음성 테스트(T-021), 머신 client의 사람 로그인 흐름 비활성화 운영 요건 |
+| confused deputy | 사람 SSO access token·타 서비스 토큰·ID token·**허용 client에서 발급된 사람 토큰**을 머신 경로에 제시 | `aud` 정확 멤버십·`azp`==`client_id`·SA 판별(`client_id==azp` AND `preferred_username`, `sid` 미사용)·SSO client 제외·payload `typ=Bearer`(D5) | audience mapper를 SSO와 공유 scope에 두는 오설정 — e2e 음성 테스트(T-021), 머신 client의 사람 로그인 흐름 비활성화 운영 요건 |
 | 재생(replay) | 유효 토큰 재전송 | 읽기 전용이라 상태 변경 없음, 짧은 TTL, 감사. `jti` 추적은 안 함 | TTL 내 재생 가능(읽기 한정) |
 | 쿠키 경계 약화 | CSRF로 bearer 경로 악용/쿠키 경로에 bearer 우회 | 헤더 자격 증명은 브라우저 자동 첨부 아님, 혼용 400, `Authorization` 문법 표(폴백 없음), Origin gate 최외곽 유지, 공개 auth 경로 bearer 거부, bearer 요청 쿠키 미발행, CORS 미확장(D2) | 선택 함수 버그 — 단위·e2e 혼용 테스트 |
 | 권한 있는 bind 오용 | 머신 경로가 관리자 bind를 쓰게 되는 설정 실수 | 전용 DN·rootdn 포함 ParseDN 비교 기동 실패(D4), ACL 순서·읽기 전용 쓰기 시도 증명(AC-018), `userPassword` denylist | ACL 오구성은 ldapium이 완전 검증 불가 — 운영 문서·e2e 점검 |
@@ -422,7 +475,7 @@ Helm: `ui.machineAuth.{enabled,issuerURL,audience,allowedClients,tokenMaxTTL,clo
 | `AC-003` | 단위(scope 해석 순수 함수) + **런타임 가드 전수 테스트**(합성 보호 GET을 allowlist 없이 등록 → 403·bind/핸들러 0, 등록된 보호 45개 전수 호출) + e2e | go test; e2e | 허용 8 / 거부 37 표, 합성 라우트 403 |
 | `AC-004` | 단위(거부 37개 전수 테이블) + 계약 테스트 + e2e 샘플 | go test; e2e | 37/37 거부 |
 | `AC-005` | e2e: non-admin 과권한 bind + 시드한 비밀 값(비밀번호 변경이 남긴 accesslog `reqMod` 포함); 응답 전수 값 grep; 단위: 감사 DTO가 `reqMod` 값을 내지 않음, 기존 redaction 회귀 | e2e; go test | 비밀 값 0건, accesslog/config/monitor DN 403 |
-| `AC-006` | 단위(`selectAuth` 13행 표) + e2e 혼용·Origin·CORS preflight | go test; e2e | 표의 상태 코드, `Set-Cookie` 부재 |
+| `AC-006` | 단위(`selectAuth` 매트릭스 전 셀·Origin 조합) + e2e 혼용·Origin·CORS preflight | go test; e2e | 셀별 상태 코드 표, `Set-Cookie` 부재 |
 | `AC-007` | e2e 2회(LDAP 모드/SSO 모드) + 기존 로그인 회귀 | docker compose 2구성 | 두 모드 통과 로그 |
 | `AC-008` | 단위(fake clock + 계수 JWKS 서버: TTL/stale/backoff 표 전 행) + e2e(Keycloak 중지 후 캐시 hit/miss) | go test; e2e | 200/401/503 표, `Retry-After` |
 | `AC-009` | 단위(config 검증: 중복 DN 변형·rootdn·필수값·`UI_TRUSTED_PROXIES`) + e2e(bind 실패, 느린 LDAP/deadline, 연결 끊김 후 슬롯 반환) | go test; e2e | 기동 오류 메시지, 503, 슬롯 수 복귀 |
@@ -434,7 +487,7 @@ Helm: `ui.machineAuth.{enabled,issuerURL,audience,allowedClients,tokenMaxTTL,clo
 | `AC-015` | 단위(DN 정규화·BASE_DN 가드, `MonitorStats` 로그 포함 여부) + e2e(accesslog/config/Monitor DN, 가드 끈 빌드의 ACL 백스톱) | go test; e2e | 403 표, accesslog 검색 미발행 |
 | `AC-016` | 단위(계수 서버, fake clock: 폭주 시 조회 ≤ 1+⌈T/30s⌉, 크기·키 수·리다이렉트·timeout) + e2e(계수 프록시 뒤 실제 Keycloak 회전·폭주) | go test; e2e | 조회 횟수 표 |
 | `AC-017` | 단위(`cursorBinding` 도메인 분리) + e2e(client 2개, 사람 cursor, 토큰 갱신) | go test; e2e | 400/200 표 |
-| `AC-018` | e2e: 머신 DN으로 slapd에 직접 쓰기·자기 수정·비밀 읽기 시도 + 타 신원 불변 | 컨테이너 e2e | 50 거부 로그, 타 신원 회귀 통과 |
+| `AC-018` | e2e: 새로 초기화한 컨테이너 **두 분기**((a) `LDAP_ANONYMOUS_READ_BASE` 미설정 (b) 설정)에서 머신 DN으로 slapd에 직접 자기 비밀번호 변경·쓰기·`B` 밖 검색·비밀 속성 요청 + 타 신원(일반 사용자·관리자·익명) 전후 불변 | 컨테이너 e2e | 분기별 50 거부 로그·빈 결과 표, 타 신원 회귀 통과 |
 | `AC-019` | 롤아웃 드릴(2 replica Helm 또는 compose 2개): 비활성화 후 구토큰 통과 → allowlist 제거 전 replica 교체 후 401 → rollback | e2e/드릴 | 단계별 응답 표, 이전 pod 0개 |
 
 단위/정적(순수 함수·계약)과 라이브 e2e를 구분한다. LDAP wire 코드는 저장소 원칙대로 단위 테스트하지 않고 e2e로만 검증하며 모킹 프레임워크를 도입하지 않는다.
@@ -445,7 +498,7 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 - Rollout sequence: (1) 수용·ADR → (2) 설정·순수 헬퍼·계약 테스트(기능 꺼짐) → (3) 인증기·라우팅 가드 → (4) e2e → (5) 문서·차트 → (6) 스테이징에서 전용 client·ACL로 활성화 → (7) 릴리스 노트. 모든 단계에서 기본 꺼짐.
 - Rollback trigger and procedure: 예기치 않은 401/403 오분류, 권한 노출 의심, JWKS 장애 파급 시 `MACHINE_AUTH_ENABLED=false`(Helm `ui.machineAuth.enabled=false`) 후 재배포하고 **모든 replica 교체 완료·이전 revision pod 0개·진행 중 요청 종료**를 확인한다(롤아웃 중에는 일부 replica가 아직 bearer를 받는다). 코드 롤백 없이 기능 정지. 롤백 후 기존 쿠키 e2e 무변경 통과(AC-019).
 - Data/configuration recovery: 영속 데이터 없음(토큰·키 미저장). 머신 LDAP 계정은 운영자가 삭제/비활성화. **긴급 차단의 1차 수단은 서버측 allowlist 제거/기능 끄기(D7)**이며 Keycloak client 비활성화·secret 회전은 새 토큰 발급을 막는 보조 수단이다(이미 발급된 JWT는 비활성화 후에도 만료까지 유효 — 관측).
-- 병합 단위(수용 후): 모든 단위가 기능 꺼짐 상태로 병합된다 — S1 config·계약 골격·순수 검증기(T-010/011/014/019) → S2 `selectAuth`·가드·감사·limiter(T-012/017/018/041) → S3 실행 신원·경계 가드(T-013/040) → S4 ACL 가이드·Helm(T-015/016) → S5 e2e·CI·release 게이트(T-021/022/024–027) → S6 문서·릴리스 노트(T-030–033). 활성화는 S5 통과 후 스테이징에서만.
+- 병합 단위(수용 후): 모든 단위가 기능 꺼짐 상태로 병합된다 — S1 config·계약 골격·순수 검증기(T-010/011/014/019) → S2 `selectAuth`·가드·감사·limiter(T-012/017/018/041) → S3 실행 신원·경계 가드(T-013/040) → S4 ACL 가이드·Helm(T-015/016) → S5 e2e·CI·release 게이트(T-021/022/024–028) → S6 문서·릴리스 노트(T-030–033). 활성화는 S5 통과 후 스테이징에서만.
 - Compatibility or migration obligations: 기존 경로·쿠키·응답 불변. OpenAPI는 additive(`securitySchemes`, `x-machine-scope`)이며 기존 오퍼레이션의 `cookieAuth`는 유지.
 
 ## Evidence and durable synchronization
@@ -459,16 +512,16 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 
 | Requirement | Acceptance | Task | Evidence |
 |---|---|---|---|
-| `REQ-001` | AC-001, AC-002 | T-010, T-011, T-019, T-020, T-021 | 검증기 단위·e2e 음성 표(양성 대조 포함), [EVIDENCE §2](EVIDENCE.md) |
+| `REQ-001` | AC-001, AC-002 | T-010, T-011, T-019, T-020, T-021, T-028 | 검증기 단위·e2e 음성 표(양성 대조 포함), [EVIDENCE §2](EVIDENCE.md) |
 | `REQ-002` | AC-001, AC-003 | T-012, T-024, T-020, T-021 | scope 해석 테스트, 가드 전수 호출 8/37, 합성 라우트 403 |
 | `REQ-003` | AC-004, AC-013 | T-012, T-014, T-024 | 거부 37개 전수, 계약 테스트 |
 | `REQ-004` | AC-001, AC-009, AC-018 | T-010, T-013, T-015, T-026 | 기동 검증(ParseDN 변형), bind DN 로그, 쓰기 시도 거부 |
 | `REQ-005` | AC-005 | T-040, T-021 | non-admin 과권한 bind e2e, 값 grep |
-| `REQ-006` | AC-006 | T-012, T-020, T-021 | `selectAuth` 13행 표, Origin·CORS·혼용 e2e |
+| `REQ-006` | AC-006 | T-012, T-020, T-021 | `selectAuth` 매트릭스, Origin·CORS·혼용 e2e |
 | `REQ-007` | AC-007 | T-021 | 2모드 e2e |
-| `REQ-008` | AC-008, AC-009 | T-011, T-013, T-019, T-021 | 503 표, 기동 실패 |
+| `REQ-008` | AC-008, AC-009 | T-006, T-011, T-013, T-019, T-021 | 503 표, 기동 실패 |
 | `REQ-009` | AC-001, AC-010 | T-017, T-020, T-021 | 줄 수 표·로그 secret scan |
-| `REQ-010` | AC-011 | T-018, T-020, T-021 | limiter 단위(순서·상한), 429 e2e, 위조 XFF |
+| `REQ-010` | AC-011 | T-018(#270 의존), T-020, T-021 | limiter 단위(경계 표·reservation·상한), 429 e2e, 위조 XFF |
 | `REQ-011` | AC-002, AC-012 | T-011, T-020 | 실제 서명 검증기 경유 경계 표 |
 | `REQ-012` | AC-013 | T-014, T-020 | 계약 테스트 |
 | `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 기존 CI 통과, 차트 렌더, 롤백 드릴 |
@@ -511,7 +564,7 @@ T-005 독립 보안 검토(Codex, 총평 BLOCKER, 7개 영역)와 [EVIDENCE.md](
 
 | # | 지적 (영역, 검토 판정) | 처리 | 위치 · 검증 |
 |---|---|---|---|
-| 1a | 토큰 종류·SA 판별이 검증 불가 문구, 같은 client 사람 토큰 (FIX-IN-PACKAGE) | JOSE `typ`·payload `typ`=`Bearer`·SA 판별(`sid` 부재, `preferred_username`) 고정. 관측: 같은 client 사람 토큰은 `aud`/`azp`/`scope`가 동일 | D5 표, AC-002 · T-011, T-021 |
+| 1a | 토큰 종류·SA 판별이 검증 불가 문구, 같은 client 사람 토큰 (FIX-IN-PACKAGE) | JOSE `typ`·payload `typ`=`Bearer`·SA 판별(`client_id==azp` AND `preferred_username`, `sid` 미사용) 고정. 관측: 같은 client 사람 토큰은 `aud`/`azp`/`scope`가 동일 | D5 표, AC-002 · T-011, T-021 |
 | 1b | `azp`/`client_id` 우선순위·불일치, alg 목록, ID/SSO 토큰 | 둘 다 필수·동일, alg 기본 `RS256,ES256`+`SupportedSigningAlgs`, ID(`typ=ID`)·SSO client 거부 | D5 표, AC-002 · T-011 |
 | 1c | `iat`·`exp<=iat`·MAX_TTL·skew 범위 | 필수 숫자 규칙·`exp>iat`·MAX_TTL (0,1h]·skew 0–60s 기동 검증 | D5 표, AC-012 · T-010, T-011 |
 | 1d | go-oidc nbf 5분 leeway | `SkipExpiryCheck:true`+자체 시간 검증(nbf 검사가 그 블록 안임을 소스·관측으로 확인), 실제 서명 검증기 경유 경계 테스트 | D5 표, AC-012 · T-011 |
@@ -519,8 +572,8 @@ T-005 독립 보안 검토(Codex, 총평 BLOCKER, 7개 영역)와 [EVIDENCE.md](
 | 2a | HTTPS 주장이 현 코드와 다름 (BLOCKER) | 머신 전용 https 검증(D15), 예외 `MACHINE_OIDC_INSECURE_HTTP`+WARN, SSO 검증은 불변 | D15, AC-016 · T-010 |
 | 2b | JWKS 재조회 증폭·TTL·timeout | 커스텀 KeySet, TTL/stale/최소 간격/backoff/negative cache/크기·timeout 수치 | D8, AC-008, AC-016 · T-019, T-025 |
 | 2c | 401 vs 503, `Retry-After` | AC-008 표로 고정 | AC-008 · T-019 |
-| 3a | Authorization 문법·쿠키 혼용 | 13행 `selectAuth` 표, 폴백 금지 | 인증 경로 분리 규칙, AC-006 · T-012 |
-| 3b | 공개 auth 경로·`Set-Cookie` | 4개 쿠키 경로에서 bearer 400, 나머지 공개는 무시, 보호 경로 쿠키 미발행 | 표 11–12행 · T-012 |
+| 3a | Authorization 문법·쿠키 혼용 | `selectAuth` 분류·우선순위 매트릭스(Revision 3에서 재작성), 폴백 금지 | 인증 경로 분리 규칙, AC-006 · T-012 |
+| 3b | 공개 auth 경로·`Set-Cookie` | 4개 쿠키 경로에서 bearer 400, 나머지 공개는 무시, 보호 경로 쿠키 미발행 | 매트릭스 PA·PO 행 · T-012 |
 | 3c | Origin gate 순서·CORS | gate 최외곽 불변, CORS `Authorization` 비허용 회귀 | 미들웨어 순서 · T-012, T-021 |
 | 4a | 53개 vs 48개, 누락 5개 (BLOCKER) | 분류 재작성: 허용 8 / denylist 36 + `getMe`. `jq`로 확인 | 분류 표, EVIDENCE §1 |
 | 4b | `getMonitor` accesslog 노출 (BLOCKER) | `audit.read` 없으면 accesslog 검색 미발행·`recentLogs` 비움 | D14(b), AC-015 · T-040 |
@@ -530,7 +583,7 @@ T-005 독립 보안 검토(Codex, 총평 BLOCKER, 7개 영역)와 [EVIDENCE.md](
 | 5b | ACL 읽기 전용 증명 | 머신 규칙을 `by self write` catch-all 앞에, `by * break` 구조, 쓰기 시도 거부 e2e | 머신 LDAP 계정·ACL, AC-018 · T-015, T-026 |
 | 5c | timeout·동시성·결과 상한·bind 실패 | bind 전 비차단 슬롯, 요청 deadline 10s, 결과 상한, defer 해제, 503 | D4, D9, AC-009 · T-013, T-021 |
 | 5d | cursor 바인딩, SESSION_SECRET 충돌 | issuer+client 안정 바인딩·도메인 분리, D4 문구 변경(키는 무결성 키라 공유) | D16, AC-017 · T-041 |
-| 6a | 남용 제한 순서·상태 상한 | ①–⑥ 순서와 모든 상태 상한, `loginLimiter` 비재사용 | D9, AC-011 · T-018 |
+| 6a | 남용 제한 순서·상태 상한 | ①–⑥ 순서와 모든 상태 상한, `loginLimiter` 현 구현 비재사용(#270 수정본 재사용) | D9, AC-011 · T-018 |
 | 6b | XFF 위조 | `UI_TRUSTED_PROXIES` 기본 `private` 금지, ingress 정리 요구, 위조 XFF 테스트 | D9, AC-011 · T-010, T-018 |
 | 6c | 감사 actor 모순·조기 반환·원문 오류 | 검증 전 `unknown`+fingerprint, 검증 후 actor, 조기 반환 1줄, reason enum | D10, AC-010 · T-017 |
 | 7a | AC-005 | non-admin 과권한 bind, 비밀 **값** 부재, accesslog DN·monitor·groups·cursor 포함, 이름 `userPassword`는 허용 | AC-005 · T-021 |
@@ -549,4 +602,28 @@ T-005 독립 보안 검토(Codex, 총평 BLOCKER, 7개 영역)와 [EVIDENCE.md](
 ### 미결 (구현 단계에서 확정, 수용을 막지 않음)
 
 - `listTree`가 머신 경로에서 자식 수 상한을 넘을 때의 응답(DTO에 additive `truncated`를 둘지 거부할지)은 T-013에서 현 DTO를 확인한 뒤 같은 PR에서 이 문서에 반영한다. 사람 경로 응답은 바꾸지 않는다.
-- 기존 `loginLimiter`의 무상한 맵(사람 로그인 경로)은 머신 범위 밖이며 별도 이슈로 보고한다(T-018).
+- 기존 `loginLimiter`의 무상한 맵(사람 로그인 경로)은 이슈 #270이 다룬다. 머신 limiter는 그 수정본을 재사용하므로 T-018은 #270(또는 같은 구현을 공유 타입으로 먼저 낸 PR)에 의존한다.
+
+## Revision 3 (2026-10-07)
+
+T-005 재검토 2라운드(Codex)는 round 1 지적이 해소되었음(53 = 8 + 45, 허용 8 / 거부 37, REQ 번호 누락 없음)을 확인했고 아래 6건을 남겼다(BLOCKER 2, FIX-IN-PACKAGE 4). 코드 근거(`image/ldifs/01-cn-config.ldif`, `image/entrypoint.sh`, `config/keycloak.go`, `origin_gate.go`, `server.go`, `login_limiter.go`)는 이 개정에서 직접 읽어 [EVIDENCE §1](EVIDENCE.md)에 옮겼고, 서비스 계정 판별은 같은 고정 이미지로 **실제 실험**해 [EVIDENCE §2.9](EVIDENCE.md)에 기록했다. 상태는 `Proposed / awaiting review; Revision 3 re-review pending`이다.
+
+| # | 지적 (판정) | 처리 | 위치 · 검증 |
+|---|---|---|---|
+| R3-1 | ACL 순서가 읽기 전용을 보장하지 않음: `{0}` `by self write`, 선행 `by users read` (BLOCKER) | 머신 규칙을 기존 모든 allow 앞(`{0}`–`{2}`)에 삽입하는 정확한 LDIF(비밀 속성 none → `B` read → 나머지 none, 전부 `by * break`), 두 렌더링 분기 모두 라이브 검증, 모니터·accesslog·config는 별도 DB 규칙·opt-in | 머신 LDAP 계정·ACL, AC-018 · T-015, T-026 |
+| R3-2 | rootdn 목록 쉼표 구분이 DN과 충돌, Monitor rootdn 누락 (BLOCKER) | `;` 구분(기존 목록과 동일 `splitEntries`), `\3B` escape, ParseDN 비교, 내장 금지 rootdn 3종(monitor·accesslog·config)+운영자 입력 메인 rootdn, Helm 파생 | D4, 설정 표, AC-009 · T-010, T-016 |
+| R3-3 | SA 판별의 token exchange·mapper 제거·lightweight·refresh 호환 (FIX-IN-PACKAGE) | 실험: refresh 사용 SA는 `sid`를 가짐 → **`sid` 요건 폐기**; exchange(사람·SA)·lightweight·mapper 제거 토큰은 `client_id`가 없음 → 양성 AND 규칙 `client_id==azp ∧ preferred_username==prefix+client_id`(OR 금지); 필수 Keycloak 설정(lightweight OFF, `service_account`·`profile` scope 유지, exchange 비허용·legacy feature OFF)과 라이브 양·음성 점검 | D5 표, EVIDENCE §2.9, AC-002 · T-011, T-028, T-021 |
+| R3-4 | JWKS 상태표 모순, negative cache 5m vs 30s, discovery 재시도 없음 (FIX-IN-PACKAGE) | 단일 상태 기계 표(키 상태 × kid × 이벤트, 우선순위, stale 최대 1h10m, negative cache TTL 30s·성공 시 무효화, discovery 재시도·복구) | JWKS·discovery 상태 기계, AC-008, D8 · T-019, T-025 |
+| R3-5 | `selectAuth` 우선순위 중복, “둘 다 존재→400”과 불일치, Origin gate 범위 (FIX-IN-PACKAGE) | 분류·우선순위·경로 × Authorization × 쿠키 매트릭스(셀당 한 결과), 문법 오류는 쿠키와 무관하게 401 > 혼용 400, PA는 400, PO·N은 무시, Origin gate는 상태 변경 메서드+`Origin` 존재 시에만(GET 비대상) | 인증 경로 분리 규칙, AC-006, D2 · T-012 |
+| R3-6 | IP throttle 수치·경계 부재 (FIX-IN-PACKAGE) | 한도 10/1m·실패 정의·성공 시 불변·원자적 reservation·경계 표, #270 수정 limiter 재사용 | D9, AC-011 · T-018 |
+
+### 결정 변경 (Revision 3)
+
+- D5: SA 판별에서 `sid` 부재 요건을 **삭제**하고 `client_id==azp`를 필수 AND 조건으로 승격(Revision 2의 “`sid` 부재” 문구는 실험으로 반증됨).
+- D4: `MACHINE_LDAP_ROOT_DNS` 직렬화를 쉼표에서 세미콜론으로 변경, rootdn 3종을 내장 금지로 추가.
+- D8: negative cache TTL 5m → 30s(=`MIN`), 성공 조회 시 전체 무효화; 기동 시 discovery 실패는 기동 실패가 아니라 재시도 상태(`D=none`).
+- D2: “둘 다 존재 → 400”을 “유효 형식 Authorization + 쿠키 이름 존재 → 400”으로 정밀화.
+
+### 미결
+
+- 위 6건 외 새 미결 없음. 유지: `listTree` 머신 경로 초과 응답(T-013/T-006). 유지보수자 판단이 필요한 항목: 머신 활성 시 `UI_TRUSTED_PROXIES=private` 금지와 `MACHINE_LDAP_ROOT_DNS` 필수 입력(둘 다 Revision 2에서 도입, 재확인 요청); 정상 SA 토큰에 `client_id` 등을 요구하므로 lightweight/mapper 제거 client는 의도적으로 거부됨(fail closed)을 수용해야 한다.
