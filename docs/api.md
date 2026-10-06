@@ -97,7 +97,7 @@ done
 | 422 | `validation_failed` | false | `limit` 범위·형식, `q` 길이·인코딩·제어 문자, 기본 키가 아닌 `sort` (메시지에는 필드명만) |
 | 422 | `size_limit_exceeded` | false | 디렉터리 크기 제한(위 설명) |
 | 422 | `scan_limit_exceeded` | false | 후보가 요청당 100000건 초과 — `q`로 좁히기 |
-| 503 | `scan_timeout` | true | 요청 deadline 30초 초과 — `q`로 좁히거나 나중에 재시도 (`Retry-After`) |
+| 503 | `scan_timeout` | true | 요청 deadline 30초 초과 — `q`로 좁히거나 나중에 재시도 (`Retry-After: 30`) |
 | 503 | `unavailable` | true | 같은 세션의 다른 커서 요청이 끝나지 않음 (`Retry-After`) |
 
 커서 목록은 두 단계(키 스캔, `entryUUID` 조회)로 읽으므로 **비-root 신원은 목록에 나올 모든 엔트리의 `entryUUID` 읽기 권한이 필요합니다**(항목 ETag에는 `entryCSN`도 필요). `entryUUID`를 읽을 수 없는 엔트리가 하나라도 있으면 그 엔트리를 조용히 빼지 않고(누락 금지) 목록 전체가 500 `internal`로 끝나며, 서버 로그에 `entryUUID of "<dn>" is not readable by this identity`가 남습니다. ACL을 직접 좁힌 배포는 목록을 읽는 신원에 두 속성의 `read`를 허용해야 합니다.
@@ -147,7 +147,7 @@ done
 | `backup_busy` | 409 | 백업이 실행 중(`retryable: true`). `active_job_id`·`active_kind`가 실행 중인 job을 가리킨다(조회용이며 내 요청의 job이라는 증명은 아니다) |
 | `job_not_found` | 404 | 형식이 맞지 않거나 보관에 없는 백업 job ID |
 | `job_not_cancellable` | 409 | 실행 중이 아닌 job(이미 `cancelled`는 200 멱등) 또는 재기동 뒤 인수한 고아 워커 job |
-| `persistence_unavailable` | 503 | 시작·취소 요청 기록을 쓸 수 없음: 워커를 시작하지 않았고 신호도 보내지 않았다(`retryable: true`, `Retry-After`) |
+| `persistence_unavailable` | 503 | 시작·취소 요청 기록을 쓸 수 없음: 워커를 시작하지 않았고 신호도 보내지 않았다(`retryable: true`, `Retry-After: 30`) |
 | `revision_conflict` | 412 | `If-Match` 불일치 |
 | `partial_failure` | 500 | 사용자 생성 후 비밀번호 단계가 끝나지 않음(`retryable: false`). 오류 본문의 유일한 예외로 `state`와 `dn` 키가 더 있음(아래 "사용자 생성 실패 처리") |
 | `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |

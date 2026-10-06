@@ -111,7 +111,7 @@ func TestEnvelope_RetryAfterOnlyForRetryable429And503(t *testing.T) {
 	}{
 		{429, codeLoginRateLimited, "5"},
 		{503, codeUnavailable, "5"},
-		{503, codeScanTimeout, "5"},
+		{503, codeScanTimeout, "30"},
 		{503, codeKeycloakDisabled, ""},
 		{502, codeUpstreamFailed, ""},
 		{409, codeBackupBusy, ""},

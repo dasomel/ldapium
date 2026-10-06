@@ -941,7 +941,7 @@
             }
           },
           "503": {
-            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline). Both are retryable and set `Retry-After`.",
+            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline). Both are retryable and set `Retry-After` (30 s for `scan_timeout`, 2 s for `unavailable`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1979,7 +1979,7 @@
             }
           },
           "503": {
-            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline). Both are retryable and set `Retry-After`.",
+            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline). Both are retryable and set `Retry-After` (30 s for `scan_timeout`, 2 s for `unavailable`).",
             "content": {
               "application/json": {
                 "schema": {
