@@ -12,6 +12,20 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Optional `Idempotency-Key` on the core user/group writes, entry move and backup
+  start (change package `api-conditional-writes`, part B, #216). A retry of the
+  same request replays the first result (`Idempotent-Replayed: true`) and writes
+  nothing again; a different request under the same key is 422
+  `idempotency_key_reused`, one in flight is 409 `idempotency_key_conflict`, an
+  unknown result is 409 `idempotency_outcome_unknown`. New codes
+  `idempotency_key_conflict`, `idempotency_key_reused`,
+  `idempotency_outcome_unknown`, `idempotency_capacity` and
+  `idempotency_unsupported`. Off by default (`UI_IDEMPOTENCY_ENABLED`, chart
+  `ui.idempotency.enabled`); records are in memory and lost on restart, so the
+  chart enables it for a single replica only. Backup start keys are stored in the
+  durable job record (fingerprint and `key_id` only) and survive restarts; they
+  need `UI_IDEMPOTENCY_KEY_FILE`, which the chart sets when backups are enabled.
+  `GET /api/server-settings` gains `idempotencyEnabled`.
 - Every `/api` error is now one JSON envelope
   `{"error", "message", "code", "requestId", "retryable"}` (change package
   `docs/changes/api-error-envelope`, #218). `error` keeps its text and

@@ -104,6 +104,11 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `partial_failure` | 500 | 사용자 생성 후 비밀번호 단계가 끝나지 않음(`retryable: false`). 오류 본문의 유일한 예외로 `state`와 `dn` 키가 더 있음(아래 "사용자 생성 실패 처리") |
 | `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
 | `validation_failed` | 422 | 형식은 맞지만 검증 실패 |
+| `idempotency_key_conflict` | 409 | 같은 `Idempotency-Key`의 같은 요청이 아직 처리 중(`retryable: true`) |
+| `idempotency_key_reused` | 422 | 같은 키가 다른 요청(method·경로·쿼리·본문)에 쓰임 |
+| `idempotency_outcome_unknown` | 409 | 쓰기 결과를 알 수 없음(연결 유실·패닉) 또는 기록의 지문 키가 더 이상 없음. 리소스를 읽어 확인(`retryable: false`) |
+| `idempotency_capacity` | 503 | 멱등 기록 저장소가 가득 참: 새 키만 거부(`retryable: true`, `Retry-After`) |
+| `idempotency_unsupported` | 422 | 이 서버에서 멱등 기능이 꺼져 있는데 키가 붙음 |
 | `if_match_required` | 428 | `If-Match` 필요 |
 | `login_rate_limited` | 429 | 로그인 실패 제한(`retryable: true`, `Retry-After`) |
 | `internal` | 500 | 예상 못 한 실패(문구 고정, `requestId`로 로그 조회) |
@@ -111,7 +116,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `keycloak_disabled` | 503 | Keycloak 관리자 연결 비활성(`retryable: false`) |
 | `unavailable` | 503 | 일시적 의존성 장애(`retryable: true`, `Retry-After`) |
 
-후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `idempotency_*`)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
+후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `idempotency_*` 외의 이름)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
 
 4xx 문구에는 DN·비밀이 없습니다. LDAP 서버가 돌려준 진단 문구는 해당 코드의 고정 문구(예: `invalid input`)로 대체되고 원문은 `requestId`와 함께 서버 로그에만 남습니다. 단 비밀번호 변경 화면이 사용자에게 보여 주는 알려진 비밀번호 정책 문구(ppolicy·ppm의 고정 문구, 예: `Password fails quality checking policy`)는 DN을 제거한 형태로 그대로 전달됩니다. 목록에 없는 새 문구는 검토 후 추가될 때까지 가려집니다.
 
@@ -178,6 +183,25 @@ curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
 
 **남는 경쟁(해결 불가):** 신원 확인과 비밀번호 설정(RFC 3062 확장 연산) 사이 수 밀리초는 닫을 수 없습니다. go-ldap v3.4.14의 `PasswordModifyRequest`는 제어를 실을 수 없어(`UserIdentity`/`OldPassword`/`NewPassword`만 있음) assertion을 붙일 수 없습니다. 그 사이 다른 관리자가 항목을 교체하면 그 항목에 비밀번호가 설정될 수 있습니다. 같은 바인드 DN의 다른 세션이 만든 수정은 `modifiersName`으로 구별되지 않습니다. 신원 읽기와 보상 삭제에는 컨텍스트·타임아웃이 없어 공유 연결을 그 시간만큼 점유하며(기존 공유 연결 한계, 컨텍스트 인식 검색 래퍼는 #215 D215-13 계획), 이 변경에서 새 메커니즘을 만들지 않았습니다.
 
+## Idempotency-Key
+
+응답이 유실된 뒤 재시도가 두 번 실행되지 않게 하는 선택 헤더입니다(change package `api-conditional-writes`, 결정 D216-6~D216-12).
+적용 대상: `POST`/`PUT`/`PATCH`/`DELETE /api/users`, `POST /api/users/password`, `/api/users/lock`, `/api/users/unlock`, `/api/groups`(POST/PUT/PATCH/DELETE), `/api/groups/members`(POST/DELETE), `POST /api/entry/move`, `POST /api/v1/backups/jobs/{kind}`. 그 밖의 라우트와 `GET`/`HEAD`/`OPTIONS`에서는 무시됩니다.
+
+```bash
+curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json' \
+  -d '{"uid":"jdoe","cn":"J Doe","sn":"Doe"}' http://localhost:8080/api/users
+```
+
+- 키: 한 개, 16-128자, `[A-Za-z0-9._~:-]`(따옴표 문자열 허용). 형식 위반·중복 헤더는 400.
+- 범위: (요청한 신원, 키). 다른 신원이 같은 키를 써도 독립이며 첫 신원의 결과·존재 여부는 드러나지 않습니다.
+- 같은 키 + 같은 요청(method, 경로, 정렬된 쿼리, 정규화한 JSON 본문; `If-Match`는 제외)은 최초의 상태·본문·`Location`을 `Idempotent-Replayed: true`와 함께 재생하고 디렉터리에 다시 쓰지 않습니다. 재생은 `If-Match` 평가보다 먼저입니다. 같은 키 + 다른 요청은 422 `idempotency_key_reused`, 아직 처리 중이면 409 `idempotency_key_conflict`(`retryable`).
+- 저장되는 결과: 2xx, `partial_failure`, `idempotency_outcome_unknown`(연결 유실·패닉으로 결과를 모를 때; 같은 키는 같은 응답을 재생하고 두 번째 실행은 없음). 그 밖의 4xx·5xx는 저장하지 않으므로 같은 키로 다시 시도할 수 있습니다. 요청 중 클라이언트가 끊겨도 쓰기는 끝까지 수행되고 결과가 기록됩니다. 처리 중 기록은 시간으로 풀리지 않습니다.
+- 비밀: 기록에는 요청 본문·비밀번호·`generatedPassword`·요청자 DN이 없습니다(키·요청 지문은 HMAC 값뿐). `POST /api/users/password`는 명시적 `password`일 때만 키를 받고(재생 본문은 `{}`), 빈 `password`+키는 422 `validation_failed`.
+- 저장소: 프로세스 메모리, 기본 TTL 24h(`UI_IDEMPOTENCY_TTL`, 1m-7d), 전체 10,000건·신원당 1,000건. 상한에 도달하면 **새 키만** 503 `idempotency_capacity`(`Retry-After`)로 거부하고 만료되지 않은 기록은 쫓아내지 않습니다.
+- **한계:** 기록은 재시작·복제본 간에 유지되지 않습니다. 재시작 뒤 같은 키로 재시도하면 새 요청으로 실행되어(생성은 409 `already_exists`, 삭제는 404) 오늘의 동작이 됩니다. 중단된 요청이 디렉터리에 남긴 효과는 복구할 수 없습니다. 그래서 `UI_IDEMPOTENCY_ENABLED`(기본 `false`, 차트 `ui.idempotency.enabled`)가 켜져 있을 때만 키를 처리하고, 꺼져 있으면 키가 붙은 쓰기를 조용히 무시하지 않고 422 `idempotency_unsupported`로 거부합니다. 차트는 복제본이 1개일 때만 켭니다. 활성 여부는 `GET /api/server-settings`의 `idempotencyEnabled`.
+- 백업 시작(`POST /api/v1/backups/jobs/{kind}`)은 메모리 스위치와 무관하게 키를 **영속 job 기록**에 둡니다(키 해시·지문·`key_id`만, API로는 나오지 않음). 같은 키 + 같은 kind는 같은 job의 `202` + `Location`을 재생하고(본문의 `status`는 그 시점의 현재 상태, 재시작 뒤에도 유효, 다른 키는 `backup_busy`가 우선), 다른 kind는 422 `idempotency_key_reused`입니다. 영속 지문 키 `UI_IDEMPOTENCY_KEY_FILE`이 없으면 키는 422 `idempotency_unsupported`로 거부됩니다(차트는 백업이 켜지면 백업 PVC의 `.idempotency/key`로 지정). 키 파일은 0600, 디렉터리 0700, 첫 기동에 한 번 생성되며 두 줄(`current`, `previous`)로 회전합니다. 기록의 `key_id`에 맞는 키가 없으면 409 `idempotency_outcome_unknown`입니다. job 기록은 job 보관(최대 200건·90일)을 따릅니다.
+
 ## 제한
 
 | 항목 | 값 |
@@ -194,10 +218,10 @@ curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
 |---|---|
 | 200 / 201 / 202 / 204 | 성공 / 생성됨 / 비동기 시작됨(백업) / 본문 없음 |
 | 303 | SSO 콜백 결과 리다이렉트 (성공 시 `/`, 실패 시 `/login?sso_error=`) |
-| 400 / 415 / 422 | 잘못된 요청(형식이 틀린 `If-Match` 포함) / 잘못된 Content-Type / 검증 실패 |
+| 400 / 415 / 422 | 잘못된 요청(형식이 틀린 `If-Match`·`Idempotency-Key` 포함) / 잘못된 Content-Type / 검증 실패(`idempotency_key_reused`·`idempotency_unsupported` 포함) |
 | 401 / 403 | 세션 없음·만료 / 권한 없음(ACL, 관리자 DN, Origin) |
 | 404 / 405 | 대상 없음·기능 비활성·알 수 없는 경로 / 허용되지 않는 메서드 |
-| 409 / 412 / 428 | 충돌 / revision·ETag 불일치(`revision_conflict`) / If-Match 필요(프로필·백업) |
+| 409 / 412 / 428 | 충돌(`idempotency_key_conflict`·`idempotency_outcome_unknown` 포함) / revision·ETag 불일치(`revision_conflict`) / If-Match 필요(프로필·백업) |
 | 500 | 예상치 못한 실패, 또는 `partial_failure`(사용자 생성 후 비밀번호 단계 미완료) |
 | 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성 |
 
