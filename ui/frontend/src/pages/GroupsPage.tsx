@@ -44,6 +44,8 @@ function TruncatedText({ text, className = '' }: { text: string; className?: str
   )
 }
 
+const MAX_EMPTY_ADVANCES = 20
+
 export function GroupsPage() {
   const { notify } = useToast()
   const { dn } = useAuth()
@@ -59,43 +61,60 @@ export function GroupsPage() {
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined)
   const [pageSize, setPageSize] = useState(10)
+  const [scanCapped, setScanCapped] = useState(false)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Group | null>(null)
   const [membersGroup, setMembersGroup] = useState<Group | null>(null)
   const [deleting, setDeleting] = useState<Group | null>(null)
 
-  const autoAdvanceRef = useRef(0)
+  const requestGenRef = useRef(0)
+  const lastRequestRef = useRef<{
+    cursorParam?: string
+    stackParam: Array<string | undefined>
+    qParam: string
+    sizeParam: number
+  } | null>(null)
   const prevDnRef = useRef(dn)
   const isMountedRef = useRef(false)
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
 
+  // Every request takes a generation; a response (or error) whose generation
+  // is no longer current is dropped, so a slow older request cannot overwrite
+  // newer rows or the cursor stack, and unmount invalidates everything.
   function loadPage(
     cursorParam?: string,
     stackParam: Array<string | undefined> = cursorStack,
     qParam = debouncedQuery,
     sizeParam = pageSize,
+    advances = 0,
   ) {
+    const gen = ++requestGenRef.current
+    lastRequestRef.current = { cursorParam, stackParam, qParam, sizeParam }
     setError(null)
+    if (advances === 0) setScanCapped(false)
     api
       .listGroups({ limit: sizeParam, cursor: cursorParam, q: qParam || undefined })
       .then(({ items, hasMore: more, nextCursor: next }) => {
+        if (gen !== requestGenRef.current) return
         const hasMoreBool = Boolean(more)
         setHasMore(hasMoreBool)
         setNextCursor(next)
         setCursor(cursorParam)
         setCursorStack(stackParam)
 
-        // Empty page with hasMore: true -> auto-advance per CHANGE.md
-        if (items.length === 0 && hasMoreBool && next && autoAdvanceRef.current < 5) {
-          autoAdvanceRef.current += 1
-          loadPage(next, stackParam, qParam, sizeParam)
-          return
+        // Empty page with hasMore: true -> auto-advance per CHANGE.md, bounded
+        if (items.length === 0 && hasMoreBool && next) {
+          if (advances < MAX_EMPTY_ADVANCES) {
+            loadPage(next, stackParam, qParam, sizeParam, advances + 1)
+            return
+          }
+          setScanCapped(true)
         }
-        autoAdvanceRef.current = 0
         setGroups(items)
       })
       .catch((err) => {
+        if (gen !== requestGenRef.current) return
         if (err instanceof ApiError) {
           // 400 cursor_invalid -> restart from first page if cursor was provided or stack was non-empty
           if (err.code === 'cursor_invalid' || (err.status === 400 && err.message.includes('cursor'))) {
@@ -113,6 +132,19 @@ export function GroupsPage() {
         }
       })
   }
+
+  // Retry re-issues the request that failed (same cursor, q, limit).
+  function retryLast() {
+    const r = lastRequestRef.current
+    if (r) loadPage(r.cursorParam, r.stackParam, r.qParam, r.sizeParam)
+  }
+
+  useEffect(
+    () => () => {
+      requestGenRef.current++
+    },
+    [],
+  )
 
   useEffect(() => {
     const trimmed = query.trim()
@@ -144,12 +176,13 @@ export function GroupsPage() {
 
   // Re-read after a conflict or a lost response (keeps the current page).
   async function reread() {
+    const gen = requestGenRef.current
     const { items } = await api.listGroups({
       limit: pageSize,
       cursor,
       q: debouncedQuery || undefined,
     })
-    setGroups(items)
+    if (gen === requestGenRef.current) setGroups(items)
     return items
   }
 
@@ -209,14 +242,21 @@ export function GroupsPage() {
   async function handleDelete() {
     if (!deleting) return
     const target = deleting
-    await write(
-      {
-        fingerprint: ['delete', target.dn],
-        etag: target.etag,
-        onStale: reread,
-      },
-      (w) => api.deleteGroup(target.dn, w),
-    )
+    try {
+      await write(
+        {
+          fingerprint: ['delete', target.dn],
+          etag: target.etag,
+          onStale: reread,
+        },
+        (w) => api.deleteGroup(target.dn, w),
+      )
+    } catch (err) {
+      // ConfirmDialog shows no error text; see UsersPage.handleDelete.
+      if (!(err instanceof ApiError)) throw err
+      notify('error', err.message)
+      return
+    }
     notify('success', t('groups.deletedToast', { cn: target.cn }))
     setDeleting(null)
     loadPage(cursor, cursorStack, debouncedQuery, pageSize)
@@ -291,7 +331,7 @@ export function GroupsPage() {
               hint={error.code === 'size_limit_exceeded' ? t('common.sizeLimitHint') : undefined}
               onRetry={
                 error.code === 'scan_timeout' || error.code === 'unavailable'
-                  ? () => loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+                  ? retryLast
                   : () => loadPage(undefined, [], debouncedQuery, pageSize)
               }
             />
@@ -323,7 +363,7 @@ export function GroupsPage() {
           )}
           {!error && groups && groups.length === 0 && (hasMore || cursorStack.length > 0) && (
             <div className="p-6 text-center text-[13px] text-muted-foreground">
-              {t('common.emptyPageWithMore')}
+              {scanCapped ? t('common.emptyScanCapped') : t('common.emptyPageWithMore')}
             </div>
           )}
           {!error && groups && groups.length > 0 && (

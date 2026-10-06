@@ -242,7 +242,8 @@ test.describe('Cursor pagination and error recovery', () => {
     await expect(rows.first()).toContainText('page1-user')
     await expect(nav.locator('[aria-current="page"]')).toHaveText('1')
     await expect(nav.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled()
-    expect(callCount).toBeGreaterThanOrEqual(3) // initial page 1, corrupted page 2, restarted page 1
+    // initial page 1, corrupted page 2, restarted page 1
+    await expect.poll(() => callCount).toBeGreaterThanOrEqual(3)
   })
 
   test('422 size_limit_exceeded displays narrow-your-search hint', async ({ page }) => {
@@ -265,11 +266,10 @@ test.describe('Cursor pagination and error recovery', () => {
 
   test('503 scan_timeout shows retry action and recovers upon retry', async ({ page }) => {
     await mockSession(page)
-    let tries = 0
+    let failing = true // dev StrictMode sends the first request twice, so gate on state, not a count
 
     await page.route('**/api/users*', (r) => {
-      tries++
-      if (tries === 1) {
+      if (failing) {
         return r.fulfill({
           status: 503,
           headers: { 'Retry-After': '30' },
@@ -291,11 +291,193 @@ test.describe('Cursor pagination and error recovery', () => {
 
     const retryBtn = page.getByRole('button', { name: 'Retry', exact: true })
     await expect(retryBtn).toBeVisible()
+    failing = false
     await retryBtn.click()
 
     const rows = page.locator('tbody tr')
     await expect(rows).toHaveCount(1)
     await expect(rows.first()).toContainText('recovered')
+    await expect(page.getByRole('alert')).toHaveCount(0)
+  })
+
+  const user = (uid: string) => ({ dn: `uid=${uid},dc=example,dc=org`, uid, cn: uid, sn: 'T', locked: false })
+
+  test('a slower older search response does not overwrite the newer rows', async ({ page }) => {
+    await mockSession(page)
+    const qs: string[] = []
+    let releaseOld!: () => void
+    const oldGate = new Promise<void>((res) => (releaseOld = res))
+    let oldSent = false
+
+    await page.route('**/api/users*', async (r) => {
+      const q = new URL(r.request().url()).searchParams.get('q') ?? ''
+      qs.push(q)
+      if (q === 'old') {
+        await oldGate
+        await r.fulfill({ json: { users: [user('old-row')], truncated: false, hasMore: false } })
+        oldSent = true
+        return
+      }
+      await r.fulfill({ json: { users: [user(q ? 'new-row' : 'initial')], truncated: false, hasMore: false } })
+    })
+
+    await page.goto('/users')
+    const filter = page.getByLabel('Filter users…', { exact: true })
+    const rows = page.locator('tbody tr')
+    await expect(rows.first()).toContainText('initial')
+
+    await filter.fill('old')
+    await expect.poll(() => qs.includes('old')).toBe(true)
+    await filter.fill('new')
+    await expect(rows.first()).toContainText('new-row')
+
+    releaseOld()
+    await expect.poll(() => oldSent).toBe(true)
+    await page.waitForTimeout(300) // let the stale response reach the page
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toContainText('new-row')
+  })
+
+  test('a stale error does not re-request with the old query', async ({ page }) => {
+    await mockSession(page)
+    const qs: string[] = []
+    let releaseOld!: () => void
+    const oldGate = new Promise<void>((res) => (releaseOld = res))
+    let oldSent = false
+
+    await page.route('**/api/users*', async (r) => {
+      const q = new URL(r.request().url()).searchParams.get('q') ?? ''
+      qs.push(q)
+      if (q === 'old') {
+        await oldGate
+        await r.fulfill({ status: 400, json: envelope('invalid cursor', 'cursor_invalid') })
+        oldSent = true
+        return
+      }
+      await r.fulfill({ json: { users: [user(q ? 'new-row' : 'initial')], truncated: false, hasMore: false } })
+    })
+
+    await page.goto('/users')
+    const filter = page.getByLabel('Filter users…', { exact: true })
+    await expect(page.locator('tbody tr').first()).toContainText('initial')
+    await filter.fill('old')
+    await expect.poll(() => qs.includes('old')).toBe(true)
+    await filter.fill('new')
+    await expect(page.locator('tbody tr').first()).toContainText('new-row')
+    const before = qs.length
+    releaseOld()
+    await expect.poll(() => oldSent).toBe(true)
+    await page.waitForTimeout(300)
+    expect(qs.length).toBe(before)
+    await expect(page.locator('tbody tr').first()).toContainText('new-row')
+  })
+
+  test('leaving the page during an in-flight request stops auto-advance', async ({ page }) => {
+    await mockSession(page)
+    const cursorCalls: string[] = []
+    let firstPageCalls = 0
+    let releaseUsers!: () => void
+    const gate = new Promise<void>((res) => (releaseUsers = res))
+    let sent = 0
+
+    await page.route('**/api/users*', async (r) => {
+      const cursor = new URL(r.request().url()).searchParams.get('cursor')
+      if (cursor) {
+        cursorCalls.push(cursor)
+        return r.fulfill({ json: { users: [user('late')], truncated: false, hasMore: false } })
+      }
+      firstPageCalls++
+      await gate
+      await r.fulfill({ json: { users: [], truncated: false, hasMore: true, nextCursor: 'cur-x' } })
+      sent++
+    })
+    await page.route('**/api/groups*', (r) => r.fulfill({ json: { groups: [], truncated: false, hasMore: false } }))
+
+    await page.goto('/users')
+    await expect.poll(() => firstPageCalls).toBeGreaterThan(0)
+    await page.getByRole('link', { name: 'Groups' }).first().click()
+    await expect(page).toHaveURL(/\/groups/)
+
+    releaseUsers()
+    await expect.poll(() => sent).toBe(firstPageCalls)
+    await page.waitForTimeout(300)
+    expect(cursorCalls).toEqual([])
+  })
+
+  test('consecutive empty pages stop at the cap and show the narrow/retry hint', async ({ page }) => {
+    await mockSession(page)
+    let advances = 0
+    await page.route('**/api/users*', (r) => {
+      const hasCursor = new URL(r.request().url()).searchParams.has('cursor')
+      if (hasCursor) advances++
+      return r.fulfill({ json: { users: [], truncated: false, hasMore: true, nextCursor: `cur-${advances}` } })
+    })
+
+    await page.goto('/users')
+    await expect(page.getByText(/narrow your search with a more specific filter/i)).toBeVisible()
+    await page.waitForTimeout(300)
+    expect(advances).toBe(20)
+  })
+
+  test('a failed next page is retried with the failed cursor, not the last good one', async ({ page }) => {
+    await mockSession(page)
+    const cursors: Array<string | null> = []
+    let failed = false
+
+    await page.route('**/api/users*', (r) => {
+      const cursor = new URL(r.request().url()).searchParams.get('cursor')
+      cursors.push(cursor)
+      if (!cursor) {
+        return r.fulfill({
+          json: { users: [user('first-page')], truncated: false, hasMore: true, nextCursor: 'cur-2' },
+        })
+      }
+      if (!failed) {
+        failed = true
+        return r.fulfill({
+          status: 503,
+          headers: { 'Retry-After': '30' },
+          json: envelope('scan timeout', 'scan_timeout', true),
+        })
+      }
+      return r.fulfill({ json: { users: [user('second-page')], truncated: false, hasMore: false } })
+    })
+
+    await page.goto('/users')
+    const nav = page.getByRole('navigation', { name: 'User list pagination' })
+    await expect(page.locator('tbody tr').first()).toContainText('first-page')
+    await nav.getByRole('button', { name: 'Next', exact: true }).click()
+    await expect(page.getByText('scan timeout')).toBeVisible()
+    await page.getByRole('button', { name: 'Retry', exact: true }).click()
+
+    await expect(page.locator('tbody tr').first()).toContainText('second-page')
+    await expect(nav.locator('[aria-current="page"]')).toHaveText('2')
+    expect(cursors.filter(Boolean)).toEqual(['cur-2', 'cur-2'])
+  })
+
+  test('a rejected group delete shows the error instead of failing silently', async ({ page }) => {
+    await mockSession(page)
+    const unhandled: string[] = []
+    page.on('pageerror', (e) => unhandled.push(e.message))
+    await page.route('**/api/groups*', (r) => {
+      if (r.request().method() === 'DELETE') {
+        return r.fulfill({ status: 500, json: envelope('delete exploded', 'internal') })
+      }
+      return r.fulfill({
+        json: {
+          groups: [{ dn: 'cn=devs,ou=groups,dc=example,dc=org', cn: 'devs', description: '', members: [] }],
+          truncated: false,
+          hasMore: false,
+        },
+      })
+    })
+
+    await page.goto('/groups')
+    await page.getByRole('button', { name: 'Delete', exact: true }).first().click()
+    await page.locator('#confirm-text').fill('devs')
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'delete exploded' })).toBeVisible()
+    expect(unhandled).toEqual([])
   })
 
   test('renders narrow viewport at 390px without horizontal scroll and captures screenshot', async ({ page }) => {

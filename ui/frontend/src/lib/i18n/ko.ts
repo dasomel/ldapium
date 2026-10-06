@@ -83,6 +83,7 @@ const ko: Record<DictKey, string> = {
   'common.cursorInvalidNotice': '페이지네이션 커서가 더 이상 유효하지 않아 첫 페이지부터 다시 시작합니다.',
   'common.scanTimeoutNotice': '디렉터리 스캔 시간이 초과되었습니다. 다시 시도해 주세요.',
   'common.emptyPageWithMore': '이 페이지에는 항목이 없지만 다음 항목이 더 존재합니다.',
+  'common.emptyScanCapped': '지금까지 확인한 항목에서 일치하는 결과가 없습니다. 다시 시도하거나 더 구체적인 검색어로 범위를 좁혀보세요.',
 
   'settings.title': '서버 설정',
   'settings.readOnlyNote': '이 디렉터리 연결의 읽기 전용 구성 정보입니다.',

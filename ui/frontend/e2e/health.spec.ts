@@ -44,7 +44,17 @@ function userRow(page: import('@playwright/test').Page, uid: string) {
 }
 
 async function filterUsers(page: import('@playwright/test').Page, query: string) {
-  await page.getByPlaceholder('Filter users…').fill(query)
+  const input = page.getByPlaceholder('Filter users…')
+  if ((await input.inputValue()) === query) return
+  // Search is server-side (debounced `q`), so wait for the filtered list to arrive
+  // before callers count rows; otherwise they read the previous, unfiltered page.
+  const filtered = page.waitForResponse((r) => {
+    const url = new URL(r.url())
+    return url.pathname === '/api/users' && (url.searchParams.get('q') ?? '') === query
+  })
+  await input.fill(query)
+  await filtered
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
 async function deleteUserIfPresent(page: import('@playwright/test').Page, uid: string) {
@@ -89,7 +99,8 @@ test('creates, edits, resets the password for, and deletes a user through the UI
   await login(page)
   await page.getByRole('link', { name: 'Users' }).click()
   await expect(page).toHaveURL(/\/users$/)
-  await expect(page.getByText(/^\d+ total$/)).toBeVisible()
+  // The cursor-paged list has no total; the pagination footer renders once rows have loaded.
+  await expect(page.getByRole('navigation', { name: 'User list pagination' })).toBeVisible()
 
   // A failed prior run can leave this dedicated account behind. Remove it
   // through the same confirmation UI before starting, keeping reruns

@@ -10,6 +10,14 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Web UI
+
+- Users and Groups lists page through the cursor API (`limit`/`cursor`/`q`, #253).
+  Search is now server-side and matches only `uid`/`cn`/`mail`/`displayName` (users)
+  and `cn`/`description` (groups); the old client-side search over `department`,
+  `organization` and `organizationalUnit` is gone (accepted in `D215-7`). The list no
+  longer shows a total count.
+
 ### API
 
 - Optional `Idempotency-Key` on the core user/group writes, entry move and backup

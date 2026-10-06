@@ -87,6 +87,7 @@ const en = {
   'common.cursorInvalidNotice': 'Pagination cursor is no longer valid. Restarted from the first page.',
   'common.scanTimeoutNotice': 'Directory scan timed out. Please try again.',
   'common.emptyPageWithMore': 'No entries on this page, but more entries exist.',
+  'common.emptyScanCapped': 'No matches found in the entries scanned so far. Retry, or narrow your search with a more specific filter.',
 
   'settings.title': 'Server settings',
   'settings.readOnlyNote': 'Read-only configuration for this directory connection.',
