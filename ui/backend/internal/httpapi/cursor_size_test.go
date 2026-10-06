@@ -95,3 +95,77 @@ func TestCursorFallbackIsFlaggedAndCanonical(t *testing.T) {
 		t.Errorf("flag without a non-UTF-8 value: err = %v, want errCursorInvalid", err)
 	}
 }
+
+func signedRaw(key []byte, rawJSON string) string {
+	p := base64.RawURLEncoding.EncodeToString([]byte(rawJSON))
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("v2." + p))
+	return "v2." + p + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// json.Marshal HTML-escapes & < > (6 bytes each); the cursor must not.
+func TestCursorDoesNotHTMLEscape(t *testing.T) {
+	key := cursorKey(cursorTestSecret)
+	binding := cursorBinding(key, testSession("s"))
+	pos := domain.PagePosition{Key: strings.Repeat("&", 250), DN: "uid=" + strings.Repeat("<", 900) + ",dc=e"}
+	token, err := encodeCursor(key, "users", "", binding, pos)
+	if err != nil {
+		t.Fatalf("250 '&' + 900 '<' must fit: %v", err)
+	}
+	if strings.Contains(payloadOf(t, token), `\u00`) {
+		t.Error("&, < or > was escaped")
+	}
+	if got, err := decodeCursor(key, token, "users", "", binding); err != nil || got != pos {
+		t.Errorf("round trip = %v", err)
+	}
+}
+
+// Worst cases in post-encoding bytes (docs/api.md): control characters cost 6
+// bytes each in JSON and a non-UTF-8 value goes through base64 twice. These
+// still exceed the cap and are an error, never a malformed token.
+func TestCursorWorstCaseInputsAreAnErrorNotAMalformedToken(t *testing.T) {
+	key := cursorKey(cursorTestSecret)
+	for name, pos := range map[string]domain.PagePosition{
+		"250 control chars in the DN": {Key: "k", DN: strings.Repeat("\x01", 250) + strings.Repeat("a", 600)},
+		"non-UTF-8 key, 1100 byte DN": {Key: string([]byte{0xff, 'a'}), DN: strings.Repeat("d", 1100)},
+	} {
+		token, err := encodeCursor(key, "users", "", "b", pos)
+		if err == nil || token != "" {
+			t.Errorf("%s: token of %d bytes minted (err %v)", name, len(token), err)
+		}
+	}
+	// ...and the documented limits themselves still work.
+	for name, pos := range map[string]domain.PagePosition{
+		"ASCII 1380":        {Key: "k", DN: strings.Repeat("a", 1380)},
+		"control chars 200": {Key: "k", DN: strings.Repeat("\x01", 200)},
+		"non-UTF-8, 900 DN": {Key: string([]byte{0xff}), DN: strings.Repeat("d", 900)},
+	} {
+		if token, err := encodeCursor(key, "users", "", "b", pos); err != nil || len(token) > maxCursorLen {
+			t.Errorf("%s: len %d err %v", name, len(token), err)
+		}
+	}
+}
+
+// Decoding re-encodes the payload and compares it with the exact signed bytes,
+// so only the one canonical spelling is accepted even with a valid MAC.
+func TestCursorDecodeIsByteCanonical(t *testing.T) {
+	key := cursorKey(cursorTestSecret)
+	binding := cursorBinding(key, testSession("s"))
+	head := `{"v":2,"r":"users","k":"a","d":"b","q":"","s":"` + binding + `"}`
+	if _, err := decodeCursor(key, signedRaw(key, head), "users", "", binding); err != nil {
+		t.Fatalf("canonical control rejected: %v", err)
+	}
+	for name, raw := range map[string]string{
+		"duplicate key":      `{"v":2,"r":"users","k":"x","k":"a","d":"b","q":"","s":"` + binding + `"}`,
+		"case-variant key":   `{"V":2,"r":"users","k":"a","d":"b","q":"","s":"` + binding + `"}`,
+		"null value":         `{"v":2,"r":"users","k":null,"d":"b","q":"","s":"` + binding + `"}`,
+		"explicit b false":   `{"v":2,"r":"users","k":"a","d":"b","q":"","s":"` + binding + `","b":false}`,
+		"lone surrogate":     `{"v":2,"r":"users","k":"\ud800","d":"b","q":"","s":"` + binding + `"}`,
+		"escaped plain char": `{"v":2,"r":"users","k":"\u0061","d":"b","q":"","s":"` + binding + `"}`,
+		"extra whitespace":   `{"v":2, "r":"users","k":"a","d":"b","q":"","s":"` + binding + `"}`,
+	} {
+		if _, err := decodeCursor(key, signedRaw(key, raw), "users", "", binding); !errors.Is(err, errCursorInvalid) {
+			t.Errorf("%s: err = %v, want errCursorInvalid", name, err)
+		}
+	}
+}

@@ -162,7 +162,8 @@ func TestCursorRejectsValidMACWithWrongContent(t *testing.T) {
 	key := cursorKey(cursorTestSecret)
 	binding := cursorBinding(key, testSession("sess-1"))
 	good := map[string]any{"v": 2, "r": "users", "k": "a", "d": "b", "q": "", "s": binding}
-	if _, err := decodeCursor(key, signed(key, good), "users", "", binding); err != nil {
+	canon := `{"v":2,"r":"users","k":"a","d":"b","q":"","s":"` + binding + `"}`
+	if _, err := decodeCursor(key, signedRaw(key, canon), "users", "", binding); err != nil {
 		t.Fatalf("control token rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(map[string]any){

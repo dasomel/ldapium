@@ -76,6 +76,19 @@ func cursorMAC(key []byte, signed string) []byte {
 	return mac.Sum(nil)
 }
 
+// canonicalPayload is the one spelling of a payload: JSON without HTML
+// escaping (json.Marshal would turn & < > into 6-byte \u00XX escapes) and
+// without the encoder's trailing newline. decodeCursor re-encodes and compares.
+func canonicalPayload(p cursorPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(p); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
 func encodeCursor(key []byte, resource, q, binding string, pos domain.PagePosition) (string, error) {
 	p := cursorPayload{V: 2, R: resource, K: pos.Key, D: pos.DN, Q: q, S: binding}
 	if !utf8.ValidString(pos.Key) || !utf8.ValidString(pos.DN) {
@@ -83,7 +96,7 @@ func encodeCursor(key []byte, resource, q, binding string, pos domain.PagePositi
 		p.K = base64.StdEncoding.EncodeToString([]byte(pos.Key))
 		p.D = base64.StdEncoding.EncodeToString([]byte(pos.DN))
 	}
-	raw, err := json.Marshal(p)
+	raw, err := canonicalPayload(p)
 	if err != nil {
 		return "", err
 	}
@@ -131,14 +144,18 @@ func decodeCursor(key []byte, token, resource, q, binding string) (domain.PagePo
 	if err := dec.Decode(&p); err != nil || dec.More() {
 		return domain.PagePosition{}, errCursorInvalid
 	}
+	// Only the exact bytes encodeCursor produces are accepted: duplicate or
+	// case-variant keys, null, an explicit "b":false, escapes of plain
+	// characters, lone surrogates, invalid UTF-8 and stray whitespace all
+	// decode into a payload that re-encodes differently.
+	if want, err := canonicalPayload(p); err != nil || !bytes.Equal(want, raw) {
+		return domain.PagePosition{}, errCursorInvalid
+	}
 	if p.V != 2 || p.R != resource || p.Q != q ||
 		subtle.ConstantTimeCompare([]byte(p.S), []byte(binding)) != 1 {
 		return domain.PagePosition{}, errCursorInvalid
 	}
 	if !p.B {
-		if !utf8.ValidString(p.K) || !utf8.ValidString(p.D) {
-			return domain.PagePosition{}, errCursorInvalid
-		}
 		return domain.PagePosition{Key: p.K, DN: p.D}, nil
 	}
 	// The fallback is canonical only when a value really is not UTF-8.
