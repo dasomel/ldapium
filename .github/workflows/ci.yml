@@ -407,6 +407,9 @@ jobs:
       - name: Validate rendered chart manifests
         run: ./scripts/verify-chart-schema.sh
 
+      - name: Assert idempotency chart rendering
+        run: ./scripts/test/test-chart-idempotency-render.sh
+
   licenses:
     name: Third-party licenses
     runs-on: ubuntu-24.04

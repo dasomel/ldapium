@@ -41,6 +41,12 @@ Backup CronJob: {{ include "ldapium.fullname" . }}-backup (schedule: {{ .Values.
   charts/ldapium/README.md's Restore section before you need them.
 {{- end }}
 
+{{- if and .Values.ui.enabled .Values.ui.idempotency.enabled (ne (int .Values.ui.replicaCount) 1) }}
+
+WARNING: ui.idempotency.enabled=true needs ui.replicaCount=1 (idempotency records
+are kept in process memory). With {{ .Values.ui.replicaCount }} replicas Idempotency-Key stays OFF and
+keyed writes are refused with 422 idempotency_unsupported.
+{{- end }}
 {{- if .Values.ui.enabled }}
 
 Management UI:
