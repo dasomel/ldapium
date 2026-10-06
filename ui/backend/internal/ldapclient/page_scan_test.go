@@ -671,3 +671,32 @@ func TestListUsersPageDeadlineInterruptsTheLockWaitOfPhaseTwo(t *testing.T) {
 	}
 	c.mu.Unlock()
 }
+
+// #216: list items carry the entry's ETag so a caller can write conditionally
+// without a second read. Cursor pages must carry the same tag the legacy list
+// and the single read give.
+func TestListPagesCarryTheEntryETag(t *testing.T) {
+	const csn = "20261006021000.123456Z#000000#001#000000"
+	want := domain.ETagFromCSN(csn)
+	if want == "" {
+		t.Fatal("ETagFromCSN returned nothing for a valid entryCSN")
+	}
+	d := &fakeDir{}
+	d.add("uid=a,ou=p,dc=e", map[string][]string{"uid": {"a"}, "cn": {"A"}, "sn": {"A"}, "entryUUID": {"id-a"}, "entryCSN": {csn}})
+	gd := &fakeDir{} // the fake ignores filters, so groups live in their own directory
+	gd.add("cn=g,ou=g,dc=e", map[string][]string{"cn": {"g"}, "entryUUID": {"id-g"}, "member": {"uid=a,ou=p,dc=e"}, "entryCSN": {csn}})
+	c := newFakeClient(d)
+	gc := newFakeClient(gd)
+
+	up, err := c.ListUsersPage(context.Background(), "dc=e", domain.PageQuery{Limit: 10})
+	if err != nil || len(up.Users) != 1 || up.Users[0].ETag != want {
+		t.Errorf("user page ETag = %+v err=%v, want %q", up.Users, err, want)
+	}
+	gp, err := gc.ListGroupsPage(context.Background(), "dc=e", domain.PageQuery{Limit: 10})
+	if err != nil || len(gp.Groups) != 1 || gp.Groups[0].ETag != want {
+		t.Errorf("group page ETag = %+v err=%v, want %q", gp.Groups, err, want)
+	}
+	if g := entryToGroup(gd.entries[0]); g.ETag != want || g.CN != "g" || len(g.Members) != 1 {
+		t.Errorf("entryToGroup = %+v", g)
+	}
+}

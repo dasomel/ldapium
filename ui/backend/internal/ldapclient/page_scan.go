@@ -35,12 +35,7 @@ func (c *client) ListGroupsPage(ctx context.Context, base string, q domain.PageQ
 	}
 	groups := make([]domain.Group, 0, len(emit))
 	for _, e := range emit {
-		groups = append(groups, domain.Group{
-			DN:          e.DN,
-			CN:          e.GetAttributeValue("cn"),
-			Description: e.GetAttributeValue("description"),
-			Members:     e.GetAttributeValues("member"),
-		})
+		groups = append(groups, entryToGroup(e))
 	}
 	return domain.GroupPage{Groups: groups, Next: next, HasMore: more}, nil
 }

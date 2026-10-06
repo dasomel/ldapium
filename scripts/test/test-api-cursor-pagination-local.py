@@ -512,6 +512,21 @@ def scenario_concurrent_changes(admin):
     subprocess.run(['docker', 'exec', '-i', ldap, 'sh', '-c', 'ldapdelete -x -H ldap://127.0.0.1 -D "$0" -w "$LDAP_ADMIN_PASSWORD" "$1"', admin_dn, dn(u)], capture_output=True, text=True)
 
 
+def scenario_etag(admin):
+  """#216: cursor pages carry the same ETag as the legacy list and the single read."""
+  for resource, q, field in (('users', 'user00042', 'users'), ('groups', 'group00042', 'groups')):
+    status, body, _, _, text = admin.page(resource, q=q, limit=5)
+    check(status == 200 and body[field], 'etag probe page failed: %d %s' % (status, text[:200]))
+    item = body[field][0]
+    check(item.get('etag'), '%s cursor page item has no etag: %s' % (resource, item))
+    st, _, headers, _ = admin.call('GET', '/api/entry?' + urllib.parse.urlencode({'dn': item['dn']}))
+    check(st == 200 and headers.get('ETag') == item['etag'], '%s: page etag %s != GET /api/entry ETag %s' % (resource, item['etag'], headers.get('ETag')))
+    st, text, _, _ = admin.call('GET', '/api/%s' % resource)
+    legacy = [i for i in json.loads(text)[field] if i['dn'] == item['dn']]
+    check(legacy and legacy[0].get('etag') == item['etag'], '%s: legacy list etag differs from the page etag' % resource)
+  record('ETag on cursor pages', 'a user and a group: page item etag == GET /api/entry ETag header == legacy list etag')
+
+
 def scenario_latency(admin, reader):
   lines = []
   for who, api in (('admin', admin), ('non-root', reader)):
@@ -657,6 +672,7 @@ def run():
   reader.login(reader_dn, reader_password)
   scenario_unlimited_nonroot(reader)
   scenario_cursor_misuse(url, admin)
+  scenario_etag(admin)
   if not os.environ.get('SKIP_PERF'):
     scenario_latency(admin, reader)
   if not os.environ.get('SKIP_SLOW'):
