@@ -97,19 +97,36 @@ poll() { # command... : retry once a second until it succeeds or the deadline pa
 # shellcheck disable=SC2317,SC2329 # invoked through poll
 ready() { docker exec "$1" ldapwhoami -x -H ldap://localhost >/dev/null 2>&1; }
 wait_ready() { poll ready "$1"; }
-asearch() { local n="$1"; shift; docker exec "$n" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -w "$pw" "$@"; }
+# asearch succeeds only when ldapsearch exited 0 AND printed "result: 0 Success": the empty
+# output of a FAILED search must never read as "no such entry" (the default output keeps that result line).
+asearch() {
+  local n="$1" out rc=0
+  shift
+  out="$(docker exec "$n" ldapsearch -x -H ldap://localhost -D "$admin" -w "$pw" "$@" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  case "$out" in
+    *$'\nresult: 0 Success'*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$out"
+}
 # shellcheck disable=SC2317,SC2329 # invoked through poll
-has_uid() { [ -n "$(asearch "$1" -b "$base" "(uid=$2)" uid 2>/dev/null | sed -n 's/^uid: //p')" ]; }
+has_uid() { local o; o="$(asearch "$1" -b "$base" "(uid=$2)" uid 2>/dev/null)" || return 1; [ -n "$(sed -n 's/^uid: //p' <<<"$o")" ]; }
 # shellcheck disable=SC2317,SC2329 # invoked through poll
-lacks_uid() { ready "$1" && [ -z "$(asearch "$1" -b "$base" "(uid=$2)" uid 2>/dev/null | sed -n 's/^uid: //p')" ]; }
+lacks_uid() { local o; o="$(asearch "$1" -b "$base" "(uid=$2)" uid 2>/dev/null)" || return 1; [ -z "$(sed -n 's/^uid: //p' <<<"$o")" ]; }
 # shellcheck disable=SC2317,SC2329 # invoked through poll
-has_identity() { [ -n "$(asearch "$1" -b "$iddn" -s base cn 2>/dev/null | sed -n 's/^cn: //p')" ]; }
-uids() { asearch "$1" -b "$base" '(objectClass=inetOrgPerson)' uid 2>/dev/null | sed -n 's/^uid: //p' | sort | tr '\n' ' ' || true; }
-hashof() { asearch "$1" -b "$base" "(uid=$2)" userPassword 2>/dev/null | sed -n 's/^userPassword:: *//p;s/^userPassword: *//p' | head -n 1 || true; }
+has_identity() { local o; o="$(asearch "$1" -b "$iddn" -s base cn 2>/dev/null)" || return 1; [ -n "$(sed -n 's/^cn: //p' <<<"$o")" ]; }
+# A failed search prints ERR, which never equals an expected value.
+uids() { local o; o="$(asearch "$1" -b "$base" '(objectClass=inetOrgPerson)' uid 2>/dev/null)" || { echo ERR; return 0; }; sed -n 's/^uid: //p' <<<"$o" | sort | tr '\n' ' '; }
+hashof() { local o; o="$(asearch "$1" -b "$base" "(uid=$2)" userPassword 2>/dev/null)" || { echo ERR; return 0; }; sed -n 's/^userPassword:: *//p;s/^userPassword: *//p' <<<"$o" | head -n 1; }
 # every DN with its entryCSN and password hash as stored on the node: nothing may
 # differ before and after a stalled consumer or a refused start
-fingerprint() { docker exec "$1" slapcat -n 1 -o ldif-wrap=no 2>/dev/null | grep -E '^(dn|entryCSN|userPassword)' | sort | cksum; }
-base_uuid() { asearch "$1" -b "$base" -s base entryUUID 2>/dev/null | sed -n 's/^entryUUID: //p'; }
+fingerprint() { local o; o="$(docker exec "$1" slapcat -n 1 -o ldif-wrap=no 2>/dev/null)" || { echo ERR; return 0; }; [ -n "$o" ] || { echo ERR; return 0; }; grep -E '^(dn|entryCSN|userPassword)' <<<"$o" | sort | cksum; }
+base_uuid() { local o; o="$(asearch "$1" -b "$base" -s base entryUUID 2>/dev/null)" || { echo ERR; return 0; }; sed -n 's/^entryUUID: //p' <<<"$o"; }
+# number of entries in the database of a node; ERR when slapcat failed (an empty database is a successful 0)
+entry_count() { local o; o="$(docker exec "$1" slapcat -n 1 2>&1)" || { echo ERR; return 0; }; grep -c "${2:-^dn:}" <<<"$o" || true; }
+# count of lines of cn=config matching a fixed string; ERR when the dump failed or is empty
+cfg_count() { local o; o="$(cfg_dump "$1")" || { echo ERR; return 0; }; grep -c -F -e "$2" <<<"$o" || true; }
 add_user() { # node uid
   docker exec -i "$1" ldapadd -x -H ldap://localhost -D "$admin" -w "$pw" >/dev/null <<EOF
 dn: uid=$2,${base}
@@ -120,9 +137,9 @@ sn: $2
 userPassword: ${alicepw}
 EOF
 }
-cfg_dump() { docker exec "$1" slapcat -n 0 -o ldif-wrap=no 2>/dev/null; }
-acl_list() { cfg_dump "$1" | sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' | grep '^olcAccess: ' || true; }
-syncrepl_list() { cfg_dump "$1" | grep '^olcSyncrepl' || true; }
+cfg_dump() { local o; o="$(docker exec "$1" slapcat -n 0 -o ldif-wrap=no 2>/dev/null)" || return 1; [ -n "$o" ] || return 1; printf '%s\n' "$o"; }
+acl_list() { local d; d="$(cfg_dump "$1")" || { echo ERR; return 0; }; sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' <<<"$d" | grep '^olcAccess: ' || true; }
+syncrepl_list() { local d; d="$(cfg_dump "$1")" || { echo ERR; return 0; }; grep '^olcSyncrepl' <<<"$d" || true; }
 norm() { grep -v -E '^(entryCSN|entryUUID|modifyTimestamp|createTimestamp|olcRootPW|userPassword)'; }
 nlines() { grep -c . <<<"$1" || true; }
 short() { printf '%s' "${1#ldapium-ridded-}" | sed "s/-${suffix}\$//"; }
@@ -182,9 +199,12 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 -su
 openssl req -newkey rsa:2048 -nodes -keyout k.pem -out s.csr -subj /CN=localhost
 openssl x509 -req -in s.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out c.pem -days 2 -extfile ext.cnf
 printf "%s" "$4" > idpw
+printf "%s" "$5" > adminpw
+mkfifo fifo
 chown -R 999:999 /certs
-chmod 600 k.pem ca.key idpw
-' sh "$n1" "$n2" "$n3" "$idpw" >/dev/null 2>&1
+chmod 600 k.pem ca.key idpw adminpw
+chmod 660 fifo
+' sh "$n1" "$n2" "$n3" "$idpw" "$pw" >/dev/null 2>&1
 
 # ============================================================================
 # Part 1 + 2: cluster and wipe recovery
@@ -245,7 +265,7 @@ EOF
     check "${mode} $(short "$n"): no olcSyncrepl value binds as the admin DN" "0" "$(grep -c "binddn=\"${admin}\"" <<<"$sl" || true)"
     check "${mode} $(short "$n"): tls_reqcert=demand and tls_cacert on every value" "2:2" \
       "$(grep -c 'tls_reqcert=demand' <<<"$sl" || true):$(grep -c 'tls_cacert=/certs/ca.pem' <<<"$sl" || true)"
-    check "${mode} $(short "$n"): the admin password is nowhere in cn=config" "0" "$(cfg_dump "$n" | grep -c -F "$pw" || true)"
+    check "${mode} $(short "$n"): the admin password is nowhere in cn=config" "0" "$(cfg_count "$n" "$pw")"
     nlog="$(docker logs "$n" 2>&1)"
     check "${mode} $(short "$n"): neither password reaches the container log" "0" "$(grep -c -F -e "$pw" -e "$idpw" <<<"$nlog" || true)"
     check "${mode} $(short "$n"): neither password is in /proc/1/environ" "0" \
@@ -322,7 +342,7 @@ description: x
 EOF
   idrc "read cn=config is refused (32)" 32 tlsc ldapsearch -x -LLL -H ldaps://localhost -D "$iddn" -w "$idpw" -b cn=config -s base
   check "the refused writes changed nothing (carol still there, no evil)" "carol,absent" \
-    "$(has_uid "$n1" carol && echo carol),$(has_uid "$n1" evil && echo present || echo absent)"
+    "$(has_uid "$n1" carol && echo carol),$(lacks_uid "$n1" evil && echo absent || echo present-or-search-failed)"
 
   # Wrong identity password on one consumer: it stalls with err=49, nothing is
   # written there or anywhere, the providers' data does not change.
@@ -341,7 +361,7 @@ EOF
   saw_49() { [ $(($(err49 "$n1") + $(err49 "$n2"))) -gt $((e1 + e2)) ]; }
   if poll saw_49; then ok "wrong identity password: the providers log err=49 for the consumer"; else bad "wrong identity password: no err=49 on the providers"; fi
   sleep 5
-  check "wrong identity password: the consumer did not receive the new entry" "no" "$(has_uid "$n3" late && echo yes || echo no)"
+  check "wrong identity password: the consumer did not receive the new entry" "absent" "$(lacks_uid "$n3" late && echo absent || echo present-or-search-failed)"
   check "wrong identity password: n1 unchanged (dn, entryCSN, hashes)" "$fp1" "$(fingerprint "$n1")"
   check "wrong identity password: n2 unchanged (dn, entryCSN, hashes)" "$fp2" "$(fingerprint "$n2")"
   restart_node "$n3" dedicated
@@ -365,7 +385,7 @@ EOF
   saw_49_n2() { [ "$(err49 "$n2")" -gt "$e2" ]; }
   if poll saw_49_n2; then ok "wiped sid 1, wrong password: rejected with err=49"; else bad "wiped sid 1, wrong password: no err=49 on n2"; fi
   sleep 5
-  check "wiped sid 1, wrong password: no base DIT and no entry was created" "0" "$(docker exec "$n1" slapcat -n 1 2>/dev/null | grep -c '^dn:' || true)"
+  check "wiped sid 1, wrong password: no base DIT and no entry was created" "0" "$(entry_count "$n1")"
   check "wiped sid 1, wrong password: n2 data unchanged" "$fp2" "$(fingerprint "$n2")"
   check "wiped sid 1, wrong password: n3 data unchanged" "$fp3" "$(fingerprint "$n3")"
   check "wiped sid 1, wrong password: n2 still has every user" "$all_users" "$(uids "$n2")"
@@ -394,7 +414,7 @@ EOF
   elapsed=$(($(date +%s) - t0))
   if [ "$elapsed" -le 30 ]; then ok "sid 1 wiped with every peer down: ready in ${elapsed}s (no peer wait)"; else bad "sid 1 wiped with every peer down: took ${elapsed}s to be ready"; fi
   sleep 3
-  check "sid 1 wiped with every peer down: nothing was created" "0" "$(docker exec "$n1" slapcat -n 1 2>/dev/null | grep -c '^dn:' || true)"
+  check "sid 1 wiped with every peer down: nothing was created" "0" "$(entry_count "$n1")"
   nlog="$(docker logs "$n1" 2>&1)"
   check "sid 1 wiped with every peer down: bootstrap logs the consumer-only decision, no peer probe, no base DIT load" "1:0:0" \
     "$(grep -c 'not creating the base DIT on any node (serverID 1)' <<<"$nlog" || true):$(grep -c 'checking peers' <<<"$nlog" || true):$(grep -c 'loading base DN' <<<"$nlog" || true)"
@@ -417,6 +437,7 @@ if want refusals; then
   rpw=(-e "LDAP_REPLICATION_PASSWORD=${idpw}")
   tlsok=(-v "${certs}:/certs:ro" -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem -e LDAP_TLS_CA_FILE=/certs/ca.pem)
   tls_noca=(-v "${certs}:/certs:ro" -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem)
+  peermsg="requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries"
   fcount=0
   fresh_refuse() {
     local label="$1" want_msg="$2" out rc w=0 state name listing
@@ -453,7 +474,7 @@ if want refusals; then
   fresh_refuse "TLS not enabled" "requires LDAP_TLS_ENABLED=true" "${peers_ok[@]}" "${rpw[@]}"
   fresh_refuse "TLS enabled without a CA file" "requires LDAP_TLS_CA_FILE" "${peers_ok[@]}" "${rpw[@]}" "${tls_noca[@]}"
   fresh_refuse "unreadable CA file" "requires a readable LDAP_TLS_CA_FILE" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e LDAP_TLS_CA_FILE=/certs/missing.pem
-  fresh_refuse "plaintext peer" "requires every LDAP_REPLICATION_PEERS entry to use ldaps://" "${rpw[@]}" "${tlsok[@]}" \
+  fresh_refuse "plaintext peer" "$peermsg" "${rpw[@]}" "${tlsok[@]}" \
     -e "LDAP_REPLICATION_PEERS=ldaps://${n1}:636,ldap://${n2}:389"
   fresh_refuse "mutual TLS" "cannot be combined with LDAP_TLS_MUTUAL_AUTH" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e LDAP_TLS_MUTUAL_AUTH=true
   fresh_refuse "custom bind DN next to the identity" "binds as the reserved replication identity" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e "LDAP_REPLICATION_BIND_DN=cn=other,${base}"
@@ -461,6 +482,132 @@ if want refusals; then
   fresh_refuse "admin DN equal to the reserved DN" "must not equal the reserved replication identity DN" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e "LDAP_ADMIN_DN=cn=replicator, ${base}"
   fresh_refuse "quoted root DN" "without double quotes or backslashes" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e 'LDAP_ROOT_DN=dc=a"b,dc=org'
   fresh_refuse "serverID 1 gets no special treatment: still needs the password" "requires an explicit LDAP_REPLICATION_PASSWORD" "${peers_ok[@]}" "${tlsok[@]}" -e LDAP_SERVER_ID=1
+
+  # Peer grammar: option text smuggled through a peer value (whitespace separates olcSyncrepl
+  # options, so `ldaps://h provider=ldap://x:389` would win with a SECOND provider and send the
+  # identity's simple bind in clear text). Every variant is refused with the fixed message and
+  # a fresh volume stays empty.
+  tab=$'\t'
+  nlc=$'\n'
+  peer_cases=(
+    "ldaps://${n2}:636 provider=ldap://${n3}:389"
+    "ldaps://${n2}:636${tab}provider=ldap://${n3}:389"
+    "ldaps://${n2}:636${nlc}provider=ldap://${n3}:389"
+    "ldaps://${n2}:636 starttls=no"
+    "ldaps://${n2}:636 bindmethod=simple"
+    "ldaps://${n2}:636 binddn=cn=x"
+    "ldaps://${n2}:636 credentials=x"
+    "ldaps://${n2}:636 tls_reqcert=never"
+    "ldaps://${n1}:636, ldaps://${n2}:636"
+    "ldaps://${n1}:636 ,ldaps://${n2}:636"
+    "ldaps://${n2}:636x"
+    "ldaps://${n2}:636/"
+    "ldaps://${n2}:636/dc=x"
+    "ldaps://${n2}:636?scope=sub"
+    "LDAPS://${n2}:636"
+    "Ldaps://${n2}:636"
+    "ldaps://user@${n2}:636"
+    "ldaps://user:pw@${n2}:636"
+    "ldaps://${n1}:636,,ldaps://${n2}:636"
+    "ldaps://${n1}:636,"
+    ",ldaps://${n1}:636"
+    "ldaps://"
+    "ldaps://:636"
+    "ldaps://${n2}:0"
+    "ldaps://${n2}:65536"
+    "ldaps://${n2}:6x"
+    "ldaps://${n2}:"
+    "ldaps://${n2}:636:1"
+    "ldaps://-${n2}:636"
+    "ldaps://${n2}..x:636"
+    "ldaps://${n2}\"x:636"
+    "ldaps://[::1:636"
+    "ldaps://[::1]x"
+    "ldaps://[::1]:636x"
+    "ldaps://[zz]:636"
+    "ldaps://[]:636"
+    "ldaps://[127.0.0.1]:636"
+    "ldap://${n2}:389"
+    "ldapi:///"
+  )
+  pc=0
+  for pcase in "${peer_cases[@]}"; do
+    pc=$((pc + 1))
+    fresh_refuse "peer grammar #${pc}: $(printf '%s' "$pcase" | tr '\t\n' '~~')" "$peermsg" "${rpw[@]}" "${tlsok[@]}" -e "LDAP_REPLICATION_PEERS=${pcase}"
+  done
+  fresh_refuse "password with a double quote" "double quotes and backslashes are not allowed" "${peers_ok[@]}" "${tlsok[@]}" -e "LDAP_REPLICATION_PASSWORD=${idpw}\"provider=ldap://x:389"
+  fresh_refuse "password with a backslash" "double quotes and backslashes are not allowed" "${peers_ok[@]}" "${tlsok[@]}" -e "LDAP_REPLICATION_PASSWORD=${idpw}\\x"
+  fresh_refuse "retry with option text" "LDAP_REPLICATION_RETRY to contain only" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e 'LDAP_REPLICATION_RETRY=5 +" provider=ldap://x:389 x="'
+  fresh_refuse "interval with option text" "LDAP_REPLICATION_INTERVAL to contain only" "${peers_ok[@]}" "${rpw[@]}" "${tlsok[@]}" -e 'LDAP_REPLICATION_INTERVAL=00:00:00:10 provider=ldap://x:389'
+
+  # The reproduced input, against a plain-LDAP decoy that logs every connection: the node must
+  # be refused and the decoy must never see a connection (no plaintext attempt on 389).
+  decoy="ldapium-ridded-decoy-${suffix}"
+  reg_containers+=("$decoy")
+  reg_vols+=("${decoy}-cfg" "${decoy}-data")
+  docker volume create "${decoy}-cfg" >/dev/null
+  docker volume create "${decoy}-data" >/dev/null
+  docker run -d --name "$decoy" --network "$net" --hostname "$decoy" -v "${decoy}-cfg:/etc/openldap/slapd.d" -v "${decoy}-data:/var/lib/openldap/data" \
+    -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" "$image" >/dev/null
+  wait_ready "$decoy" || bad "decoy never ready"
+  decoy_hits() { docker logs "$decoy" 2>&1 | grep 'ACCEPT from IP=' | grep -c -v -e 'IP=127.0.0.1:' -e 'IP=\[::1\]:' || true; }
+  check "decoy: no remote connection before the test" "0" "$(decoy_hits)"
+  inj="ldaps://${n2}:636 provider=ldap://${decoy}:389"
+  iname="ldapium-ridded-inj-${suffix}"
+  reg_containers+=("$iname")
+  reg_vols+=("${iname}-cfg" "${iname}-data")
+  docker volume create "${iname}-cfg" >/dev/null
+  docker volume create "${iname}-data" >/dev/null
+  docker run -d --name "$iname" --network "$net" --hostname "$iname" -v "${iname}-cfg:/etc/openldap/slapd.d" -v "${iname}-data:/var/lib/openldap/data" \
+    "${common[@]}" "${rpw[@]}" "${tlsok[@]}" -e "LDAP_REPLICATION_PEERS=${inj},ldaps://${n3}:636" "$image" >/dev/null
+  # a vulnerable build keeps running and dials the decoy within its first retry interval
+  w=0
+  while [ "$w" -lt 25 ]; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$iname" 2>/dev/null || echo gone)" = "false" ] && break
+    sleep 1
+    w=$((w + 1))
+  done
+  check "reproduced injection: node refused (not running)" "false" "$(docker inspect -f '{{.State.Running}}' "$iname" 2>/dev/null || echo gone)"
+  injout="$(docker logs "$iname" 2>&1)"
+  if [[ "$injout" == *"$peermsg"* ]]; then ok "reproduced injection: fixed refusal message"; else bad "reproduced injection: message missing; got: $(printf '%s' "$injout" | tail -n 2)"; fi
+  sleep 8
+  check "reproduced injection: the decoy never saw a plaintext connection on 389" "0" "$(decoy_hits)"
+  docker rm -fv "$iname" "$decoy" >/dev/null
+
+  # Valid forms are accepted (no peer is reachable, which only keeps the consumers retrying).
+  vname="ldapium-ridded-valid-${suffix}"
+  reg_containers+=("$vname")
+  reg_vols+=("${vname}-cfg" "${vname}-data")
+  docker volume create "${vname}-cfg" >/dev/null
+  docker volume create "${vname}-data" >/dev/null
+  docker run -d --name "$vname" --network "$net" --hostname "$vname" -v "${vname}-cfg:/etc/openldap/slapd.d" -v "${vname}-data:/var/lib/openldap/data" \
+    "${common[@]}" -e LDAP_SERVER_ID=4 "${rpw[@]}" "${tlsok[@]}" \
+    -e 'LDAP_REPLICATION_PEERS=ldaps://[::1]:636,ldaps://10.0.0.1,ldaps://a-b.example.test:1,ldaps://x:65535,ldaps://self.test' "$image" >/dev/null
+  if wait_ready "$vname"; then ok "valid peer forms (IPv6 literal, IPv4, no port, port 1 and 65535) are accepted"; else bad "valid peer forms refused"; docker logs "$vname" 2>&1 | tail -n 4 >&2; fi
+  vsl="$(syncrepl_list "$vname")"
+  check "valid peer forms: four values, each with exactly one ldaps:// provider" "4:4" \
+    "$(nlines "$vsl"):$(grep -c -E 'provider=ldaps://[^ ]+ ' <<<"$vsl" || true)"
+  docker rm -fv "$vname" >/dev/null
+
+  # The secret file is read ONCE. A FIFO serves the identity password on the first read and an
+  # EMPTY second read: a build that reads again would fall back to (and store) the admin password.
+  fw="ldapium-ridded-fw-${suffix}"
+  reg_containers+=("$fw")
+  fv="ldapium-ridded-fv-${suffix}"
+  reg_vols+=("${fv}-cfg" "${fv}-data")
+  docker volume create "${fv}-cfg" >/dev/null
+  docker volume create "${fv}-data" >/dev/null
+  docker run -d --name "$fw" -v "${certs}:/certs" -e PW="$idpw" --entrypoint sh "$image" -c 'while true; do printf "%s" "$PW" > /certs/fifo; sleep 3; : > /certs/fifo; sleep 3; done' >/dev/null
+  fvn="ldapium-ridded-fvn-${suffix}"
+  reg_containers+=("$fvn")
+  docker run -d --name "$fvn" --network "$net" --hostname "$fvn" -v "${fv}-cfg:/etc/openldap/slapd.d" -v "${fv}-data:/var/lib/openldap/data" \
+    "${common[@]}" "${peers_ok[@]}" "${tlsok[@]}" -e LDAP_REPLICATION_PASSWORD_FILE=/certs/fifo "$image" >/dev/null
+  if wait_ready "$fvn"; then ok "FIFO password file (first read valid, second read empty): node starts"; else bad "FIFO node never ready"; docker logs "$fvn" 2>&1 | tail -n 5 >&2; fi
+  check "FIFO password file: stored credentials are the identity password, the admin password was never substituted" "2:0" \
+    "$(cfg_count "$fvn" "$idpw"):$(cfg_count "$fvn" "$pw")"
+  docker rm -fv "$fvn" "$fw" >/dev/null
+  # a file holding the ADMIN password is refused (single read, validated value)
+  fresh_refuse "password file holding the admin password" "must differ from the admin password" "${peers_ok[@]}" "${tlsok[@]}" -e LDAP_REPLICATION_PASSWORD_FILE=/certs/adminpw
 
   # Existing volume: a clean admin-mode sid 1 volume, then the stored conditions are
   # introduced offline one by one; cn=config and the file listing must not change.
@@ -482,6 +629,7 @@ if want refusals; then
     local label="$1" want_msg="$2" cb ca fb fa out rc w=0 state
     cb="$(rv_cfg)"
     fb="$(rv_files)"
+    if [ -z "$cb" ] || [ -z "$fb" ]; then bad "${label}: could not read cn=config or the file listing before the start"; return; fi
     docker run -d "${rv_args[@]}" "${rv_ded[@]}" "$image" >/dev/null
     while [ "$w" -lt "$timeout_s" ]; do
       state="$(docker inspect -f '{{.State.Running}}' "$rv" 2>/dev/null || echo gone)"
@@ -495,6 +643,7 @@ if want refusals; then
     docker rm -f "$rv" >/dev/null
     ca="$(rv_cfg)"
     fa="$(rv_files)"
+    if [ -z "$ca" ] || [ -z "$fa" ]; then bad "${label}: could not read cn=config or the file listing after the refusal"; return; fi
     if [ "$rc" -eq 0 ]; then bad "${label}: exited 0, expected a refusal"; return; fi
     if [[ "$out" != *"$want_msg"* ]]; then bad "${label}: message missing '${want_msg}'; got: $(printf '%s' "$out" | tail -n 2)"; return; fi
     if [[ "$out" == *"$idpw"* || "$out" == *"$pw"* ]]; then bad "${label}: a password leaked into the output"; return; fi
@@ -616,7 +765,7 @@ EOF
   docker run -d "${rv_args[@]}" "${rv_ded[@]}" "$image" >/dev/null
   if wait_ready "$rv"; then ok "clean volume: dedicated starts"; else bad "clean volume: dedicated never ready"; docker logs "$rv" 2>&1 | tail -n 10 >&2; fi
   check "clean volume: identity rule is the first rule" "olcAccess: ${want_acl}" "$(acl_list "$rv" | head -n 1)"
-  check "clean volume: base DIT of the existing volume is intact" "1" "$(docker exec "$rv" slapcat -n 1 2>/dev/null | grep -c "^dn: ${base}\$" || true)"
+  check "clean volume: the base DIT entry of the existing volume is intact" "1" "$(entry_count "$rv" "^dn: ${base}\$")"
   sl="$(syncrepl_list "$rv")"
   check "clean volume: syncrepl binds as the identity over verified TLS" "1:1" \
     "$(grep -c "binddn=\"${iddn}\"" <<<"$sl" || true):$(grep -c 'tls_reqcert=demand tls_cacert=/certs/ca.pem' <<<"$sl" || true)"

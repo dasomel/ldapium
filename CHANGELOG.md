@@ -230,7 +230,12 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   node, a wrong password or a missing peer leaves the node empty (consumer
   `rc 49` / retry) instead of minting a second tree. It installs the unit-2 ACL
   and shares its refusals. New fixed-message refusals before anything is written:
-  `LDAP_TLS_ENABLED` off, no readable `LDAP_TLS_CA_FILE`, a non-`ldaps://` peer,
+  `LDAP_TLS_ENABLED` off, no readable `LDAP_TLS_CA_FILE`, a peer list that is not exactly
+  `ldaps://<host>[:<port>]` entries (strict grammar: no whitespace, userinfo, path or
+  option text, so a smuggled `provider=ldap://...` cannot send the identity's bind in
+  clear text; re-checked before `olcSyncrepl` is rendered and read back after), a
+  password with a quote or backslash, odd retry/interval text, a `_FILE` secret that is
+  read once (never twice, never substituted by the admin password),
   `LDAP_TLS_MUTUAL_AUTH`, a custom `LDAP_REPLICATION_BIND_DN`; stored-config
   refusals (`olcAuthzRegexp`, `olcAuthIDRewrite`, `olcAuthzPolicy`,
   `olcTLSVerifyClient`, `authzTo`/`authzFrom`, rootDN = reserved DN, existing

@@ -148,6 +148,72 @@ case "$LDAP_REPLICATION_IDENTITY" in
     case "$LDAP_ROOT_DN" in
       *\"*|*\\*) die "LDAP_REPLICATION_IDENTITY=${LDAP_REPLICATION_IDENTITY} requires LDAP_ROOT_DN without double quotes or backslashes" ;;
     esac
+    # dedicated: a peer value is rendered verbatim into an olcSyncrepl value, where
+    # whitespace separates options, so ANY extra text is an injection (`ldaps://h
+    # provider=ldap://x:389` makes the second provider win and sends the identity's
+    # simple bind in clear text). Accept exactly ldaps://<host>[:<port>]: host = DNS
+    # name / IPv4 (letters, digits, dots, hyphens, no empty label) or a bracketed
+    # IPv6 literal, port numeric 1..65535; no whitespace, userinfo, path, query,
+    # quote, `=` or comma. Returns non-zero on anything else.
+    ri_peer_valid() {
+      case "$1" in
+        ldaps://?*) ;;
+        *) return 1 ;;
+      esac
+      _rp=${1#ldaps://}
+      case "$_rp" in
+        \[*)
+          _rh=${_rp%%]*}
+          [ "$_rh" != "$_rp" ] || return 1
+          _rr=${_rp#*]}
+          _rh=${_rh#\[}
+          [ -n "$_rh" ] || return 1
+          case "$_rh" in
+            *[!0-9A-Fa-f:.]*) return 1 ;;
+            *:*) ;;
+            *) return 1 ;;
+          esac
+          ;;
+        *)
+          _rh=${_rp%%:*}
+          if [ "$_rh" = "$_rp" ]; then _rr=""; else _rr=":${_rp#*:}"; fi
+          [ -n "$_rh" ] || return 1
+          case "$_rh" in
+            *[!A-Za-z0-9.-]*|-*|.*|*-|*.|*..*) return 1 ;;
+          esac
+          ;;
+      esac
+      case "$_rr" in
+        "") ;;
+        :*)
+          _rn=${_rr#:}
+          case "$_rn" in
+            ''|*[!0-9]*) return 1 ;;
+          esac
+          [ "${#_rn}" -le 5 ] || return 1
+          [ "$_rn" -ge 1 ] && [ "$_rn" -le 65535 ] || return 1
+          ;;
+        *) return 1 ;;
+      esac
+      return 0
+    }
+    # The whole list is validated: no whitespace anywhere (also not around the
+    # commas), no empty entry, every entry strictly valid. Used again right before
+    # olcSyncrepl is rendered.
+    ri_peers_valid() {
+      case "$1" in
+        ''|*[[:space:]]*|,*|*,|*,,*) return 1 ;;
+      esac
+      _ro=$IFS
+      IFS=','
+      # shellcheck disable=SC2086
+      set -- $1
+      IFS=$_ro
+      for _re in "$@"; do
+        ri_peer_valid "$_re" || return 1
+      done
+      return 0
+    }
     ri_id_norm=$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}") ||
       die "cannot normalize the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>; refusing"
     ri_admin_norm=$(ldap_dn_norm "$LDAP_ADMIN_DN") ||
@@ -163,7 +229,10 @@ case "$LDAP_REPLICATION_IDENTITY" in
     ldap_repl_pw="${LDAP_REPLICATION_PASSWORD:-}"
     if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
       [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
-      ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
+      # The ONE read of the secret file: this value is validated below and is the
+      # only one used afterwards (a FIFO or a file swapped between two reads must not
+      # be able to pass validation with one value and be stored as another).
+      ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE") || die "LDAP_REPLICATION_PASSWORD_FILE could not be read"
     fi
     # D61: mTLS client authentication (olcAuthzRegexp) can map a certificate
     # subject onto the identity DN, so it cannot coexist with the identity.
@@ -185,6 +254,9 @@ case "$LDAP_REPLICATION_IDENTITY" in
       # would overstate the distinct characters.
       [ -z "$(printf '%s' "$ldap_repl_pw" | LC_ALL=C tr -d '!-~')" ] ||
         die "replication password failed the hygiene check: only printable ASCII characters (0x21-0x7E, no spaces) are allowed (a hygiene check, not proof of randomness)"
+      case "$ldap_repl_pw" in
+        *\"*|*\\*) die "replication password failed the hygiene check: double quotes and backslashes are not allowed (the value is rendered quoted into olcSyncrepl)" ;;
+      esac
       [ "${#ldap_repl_pw}" -ge 32 ] ||
         die "replication password failed the hygiene check: length must be at least 32 (a hygiene check, not proof of randomness)"
       [ "$(printf '%s' "$ldap_repl_pw" | fold -w1 | sort -u | wc -l)" -ge 10 ] ||
@@ -214,21 +286,15 @@ case "$LDAP_REPLICATION_IDENTITY" in
       case "$LDAP_TLS_CA_FILE" in
         *[[:space:]\"\\]*) die "LDAP_REPLICATION_IDENTITY=dedicated requires an LDAP_TLS_CA_FILE path without whitespace, quotes or backslashes" ;;
       esac
-      ri_peer_n=0
-      ri_oldifs=$IFS
-      IFS=','
-      for ri_peer in ${LDAP_REPLICATION_PEERS:-}; do
-        ri_peer=$(printf '%s' "$ri_peer" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        [ -n "$ri_peer" ] || continue
-        ri_peer_n=$((ri_peer_n + 1))
-        case "$ri_peer" in
-          ldaps://*) ;;
-          *) IFS=$ri_oldifs; die "LDAP_REPLICATION_IDENTITY=dedicated requires every LDAP_REPLICATION_PEERS entry to use ldaps:// (replication must run over verified TLS)" ;;
-        esac
-      done
-      IFS=$ri_oldifs
-      [ "$ri_peer_n" -gt 0 ] ||
-        die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_PEERS"
+      ri_peers_valid "${LDAP_REPLICATION_PEERS:-}" ||
+        die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries (no whitespace, userinfo, path, options or empty entries; replication must run over verified TLS)"
+      # The other operator text rendered into olcSyncrepl values.
+      case "${LDAP_REPLICATION_RETRY:-5 10 30 +}" in
+        *[!0-9\ +]*) die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_RETRY to contain only digits, spaces and +" ;;
+      esac
+      case "${LDAP_REPLICATION_INTERVAL:-00:00:00:10}" in
+        ''|*[!0-9:]*) die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_INTERVAL to contain only digits and colons" ;;
+      esac
     fi
     ;;
   *) die "LDAP_REPLICATION_IDENTITY must be one of: admin, prepare, dedicated" ;;
@@ -764,11 +830,20 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     LDAP_REPLICATION_BIND_DN="${LDAP_REPLICATION_BIND_DN:-$LDAP_ADMIN_DN}"
   fi
 
-  if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
-    [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
-    LDAP_REPLICATION_PASSWORD=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
+  if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ]; then
+    # The value validated in section 1 (read exactly once). NO fallback of any kind
+    # to the admin password: empty or equal to it is a refusal, never a substitution.
+    [ -n "$ldap_repl_pw" ] || die "LDAP_REPLICATION_IDENTITY=dedicated has no replication password"
+    [ "$ldap_repl_pw" != "$LDAP_ADMIN_PASSWORD" ] || die "LDAP_REPLICATION_IDENTITY=dedicated replication password equals the admin password"
+    LDAP_REPLICATION_PASSWORD="$ldap_repl_pw"
+    ri_peers_valid "$LDAP_REPLICATION_PEERS" || die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries"
+  else
+    if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
+      [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
+      LDAP_REPLICATION_PASSWORD=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
+    fi
+    LDAP_REPLICATION_PASSWORD="${LDAP_REPLICATION_PASSWORD:-$LDAP_ADMIN_PASSWORD}"
   fi
-  LDAP_REPLICATION_PASSWORD="${LDAP_REPLICATION_PASSWORD:-$LDAP_ADMIN_PASSWORD}"
   [ -n "$LDAP_REPLICATION_PASSWORD" ] || die "LDAP_REPLICATION_PASSWORD resolved empty"
   case "$LDAP_REPLICATION_PASSWORD" in
     *"$nl"*) die "the replication password must not contain a newline" ;;
@@ -2173,6 +2248,12 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   # They are therefore two separate LDIF records rather than one modify with
   # a '-' separator, so the ordering is explicit and can't be reshuffled by
   # accident.
+  if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ]; then
+    # Validated again here, on the path that renders olcSyncrepl: the stored value
+    # is replaced wholesale on every start and never trusted.
+    ri_peers_valid "$LDAP_REPLICATION_PEERS" ||
+      die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries"
+  fi
   peer_pos=0
   emitted_count=0
   repl_ldif="${rc_work}/syncrepl.ldif"
@@ -2216,6 +2297,19 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
   } > "$repl_ldif"
   log "applying olcMultiProvider + olcSyncrepl (${emitted_count} peer(s), self excluded)"
   slapmodify -n 0 -F "$CONFIG_DIR" -l "$repl_ldif"
+
+  if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ]; then
+    # Read-back: every stored value has exactly one provider, and it is ldaps://.
+    # Only a count reaches the log, never the values (they hold the credentials).
+    ri_stored=$(slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no) || die "replication identity dedicated: cannot read cn=config back; refusing to start"
+    ri_stored=$(printf '%s\n' "$ri_stored" | grep '^olcSyncrepl: ' || true)
+    ri_nstored=$(printf '%s\n' "$ri_stored" | grep -c . || true)
+    [ "$ri_nstored" -eq "$emitted_count" ] ||
+      die "replication identity dedicated: stored olcSyncrepl value count does not match; refusing to start"
+    ri_badprov=$(printf '%s\n' "$ri_stored" | awk '{ n = gsub(/provider=/, "&"); if (n != 1 || $0 !~ /provider=ldaps:\/\/[^ ]+/) bad++ } END { print bad + 0 }')
+    [ "$ri_badprov" = "0" ] ||
+      die "replication identity dedicated: a stored olcSyncrepl value does not have exactly one ldaps:// provider; refusing to start"
+  fi
 
   rm -rf "$rc_work"
   trap - EXIT HUP INT TERM

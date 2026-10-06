@@ -321,7 +321,7 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 ## Review record
 
 - Accepted scope/requirements: 미수용.
-- Implementation authorized by the maintainer on 2026-10-07 (user instruction), staged per TASKS.md; unit 1 = T-010; unit 2 = T-011 (`prepare`: ACL + olcLimits, no entry creation, replication still as admin); unit 3 = T-012 (`dedicated`: consumer-only on every node, identity bind over verified TLS, fixed-message refusals; not yet a supported mode, acceptance conditions 1-5 remain open)
+- Implementation authorized by the maintainer on 2026-10-07 (user instruction), staged per TASKS.md; unit 1 = T-010; unit 2 = T-011 (`prepare`: ACL + olcLimits, no entry creation, replication still as admin); unit 3 = T-012, revised after Codex review round 1 (strict peer grammar, single secret read, test helpers that cannot mistake a failed search for absence) (`dedicated`: consumer-only on every node, identity bind over verified TLS, fixed-message refusals; not yet a supported mode, acceptance conditions 1-5 remain open)
 - Material changes after acceptance and re-review: 없음.
 - **개정 4 (세 번째 검토 반영) — 접근을 단순화했다.** 지적 → 처리:
 
