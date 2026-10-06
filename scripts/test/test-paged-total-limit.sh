@@ -10,7 +10,9 @@
 #                    (and no state file exists);
 #   <n>|unlimited    converge to exactly one rule `users size.prtotal=<value>`,
 #                    appended after operator rules; the selector `users` is
-#                    reserved while enabled (another shape there => abort);
+#                    reserved while enabled (default-deny: a `users` rule that is
+#                    not exactly the managed shape, or anything the parser is not
+#                    certain about, aborts in set/off);
 #   off              remove exactly `users size.prtotal=<any value>`;
 #   any failure to apply/verify/restore for set/off => startup aborts.
 #
@@ -145,7 +147,8 @@ limits_ldif() { # operation lines on stdin: modify olcLimits on the main databas
     docker exec -i "$c" ldapmodify -x -H "$ldapi" -D "cn=admin,cn=config" -w "$admin_pw" >/dev/null
 }
 clear_limits() { printf 'delete: olcLimits\n' | limits_ldif 2>/dev/null || true; }
-add_limit() { printf 'add: olcLimits\nolcLimits: %s\n' "$1" | limits_ldif; }
+# values go in base64 so control characters (VT, FF, CR, NL), tabs and 64 KiB rules arrive byte for byte
+add_limit() { printf 'add: olcLimits\nolcLimits:: %s\n' "$(printf '%s' "$1" | base64 | tr -d '\n')" | limits_ldif; }
 log_has() { [[ "$(docker logs "$c" 2>&1)" == *"$1"* ]]; }
 no_state_file() { # the stateless contract: nothing is recorded anywhere
   if docker exec "$c" test -e /etc/openldap/slapd.d/.paged-total-limit; then echo present; else echo absent; fi
@@ -181,6 +184,11 @@ offline_limits() {
   docker run --rm --user root --name "l3-ptl-off-${suffix}" --entrypoint slapcat \
     -v "${vol}-config:/etc/openldap/slapd.d" -v "${vol}-data:/var/lib/openldap/data" "$real_image" \
     -n 0 -F /etc/openldap/slapd.d -o ldif-wrap=no 2>/dev/null | sed -n 's/^olcLimits: {[0-9]*}//p' | sort | tr '\n' '|'
+}
+count_all_offline() {
+  docker run --rm --user root --name "l3-ptl-off-${suffix}" --entrypoint slapcat \
+    -v "${vol}-config:/etc/openldap/slapd.d" -v "${vol}-data:/var/lib/openldap/data" "$real_image" \
+    -n 0 -F /etc/openldap/slapd.d -o ldif-wrap=no 2>/dev/null | grep -c '^olcLimits::\? ' || true
 }
 # make the main database's config file unwritable / writable again
 file_mode="" dir_mode=""
@@ -296,16 +304,15 @@ expect_eq "off: non-root is back to the default cap" "$(paged "$c" "$user_dn" "$
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
 expect_eq "off again: a no-op" "$(olc_limits "$c")" ""
 
-# --- reserved selector: a differently shaped `users` rule. -------------------
+# --- reserved selector: a differently shaped `users` rule (default-deny). ---------
 add_limit '{0}users size.soft=50 size.prtotal=700'
-start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
-expect_eq "off: a differently shaped 'users' rule is left alone" "$(olc_limits "$c")" "{0}users size.soft=50 size.prtotal=700"
-if log_has "leaving the differently shaped olcLimits rule"; then ok "off: ... and logged"; else bad "off: the left-alone rule was not logged"; fi
+expect_eq "off against a differently shaped 'users' rule aborts (never 'ignore')" \
+  "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
 expect_eq "set against a differently shaped 'users' rule aborts startup" \
-  "$(run_abort "$real_image" "already exists in another shape" -e LDAP_PAGED_TOTAL_LIMIT=unlimited)" "abort ok (exit 1)"
+  "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=unlimited)" "abort ok (exit 1)"
 expect_eq "... and the operator's rule is untouched" "$(offline_limits)" "users size.soft=50 size.prtotal=700|"
 start "$c" "$vol"
-expect_eq "unset still starts with that operator rule (hands off)" "$(olc_limits "$c")" "{0}users size.soft=50 size.prtotal=700"
+expect_eq "unset still starts with that operator rule (hands off, nothing is read)" "$(olc_limits "$c")" "{0}users size.soft=50 size.prtotal=700"
 clear_limits
 
 # --- operator rules keep precedence (first match wins). ----------------------
@@ -408,6 +415,12 @@ specs=(
   'us"ers" size.prtotal=unlimited'
   'users "size.prtotal=unlimited"'
   '"USERS" Size.PrTotal="NONE"'
+  $'users\vsize.prtotal=unlimited'
+  $'users\fsize.prtotal=unlimited'
+  $'users\rsize.prtotal=unlimited'
+  $'users\nsize.prtotal=unlimited'
+  $'USERS\v \f size.prtotal=NONE'
+  'users size.prtotal=-0'
 )
 for spec in "${specs[@]}"; do
   q="$(printf '%q' "$spec")"
@@ -420,6 +433,17 @@ for spec in "${specs[@]}"; do
   expect_eq "parser ${q}: ... and nothing else is left" "$(count_all "$c")" "1"
   clear_limits
 done
+# Valid spellings of 900 (quoted value with a leading space, an ignored empty
+# argument, + and zero padding with trailing space): equal by VALUE, left as written; off removes them.
+for spec in 'users size.prtotal=" 900"' 'users size.prtotal=900 ""' 'users size.prtotal=+0900'; do
+  q="$(printf '%q' "$spec")"
+  add_limit "{0}${spec}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
+  expect_eq "by value ${q}: equals 900, left untouched" "$(olc_limits "$c")" "{0}${spec}"
+  expect_eq "by value ${q}: it is the limit in force" "$(paged "$c" "$other_dn" "$user_pw")" "900 4"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+  expect_eq "by value ${q}: off removes it" "$(count_all "$c")" "0"
+done
 # Equal by VALUE (not by text) and already last: left exactly as written.
 for pair in 'USERS size.prtotal=0900|900' 'users size.prtotal=NONE|unlimited' 'users size.prtotal=-01|unlimited' 'Users   Size.PrTotal=+5|5'; do
   spec="${pair%|*}"
@@ -429,14 +453,34 @@ for pair in 'USERS size.prtotal=0900|900' 'users size.prtotal=NONE|unlimited' 'u
   expect_eq "by value: '${spec}' already equals ${want}, left untouched" "$(olc_limits "$c")" "{0}${spec}"
   clear_limits
 done
-# `users` with ANY other limit is not the reserved shape: conflict for set, left alone for off.
-for spec in 'users size.prtotal=100 size.hard=50' 'USERS size.hard=50' 'users size.prtotal=100 time.soft=5'; do
+# DEFAULT-DENY: a `users` rule that is not exactly the managed shape (any other
+# limit or argument, any separator) is neither managed nor ignored: set AND off abort
+# before any change, and unset (hands off) still starts.
+for spec in 'users size.prtotal=100 size.hard=50' 'USERS size.hard=50' 'users size.prtotal=100 time.soft=5' \
+  $'users\vsize.hard=50' $'users size.prtotal=100\nsize.soft=5' 'users size.soft=5 size.prtotal=100'; do
+  q="$(printf '%q' "$spec")"
   add_limit "{0}${spec}"
-  expect_eq "other shape '${spec}': set aborts as a conflict" \
-    "$(run_abort "$real_image" "already exists in another shape" -e LDAP_PAGED_TOTAL_LIMIT=unlimited)" "abort ok (exit 1)"
-  expect_eq "other shape '${spec}': the rule is untouched" "$(offline_limits)" "${spec}|"
+  expect_eq "default-deny ${q}: set aborts" \
+    "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=unlimited)" "abort ok (exit 1)"
+  expect_eq "default-deny ${q}: off aborts" \
+    "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
+  expect_eq "default-deny ${q}: nothing was modified" "$(count_all_offline)" "1"
+  start "$c" "$vol"
+  expect_eq "default-deny ${q}: unset never reads it and starts" "$(count_all "$c")" "1"
+  clear_limits
+done
+
+# Performance: classification is O(n). An 8 KiB and a 64 KiB dn.regex rule must
+# not stall startup (the dash implementation took 20 s on 8 KiB).
+for n in 8192 65536; do
+  big="$(head -c "$n" /dev/zero | tr '\0' 'a')"
+  add_limit "{0}dn.regex=\"^cn=${big},dc=example,dc=org\$\" size.hard=100"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+  took="$(docker logs "$c" 2>&1 | sed -n 's/.*paged-total reconcile took \([0-9]*\)s.*/\1/p' | head -n 1)"
+  if [ -n "$took" ] && [ "$took" -le 1 ]; then ok "${n}-byte dn.regex rule: reconcile took ${took}s (<= 1s)"; else bad "${n}-byte dn.regex rule: reconcile took '${took}'s"; fi
+  expect_eq "${n}-byte dn.regex rule: ours is appended behind it (last value)" "$(olc_limits "$c" | tail -n 1)" "{1}users size.prtotal=unlimited"
   start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
-  expect_eq "other shape '${spec}': off leaves it alone" "$(olc_limits "$c")" "{0}${spec}"
+  expect_eq "${n}-byte dn.regex rule: off removes only ours" "$(count_all "$c")" "1"
   clear_limits
 done
 
@@ -459,9 +503,9 @@ done
 # modification, and unset (hands off) never reads the config at all.
 add_limit '{0}users size.prtotal="unlimited'
 expect_eq "unterminated quote: set aborts" \
-  "$(run_abort "$real_image" "could not be parsed with certainty" -e LDAP_PAGED_TOTAL_LIMIT=900)" "abort ok (exit 1)"
+  "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=900)" "abort ok (exit 1)"
 expect_eq "unterminated quote: off aborts" \
-  "$(run_abort "$real_image" "could not be parsed with certainty" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
+  "$(run_abort "$real_image" "could not be classified with certainty" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
 expect_eq "unterminated quote: nothing was modified" "$(offline_limits)" 'users size.prtotal="unlimited|'
 start "$c" "$vol"
 expect_eq "unterminated quote: unset never reads the rules and starts" "$(olc_limits "$c")" '{0}users size.prtotal="unlimited'

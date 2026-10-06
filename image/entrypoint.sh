@@ -1332,15 +1332,111 @@ rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 #      verified or rolled back aborts startup instead of serving an unproven
 #      policy; the previous config file is restored atomically first.
 # ---------------------------------------------------------------------------
-# paged_total_rules <dump> <out>: writes "<index> <spec>" for EVERY olcLimits
-# value of the main database to <out>, in the order slapd holds them (first
-# match wins, so order is the policy). Every step is a separate command whose
-# status is checked (POSIX sh has no pipefail), and an unreadable dump, a missing
-# database entry or an empty block is a FAILURE, never an empty rule list.
+# DEFAULT-DENY classification of olcLimits values (one awk program, O(n)).
+# For each stored rule exactly one of three outcomes:
+#   other     the first token, after quote removal and case folding, is clearly
+#             NOT the selector `users`: the rule is none of our business and is
+#             left alone;
+#   reserved  selector `users` with ONLY a size.prtotal limit whose value is
+#             parsed with certainty: the rule this setting manages;
+#   abort     anything else whose first token is `users`, or that the parser is
+#             not certain about: startup aborts in set/off mode before any
+#             change. There is no "another shape, ignore" fall-through.
+# What the parser handles, exactly (probed against the image's slapd 2.6.15):
+#   tokens    split on any isspace() character: space, tab, VT, FF, CR, NL;
+#   quotes    a double quote toggles a quoted segment anywhere inside a token
+#             (`"users"`, `size.prtotal="unlimited"`, `us"ers"`); quotes are
+#             removed and white space inside them belongs to the token, so a
+#             quoted DN with spaces and commas (or a 64 KiB dn.regex) is one token;
+#   empty     an empty argument (`""`) after the selector is ignored, like
+#             limits.c does; an empty token BEFORE the selector is `abort`;
+#   case      selector, keys and keywords compare case-insensitively;
+#   value     surrounding white space is trimmed; unlimited, none, -1 (and -01,
+#             any zero padding) = unlimited; disabled; hard; a decimal integer
+#             with optional sign and zero padding, -0 = 0, anything below -1 is
+#             `abort`; more than 10 digits is `abort`;
+#   abort     also: an unterminated quote, a backslash before a double quote,
+#             a backslash in a `users` rule or in a first token that becomes
+#             `users` without it, a rule without tokens, a `users` rule with
+#             any other limit or argument, a value that cannot be base64
+#             decoded, a value without a {N} index, an unreadable or empty dump.
+# Single quotes are ordinary characters (slapd rejects them around a selector
+# or value and they appear inside DNs).
+# shellcheck disable=SC2016 # the awk program is deliberately single-quoted
+PT_AWK='
+function isws(c) { return (c == " " || c == "\t" || c == "\013" || c == "\014" || c == "\015" || c == "\n") }
+function flush(   t) {
+  t = cur substr(buf, segstart, i - segstart)
+  ntok++; tokv[ntok] = t; tbs[ntok] = cbs
+  cur = ""; have = 0; cbs = 0
+}
+{ buf = (NR == 1) ? $0 : buf "\n" $0 }
+END {
+  n = length(buf); q = 0; have = 0; cur = ""; ntok = 0; cbs = 0; segstart = 1
+  for (i = 1; i <= n; i++) {
+    c = substr(buf, i, 1)
+    if (c == "\"") {
+      cur = cur substr(buf, segstart, i - segstart); segstart = i + 1
+      q = !q; have = 1
+    } else if (c == "\\") {
+      if (substr(buf, i + 1, 1) == "\"") { print "abort"; exit }
+      cbs = 1; have = 1
+    } else if (!q && isws(c)) {
+      if (have) { flush(); }
+      segstart = i + 1
+    } else {
+      have = 1
+    }
+  }
+  if (q) { print "abort"; exit }
+  i = n + 1
+  if (have) flush()
+  first = 0
+  for (k = 1; k <= ntok; k++) if (tokv[k] != "") { first = k; break }
+  if (first != 1) { print "abort"; exit }
+  sel = tolower(tokv[1])
+  if (tbs[1]) { t = sel; gsub(/\\/, "", t); if (t == "users") { print "abort"; exit } }
+  if (sel != "users") { print "other"; exit }
+  m = 0
+  for (k = 1; k <= ntok; k++) if (tokv[k] != "") { m++; idx[m] = k; if (tbs[k]) { print "abort"; exit } }
+  if (m != 2) { print "abort"; exit }
+  tok = tokv[idx[2]]
+  eq = index(tok, "=")
+  if (eq == 0) { print "abort"; exit }
+  if (tolower(substr(tok, 1, eq - 1)) != "size.prtotal") { print "abort"; exit }
+  v = substr(tok, eq + 1)
+  while (length(v) > 0 && isws(substr(v, 1, 1))) v = substr(v, 2)
+  while (length(v) > 0 && isws(substr(v, length(v), 1))) v = substr(v, 1, length(v) - 1)
+  lv = tolower(v)
+  if (lv == "unlimited" || lv == "none") { print "reserved unlimited"; exit }
+  if (lv == "disabled") { print "reserved disabled"; exit }
+  if (lv == "hard") { print "reserved hard"; exit }
+  sign = ""
+  d = lv
+  if (substr(d, 1, 1) == "-") { sign = "-"; d = substr(d, 2) } else if (substr(d, 1, 1) == "+") { d = substr(d, 2) }
+  if (d !~ /^[0-9]+$/) { print "abort"; exit }
+  while (length(d) > 1 && substr(d, 1, 1) == "0") d = substr(d, 2)
+  if (length(d) > 10) { print "abort"; exit }
+  num = d + 0
+  if (sign == "-") {
+    if (num == 1) { print "reserved unlimited"; exit }
+    if (num == 0) { print "reserved 0"; exit }
+    print "abort"; exit
+  }
+  print "reserved " num
+}
+'
+
+# paged_total_rules <dump> <out>: writes "<index> <class> <value> <b64>" for
+# EVERY olcLimits value of the main database to <out>, in the order slapd holds
+# them (first match wins, so order is the policy). class is other|reserved|abort
+# (see above); b64 is the base64 of the stored "{N}spec" (the exact delete value;
+# `-` for other rules), so no raw rule text, which may hold newlines, ever sits in
+# the list. Every step is a separate command whose status is checked (POSIX sh
+# has no pipefail); an unreadable dump, a missing database entry, an empty block
+# or a decode error is a FAILURE (return 1), never an empty or partial list.
 # slapcat writes a value as `olcLimits:: <base64>` when it is not plain ASCII
-# text (a Korean DN, a tab, a leading space), so both forms are read and long
-# lines are unfolded. A value that cannot be decoded is an ERROR (return 1): it
-# could be the very rule being looked for, so nothing is guessed.
+# text (a Korean DN, a tab, a leading space).
 paged_total_rules() {
   pt_blk=$(mktemp) || return 1
   pt_unf=$(mktemp) || return 1
@@ -1369,7 +1465,20 @@ paged_total_rules() {
       "{"[0-9]*"}"*)
         pt_i=${pt_val#"{"}
         pt_i=${pt_i%%"}"*}
-        if ! printf '%s %s\n' "$pt_i" "${pt_val#*"}"}" >> "$2"; then pt_rc=1; break; fi
+        pt_spec=${pt_val#*"}"}
+        if ! pt_cls=$(printf '%s' "$pt_spec" | awk "$PT_AWK") || [ -z "$pt_cls" ]; then pt_rc=1; break; fi
+        pt_b64='-'
+        case "$pt_cls" in
+          reserved*)
+            if ! pt_b64=$(printf '%s' "$pt_val" | base64 | tr -d '\n'); then pt_rc=1; break; fi
+            ;;
+        esac
+        pt_class=${pt_cls%% *}
+        pt_pv='-'
+        case "$pt_cls" in
+          *" "*) pt_pv=${pt_cls#* } ;;
+        esac
+        if ! printf '%s %s %s %s\n' "$pt_i" "$pt_class" "$pt_pv" "$pt_b64" >> "$2"; then pt_rc=1; break; fi
         ;;
       *)
         pt_rc=1 # an olcLimits value without a {N} index cannot be ordered
@@ -1381,137 +1490,9 @@ paged_total_rules() {
   return "$pt_rc"
 }
 paged_total_fail() { die "paged-total reconcile failed; refusing to start"; }
-# The olcLimits syntaxes this parser handles, EXACTLY (probed against the
-# image's slapd 2.6.15). Everything else is not guessed: it is "not certain" and
-# aborts startup in set/off mode before anything is modified.
-#   tokens    separated by runs of spaces and/or tabs;
-#   quotes    a double quote toggles a quoted segment, anywhere inside a token
-#             (`"users"`, `size.prtotal="unlimited"`, `us"ers"`, `"a b"`); the
-#             quotes are removed and white space inside them belongs to the
-#             token, so a quoted DN with spaces and commas stays ONE token;
-#   case      selector, keys and the prtotal value compare case-insensitively;
-#   values    prtotal: unlimited, none, -1 (any zero padding: -01) = unlimited;
-#             disabled; hard; a decimal integer (optional +, zero padded);
-#   reserved  selector `users` with exactly ONE limit, size.prtotal; `users`
-#             with anything else is another shape.
-#   NOT CERTAIN (abort): an unterminated quote; a backslash followed by a double
-#   quote; a backslash anywhere in a token that could be the selector `users`
-#   once the backslash is dropped, or anywhere in a `users` rule; a value that
-#   cannot be base64-decoded. Single quotes are ordinary characters (slapd
-#   rejects them around a selector or value, and they appear inside DNs).
-# paged_total_tokenize <spec>: sets pt_ntok, pt_tok1, pt_tok2 (quotes removed),
-# pt_bs1 (token 1 contains a backslash) and pt_bs_any; returns 1 if not certain.
-paged_total_tokenize() {
-  pt_rest=$1
-  pt_ntok=0
-  pt_tok1=''
-  pt_tok2=''
-  pt_bs1=''
-  pt_bs_any=''
-  pt_cur=''
-  pt_have=''
-  pt_q=''
-  pt_cbs=''
-  pt_tab=$(printf '\t')
-  while [ -n "$pt_rest" ]; do
-    pt_c=${pt_rest%"${pt_rest#?}"}
-    pt_rest=${pt_rest#?}
-    pt_end=''
-    case "$pt_c" in
-      '"')
-        if [ -n "$pt_q" ]; then pt_q=''; else pt_q=1; fi
-        pt_have=1
-        ;;
-      \\)
-        case "$pt_rest" in
-          '"'*) return 1 ;;
-        esac
-        pt_bs_any=1
-        pt_cbs=1
-        pt_cur=$pt_cur$pt_c
-        pt_have=1
-        ;;
-      ' '|"$pt_tab")
-        if [ -n "$pt_q" ]; then
-          pt_cur=$pt_cur$pt_c
-          pt_have=1
-        else
-          pt_end=1
-        fi
-        ;;
-      *)
-        pt_cur=$pt_cur$pt_c
-        pt_have=1
-        ;;
-    esac
-    if [ -n "$pt_end" ] && [ -n "$pt_have" ]; then
-      pt_ntok=$((pt_ntok + 1))
-      if [ "$pt_ntok" -eq 1 ]; then pt_tok1=$pt_cur; pt_bs1=$pt_cbs; fi
-      if [ "$pt_ntok" -eq 2 ]; then pt_tok2=$pt_cur; fi
-      pt_cur=''
-      pt_have=''
-      pt_cbs=''
-    fi
-  done
-  [ -z "$pt_q" ] || return 1 # unterminated quote
-  if [ -n "$pt_have" ]; then
-    pt_ntok=$((pt_ntok + 1))
-    if [ "$pt_ntok" -eq 1 ]; then pt_tok1=$pt_cur; pt_bs1=$pt_cbs; fi
-    if [ "$pt_ntok" -eq 2 ]; then pt_tok2=$pt_cur; fi
-  fi
-  return 0
-}
-# paged_total_parse <spec>: classify one decoded olcLimits value. Sets
-#   pt_p_sel       lowercased selector (first token, quotes removed)
-#   pt_p_reserved  1 when the rule is exactly `users` with ONLY a size.prtotal
-#                  limit (the one shape this setting owns), else empty
-#   pt_p_val       its value, parsed: unlimited, disabled, hard, or the integer
-#                  without sign or leading zeros
-# Returns 1 when the value cannot be tokenised with certainty (see above).
-paged_total_parse() {
-  pt_p_sel=''
-  pt_p_reserved=''
-  pt_p_val=''
-  paged_total_tokenize "$1" || return 1
-  [ "$pt_ntok" -gt 0 ] || return 0
-  if [ -n "$pt_bs1" ]; then
-    pt_t1=$(printf '%s' "$pt_tok1" | tr -d '\134' | tr '[:upper:]' '[:lower:]')
-    [ "$pt_t1" != users ] || return 1
-  fi
-  pt_p_sel=$(printf '%s' "$pt_tok1" | tr '[:upper:]' '[:lower:]')
-  [ "$pt_p_sel" = users ] || return 0
-  [ -z "$pt_bs_any" ] || return 1
-  [ "$pt_ntok" -eq 2 ] || return 0
-  case "$pt_tok2" in
-    *=*) ;;
-    *) return 0 ;;
-  esac
-  pt_k=$(printf '%s' "${pt_tok2%%=*}" | tr '[:upper:]' '[:lower:]')
-  [ "$pt_k" = size.prtotal ] || return 0
-  pt_v=$(printf '%s' "${pt_tok2#*=}" | tr '[:upper:]' '[:lower:]')
-  pt_sign=''
-  case "$pt_v" in
-    unlimited|none) pt_p_val=unlimited; pt_p_reserved=1; return 0 ;;
-    disabled) pt_p_val=disabled; pt_p_reserved=1; return 0 ;;
-    hard) pt_p_val=hard; pt_p_reserved=1; return 0 ;;
-    -*) pt_sign=-; pt_v=${pt_v#-} ;;
-    +*) pt_v=${pt_v#+} ;;
-  esac
-  case "$pt_v" in
-    ''|*[!0-9]*) return 0 ;;
-  esac
-  while [ "${#pt_v}" -gt 1 ] && [ "${pt_v#0}" != "$pt_v" ]; do pt_v=${pt_v#0}; done
-  if [ -n "$pt_sign" ]; then
-    # only -1 is a value slapd accepts, and it means unlimited
-    [ "$pt_v" = 1 ] || return 0
-    pt_p_val=unlimited
-  else
-    pt_p_val=$pt_v
-  fi
-  pt_p_reserved=1
-  return 0
-}
+paged_total_unsure() { die "an olcLimits rule for the selector 'users' is not the shape this setting manages, or could not be classified with certainty; refusing to start (LDAP_PAGED_TOTAL_LIMIT=${LDAP_PAGED_TOTAL_LIMIT})"; }
 if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
+  pt_t0=$(date +%s)
   pt_db_file="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
   pt_dump=$(mktemp)
   pt_list=$(mktemp)
@@ -1519,50 +1500,42 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
   # Fail closed BEFORE changing anything: an unreadable or empty dump aborts.
   slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no -l "$pt_dump" || paged_total_fail
   paged_total_rules "$pt_dump" "$pt_list" || paged_total_fail
-  pt_users_idx=''
-  pt_users_spec=''
-  pt_users_reserved=''
-  pt_users_val=''
-  pt_n_users=0
+  pt_res_idx=''
+  pt_res_val=''
+  pt_res_b64=''
+  pt_n_res=0
   pt_last_idx=''
-  while IFS=' ' read -r pt_idx pt_spec; do
+  while IFS=' ' read -r pt_idx pt_class pt_pv pt_b64; do
     pt_last_idx="{${pt_idx}}"
-    if ! paged_total_parse "$pt_spec"; then
-      die "an olcLimits rule could not be parsed with certainty; refusing to start (LDAP_PAGED_TOTAL_LIMIT=${LDAP_PAGED_TOTAL_LIMIT})"
-    fi
-    if [ "$pt_p_sel" = users ]; then
-      pt_n_users=$((pt_n_users + 1))
-      pt_users_idx="{${pt_idx}}"
-      pt_users_spec=$pt_spec
-      pt_users_reserved=$pt_p_reserved
-      pt_users_val=$pt_p_val
-    fi
+    case "$pt_class" in
+      other) ;;
+      reserved)
+        pt_n_res=$((pt_n_res + 1))
+        pt_res_idx="{${pt_idx}}"
+        pt_res_val=$pt_pv
+        pt_res_b64=$pt_b64
+        ;;
+      *) paged_total_unsure ;;
+    esac
   done < "$pt_list"
-  if [ "$pt_n_users" -gt 1 ]; then
+  if [ "$pt_n_res" -gt 1 ]; then
     die "more than one olcLimits rule for the selector 'users' is present; refusing to start (LDAP_PAGED_TOTAL_LIMIT=${LDAP_PAGED_TOTAL_LIMIT})"
   fi
-  # delete values are sent base64 encoded: the stored text may hold tabs or
-  # runs of spaces that must match byte for byte
-  pt_del="olcLimits:: $(printf '%s' "${pt_users_idx}${pt_users_spec}" | base64 | tr -d '\n')"
   if [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
-    if [ -n "$pt_users_reserved" ]; then
-      printf 'delete: olcLimits\n%s\n-\n' "$pt_del" > "$pt_ops"
-      log "LDAP_PAGED_TOTAL_LIMIT=off: removing '${pt_users_spec}'"
-    elif [ "$pt_n_users" -eq 1 ]; then
-      log "LDAP_PAGED_TOTAL_LIMIT=off: leaving the differently shaped olcLimits rule '${pt_users_spec}' alone"
+    if [ "$pt_n_res" -eq 1 ]; then
+      printf 'delete: olcLimits\nolcLimits:: %s\n-\n' "$pt_res_b64" > "$pt_ops"
+      log "LDAP_PAGED_TOTAL_LIMIT=off: removing the rule 'users size.prtotal=${pt_res_val}'"
     fi
   else
     pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
-    if [ "$pt_n_users" -eq 0 ]; then
+    if [ "$pt_n_res" -eq 0 ]; then
       printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" > "$pt_ops"
-    elif [ -z "$pt_users_reserved" ]; then
-      die "LDAP_PAGED_TOTAL_LIMIT is set but an olcLimits rule for the selector 'users' already exists in another shape; that selector is reserved for this setting while it is enabled. Remove that rule or unset the variable; refusing to start"
-    elif [ "$pt_users_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_users_idx" = "$pt_last_idx" ]; then
+    elif [ "$pt_res_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_res_idx" = "$pt_last_idx" ]; then
       : # converged by VALUE (not text): the one owned rule, and it is the LAST value (first match wins)
     else
       # another value, or the right value in the wrong place (an operator rule
       # behind it would never be reached): delete and re-append
-      printf 'delete: olcLimits\n%s\n-\nadd: olcLimits\nolcLimits: %s\n-\n' "$pt_del" "$pt_want" > "$pt_ops"
+      printf 'delete: olcLimits\nolcLimits:: %s\n-\nadd: olcLimits\nolcLimits: %s\n-\n' "$pt_res_b64" "$pt_want" > "$pt_ops"
     fi
   fi
   if [ -s "$pt_ops" ]; then
@@ -1581,27 +1554,22 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
       pt_n=0
       pt_now_idx=''
       pt_now_val=''
-      pt_now_reserved=''
-      pt_left=0
       pt_bad=''
       pt_last_now=''
-      while IFS=' ' read -r pt_idx pt_spec; do
+      while IFS=' ' read -r pt_idx pt_class pt_pv pt_b64; do
         pt_last_now="{${pt_idx}}"
-        if ! paged_total_parse "$pt_spec"; then pt_bad=1; fi
-        if [ "$pt_p_sel" = users ]; then
-          pt_n=$((pt_n + 1))
-          pt_now_idx="{${pt_idx}}"
-          pt_now_val=$pt_p_val
-          pt_now_reserved=$pt_p_reserved
-        fi
-        if [ -n "$pt_p_reserved" ]; then pt_left=$((pt_left + 1)); fi
+        case "$pt_class" in
+          other) ;;
+          reserved) pt_n=$((pt_n + 1)); pt_now_idx="{${pt_idx}}"; pt_now_val=$pt_pv ;;
+          *) pt_bad=1 ;;
+        esac
       done < "$pt_list"
       if [ -n "$pt_bad" ]; then
-        : # a stored value that cannot be parsed with certainty is never "verified"
+        : # a stored value that cannot be classified with certainty is never "verified"
       elif [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
         # no reserved-shape rule may remain, whatever its spelling
-        if [ "$pt_left" -eq 0 ]; then pt_ok=1; fi
-      elif [ "$pt_n" -eq 1 ] && [ -n "$pt_now_reserved" ] && [ "$pt_now_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_now_idx" = "$pt_last_now" ]; then
+        if [ "$pt_n" -eq 0 ]; then pt_ok=1; fi
+      elif [ "$pt_n" -eq 1 ] && [ "$pt_now_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_now_idx" = "$pt_last_now" ]; then
         pt_ok=1
       fi
     fi
@@ -1623,6 +1591,7 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
     rm -f "$pt_backup" "$pt_ldif"
   fi
   rm -f "$pt_dump" "$pt_list" "$pt_ops"
+  log "paged-total reconcile took $(($(date +%s) - pt_t0))s"
 fi
 
 # ---------------------------------------------------------------------------

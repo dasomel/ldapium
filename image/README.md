@@ -216,24 +216,37 @@ file of remembered state; every start converges to what the variable says
 |---|---|
 | unset / empty | **Hands off.** No `olcLimits` rule is read, changed or removed, and nothing is recorded. An operator's own `users size.prtotal=500` stays as it is. |
 | `<1..2147483647>` or `unlimited` | Converge to exactly one rule `users size.prtotal=<value>`, **appended** after the existing rules. Already there: no write. A `users size.prtotal=<other value>` rule is the setting's own shape and is changed to the value. A `users` rule of any other shape (e.g. `users size.soft=50 ...`) is a conflict: startup **aborts** and the operator decides. |
-| `off` | Remove exactly `users size.prtotal=<any value>`. A differently shaped `users` rule is left alone and logged. Nothing to remove: no-op. |
+| `off` | Remove exactly `users size.prtotal=<any value>`. A differently shaped `users` rule aborts startup (default-deny). Nothing to remove: no-op. |
 
 Because the selector `users` is reserved while the setting is on, the rule
 this setting manages is recognised by its shape, not by a remembered marker. The
-shape is parsed, not text-matched: the value is split on any whitespace (tabs
-included), selector and keys compare case-insensitively like slapd, and the
-value is read semantically (`unlimited`, `none`, `-1` and `-01` are the same,
-leading zeros and `+` are ignored, `disabled` and `hard` are their own values), so
-`USERS<TAB>SIZE.PRTOTAL=NONE` is the reserved rule and an already equal rule is
-not rewritten; `users` with any other limit alongside is a different shape.
-Double quotes are handled like slapd does (`"users"`, `size.prtotal="unlimited"`,
-`us"ers"`: quotes removed, white space inside them belongs to the token, so a
-quoted DN stays one token). **Anything the parser cannot be certain about is not
-guessed, it aborts startup in set/off mode before any change:** an unterminated
-quote, a backslash before a double quote, a backslash in a `users` rule or in a
-first token that would become `users` without it, a value that cannot be base64
-decoded, an unreadable or empty config dump. So
-there is no state that can drift, go stale or survive a crash half-written.
+classification is **default-deny** and done by one awk program (linear time: an
+8 KiB or 64 KiB `dn.regex` rule costs milliseconds), one outcome per stored rule:
+
+- **not ours:** the first token, after quote removal and case folding, is not
+  `users`: left alone;
+- **managed:** selector `users` with only a `size.prtotal` limit whose value is
+  parsed with certainty: converged, replaced or removed;
+- **abort:** anything else whose first token is `users` (another limit alongside,
+  any other argument) or that the parser is not certain about: startup aborts in
+  set/off mode before any change. There is no "other shape, ignore" fall-through
+  (so `off` does not silently skip a rule it cannot place).
+
+Exactly what is parsed (probed on the image's slapd 2.6.15): tokens split on any
+`isspace()` character (space, tab, VT, FF, CR, NL); a double quote toggles a quoted
+segment anywhere in a token (`"users"`, `size.prtotal="unlimited"`, `us"ers"`),
+quotes are removed and white space inside them belongs to the token, so a quoted
+DN stays one token; an empty argument (`""`) after the selector is ignored; selector,
+keys and keywords are case-insensitive; the value is trimmed and read as
+`unlimited`/`none`/`-1` (any zero padding), `disabled`, `hard`, or a decimal integer
+(optional sign, zero padding, `-0` is 0, below -1 aborts, more than 10 digits
+aborts). Also aborting: an unterminated quote, a backslash before a double quote, a
+backslash in a `users` rule or in a first token that becomes `users` without it, a
+rule without tokens, a value that cannot be base64 decoded, a value without a
+`{N}` index, an unreadable or empty config dump. Desired and stored values are
+compared by parsed value, so `USERS<TAB>SIZE.PRTOTAL=" 0900"` equals `900` and is
+not rewritten. Unset never reads the config, so none of this can stop an unset start.
+
 slapd applies only the *first* matching `olcLimits` rule and allows one rule per
 selector: the rule is appended, so a rule you wrote for a DN or a group keeps its
 effect for the identities it matches (verified: an operator
