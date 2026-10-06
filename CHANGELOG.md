@@ -71,6 +71,105 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   not observed is `state: unknown`. Idempotency keys
   are not part of this change.
 
+- **Breaking for some non-browser clients:** every state-changing `/api`
+  request (`POST`/`PUT`/`PATCH`/`DELETE`, including login and logout) that
+  carries an `Origin` header is now refused with 403 `origin_mismatch` before
+  any handler runs unless that `Origin` is the server's own origin (change
+  package `api-error-envelope`, D218-16, #218). An empty, `null` or repeated
+  `Origin` is refused too. Requests without an `Origin` header (curl, scripts,
+  services) are unaffected, as are `GET`/`HEAD`/`OPTIONS`. Clients whose HTTP
+  library adds an `Origin` header on its own must stop sending it. Behind a
+  reverse proxy the server compares against its own scheme (from
+  `X-Forwarded-Proto` and friends) and the request `Host`; a proxy that
+  rewrites `Host` makes ordinary browser writes 403, one that keeps `Host` and
+  forwards the scheme is fine. There is no switch to turn the gate off;
+  rollback is reverting the change.
+- Opt-in `/metrics` listener (#218): set `METRICS_ADDR` (`host:port`, chart
+  `ui.metrics.enabled`) to serve the `ldapium_ui_*` process metrics (request
+  rate and latency, API errors per `code`, login failures, directory calls,
+  active sessions) on a second port. Unset by default: no listener and no
+  collection. The port must differ from the public one, has no authentication
+  and answers only `GET /metrics`. On the public port `GET /metrics` is now a
+  404 error envelope; the single-page-app fallback used to answer it with
+  `index.html`. Adds the Go dependency `github.com/prometheus/client_golang`.
+  Remove `METRICS_ADDR` to turn it off again.
+- Opt-in CORS for reads (#218): `CORS_ALLOWED_ORIGINS` (comma-separated exact
+  `scheme://host[:port]`, chart `ui.cors.allowedOrigins`) lets the listed
+  origins read `GET`/`HEAD` responses with credentials and answers their
+  preflight for `GET, HEAD, OPTIONS` only. Off by default, in which case no
+  `Access-Control-*` header is sent; when on, `Vary: Origin` is on every
+  response. It never opens a write path: the Origin gate above ignores the
+  list, and the session cookie stays `SameSite=Lax`. The OpenAPI description
+  and `llms.txt` no longer claim unconditionally that there are no CORS
+  headers.
+- Compatibility of the error envelope's `message`: it stays a copy of `error`
+  for the whole of `/api/v1`. Removing it needs a separate change package and
+  at least one release after the UI stopped reading it (D218-4); new clients
+  should read `error`.
+- Cursor pagination for `GET /api/users` and `GET /api/groups` (change package
+  `api-cursor-pagination`, #215). Sending any of `limit` (1-200, default 50),
+  `cursor`, `q` or `sort` selects cursor mode, which walks a directory past the
+  5000-entry cap in a fixed order; the response gains `hasMore` and
+  `nextCursor` (continue while `hasMore` is true, a page can be short or empty
+  while it is). Without those parameters the response is byte-for-byte what it
+  was. Cursors are opaque, bound to the login session, the resource and `q`,
+  and a re-login invalidates them. New codes: 400 `cursor_invalid`, 422
+  `size_limit_exceeded` and `scan_limit_exceeded`, 503 `scan_timeout`
+  (retryable, with `Retry-After`). Each page costs a scan of the candidates
+  (100000 per request, 30 s deadline); a non-root identity needs read access
+  to `entryUUID` on every listed entry. Items carry the same `etag` as in the
+  legacy list. See `docs/api.md`. Rollback: additive, revert the commits; no
+  stored state. The web UI keeps its client-side paging.
+- Backup jobs (change package `backup-job-ids`, #217). `POST
+  /api/v1/backups/jobs/{kind}` now answers 202 with `job_id` and a `Location`
+  header (the body still has `kind` and `status`). New endpoints:
+  `GET /api/v1/backups/jobs`, `GET /api/v1/backups/jobs/{id}` and
+  `POST /api/v1/backups/jobs/{id}/cancel`. Compatibility changes:
+  `states[kind].status` can now be `cancelled`, so clients that treat it as a
+  closed set need updating (job records add `abandoned`, for a run whose
+  result could not be established after a restart); the 409 `backup_busy`
+  body gains `active_job_id` and `active_kind`; a failure to record a start or
+  cancel request is now 503 `persistence_unavailable` (nothing started, no
+  signal sent) where it used to be a 422 that also covered other failures,
+  which stay 422 `validation_failed`; the `backup_started` log line carries
+  `actor_fp` (a one-way fingerprint) instead of `actor` (the DN). New
+  `BACKUP_JOB_TIMEOUT_DATA`/`BACKUP_JOB_TIMEOUT_LOGS` (1m-24h, default 2h, chart
+  `ui.backups.jobTimeout`) bound a run; cancel and deadline send SIGTERM to the
+  worker's process group and SIGKILL after 10 s. Job records are kept in
+  `backup-jobs.json` next to the policy file (200 records or 90 days) and the
+  worker leaves `<root>/.results/<job_id>.json` (0600) per run. The worker
+  ships in the UI image, so the image must be rebuilt and deployed for these to
+  work. Rollback: an older version never reads `backup-jobs.json` or
+  `.results/`, so both can stay or be deleted; the older version simply shows
+  no job history.
+
+### Images
+
+- `LDAP_PAGED_TOTAL_LIMIT` (#215), opt-in: lifts the total of a paged search
+  for authenticated non-root identities, which `LDAP_SIZE_LIMIT` otherwise caps
+  at 10000 however small the pages are (the admin DN is already exempt). Unset
+  leaves `cn=config` alone; a number up to 2147483647 or `unlimited` converges
+  to one `olcLimits: users size.prtotal=<value>` rule; `off` removes it. It
+  weakens `LDAP_SIZE_LIMIT` as a bulk-dump backstop, so leave it unset unless an
+  API client must enumerate more than 10000 entries without the admin DN.
+  Rollback: set `off` and restart once before moving to an image that predates
+  the setting; the rule lives in `cn=config` and an older image would not
+  remove it.
+
+### Helm chart
+
+- New values, all off or empty by default: `ui.metrics.enabled` with
+  `ui.metrics.port` (9331), `ui.metrics.networkPolicy.from` (required once
+  metrics are on; an empty list fails the render) and
+  `ui.metrics.serviceMonitor.enabled`/`ui.metrics.podMonitor.enabled` (#218);
+  `ui.networkPolicy.httpFrom`; `ui.cors.allowedOrigins` (#218);
+  `ldap.limits.pagedTotal` (#215); `ui.backups.jobTimeout.data`/`.logs` (#217).
+  Enabling `ui.metrics.enabled` adds a NetworkPolicy that selects the UI pods,
+  which makes them default-deny for ingress: the HTTP port stays open to every
+  source unless `ui.networkPolicy.httpFrom` narrows it. The metrics port is
+  exposed only by a separate `<release>-ldapium-ui-metrics` Service, never by
+  the public UI Service.
+
 ### CI
 
 - Heavy E2E jobs (anything that builds the OpenLDAP server image and/or
