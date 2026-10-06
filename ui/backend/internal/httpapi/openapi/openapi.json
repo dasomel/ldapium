@@ -190,6 +190,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "Password login is disabled (SSO mode)",
             "content": {
@@ -241,6 +244,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4403,7 +4409,7 @@
         }
       },
       "Forbidden": {
-        "description": "Not allowed (`forbidden`, `admin_required` or `origin_mismatch`).",
+        "description": "Not allowed (`forbidden`, `admin_required` or `origin_mismatch`). `origin_mismatch` is also what any state-changing request returns when it carries an `Origin` header that is neither the server's own origin nor allow-listed.",
         "content": {
           "application/json": {
             "schema": {

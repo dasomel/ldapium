@@ -42,10 +42,10 @@
 
 ### Phase 1b — 쓰기 Origin 게이트 (CORS보다 먼저 병합, Q2 해소)
 
-- [ ] `T-033` (`REQ-015`) 사전 확인: 프록시 뒤에서 `c.Scheme()`·`Host`가 브라우저 `Origin`과 어떻게 비교되는지(`requireProfileWrite` 비교 `app_profile_handlers.go:112-120`, `X-Forwarded-Proto` 처리 `sso.go:248`, `UI_TRUSTED_PROXIES`), 차트 Ingress(`ui-ingress.yaml`) 구성에서 정상 UI 쓰기가 통과하는지 로컬 Docker/Ingress 또는 단위로 확인. 결과를 CHANGE.md D218-16에 반영(미검증 (d)).
-- [ ] `T-034` (`REQ-015`, `AC-016`) 전역 미들웨어: `/api` 상태 변경 메서드에 `Origin` 헤더가 있으면 본인 origin 또는 허용 목록(Phase 3 이전에는 빈 목록)과 비교, 불일치·`null`은 403 `origin_mismatch` 봉투. 헤더 없음은 통과. `GET`/`HEAD`/`OPTIONS` 제외. 기존 `requireProfileWrite`는 유지(더 엄격).
+- [x] `T-033` (`REQ-015`) 사전 확인: 프록시 뒤에서 `c.Scheme()`·`Host`가 브라우저 `Origin`과 어떻게 비교되는지(`requireProfileWrite` 비교 `app_profile_handlers.go:112-120`, `X-Forwarded-Proto` 처리 `sso.go:248`, `UI_TRUSTED_PROXIES`), 차트 Ingress(`ui-ingress.yaml`) 구성에서 정상 UI 쓰기가 통과하는지 로컬 Docker/Ingress 또는 단위로 확인. 결과를 CHANGE.md D218-16에 반영(미검증 (d)).
+- [x] `T-034` (`REQ-015`, `AC-016`) 전역 미들웨어: `/api` 상태 변경 메서드에 `Origin` 헤더가 있으면 본인 origin 또는 허용 목록(Phase 3 이전에는 빈 목록)과 비교, 불일치·`null`은 403 `origin_mismatch` 봉투. 헤더 없음은 통과. `GET`/`HEAD`/`OPTIONS` 제외. 기존 `requireProfileWrite`는 유지(더 엄격).
       파일: `BE/origin_gate.go`(신규), `BE/server.go`(미들웨어 등록, `s.echo.Use` 목록 `:87-99`), `BE/origin_gate_test.go`. 증거: 쓰기 라우트 열거 표 주도 테스트(AC-016 (a)–(e)).
-- [ ] `T-035` (`REQ-015`, `AC-016`, `AC-002`) FE e2e: 동일 출처 사용자·그룹·로그인 쓰기가 계속 성공함을 확인하는 회귀(`ui/frontend/e2e`), 릴리스 노트에 Origin 보내는 비브라우저 클라이언트·프록시 영향 기록, `docs/api.md`에 규칙 추가.
+- [x] `T-035` (`REQ-015`, `AC-016`, `AC-002`) FE e2e: 동일 출처 사용자·그룹·로그인 쓰기가 계속 성공함을 확인하는 회귀(`ui/frontend/e2e`), 릴리스 노트에 Origin 보내는 비브라우저 클라이언트·프록시 영향 기록, `docs/api.md`에 규칙 추가.
 
 ### Phase 2 — `/metrics` (기본 꺼짐)
 
