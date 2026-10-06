@@ -179,8 +179,9 @@ esac
 # sizeLimitExceeded; rootDN is exempt). `size.prtotal` is the knob that lifts
 # that total for paged searches only — an unpaged search keeps olcSizeLimit.
 # Reconciled into cn=config on every start (section 3b), as
-# `olcLimits: {0}users size.prtotal=<value>`: `users` = every authenticated
-# DN, so anonymous is unaffected. Raising it lets any authenticated user page
+# an APPENDED `olcLimits: users size.prtotal=<value>` (operator rules written
+# earlier keep precedence; see the ownership notes there): `users` = every
+# authenticated DN, so anonymous is unaffected. Raising it lets any authenticated user page
 # through the whole readable directory (ACLs still apply), which weakens the
 # "last backstop" argument above — hence opt-in. Positive integer without a
 # leading zero, or `unlimited`; 0 is refused because its meaning varies
@@ -1293,21 +1294,57 @@ hd_clear() {
   elif sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -q '^olcLastBind'; then
     log "leaving operator-set olcLastBind on the main database untouched"
   fi
-  # paged total (see LDAP_PAGED_TOTAL_LIMIT): owns ONLY an olcLimits value of
-  # exactly the form this script writes (`{N}users size.prtotal=<word>`), so
-  # an operator's other olcLimits values survive in both directions. Set:
-  # replace our value when it differs (delete + add in one modify, no
-  # window); unset: remove it, which restores the default behaviour.
-  pt_cur=$(sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" \
-    | sed -n 's/^olcLimits: \({[0-9]*}users size\.prtotal=[A-Za-z0-9]*\)$/\1/p' | head -n 1)
+  # paged total (see LDAP_PAGED_TOTAL_LIMIT). slapd applies only the FIRST
+  # olcLimits rule that matches a DN, so two properties matter:
+  #  - ORDER: our rule is always APPENDED (an `add` without an index), never
+  #    inserted at {0}, so a rule an operator wrote for a DN, a group or a
+  #    different limit keeps its effect for the identities it matches. Ours is
+  #    the catch-all for authenticated DNs that no earlier rule claimed. An
+  #    operator `*` rule that precedes ours wins entirely (logged); an operator
+  #    `users` rule cannot coexist with ours (one rule per selector), so then
+  #    nothing is added and the operator's rule stays the one in force.
+  #  - PROVENANCE: the entrypoint only ever modifies or removes a value it
+  #    wrote itself, recorded in a marker file next to the bootstrap marker
+  #    (the spec text without the {N} index). A same-looking operator value
+  #    is never taken over, so with the variable unset an existing config is
+  #    left exactly as it was.
+  pt_marker="${CONFIG_DIR}/.paged-total-limit"
+  pt_owned=''
+  [ ! -s "$pt_marker" ] || pt_owned=$(head -n 1 "$pt_marker")
   pt_want=''
-  [ -z "$LDAP_PAGED_TOTAL_LIMIT" ] || pt_want="{0}users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
-  if [ "$pt_cur" != "$pt_want" ]; then
-    if [ -n "$pt_cur" ]; then
-      printf 'delete: olcLimits\nolcLimits: %s\n-\n' "$pt_cur" >> "$hd_db"
+  [ -z "$LDAP_PAGED_TOTAL_LIMIT" ] || pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
+  pt_specs=$(sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | sed -n 's/^olcLimits: {[0-9]*}//p')
+  pt_owned_idx=''
+  if [ -n "$pt_owned" ]; then
+    # {N} of the value that is exactly ours (whole-line match, no prefix hits)
+    for pt_i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19; do
+      if sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -qxF -- "olcLimits: {${pt_i}}${pt_owned}"; then
+        pt_owned_idx="{${pt_i}}"
+        break
+      fi
+    done
+  fi
+  pt_marker_action=''
+  if [ -z "$pt_want" ]; then
+    if [ -n "$pt_owned_idx" ]; then
+      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$hd_db"
+      log "removing the paged-total limit this entrypoint added earlier (${pt_owned})"
     fi
-    if [ -n "$pt_want" ]; then
-      printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$hd_db"
+    [ -z "$pt_owned" ] || pt_marker_action='clear'
+  elif [ -n "$pt_owned_idx" ] && [ "$pt_owned" = "$pt_want" ]; then
+    : # already in place
+  elif [ -z "$pt_owned_idx" ] && printf '%s\n' "$pt_specs" | grep -qE '^users([ ]|$)'; then
+    # slapd allows ONE rule per selector (a second `users` rule is a config
+    # error that stops slapd), and the operator's rule is not ours to change.
+    log "an operator-set olcLimits rule for 'users' exists (${pt_want} not added; edit that rule with ldapmodify to change the paged total)"
+  else
+    if [ -n "$pt_owned_idx" ]; then
+      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$hd_db"
+    fi
+    printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$hd_db"
+    pt_marker_action='set'
+    if printf '%s\n' "$pt_specs" | grep -qE '^\*([ ]|$)'; then
+      log "an operator olcLimits rule for '*' precedes the paged-total rule; slapd applies the first match, so LDAP_PAGED_TOTAL_LIMIT will not take effect for the identities that rule covers"
     fi
   fi
   if [ -s "$hd_db" ]; then
@@ -1317,6 +1354,11 @@ hd_clear() {
 } > "$hardening_ldif"
 log "reconciling hardening settings (slapmodify -n 0)"
 slapmodify -n 0 -F "$CONFIG_DIR" -l "$hardening_ldif"
+# Provenance marker for the paged-total rule, written only after cn=config took it.
+case "$pt_marker_action" in
+  set) printf '%s\n' "$pt_want" > "$pt_marker" ;;
+  clear) rm -f "$pt_marker" ;;
+esac
 rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 
 # ---------------------------------------------------------------------------

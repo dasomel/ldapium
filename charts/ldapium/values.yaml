@@ -119,11 +119,12 @@ ldap:
     #    olcSizeLimit (10000), so a non-admin identity cannot page past that
     #    many entries (GET /api/users?limit=... then fails with
     #    size_limit_exceeded); the admin DN is exempt. A positive number or
-    #    "unlimited" renders `olcLimits: {0}users size.prtotal=<value>` for
+    #    "unlimited" appends `olcLimits: users size.prtotal=<value>` for
     #    every authenticated DN (anonymous excluded); unpaged searches keep
     #    olcSizeLimit. Trade-off: any authenticated user can then page through
     #    everything their ACLs let them read. Reconciled on every start, so
-    #    emptying it again removes the limit.
+    #    emptying it again removes the rule the image added. Operator-written
+    #    olcLimits rules keep precedence (slapd applies the first match).
     pagedTotal: ""
 
   # -- Last-bind tracking (slapo-lastbind -> pwdLastSuccess): records when each
