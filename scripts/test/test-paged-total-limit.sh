@@ -403,6 +403,11 @@ specs=(
   $'users \t size.prtotal=HARD'
   'users size.prtotal=0100'
   'users size.prtotal=0'
+  '"users" size.prtotal=unlimited'
+  'users size.prtotal="unlimited"'
+  'us"ers" size.prtotal=unlimited'
+  'users "size.prtotal=unlimited"'
+  '"USERS" Size.PrTotal="NONE"'
 )
 for spec in "${specs[@]}"; do
   q="$(printf '%q' "$spec")"
@@ -434,6 +439,33 @@ for spec in 'users size.prtotal=100 size.hard=50' 'USERS size.hard=50' 'users si
   expect_eq "other shape '${spec}': off leaves it alone" "$(olc_limits "$c")" "{0}${spec}"
   clear_limits
 done
+
+# A quoted DN with spaces and a comma is ONE token and never the reserved selector,
+# even when its text looks like the reserved rule.
+for dnrule in 'dn.exact="cn=users size.prtotal=unlimited,dc=example,dc=org" size.soft=100' \
+  'dn.exact="cn=John Doe,ou=people,dc=example,dc=org" size.hard=100' \
+  'dn.exact="cn=a\, b,dc=example,dc=org" size.soft=100'; do
+  add_limit "{0}${dnrule}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+  expect_eq "quoted DN '${dnrule}': off leaves it alone" "$(olc_limits "$c")" "{0}${dnrule}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+  expect_eq "quoted DN: set appends ours behind it" "$(sorted_limits "$c")" "{0}${dnrule}|{1}users size.prtotal=unlimited|"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+  expect_eq "quoted DN: off removes only ours" "$(olc_limits "$c")" "{0}${dnrule}"
+  clear_limits
+done
+
+# Not certain => no guessing: an unterminated quote aborts in set/off before any
+# modification, and unset (hands off) never reads the config at all.
+add_limit '{0}users size.prtotal="unlimited'
+expect_eq "unterminated quote: set aborts" \
+  "$(run_abort "$real_image" "could not be parsed with certainty" -e LDAP_PAGED_TOTAL_LIMIT=900)" "abort ok (exit 1)"
+expect_eq "unterminated quote: off aborts" \
+  "$(run_abort "$real_image" "could not be parsed with certainty" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
+expect_eq "unterminated quote: nothing was modified" "$(offline_limits)" 'users size.prtotal="unlimited|'
+start "$c" "$vol"
+expect_eq "unterminated quote: unset never reads the rules and starts" "$(olc_limits "$c")" '{0}users size.prtotal="unlimited'
+clear_limits
 
 # --- failed apply aborts, in both directions (unwritable config). ------------
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
@@ -487,6 +519,8 @@ FROM ${real_image}
 USER root
 COPY slapmodify-shim /tmp/slapmodify-shim
 COPY slapcat-shim /tmp/slapcat-shim
+COPY base64-shim /tmp/base64-shim
+RUN p="\$(command -v base64)" && mkdir /opt/real-base64 && cp -L "\$p" /opt/real-base64/base64 && rm -f "\$p" && cp /tmp/base64-shim "\$p" && chmod 755 "\$p"
 RUN p="\$(command -v slapcat)" && mkdir /opt/real-slapcat && mv "\$p" /opt/real-slapcat/slapcat && cp /tmp/slapcat-shim "\$p" && chmod 755 "\$p"
 RUN p="\$(command -v slapmodify)" && mkdir /opt/real-slapmodify && mv "\$p" /opt/real-slapmodify/slapmodify && cp /tmp/slapmodify-shim "\$p" && chmod 755 "\$p"
 USER ldap
@@ -519,10 +553,27 @@ case " $* " in
 esac
 exec "$real" "$@"
 SHIM
+cat > "${shim_dir}/base64-shim" <<'SHIM'
+#!/bin/sh
+if [ "$FAKE_BASE64" = fail ] && [ "$1" = "-d" ]; then exit 1; fi
+exec /opt/real-base64/base64 "$@"
+SHIM
 shim_image="l3-ptl-shim-${suffix}"
 docker build -q -t "$shim_image" "$shim_dir" >/dev/null
 images+=("$shim_image")
 
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
+add_limit "{1}${kr_rule}"
+expect_eq "decoder fails on a valid base64 rule: set aborts before changing anything" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=100 -e FAKE_BASE64=fail)" "abort ok (exit 1)"
+expect_eq "decoder fails: off aborts instead of missing a rule it could not read" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off -e FAKE_BASE64=fail)" "abort ok (exit 1)"
+expect_eq "decoder fails: nothing was modified" "$(offline_limits)" "users size.prtotal=900|"
+image="$shim_image"
+start "$c" "$vol" -e FAKE_BASE64=fail
+image="$real_image"
+expect_eq "decoder fails: unset never reads the rules and starts" "$(olc_limits "$c")" "{0}users size.prtotal=900"
+clear_limits
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
 expect_eq "dump read fails (slapcat exits 1): set aborts before changing anything" \
   "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=100 -e FAKE_SLAPCAT=fail)" "abort ok (exit 1)"

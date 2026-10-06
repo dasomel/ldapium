@@ -225,8 +225,14 @@ included), selector and keys compare case-insensitively like slapd, and the
 value is read semantically (`unlimited`, `none`, `-1` and `-01` are the same,
 leading zeros and `+` are ignored, `disabled` and `hard` are their own values), so
 `USERS<TAB>SIZE.PRTOTAL=NONE` is the reserved rule and an already equal rule is
-not rewritten; `users` with any other limit alongside is a different shape. An
-unreadable or empty config dump aborts before anything is changed. So
+not rewritten; `users` with any other limit alongside is a different shape.
+Double quotes are handled like slapd does (`"users"`, `size.prtotal="unlimited"`,
+`us"ers"`: quotes removed, white space inside them belongs to the token, so a
+quoted DN stays one token). **Anything the parser cannot be certain about is not
+guessed, it aborts startup in set/off mode before any change:** an unterminated
+quote, a backslash before a double quote, a backslash in a `users` rule or in a
+first token that would become `users` without it, a value that cannot be base64
+decoded, an unreadable or empty config dump. So
 there is no state that can drift, go stale or survive a crash half-written.
 slapd applies only the *first* matching `olcLimits` rule and allows one rule per
 selector: the rule is appended, so a rule you wrote for a DN or a group keeps its
