@@ -333,16 +333,21 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 ISSUER=https://sso.example.com/realms/example      # = MACHINE_OIDC_ISSUER_URL (토큰 iss와 바이트 단위로 같아야 함)
 BASE=https://ldapium.example.com
 
-# 1. 토큰 (secret은 파일에서 읽는다)
-TOKEN=$(curl -sS -X POST "$ISSUER/protocol/openid-connect/token" \
+# 1. 토큰을 헤더 파일로 받는다 (secret은 파일에서 읽고, 토큰은 변수·argv에 두지 않는다)
+HDR=$(umask 077; mktemp)
+curl -sS -X POST "$ISSUER/protocol/openid-connect/token" \
   -d grant_type=client_credentials -d client_id=svc-reporting \
-  --data-urlencode client_secret@/run/secrets/svc-reporting | jq -r .access_token)
+  --data-urlencode client_secret@/run/secrets/svc-reporting \
+  | jq -r '"Authorization: Bearer " + .access_token' > "$HDR"
 
-# 2. bearer로 호출 (쿠키를 함께 보내면 400)
-curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/users?limit=50"
-curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/entry" --get \
+# 2. bearer로 호출 (쿠키를 함께 보내면 400). 헤더는 파일에서 읽는다
+curl -sS -H @"$HDR" "$BASE/api/users?limit=50"
+curl -sS -H @"$HDR" "$BASE/api/entry" --get \
   --data-urlencode "dn=uid=jdoe,ou=people,dc=example,dc=org"
+rm -f "$HDR"
 ```
+
+토큰과 secret은 명령줄 인자(`-H "Authorization: Bearer $TOKEN"`, `-d client_secret=…`)에 쓰지 마세요. 인자는 같은 호스트의 다른 사용자가 프로세스 목록(`ps`)으로 볼 수 있습니다. `curl -H @file`(curl 7.55+)과 `--data-urlencode name@file`은 파일에서 읽고, 파일은 `umask 077`로 만들어 쓰고 바로 지웁니다.
 
 한 번 받은 토큰은 `exp`까지 재사용하고(Keycloak 기본 300초, ldapium 상한 `MACHINE_TOKEN_MAX_TTL`), 만료 전에 새로 받으세요. 401 `token_expired`를 받으면 새 토큰으로 한 번만 재시도합니다. 다른 401은 재시도해도 같습니다.
 list의 `cursor`는 토큰을 갱신해도 이어집니다(issuer+client에 묶임).

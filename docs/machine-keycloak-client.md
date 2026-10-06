@@ -61,17 +61,22 @@ ldapium은 SSO client를 `azp`로 거부하므로 방어는 이중이지만, 공
 
 ```bash
 ISSUER=https://sso.example.com/realms/example     # = MACHINE_OIDC_ISSUER_URL
-TOKEN=$(curl -sS -X POST "$ISSUER/protocol/openid-connect/token" \
+HDR=$(umask 077; mktemp)                           # 0600; holds the token, never put it in argv
+curl -sS -X POST "$ISSUER/protocol/openid-connect/token" \
   -d grant_type=client_credentials -d client_id=svc-reporting \
-  --data-urlencode client_secret@/path/to/secret-file | jq -r .access_token)
+  --data-urlencode client_secret@/path/to/secret-file \
+  | jq -r '"Authorization: Bearer " + .access_token' > "$HDR"
 ```
 
-(secret은 파일·Secret에서 읽고 셸 히스토리에 남기지 않습니다. 사용자 지정 scope가 Optional이면 `-d scope='directory.users.read'`를 추가합니다.)
+(secret은 파일에서 읽습니다. `-d client_secret=…`나 `-H "Authorization: Bearer $TOKEN"`처럼 인자에 쓰면 `ps`로 보입니다. 호출은 `curl -H @"$HDR" …`, 끝나면 `rm -f "$HDR"`. 사용자 지정 scope가 Optional이면 `-d scope='directory.users.read'`를 추가합니다.)
 
-토큰을 서명 검증 없이 **눈으로만** 확인할 때(비밀이 아닌 claim만 출력):
+토큰을 서명 검증 없이 **눈으로만** 확인할 때(비밀이 아닌 claim만 출력; JWT는 패딩 없는 base64url이라 직접 복원합니다):
 
 ```bash
-printf '%s' "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
+cut -d' ' -f3 "$HDR" | python3 -I -c '
+import sys, json, base64
+p = sys.stdin.read().strip().split(".")[1]
+print(json.dumps(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))))' \
   | jq '{typ,iss,aud,azp,client_id,preferred_username,scope,iat,exp,ttl:(.exp-.iat)}'
 ```
 
@@ -102,7 +107,13 @@ printf '%s' "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
 
 ## 6. 키 회전과 JWKS
 
-- 키 회전은 **overlap**으로 합니다: 새 서명 키를 추가해 두 키가 JWKS에 함께 있게 한 뒤 옛 키를 제거합니다(관측 §2.6: 옛 `kid` 토큰도 overlap 동안 검증됨). 옛 키를 곧바로 지우면 그 `kid`로 서명된 발급 토큰이 즉시 401입니다.
+- 키 회전은 **overlap**으로 합니다: 새 서명 키를 추가해 두 키가 JWKS에 함께 있게 한 뒤, 이미 발급된 토큰이 모두 만료된 다음에 옛 키를 제거합니다(관측 §2.6: 옛 `kid` 토큰도 overlap 동안 검증됨).
+- **키를 삭제·회전해 내보내는 것은 즉시 폐기가 아닙니다.** ldapium은 받아 둔 키로 로컬 검증하며(`machineauth/keyset.go` `lookup`, 알려진 `kid`는 캐시된 키를 그대로 반환), 삭제를 알아차리는 시점은 다음 JWKS 조회입니다. 기본값 기준:
+  - **신선(FRESH, 마지막 조회 성공 후 `MACHINE_JWKS_CACHE_TTL`=10분 이내)**: 삭제된 키로 서명된 토큰도 **계속 200**입니다. 이 동안 알려진 `kid`는 조회를 일으키지 않습니다.
+  - **STALE(TTL 초과, `MACHINE_JWKS_CACHE_TTL`+`MACHINE_JWKS_MAX_STALE`=1시간 10분 이내)**: 알려진 `kid`의 첫 요청은 여전히 캐시된 옛 키로 검증되어 통과하고, 그 요청이 **백그라운드 조회 1건**을 시작합니다(조회 최소 간격 `MACHINE_JWKS_MIN_REFRESH`=30초 예산 안에서). 조회가 성공하면 키 집합이 교체되어 이후 그 `kid`는 401(`token_invalid`, `reason=kid`)입니다. 조회가 실패하면(Keycloak 중지 등) backoff(30초→최대 5분)로 재시도하며 그동안은 계속 통과합니다.
+  - **EXPIRED(1시간 10분 초과)**: 캐시를 쓰지 않고 조회가 필요합니다. 성공하면 위처럼 401, 실패·backoff 중이면 **503 + `Retry-After`**.
+  - 요청이 없으면 조회도 없습니다(키 집합은 요청이 올 때만 갱신). 최악의 경우 삭제된 키의 토큰이 통과하는 시간은 **조회가 계속 실패할 때 1시간 10분**, 정상일 때는 **캐시 TTL 10분 + 그 뒤 첫 요청이 갱신을 마칠 때까지**입니다. 토큰 자체의 `exp`(+skew)가 더 이르면 그때 끝납니다. 수치는 `keyset.go`와 CHANGE.md "JWKS·discovery 상태 기계"(시나리오 c·d·e)를 읽어 확인했고, 실제 Keycloak 앞에서의 라이브 확인은 하지 않았습니다(단위 5a).
+  - **즉시 폐기 수단이 아닙니다.** 즉시 차단은 서버 쪽뿐입니다: `MACHINE_ALLOWED_CLIENTS`에서 제거 또는 `MACHINE_AUTH_ENABLED=false`로 배포하고 **모든 replica를 교체**한 뒤 진행 중 요청이 끝났는지 확인합니다([`machine-auth-operations.md`](machine-auth-operations.md)). 새 pod는 시작 시 키를 새로 받으므로 pod 교체는 캐시도 비웁니다.
 - ldapium은 JWKS를 10분(`MACHINE_JWKS_CACHE_TTL`) 캐시하고 조회는 최소 30초 간격(`MACHINE_JWKS_MIN_REFRESH`)입니다. 새 `kid`는 마지막 조회 성공 후 30초까지 401일 수 있습니다(문서화된 비용).
 - Keycloak/JWKS가 닿지 않으면 알려진 `kid`는 stale 한도(`MACHINE_JWKS_MAX_STALE`, 기본 1시간) 안에서 로컬 검증되고, 그 밖에는 **503 + `Retry-After`**(fail closed)입니다. 서명 검증을 생략하는 폴백은 없습니다.
 - issuer/JWKS는 https만 허용되며, ldapium Pod에서 도달 가능해야 합니다([`air-gap.md`](air-gap.md) "머신 인증과 issuer 도달성").

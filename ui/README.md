@@ -361,14 +361,16 @@ shifts depending on which other databases/overlays are enabled, rather than
 assuming a fixed value:
 
 ```bash
-ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+PWF=$(umask 077; mktemp); printf %s "$LDAP_ADMIN_PASSWORD" > "$PWF"   # a password in argv (-w) is visible in process listings; -y reads it from the file
+ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -y "$PWF" \
   -b cn=config "(olcSuffix=cn=accesslog)" dn | sed -n 's/^dn: //p')
-cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -y "$PWF"
 dn: $ACCESSLOG_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by dn.exact="<your DN>" read by * none
 EOF
+rm -f "$PWF"
 ```
 
 ## Development

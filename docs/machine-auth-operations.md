@@ -48,7 +48,8 @@ kubectl get rs -n <ns> -l app.kubernetes.io/component=ui     # 이전 ReplicaSet
 **3) 같은 토큰으로 확인**: 차단 대상 client의 (유출된 것으로 보이는) 토큰이 아닌, 같은 client로 **차단 전에 받아 둔 테스트 토큰**을 보냅니다.
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TEST_TOKEN" https://ldapium.example.com/api/users
+# $HDR: "Authorization: Bearer <token>" 한 줄이 든 0600 파일 (docs/api.md 예). 토큰을 인자에 쓰지 않는다(ps에 보임)
+curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HDR" https://ldapium.example.com/api/users
 # client 제거: 401 (code token_invalid), 기능 끔: 401 (code unauthenticated)
 ```
 

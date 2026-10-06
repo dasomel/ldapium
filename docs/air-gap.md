@@ -52,11 +52,16 @@ built, before it installs anything.
 ## Install
 
 ```bash
+# offline-install.sh only forwards --set, and a password in argv is visible in
+# process listings, so create the Secret from a file and reference it
+(umask 077; openssl rand -base64 24 | tr -d '\n' > admin.pw)
+kubectl create namespace directory
+kubectl -n directory create secret generic ldapium-admin --from-file=admin-password=admin.pw
 scripts/offline-install.sh \
   --bundle ./bundle \
   --release directory \
   --namespace directory \
-  --set auth.adminPassword="$(openssl rand -base64 24)" \
+  --set auth.existingSecret=ldapium-admin \
   --set replicaCount=3
 ```
 

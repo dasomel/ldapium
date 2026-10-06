@@ -9,9 +9,11 @@ bind) is described under Replication below.
 ## Quick start
 
 ```bash
+# a value in --set is visible in process listings; --set-file reads it from a file
+(umask 077; openssl rand -base64 24 | tr -d '\n' > admin.pw)
 helm install ldap charts/ldapium \
   --set image.repository=<your-registry>/ldapium \
-  --set auth.adminPassword="$(openssl rand -base64 24)"
+  --set-file auth.adminPassword=admin.pw
 ```
 
 There is **no default admin password**: `image/entrypoint.sh` refuses to start
@@ -841,7 +843,7 @@ with its binder attributed, a failed bind shows up with `reqResult: 49`
 (not silently dropped), and a write does **not** show up a second time.
 
 ```
-$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+$ ldapsearch -x -D cn=admin,cn=accesslog -y <password-file> -b cn=accesslog \
     "(objectClass=auditSearch)" reqStart reqAuthzID reqDN reqFilter reqResult
 dn: reqStart=20260823155413.000004Z,cn=accesslog
 reqStart: 20260823155413.000004Z
@@ -850,7 +852,7 @@ reqDN: dc=example,dc=org
 reqFilter: (objectClass=*)
 reqResult: 0
 
-$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+$ ldapsearch -x -D cn=admin,cn=accesslog -y <password-file> -b cn=accesslog \
     "(objectClass=auditBind)" reqStart reqDN reqResult
 dn: reqStart=20260823155732.000004Z,cn=accesslog
 reqStart: 20260823155732.000004Z
@@ -1041,14 +1043,16 @@ assuming a fixed value, the same way `.github/workflows/ui-e2e.yml` does in
 CI:
 
 ```bash
-MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+PWF=$(umask 077; mktemp); printf %s "$LDAP_ADMIN_PASSWORD" > "$PWF"   # a password in argv (-w) is visible in process listings; -y reads it from the file
+MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -y "$PWF" \
   -b cn=config "(olcDatabase=monitor)" dn | sed -n 's/^dn: //p')
-cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -y "$PWF"
 dn: $MONITOR_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="<your DN>" read by * none
 EOF
+rm -f "$PWF"
 ```
 
 Widening this ACL to `by users read` instead of naming a specific DN would
@@ -1337,4 +1341,4 @@ read/write/list/delete rights for owned-backup retention. No Secret values are r
 The runtimeConfirmed setting is an operator assertion; Helm cannot inspect image contents.
 
 Backups UI policies default disabled. Select one scheduler owner: existing `backup`
-CronJob and this controller otherwise operate independently. See [UI operating guide](../../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).
+CronJob and this controller otherwise operate independently. See [UI operating guide](../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).
