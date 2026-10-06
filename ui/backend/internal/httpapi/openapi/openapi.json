@@ -900,7 +900,7 @@
       "get": {
         "operationId": "listUsers",
         "summary": "List users",
-        "description": "Users under the user search base. Capped at 5000 entries; `truncated: true` means more exist and cannot currently be fetched (no cursor).",
+        "description": "Users under the base DN. Without `limit`, `cursor`, `q` or `sort` this is the legacy listing: at most 5000 entries in directory order, `truncated: true` when more exist. With any of those parameters the listing is paged (keyset): entries come in strictly increasing order of (lowercased smallest `uid`, lowercased DN), up to `limit` per page; follow `nextCursor` while `hasMore` is true. A page can be shorter than `limit`, even empty, while `hasMore` is true (entries can change while a page is assembled): continue on `hasMore`, never on page length. Cursors are opaque, bound to the login session (a new login invalidates them), to the resource and to the `q` they were issued with (send the same `q` on every page). Concurrent changes (no snapshot): an entry that exists and keeps its sort key and DN for the whole traversal is returned exactly once; an entry added after the cursor position may appear, one added at or before it will not; an entry deleted before its page is read is not returned, one already returned stays returned; a renamed entry or one whose sort key changed can appear twice (moved from before to after the cursor) or not at all (moved from after to before). Every page scans the whole candidate set (O(N) per page, O(N^2/limit) for a full traversal), bounded by 100000 candidates and a 30 s request deadline. The directory's size limit (olcSizeLimit, default 10000, counted over the whole scan) stops a non-admin identity with 422 `size_limit_exceeded` instead of returning a partial page: narrow with `q`, use an identity exempt from the limit (the admin DN), or ask the operator to set LDAP_PAGED_TOTAL_LIMIT (chart value ldap.limits.pagedTotal).",
         "tags": [
           "Users"
         ],
@@ -916,6 +916,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`cursor_invalid`: the cursor was tampered with, truncated, of an unknown version, or issued for another login session, resource or `q`. The message never says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (limit, q or sort rejected; the message names only the field), `size_limit_exceeded` (the directory's size limit stopped the scan; no partial page) or `scan_limit_exceeded` (more than 100000 candidates; narrow with q).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline; retryable, `Retry-After` is set).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -936,7 +966,53 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1-200 (default 50). Sending any of limit, cursor, q or sort selects the paged mode.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor: the `nextCursor` of the previous page. Invalid, tampered or foreign (other login session, resource or `q`) cursors are 400 `cursor_invalid`.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Substring filter, at most 64 characters, valid UTF-8, no control characters; surrounding whitespace is trimmed. Matched case-insensitively against uid, cn, mail and displayName. Filter characters such as `*`, `(`, `)` and `\\` are matched literally.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Only the default key is accepted: `uid` (ascending). Any other value is 422 `validation_failed`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "uid"
+              ]
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "createUser",
@@ -1862,7 +1938,7 @@
       "get": {
         "operationId": "listGroups",
         "summary": "List groups",
-        "description": "Groups under the group search base. Capped at 5000 entries; `truncated: true` means more exist and cannot currently be fetched (no cursor).",
+        "description": "Groups under the base DN. Without `limit`, `cursor`, `q` or `sort` this is the legacy listing: at most 5000 entries in directory order, `truncated: true` when more exist. With any of those parameters the listing is paged (keyset): entries come in strictly increasing order of (lowercased smallest `cn`, lowercased DN), up to `limit` per page; follow `nextCursor` while `hasMore` is true. A page can be shorter than `limit`, even empty, while `hasMore` is true (entries can change while a page is assembled): continue on `hasMore`, never on page length. Cursors are opaque, bound to the login session (a new login invalidates them), to the resource and to the `q` they were issued with (send the same `q` on every page). Concurrent changes (no snapshot): an entry that exists and keeps its sort key and DN for the whole traversal is returned exactly once; an entry added after the cursor position may appear, one added at or before it will not; an entry deleted before its page is read is not returned, one already returned stays returned; a renamed entry or one whose sort key changed can appear twice (moved from before to after the cursor) or not at all (moved from after to before). Every page scans the whole candidate set (O(N) per page, O(N^2/limit) for a full traversal), bounded by 100000 candidates and a 30 s request deadline. The directory's size limit (olcSizeLimit, default 10000, counted over the whole scan) stops a non-admin identity with 422 `size_limit_exceeded` instead of returning a partial page: narrow with `q`, use an identity exempt from the limit (the admin DN), or ask the operator to set LDAP_PAGED_TOTAL_LIMIT (chart value ldap.limits.pagedTotal).",
         "tags": [
           "Groups"
         ],
@@ -1878,6 +1954,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GroupList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`cursor_invalid`: the cursor was tampered with, truncated, of an unknown version, or issued for another login session, resource or `q`. The message never says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (limit, q or sort rejected; the message names only the field), `size_limit_exceeded` (the directory's size limit stopped the scan; no partial page) or `scan_limit_exceeded` (more than 100000 candidates; narrow with q).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`scan_timeout` (the 30 s request deadline ran out; narrow with q) or `unavailable` (another listing on the same login session held the scan slot until this request's deadline; retryable, `Retry-After` is set).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1898,7 +2004,53 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1-200 (default 50). Sending any of limit, cursor, q or sort selects the paged mode.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor: the `nextCursor` of the previous page. Invalid, tampered or foreign (other login session, resource or `q`) cursors are 400 `cursor_invalid`.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Substring filter, at most 64 characters, valid UTF-8, no control characters; surrounding whitespace is trimmed. Matched case-insensitively against cn and description. Filter characters such as `*`, `(`, `)` and `\\` are matched literally.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Only the default key is accepted: `cn` (ascending). Any other value is 422 `validation_failed`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cn"
+              ]
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "createGroup",
@@ -5763,7 +5915,15 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "True when the 5000-entry cap cut the listing"
+            "description": "Legacy listing: true when the 5000-entry cap cut the listing. Always false in paged mode, where `hasMore` says whether more entries exist."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Paged mode only: true while entries remain after this page. Continue with `nextCursor`, regardless of how many items this page holds."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Paged mode only, present only while `hasMore` is true: pass it as `cursor` (with the same `q`) to get the next page."
           }
         },
         "required": [
@@ -5811,7 +5971,15 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "True when the 5000-entry cap cut the listing"
+            "description": "Legacy listing: true when the 5000-entry cap cut the listing. Always false in paged mode, where `hasMore` says whether more entries exist."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Paged mode only: true while entries remain after this page. Continue with `nextCursor`, regardless of how many items this page holds."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Paged mode only, present only while `hasMore` is true: pass it as `cursor` (with the same `q`) to get the next page."
           }
         },
         "required": [
@@ -7169,6 +7337,7 @@
       "Do not log or persist generatedPassword",
       "Do not retry destructive operations blindly",
       "Do not assume a truncated list is complete"
-    ]
+    ],
+    "listing": "Page GET /api/users and /api/groups with limit (1-200) and the returned nextCursor until hasMore is false, resending the same q; continue on hasMore, not on page length. 422 size_limit_exceeded is never a partial result: narrow with q or use an identity exempt from the directory size limit."
   }
 }
