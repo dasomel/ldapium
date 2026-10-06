@@ -569,7 +569,9 @@ check "slapdn: multivalued RDN order" "$(dn_norm 'cn=a+uid=b,dc=x')" "$(dn_norm 
 # that it binds in plaintext and can ADD (what the TLS-only read-only identity
 # must never be able to do), then start with prepare, which must refuse.
 alias_case() {
-  local label="$1" root="$2" alias="$3" xw=0 xout
+  local label="$1" root="$2" alias="$3" stub="${4:-}" want="${5:-is a stored olcRootDN or replication bind DN}" xw=0 xout
+  local sargs=()
+  [ -z "$stub" ] || sargs=(-v "${certs}:/certs:ro" -e "PATH=/certs/${stub}:${image_path}")
   local envs=(-v "${xv}-cfg:/etc/openldap/slapd.d" -v "${xv}-data:/var/lib/openldap/data" -e "LDAP_ROOT_DN=${root}" -e LDAP_ADMIN_PASSWORD="$pw"
     -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 -e "LDAP_REPLICATION_PEERS=ldap://${xv}:389,ldap://${xv}-peer:389")
   docker volume rm -f "${xv}-cfg" "${xv}-data" >/dev/null
@@ -596,16 +598,54 @@ cn: evil
 EOF
 echo "$rc")"
   docker rm -f "$xv" >/dev/null
-  docker run -d --name "$xv" "${envs[@]}" -e LDAP_REPLICATION_IDENTITY=prepare "$image" >/dev/null
+  docker run -d --name "$xv" "${envs[@]}" ${sargs[@]+"${sargs[@]}"} -e LDAP_REPLICATION_IDENTITY=prepare "$image" >/dev/null
   while [ "$(docker inspect -f '{{.State.Running}}' "$xv" 2>/dev/null || echo gone)" = "true" ] && [ "$xw" -lt "$timeout_s" ]; do sleep 1; xw=$((xw + 1)); done
   xout="$(docker logs "$xv" 2>&1)"
   check "${label}: prepare refuses to start" "1" "$(docker inspect -f '{{.State.ExitCode}}' "$xv")"
-  if [[ "$xout" == *"is a stored olcRootDN or replication bind DN"* ]]; then ok "${label}: fixed refusal message"; else bad "${label}: message missing; got $(printf '%s' "$xout" | tail -n 2)"; fi
+  if [[ "$xout" == *"$want"* ]]; then ok "${label}: fixed refusal message"; else bad "${label}: message missing; got $(printf '%s' "$xout" | tail -n 2)"; fi
   check "${label}: no identity rule stored" "0" \
     "$(docker run --rm -v "${xv}-cfg:/etc/openldap/slapd.d" -v "${xv}-data:/var/lib/openldap/data" --entrypoint slapcat "$image" -n 0 -F /etc/openldap/slapd.d -o ldif-wrap=no | grep -c 'ssf=128' || true)"
   docker rm -f "$xv" >/dev/null
 }
 alias_case "alias, hex-escaped and cased RDN" 'dc=example,dc=org' 'CN=Replic\61tor,DC=Example,DC=Org'
+
+# --- Part 7: a helper that fails quietly must never read as "no collision" -----
+# Stubs earlier in PATH make slapdn / slapcat misbehave (exit 0 with no output, a
+# blank line, two lines, exit 255, garbage; slapcat returning nothing). The
+# selective stub breaks ONLY for the aliased stored rootDN (the reserved DN spelled
+# CN=Replic\61tor...), so every other normalization still works: the old code then
+# read the alias as an empty string that is "not equal" to the identity and started.
+image_path="$(docker run --rm --entrypoint printenv "$image" PATH)"
+mkstub() { # <dir> <script body> <file name>: an executable stub at /certs/<dir>/<name>
+  docker run --rm --user 0 -v "${certs}:/certs" --entrypoint sh "$image" \
+    -c 'mkdir -p "/certs/$1" && printf "%s\n" "$2" > "/certs/$1/$3" && chmod 755 "/certs/$1" "/certs/$1/$3"' sh "$1" "$2" "$3"
+}
+mkstub st-empty '#!/bin/sh
+exit 0' slapdn
+mkstub st-blank '#!/bin/sh
+echo
+exit 0' slapdn
+mkstub st-two '#!/bin/sh
+printf "dc=a\ndc=b\n"
+exit 0' slapdn
+mkstub st-garbage '#!/bin/sh
+echo x
+exit 0' slapdn
+mkstub st-255 '#!/bin/sh
+exit 255' slapdn
+# shellcheck disable=SC2016 # the stub body is meant to be written literally
+mkstub st-selective '#!/bin/sh
+case "$4" in cn=Replicator*) exit 0 ;; esac
+exec /usr/sbin/slapdn "$@"' slapdn
+mkstub st-slapcat '#!/bin/sh
+exit 0' slapcat
+cmsg="cannot normalize"
+for stub in st-empty st-blank st-two st-garbage st-255; do
+  fresh_refuse "fault injection (${stub}): slapdn output is refused" "$cmsg" \
+    -e LDAP_ROOT_DN="$base" -e LDAP_SERVER_ID=2 -v "${certs}:/certs:ro" -e "PATH=/certs/${stub}:${image_path}"
+done
+alias_case "fault injection (selective empty slapdn): the aliased stored rootDN is refused" 'dc=example,dc=org' 'CN=Replic\61tor,DC=Example,DC=Org' st-selective "$cmsg"
+alias_case "fault injection (slapcat reads nothing): the config read is refused" 'dc=example,dc=org' 'CN=Replic\61tor,DC=Example,DC=Org' st-slapcat "cannot read or modify cn=config offline"
 
 # --- Part 6: olcLimits are first-match, so the identity rule must be first ----
 offv() { docker run --rm -i -v "${lv}-cfg:/etc/openldap/slapd.d" -v "${lv}-data:/var/lib/openldap/data" --entrypoint "$1" "$image" "${@:2}"; }

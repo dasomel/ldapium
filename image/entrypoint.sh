@@ -121,9 +121,20 @@ case "$LDAP_REPLICATION_IDENTITY" in
       _dnc=$(mktemp) || return 1
       printf 'include /etc/openldap/schema/core.schema\ninclude /etc/openldap/schema/cosine.schema\ninclude /etc/openldap/schema/inetorgperson.schema\n' > "$_dnc"
       _dnr=0
-      slapdn -f "$_dnc" -N "$1" 2>/dev/null || _dnr=$?
+      _dno=$(slapdn -f "$_dnc" -N "$1" 2>/dev/null) || _dnr=$?
       rm -f "$_dnc"
-      return "$_dnr"
+      [ "$_dnr" -eq 0 ] || return 1
+      # Never trust an exit status alone: the output must be exactly one
+      # non-blank line shaped like a DN (x=y). An empty result would otherwise
+      # compare equal/unequal to anything.
+      case "$_dno" in
+        *'
+'*) return 1 ;;
+        ?*=?*) ;;
+        *) return 1 ;;
+      esac
+      [ -n "$(printf '%s' "$_dno" | tr -d '[:space:]')" ] || return 1
+      printf '%s\n' "$_dno"
     }
     if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
       # The root DN is written into an ACL value and an LDIF line below: keep it
@@ -1358,6 +1369,9 @@ if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
   ri_scan() {
     ri_cfg=$(slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no) || die "$ri_fail"
     ri_mdb=$(printf '%s\n' "$ri_cfg" | sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p')
+    # An empty read must never mean "nothing stored": the main database entry
+    # always exists, so its absence is a failed read.
+    [ -n "$ri_mdb" ] || die "$ri_fail"
     ri_have_acl=0
     ri_have_lim=0
     ri_stored0=$(printf '%s\n' "$ri_mdb" | sed -n 's/^olcAccess: {0}/{0}/p')
@@ -1374,15 +1388,27 @@ if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
   # main, config, accesslog, monitor) nor the stored syncrepl bind DN. Compared
   # as slapd-normalized DNs; an unparseable stored DN refuses.
   ri_want_dn=$(ldap_dn_norm "$ri_dn") || die "cannot normalize the reserved replication identity DN ${ri_dn}; refusing"
-  ri_roots=$(printf '%s\n' "$ri_cfg" | sed -n -e 's/^olcRootDN: //p' -e 's/^olcSyncrepl: .*binddn="\([^"]*\)".*$/\1/p')
+  ri_roots=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcRootDN: //p')
+  # Every database has a rootDN (main, config, ...): an empty list is a failed
+  # read, never "no collision".
+  [ -n "$ri_roots" ] || die "$ri_fail"
+  ri_binds=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcSyncrepl: .*binddn="\([^"]*\)".*$/\1/p')
   while IFS= read -r ri_root; do
-    [ -n "$ri_root" ] || continue
     ri_root_norm=$(ldap_dn_norm "$ri_root") || die "cannot normalize a stored rootDN/bind DN; refusing replication identity prepare"
     [ "$ri_root_norm" != "$ri_want_dn" ] ||
       die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN or replication bind DN (a rootDN bypasses ACLs); refusing replication identity prepare"
   done <<EOF
 $ri_roots
 EOF
+  if [ -n "$ri_binds" ]; then
+    while IFS= read -r ri_root; do
+      ri_root_norm=$(ldap_dn_norm "$ri_root") || die "cannot normalize a stored rootDN/bind DN; refusing replication identity prepare"
+      [ "$ri_root_norm" != "$ri_want_dn" ] ||
+        die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN or replication bind DN (a rootDN bypasses ACLs); refusing replication identity prepare"
+    done <<EOF
+$ri_binds
+EOF
+  fi
   # D61/D64: no stored path by which another principal could be mapped onto or
   # authorized as the identity. Fixed messages, no credential material.
   ri_verify=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcTLSVerifyClient: //p')
