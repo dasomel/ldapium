@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-09-14 against `main`.
+Last verified: 2026-09-14 against `main`, except the "External HTTP API" section, which was added 2026-10-06 against `main` at `6c118ac` from the audit in `docs/changes/CLOSE-OUT-2026-10.md` and the code, tests and PR history it cites (the live Docker scripts were not re-run for it).
 
 This snapshot records features already merged to `main`. Open pull requests and issue-only roadmap items are intentionally excluded.
 
@@ -59,6 +59,28 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - browser-driven Playwright E2E against a real directory
 - Keycloak/OIDC integration path with end-to-end user federation testing
 
+## External HTTP API (`/api`, UI backend)
+
+Contract: `docs/api.md`. Operator procedures: `docs/ui-operations.md`. Decisions: `docs/changes/api-error-envelope/ADR.md`, `docs/changes/api-conditional-writes/ADR.md`.
+
+- one JSON error envelope (`error`, `message`, `code`, `requestId`, `retryable`) on every `/api` error, a closed append-only `code` table pinned by a golden-list test, fixed text for 5xx, no DN or LDAP diagnostic text in 4xx (#218; PRs #234, #240, #242, #246)
+- `message` is a deprecated copy of `error`, kept for the whole of `/api/v1`
+- same-origin gate on state-changing requests that carry an `Origin` header (403 `origin_mismatch`); requests without `Origin` are unaffected and there is no switch to turn it off
+- opt-in `/metrics` on a separate listener (`METRICS_ADDR`, chart `ui.metrics.*` with a required scrape-peer list); `GET /metrics` on the public port is a 404 envelope
+- opt-in read-only CORS (`CORS_ALLOWED_ORIGINS`, chart `ui.cors.*`); writes are never CORS-enabled
+- cursor pagination for `GET /api/users` and `/api/groups` (`limit`, `cursor`, `q`, `sort`; legacy response byte-for-byte unchanged), with the opt-in image setting `LDAP_PAGED_TOTAL_LIMIT` (chart `ldap.limits.pagedTotal`) for non-root enumeration past `LDAP_SIZE_LIMIT` (#215; PRs #237, #243, #244, #256)
+- conditional writes: `etag`/`ETag` from `entryCSN`, `If-Match` enforced by slapd through the RFC 4528 assertion control, `PATCH` for users and groups, identity-bound compensation for a user create whose password step fails (#216 part A, PR #235)
+- opt-in `Idempotency-Key` for core writes and backup start (#216 part B, PR #241)
+- backup job IDs, `GET`/`cancel` job endpoints, durable job records, orphan-aware restart recovery, per-kind deadline (#217, PR #236)
+
+Boundaries:
+
+- `If-Match` is evaluated on the receiving node only; against multi-provider replication it is optimistic protection, not consensus.
+- Core-write idempotency records live in process memory and are lost on restart, so the chart enables them for a single UI replica only. Backup-start keys are the exception: they are stored in the durable job record.
+- The web UI does not send `If-Match` or `Idempotency-Key` and still pages Users and Groups on the client (#216 REQ-013 and #215 AC-010 are open).
+- Remote backup destinations (S3/FTP/SFTP), the SIGKILL-after-grace path and the job deadline path are covered by unit tests only; they have not been run live (#255 stays open for that).
+- Live evidence for these features is in the packages' `EVIDENCE*.md` files (local Docker runs); the CI workflows named there were not re-run for this section.
+
 ## Operations / resilience
 
 - scheduled backup with integrity manifest
@@ -106,6 +128,9 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - `docs/encryption-at-rest.md`
 - `docs/scale-benchmarks.md`
 - `docs/audit-event-schema.md`
+- `docs/api.md`
+- `docs/ui-operations.md`
+- `docs/changes/CLOSE-OUT-2026-10.md`
 - `docs/incident-evidence.md`
 - `.github/workflows/e2e.yml`
 - `.github/workflows/security-e2e.yml`

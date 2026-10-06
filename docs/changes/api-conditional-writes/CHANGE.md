@@ -212,7 +212,7 @@
 ## Architecture and decisions
 
 - Relevant ADR/design links: [api-error-envelope](../api-error-envelope/CHANGE.md)(D218-3 코드 표, D218-5 `retryable`, D218-12 CORS, D218-14 규약, D218-15 메시지, D218-16 Origin 게이트), [backup-job-ids](../backup-job-ids/CHANGE.md)(D217-9), [api-cursor-pagination](../api-cursor-pagination/CHANGE.md)(GET 무헤더), [api-integration PLAN](../api-integration/PLAN.md), [AGENTS.md](../../../AGENTS.md)(`userPassword` 비노출, LDAP 와이어 코드 단위 테스트 없음).
-- ADR threshold result: `required` — 공용 멱등 규약(#217이 의존)과 외부 계약(`etag`·헤더·`PATCH`)·디렉터리 쓰기 의미는 되돌리기 어렵다. 수용 시 ADR 한 건으로 D216-1·2·5·6~9를 승격한다.
+- ADR threshold result: `required` — 공용 멱등 규약(#217이 의존)과 외부 계약(`etag`·헤더·`PATCH`)·디렉터리 쓰기 의미는 되돌리기 어렵다. 수용 시 ADR 한 건으로 D216-1·2·5·6~9를 승격한다 → [ADR.md](ADR.md).
 - Alternatives and important trade-offs: 각 결정의 “대안” 열.
 
 ### 결정 기록 (ID는 이 패키지 한정이라 `D216-` 접두)

@@ -230,7 +230,7 @@
 ## Architecture and decisions
 
 - Relevant ADR/design links: [machine-principal-auth](../machine-principal-auth/CHANGE.md)(bearer 경로, CORS 미확장), [api-integration PLAN](../api-integration/PLAN.md), [docs/api.md](../../api.md), [AGENTS.md](../../../AGENTS.md)(`userPassword` 비노출, LDAP 와이어 코드 단위 테스트 없음 원칙).
-- ADR threshold result: `required` — 외부 계약(오류 봉투·코드 표)과 신규 리스너·의존성은 되돌리기 어렵다. 수용 시 ADR 한 건으로 D218-1~14를 승격한다.
+- ADR threshold result: `required` — 외부 계약(오류 봉투·코드 표)과 신규 리스너·의존성은 되돌리기 어렵다. 수용 시 ADR 한 건으로 D218-1~14를 승격한다 → [ADR.md](ADR.md).
 
 ### 결정 기록 (ID는 이 패키지 한정이라 `D218-` 접두)
 

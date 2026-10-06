@@ -298,7 +298,7 @@
 | Acceptance ID | Verification method | Environment | Expected evidence |
 |---|---|---|---|
 | `AC-001` | 변경 전 응답 기록 대비 고정 비교 + 기존 테스트 무수정 통과 | 유닛(핸들러 fake) + 라이브 5001+ | 키 집합·길이·순서 일치 |
-| `AC-002` | `scripts/test/test-api-cursor-pagination-local.py`(신규, `test-api-edge-codes-local.py` 선례): `scripts/bench-load.sh --count 12000`(`bench-generate-ldif.py`는 `ou=people` 사용자만 생성 — 그룹·엣지 생성기는 T-014); (i) 관리자 로그인, (ii) `LDAP_PAGED_TOTAL_LIMIT=unlimited` 이미지 + 일반 사용자 | 라이브: slapd+UI 컨테이너(`ldapium:e2e` 재빌드) | 집합 동등·중복 0·엄격 증가 |
+| `AC-002` | `scripts/test/test-api-cursor-pagination-local.py`(신규, `test-api-edge-codes-local.py` 선례): 스크립트 자체 생성기(`user_entries`/`group_entries`: 사용자·그룹·엣지 엔트리) 12000건을 오프라인 `slapadd -n 1`로 적재(T-014: `bench-generate-ldif.py`는 그대로 둔다); (i) 관리자 로그인, (ii) `LDAP_PAGED_TOTAL_LIMIT=unlimited` 이미지 + 일반 사용자 | 라이브: slapd+UI 컨테이너(`ldapium:e2e` 재빌드) | 집합 동등·중복 0·엄격 증가 |
 | `AC-003` | 같은 스크립트의 **페이지 사이** 결정적 변경 (a)–(f) 기대표 단언 | 라이브 | 기대표 대비 실측 |
 | `AC-004` | 순수 단위: 왕복·1바이트 변조·잘림·버전·리소스·`q`·세션 결속(**재로그인 = 새 `Session.ID`**)·비밀 교체·길이 + 핸들러 400. 라이브: 같은 사용자 재로그인 후 이전 커서 거부 | 유닛 + 라이브 | `go test`, 라이브 로그 |
 | `AC-005` | 단위: 검증 표, 필터 문자열 고정 비교, `EscapeFilter` 퍼즈(`escaping_fuzz_test.go` 패턴) | 유닛 | `go test` + 시드 |

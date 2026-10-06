@@ -9,7 +9,7 @@
 
 ## Authentication
 
-- A signed session cookie named `ldapium_session` is the only credential. There are no API tokens, no OAuth client credentials and no CORS headers.
+- A signed session cookie named `ldapium_session` is the only credential. There are no API tokens and no OAuth client credentials. CORS headers are off by default (see the CORS note below).
 - LDAP mode (GET /api/v1/meta -> authMode "ldap"): POST /api/login with {"identity","password"} using a cookie jar, then reuse the jar. Failed logins are rate-limited per IP (429 + Retry-After).
 - SSO mode (authMode "sso"): login is a browser OIDC flow; scripted login is not possible.
 - Directory operations run as the logged-in identity (LDAP mode) or the configured service account (SSO mode), under that identity's LDAP ACLs. 403 usually means the ACL denies it.
