@@ -5,9 +5,19 @@
 - Related issue: [#229](https://github.com/dasomel/ldapium/issues/229) 두 번째 항목 (첫 번째 항목 `/proc/1/environ`은 `image/entrypoint.sh:1598-1603`에서 이미 처리). 선행 기록: [generated-credentials D43](../generated-credentials/CHANGE.md)
 - Status: `Proposed / awaiting review`
 - Accepted by / date: 미수용 — 이 문서는 제안이며 Class D 수용 전 구현 착수 금지
-- 작성일: 2026-10-06 · **개정 4 (단순화)**: 자동 생성·토큰·훅·takeover·정규식 평가 기구를 모두 폐기하고 "명시적 운영자 명령 + fail-closed 거부"로 재설계했다(아래 "폐기한 것").
+- 작성일: 2026-10-06 · **개정 5 (단순화 + 4차 검토의 계약 보강)**: 자동 생성·토큰·훅·takeover·정규식 평가 기구를 모두 폐기하고 "명시적 운영자 명령 + fail-closed 거부"로 재설계했다(아래 "폐기한 것").
 
-> 이 문서는 설계 제안이다. 저장소의 코드·ACL·Helm·스크립트는 변경하지 않았다. 아래 "실험(E1–E16)"은 1회용 컨테이너
+## 수용 조건 (Accepted가 과대 주장하지 않도록, 구현 시점 조건을 먼저 명시)
+
+수용은 **설계의 수용**이며 아래는 구현 단계의 완료 조건이다. 이 중 하나라도 미충족이면 해당 기능을 `dedicated`의 지원 범위로 선언하지 않는다.
+
+1. **Kubernetes 복구 검증**: 차트·StatefulSet(기본 OrderedReady)에서 sid 1·sid 2 wipe, 틀린 Secret, 피어 부재, 롤링 회전을 실제 클러스터로 검증(지금까지의 실험은 Docker 2노드까지).
+2. **D63 전체 소실 절차**: `restore.sh` 복원 노드가 `dedicated`로 기동하고 나머지가 복제로 채워지는지, 복원 후 자격 증명 reconcile(D66)과 함께 검증.
+3. **점검의 노드 간 교차 비교·수렴 대기**(지금은 단일 노드 시점 비교만 실측)와 값 순서 정규화·대량 성능.
+4. 엔트리포인트·명령·차트의 구현 자체(지금까지는 설계 + 일회용 이미지 실험): `prepare` 검사, `dedicated` 거부 조건 전체(D61·D64·D65), `ensure`/`rotate`/`retire`/`reconcile`/`rollback-admin`.
+5. 미검증 주장 목록(문서 끝)의 (a)–(k) 해소 또는 한계로 문서화.
+
+> 이 문서는 설계 제안이다. 저장소의 코드·ACL·Helm·스크립트는 변경하지 않았다. 아래 "실험(E1–E17)"은 1회용 컨테이너
 > (OpenLDAP 2.6.15, `docker build -t l5-ldap:1 -f image/Dockerfile ./image`, HEAD 0baf3ea)에서 실제로 실행한 결과이며
 > 실험 스크립트는 저장소 밖이다(T-020–T-024에서 `scripts/test/`로 재현 가능하게 만든다). 실험의 ACL/엔트리는 `cn=config`·디렉터리
 > 온라인 수정으로 적용했고, "dedicated에서 sid 1도 소비자 전용"은 엔트리포인트 한 줄(`:1111` 조건)을 sed로 바꾼 일회용 이미지로 흉내 냈다
@@ -71,6 +81,10 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 - `REQ-010` — **점검**: 열거된 속성 집합(`userPassword` + 운영자가 지정한 사용자 속성, 기본 `objectClass uid cn sn mail`)만 비교하고 `contextCSN` 등 동적 운영 속성은 비교하지 않는다. 신원 시점 vs root 시점을 `entryCSN` 안정성 확인 후 비교(같은 CSN·다른 내용 = 즉시 실패, CSN 변동 = 경쟁 → 최대 5회 재시도, 지속 쓰기 엔트리만 남으면 경고 통과), 노드 간 교차 비교, 소비자 `olcSyncrepl` 바인드 DN·자격 증명 지문, 노드별 카나리. 게이트는 G1(엔트리 생성 전 설정만)/G2(생성 후 권한·전파)로 분리. 못 잡는 것을 문서화.
 - `REQ-011` — **wipe 복구**: 어느 노드(sid 1 포함)를 지워도 피어가 데이터와 엔트리를 갖고 있으면 올바른 자격 증명으로 복제로 복구되고, 틀린 자격 증명이면 아무것도 만들거나 지우지 않는다. 피어가 없어도 파드는 즉시 Ready가 되어 기본 OrderedReady에서 교착하지 않는다. **전체 소실**은 명시적 절차(백업 복원 또는 신규 클러스터 재초기화)로만 복구한다.
 - `REQ-012` — 차트: `replication.identity`(기본 `admin`), `replication.existingSecret` 사용, `dedicated`+`tls.enabled=false` 렌더 실패, `dedicated`+mTLS 렌더 실패, `networkPolicy.ingressFrom` 기본값 경고, 점검 CronJob·알림(설계).
+- `REQ-013` — **SASL/권한 위임 경로 완전 차단**: `prepare`·`dedicated` 기동은 저장된 `olcAuthIDRewrite`가 하나라도 있으면, `olcAuthzPolicy`가 `none`(또는 미설정)이 아니면, `authzTo`/`authzFrom`을 가진 엔트리가 있으면 거부한다(운영 중 `cn=config` 변경은 다음 점검 G1에서 잡는다).
+- `REQ-014` — **예약 DN ≠ 어떤 rootDN**: 예약 DN(정규화)이 `LDAP_ADMIN_DN` 또는 저장된 어떤 `olcRootDN`과 같으면 `prepare`·`ensure`·`dedicated` 기동이 거부한다(rootDN이면 ACL을 우회).
+- `REQ-015` — **DN과 Secret은 함께 전환**: 신원 모드가 복제 DN과 복제 Secret을 같이 결정한다(양방향). `admin`/`prepare`에서 복제 Secret이 설정돼 있으면 거부, `admin` 롤백은 관리자 자격으로 돌아가며, **노드가 비었거나 재동기화 중이면 `admin`/`prepare` 롤백을 거부**한다(sid 1이 새 DIT를 만드는 E8 경로).
+- `REQ-016` — **백업 복원 후 자격 증명 reconcile**: 회전 전 백업을 복원하면 신원 엔트리의 비밀번호 값이 현재 Secret과 어긋나 모든 소비자가 49로 정체한다. 피어를 시작하기 전에 reconcile + 검증 단계를 거친다.
 
 ## Acceptance scenarios
 
@@ -122,6 +136,22 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 - When `helm template`·`verify-chart-schema.sh`: 미지정/dedicated, TLS 켬/끔, mTLS, `ingressFrom` 기본/좁힘
 - Then 미지정은 현재와 같은 매니페스트, 위반은 렌더 실패/경고.
 
+### `AC-010` — authz 우회 경로 거부(REQ-013, REQ-014)
+- Covers: `REQ-013`, `REQ-014`
+- When `prepare`/`dedicated` 기동 전에 (a) 저장된 `olcAuthIDRewrite` 1개 (b) `olcAuthzPolicy: to`/`from`/`both` (c) `authzTo: dn:<신원 DN>`을 가진 엔트리 (d) `LDAP_ADMIN_DN=cn=replicator,<root>` (대소문자·공백 변형 포함) (e) `ensure`를 (d) 구성에 실행
+- Then 전부 고정 메시지로 거부. 대조: (b)+(c) 상태에서 일반 사용자의 프록시 권한 제어(`-e '!authzid=dn:<신원>'`)가 신원으로 전환되어 해시를 읽는다(E17 재현), 실제 SASL 바인드 경로(`olcAuthIDRewrite`)도 negative 테스트로 확인한다.
+
+### `AC-011` — DN·Secret 동시 전환과 롤백 거부(REQ-015)
+- Covers: `REQ-015`
+- When (a) `admin`/`prepare`에서 복제 Secret 설정 (b) 차트에서 identity와 Secret/DN을 어긋나게 설정 (c) `dedicated` → `rollback-admin`을 정상 클러스터에서 (d) 같은 명령을 한 노드가 비었거나 재동기화 중일 때, 특히 sid 1 (e) 롤백 후 admin 자격 동작
+- Then (a) 거부 (b) 렌더 실패 (c) DN·Secret이 함께 빠지고 관리자 자격으로 복제가 계속 (d) 거부, 아무것도 만들거나 지우지 않음 (e) 양방향 쓰기 정상. `prepare`가 마커 없는 sid-1 부트스트랩을 거부.
+
+### `AC-012` — 백업 복원 후 자격 증명 reconcile(REQ-016)
+- Covers: `REQ-016`
+- Given 회전 전에 만든 백업, 이후 회전 완료(현재 Secret ≠ 백업의 신원 비밀번호)
+- When (a) reconcile 없이 복원 노드와 피어를 시작 (b) D67 절차(피어 정지 → 복원 → `dedicated` 기동 → `reconcile` → 검증 → 피어 시작)
+- Then (a) 모든 소비자가 `rc 49`로 정체(대조), (b) 검증 통과 후 피어 시작, 복제 정상, 점검 G2 통과. 검증 실패 시 피어 시작이 거부됨.
+
 ## Architecture and decisions
 
 - Relevant ADR/design links: [openldap-2.6-hardening D3·D8·D10·D13](../openldap-2.6-hardening/CHANGE.md), [issue-206](../issue-206/CHANGE.md), [generated-credentials D40–D45](../generated-credentials/CHANGE.md), [docs/ha-profile.md](../../ha-profile.md).
@@ -163,6 +193,7 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 | E14 | 예약 DN에 기존 일반 엔트리 | 규칙 설치 전 admin 해시 읽기 0, 설치 직후 1 → "비활성 ACL"은 조건부 → `prepare`가 기존 엔트리를 거부(설계, 효과만 실측) |
 | E15 | SASL EXTERNAL 소비자(후속 패키지용 실증) | 엔트리 없이 `dn.exact` ACL로 해시 복제 성공, cn=config엔 키 경로만. cn=accesslog의 EXTERNAL 바인드 레코드는 `reqDN`·`reqAuthzID` 비어 있고 영속 검색 미기록, slapd `stats` 로그에는 `authcid="cn=replicator"` |
 | E16 | 모니터링 신호 | 소비자 로그 `rc 49`/`rc -101`/`rc -1`, 프로바이더 accesslog `reqResult=49`. contextCSN만으로는 속성 손실을 못 봄(E1) |
+| E17 | **프록시 권한 위임**(단일 노드, 신원 읽기 ACL, 일반 사용자 `mallory`가 `-e '!authzid=dn:<신원 DN>'` 제어) | 정책 기본값: 거부(123 "not authorized to assume identity"). `olcAuthzPolicy: to`만 설정: 여전히 거부. **`olcAuthzPolicy: to` + `mallory`에 `authzTo: dn:<신원 DN>`: 신원으로 전환되어 admin `userPassword`를 읽음** — 정규식·mTLS·엔트리 없이도 성립. `slapcat`으로 정책값·`authzTo` 보유 엔트리 수·`olcAuthIDRewrite` 수를 오프라인 판독 가능(AuthIDRewrite 경로 자체와 실제 SASL 바인드 경로는 **실행하지 않음, 설계만**) |
 
 ### 결정
 
@@ -183,6 +214,10 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 | D61 | **authz 안전은 증명 대신 금지로**: `dedicated`(와 `prepare`)는 `slapcat -n 0`에서 `olcTLSVerifyClient`가 `never` 외 값이거나 `olcAuthzRegexp`가 하나라도 있으면 **기동 거부**. 따라서 `LDAP_TLS_MUTUAL_AUTH`(mTLS 클라이언트 인증)와 dedicated는 **공존하지 않는다**(비용). 임의 매핑의 안전을 증명하려 하지 않는다 | E13: 앞선 `service42` 매핑은 열거 주체 검사를 통과하고 마지막 catch-all로는 못 막음 · 검사 함수의 verify-client 절은 실행 실측, regexp 절은 저장값 판독만 실측(로직은 설계), 엔트리포인트 구현은 설계 |
 | D62 | 롤백: `admin`으로 즉시 롤백은 모든 노드의 관리자 비밀번호가 모든 피어에서 유효(공유)할 때만 성립(E10). 점검이 경고 | E10 |
 | D63 | **전체 소실 절차**(설계만): 모든 노드의 데이터가 사라지면 피어에 엔트리가 없으므로 복제로 복구될 수 없다. (1) 백업이 있으면 `restore.sh`(오프라인, 데이터+cn=config)로 한 노드에 복원한 뒤 그 노드를 `dedicated`로 기동, 나머지는 빈 상태로 기동해 복제로 채움 (2) 백업이 없으면 신규 클러스터로 재초기화(`admin` → `prepare` → `ensure` → `dedicated`). 엔트리포인트는 어느 경우에도 신원 엔트리를 만들지 않는다. 테스트(T-021) 전에는 "복원이 `dedicated` 상태와 호환되는지"를 검증하지 못했다고 명시 | `restore.sh:1-4` · 미검증 |
+| D64 | **거부 조건 확장(REQ-013)**: `slapcat -n 0`/`-n 1` 오프라인 판독으로 `prepare`와 `dedicated` 기동 모두 (a) `olcAuthIDRewrite` 존재 (b) `olcAuthzPolicy`가 `none`/미설정이 아님 (c) `authzTo`/`authzFrom` 보유 엔트리 존재 중 하나라도 있으면 고정 메시지로 거부(D61의 `olcTLSVerifyClient`·`olcAuthzRegexp`와 합쳐 SASL/위임으로 신원에 도달하는 경로를 모두 금지). `authzTo`는 정책이 `none`이면 비활성이지만 정책은 `cn=config`에서 바뀔 수 있어 보수적으로 존재만으로 거부하고, 점검 G1이 운영 중 변경을 재검사한다 | E17(위임 성립 조건 실측), E13 · (a)의 실제 SASL 경로와 `authzFrom`은 **설계만**, 비용: 프록시 권한 위임 사용 앱과 `dedicated`는 공존 불가 |
+| D65 | **예약 DN ≠ rootDN(REQ-014)**: 예약 DN `cn=replicator,<root>`(정규화: 소문자, 쉼표 주변 공백 제거)를 `LDAP_ADMIN_DN`과 저장된 모든 `olcRootDN`(`slapcat -n 0`)에 대조해 같으면 `prepare`·`ensure`(라이브 `cn=config` 또는 `--admin-dn`)·`dedicated` 기동이 거부한다. 지원되는 `LDAP_ADMIN_DN=cn=replicator,<root>` 설정에서 `retire`→`ensure`가 신원을 rootDN으로 만들어 ACL을 우회하는 경로를 막는다 | **설계만**(rootDN은 ACL을 우회한다는 기존 사실에 근거, 이번에 실행 안 함) · DN 정규화 방법(`slapdn` 유무 등)은 T-004 |
+| D66 | **DN과 Secret의 동시 전환(REQ-015)**: 신원 모드가 DN과 Secret을 같이 결정한다. 엔트리포인트는 `admin`/`prepare`에서 `LDAP_REPLICATION_PASSWORD(_FILE)`가 설정돼 있으면(관리자 DN + 다른 비밀번호로 조용히 정체하는 현재 경로, `entrypoint.sh:575-583`) 거부하고, 차트는 `replication.identity=admin`이면 복제 Secret env(`statefulset.yaml:197-203`)를 **렌더하지 않으며** `dedicated`이면 DN과 Secret env를 함께 렌더한다(한쪽만 렌더하는 값 조합은 스키마/렌더 실패). **롤백(`replication-identity.sh rollback-admin`)**: ① 모든 노드가 비어 있지 않고 재동기화 중이 아님을 확인(비었거나 재동기화 중이면 거부) ② 모든 노드에서 관리자 비밀번호가 모든 피어에 유효한지 확인(D62) ③ 차트 값/환경을 identity=admin으로 바꾸면 DN·복제 Secret이 함께 빠지고 관리자 자격 복귀. `prepare`는 마커 없는 sid-1 부트스트랩(새 DIT 생성)을 거부한다(신규 설치는 `admin`으로 시작). **빈 sid 1에서 `admin` 모드의 부트스트랩은 지금과 같은 위험(E8)이므로** 롤백 명령과 문서가 "먼저 `dedicated`에서 재동기화를 마친 뒤 롤백"을 요구한다 | E8, E10, E12 · **설계만**: 엔트리포인트·차트·명령 구현, 잔존 위험: 운영자가 명령 없이 직접 identity=admin으로 바꾸고 빈 sid 1을 띄우면 E8이 재현된다(`admin` 모드의 기존 성질) |
+| D67 | **백업 복원 후 reconcile(REQ-016)**: `restore.sh`는 cn=config(`olcSyncrepl` 자격 증명 포함)와 데이터를 백업 시점으로 되돌리므로 회전 이후 복원하면 엔트리의 `userPassword` 값이 현재 Secret과 어긋난다(E6/E7: 소비자 49 정체). 절차: ① `restore.sh`(오프라인) ② 복원 노드를 **피어를 모두 내린 상태에서** `dedicated`로 기동(부팅 시 olcSyncrepl은 현재 Secret으로 다시 렌더) ③ `replication-identity.sh reconcile`(관리자 온라인): 신원 엔트리 `userPassword`에 현재 Secret 값을 추가 ④ **검증**: 현재 Secret으로 TLS 신원 바인드 성공 + `check --local` 통과 ⑤ 그 뒤에만 피어를 시작하고 점검 G2 ⑥ 필요 시 `rotate`로 정리. 검증이 실패하면 피어를 시작하지 않는다 | E6/E7에서 원인 실측, 절차는 **설계만**(AC-012) · 회전 이전 값이 복원되며 구 값이 복제될 위험은 reconcile 후 `rotate` 정리로 처리 |
 
 ### 잔여 위험
 
@@ -235,6 +270,9 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 | `AC-007` | 기존 e2e 3종 + cn=config diff | CI | diff 없음 |
 | `AC-008` | 안전하지 않은 설정 6종 + TLS만 통과 + 인증서 `-Y EXTERNAL` | 동일(TLS) | 고정 메시지 거부 |
 | `AC-009` | `helm template`·스키마 검증 | CI | 렌더 diff, 실패/경고 |
+| `AC-010` | 거부 조건 5종(AuthIDRewrite·AuthzPolicy·authzTo·rootDN 충돌·ensure) + 프록시 권한 위임 대조(E17) + 실제 SASL negative | 동일 | 고정 메시지 거부, 위임 대조 성립 |
+| `AC-011` | 모드/Secret 불일치 거부, 차트 렌더, `rollback-admin` 정상·빈 노드·재동기화 중 | 동일 + CI 렌더 | 거부/성공 결과, 롤백 후 양방향 쓰기 |
+| `AC-012` | 회전 후 복원: reconcile 없이(49 정체 대조) vs D67 절차 | 동일(`restore.sh`) | 대조 정체, 절차 후 정상 |
 
 라이브 LDAP 경로를 모킹하지 않는다(AGENTS.md "Testing philosophy").
 
@@ -254,6 +292,10 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 | REQ-010 | AC-006 | T-014, T-017, T-020 | E11 |
 | REQ-011 | AC-004 | T-012, T-021 | E9, E12 |
 | REQ-012 | AC-009 | T-016, T-017 | (미실행) |
+| REQ-013 | AC-010 | T-012, T-011, T-022 | E17, E13 |
+| REQ-014 | AC-010 | T-010, T-013, T-022 | (미실행) |
+| REQ-015 | AC-011 | T-010, T-011, T-013, T-016, T-021 | E8, E10, E12 |
+| REQ-016 | AC-012 | T-013, T-021 | E6, E7 |
 
 ## Rollout, rollback and recovery
 
@@ -271,7 +313,7 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 
 ## Evidence and durable synchronization
 
-- Evidence location/format: 실험은 저장소 밖 일회용 스크립트. T-020–T-024가 `scripts/test/`로 재현하고 E1–E16 대응표를 남긴다.
+- Evidence location/format: 실험은 저장소 밖 일회용 스크립트. T-020–T-024가 `scripts/test/`로 재현하고 E1–E17 대응표를 남긴다.
 - Durable regression controls: `test-replication-identity.sh`, `check-replication-identity.sh`(운영·CI·CronJob), chaos·TLS E2E의 dedicated 시나리오.
 - Documentation to update: `image/README.md`, `charts/ldapium/README.md`·`values.yaml`, `docs/ha-profile.md`, `docs/migration.md`, [generated-credentials](../generated-credentials/CHANGE.md)에 D43 후속(D56), `CHANGELOG*`.
 - ADR/evidence/portfolio records: ADR(수용 시), `docs/IMPLEMENTATION-STATUS.md`.
