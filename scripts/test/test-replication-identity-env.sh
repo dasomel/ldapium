@@ -40,35 +40,83 @@ fail=0
 ok() { printf 'PASS: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 
-# shellcheck disable=SC2317,SC2329 # invoked via the EXIT trap below
+# Every container and volume is registered here BEFORE it is created, so the
+# trap removes it even when the run is interrupted mid-way.
+reg_containers=("$n1" "$n2" "$solo")
+reg_vols=("${vols[@]}")
+
+# shellcheck disable=SC2317,SC2329 # invoked via the trap below
 cleanup() {
   local x
-  docker rm -f "$n1" "$n2" "$solo" >/dev/null 2>&1 || true
-  for x in "${vols[@]}"; do docker volume rm -f "$x" >/dev/null 2>&1 || true; done
+  trap - EXIT
+  for x in "${reg_containers[@]}"; do docker rm -fv "$x" >/dev/null 2>&1 || true; done
+  for x in "${reg_vols[@]}"; do docker volume rm -f "$x" >/dev/null 2>&1 || true; done
   docker network rm "$net" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- Part 1: refusals --------------------------------------------------------
 # refuse <label> <expected message fragment> <docker -e args...>
-# The container must exit non-zero, print the fragment, and never print the
-# admin password or the candidate replication password.
+# The container must exit non-zero within REFUSE_DEADLINE seconds, print the
+# fragment, never print the admin password or the candidate replication
+# password, and leave fresh config/data volumes exactly as they were (a refused
+# start must not create .credentials, markers or directories). Set
+# admin_args=() beforehand to start without an admin password.
+refuse_deadline="${REFUSE_DEADLINE:-60}"
+admin_args=(-e LDAP_ADMIN_PASSWORD="$pw")
 cn=0
+
+pv="ldapium-ridenv-pristine-${suffix}"
+reg_vols+=("${pv}-cfg" "${pv}-data")
+docker volume create "${pv}-cfg" >/dev/null
+docker volume create "${pv}-data" >/dev/null
+# Mounted at the real paths so any image-seeded content is part of the baseline.
+pristine_cfg="$(docker run --rm --entrypoint ls -v "${pv}-cfg:/etc/openldap/slapd.d" "$image" -A /etc/openldap/slapd.d 2>&1 | sort | tr '\n' ' ')"
+pristine_data="$(docker run --rm --entrypoint ls -v "${pv}-data:/var/lib/openldap/data" "$image" -A /var/lib/openldap/data 2>&1 | sort | tr '\n' ' ')"
+
 refuse() {
-  local label="$1" want="$2" out rc=0
+  local label="$1" want="$2" out rc=0 name cfgv datav w=0 state
   shift 2
   cn=$((cn + 1))
-  out="$(docker run --rm --name "ldapium-ridenv-r${cn}-${suffix}" \
-    -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" \
+  name="ldapium-ridenv-refuse-${cn}-${suffix}"
+  cfgv="${name}-cfg"
+  datav="${name}-data"
+  reg_containers+=("$name")
+  reg_vols+=("$cfgv" "$datav")
+  docker volume create "$cfgv" >/dev/null
+  docker volume create "$datav" >/dev/null
+  docker run -d --name "$name" \
+    -v "${cfgv}:/etc/openldap/slapd.d" -v "${datav}:/var/lib/openldap/data" \
+    -e LDAP_ROOT_DN="$base" ${admin_args[@]+"${admin_args[@]}"} \
     -e LDAP_REPLICATION_PEERS="$peers" -e LDAP_SERVER_ID=1 \
-    "$@" "$image" 2>&1)" || rc=$?
+    "$@" "$image" >/dev/null
+  while [ "$w" -lt "$refuse_deadline" ]; do
+    state="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo gone)"
+    [ "$state" = "false" ] && break
+    sleep 1
+    w=$((w + 1))
+  done
+  if [ "$state" != "false" ]; then
+    bad "${label}: container still running after ${refuse_deadline}s, expected refusal"
+    docker rm -fv "$name" >/dev/null 2>&1 || true
+    return
+  fi
+  rc="$(docker inspect -f '{{.State.ExitCode}}' "$name")"
+  out="$(docker logs "$name" 2>&1)"
   if [ "$rc" -eq 0 ]; then
     bad "${label}: container exited 0, expected refusal"
     return
   fi
   if [[ "$out" != *"$want"* ]]; then
     bad "${label}: message missing '${want}'; got: $(printf '%s' "$out" | tail -n 3)"
+    return
+  fi
+  if [ "$(docker run --rm --entrypoint ls -v "${cfgv}:/etc/openldap/slapd.d" "$image" -A /etc/openldap/slapd.d 2>&1 | sort | tr '\n' ' ')" != "$pristine_cfg" ] ||
+    [ "$(docker run --rm --entrypoint ls -v "${datav}:/var/lib/openldap/data" "$image" -A /var/lib/openldap/data 2>&1 | sort | tr '\n' ' ')" != "$pristine_data" ]; then
+    bad "${label}: refusal modified the config/data volume"
     return
   fi
   # Candidate replication password is the last -e LDAP_REPLICATION_PASSWORD=<v>.
@@ -106,6 +154,26 @@ refuse "dedicated low-distinct password" "at least 10 distinct characters" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abababababababababababababababab"
 refuse "hygiene message names its limit (distinct)" "$hyg" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abababababababababababababababab"
+refuse "dedicated multibyte password (9 distinct chars, 10 bytes)" "only printable ASCII characters" \
+  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=éñöøçßåäüéñöøçßåäüéñöøçßåäüéñöøçßåäü"
+refuse "dedicated password with a space" "only printable ASCII characters" \
+  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good:0:16} ${good:16}"
+refuse "dedicated ASCII password with 9 distinct chars" "at least 10 distinct characters" \
+  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abcdefghiabcdefghiabcdefghiabcdefghi"
+refuse "dedicated ASCII password with 10 distinct chars is accepted by hygiene" "is not implemented in this image yet" \
+  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abcdefghijabcdefghijabcdefghijabcdefghij"
+# Fresh volume and no admin password: the refusal must come before admin-password
+# generation would create .credentials on the data volume.
+admin_args=()
+refuse "prepare without replication, no admin password (volume untouched)" "requires LDAP_REPLICATION_ENABLED=true" \
+  -e LDAP_REPLICATION_IDENTITY=prepare
+refuse "dedicated without replication, no admin password (volume untouched)" "requires LDAP_REPLICATION_ENABLED=true" \
+  -e LDAP_REPLICATION_IDENTITY=dedicated
+refuse "invalid value, no admin password (volume untouched)" "LDAP_REPLICATION_IDENTITY must be one of" \
+  -e LDAP_REPLICATION_IDENTITY=bogus
+refuse "dedicated good password, no admin password (volume untouched)" "is not implemented in this image yet" \
+  "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good}"
+admin_args=(-e LDAP_ADMIN_PASSWORD="$pw")
 refuse "dedicated password equals admin" "must differ from the admin password" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${pw}"
 refuse "dedicated good password -> staged refusal" "is not implemented in this image yet" \

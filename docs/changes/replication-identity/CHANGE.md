@@ -77,7 +77,7 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 - `REQ-006` — 기본값 불변: `admin`이면 cn=config·olcSyncrepl 바이트 단위 동일. 커스텀 `LDAP_REPLICATION_BIND_DN`은 동작 유지 + 경고.
 - `REQ-007` — `dedicated` 노드는 **베이스 DIT를 만들지 않으며 sid 1도 예외가 아니다**, 피어 프로브·대기를 하지 않는다. 비밀번호 미지정/위생 실패, TLS 미검증, mTLS 또는 저장된 `olcAuthzRegexp` 존재 중 하나라도 있으면 **고정 메시지로 기동 거부**하고 admin 신원으로 폴백하지 않는다.
 - `REQ-008` — `dedicated`는 검증된 TLS 필수(`ldaps://` + `tls_reqcert=demand` + CA, 또는 `starttls=critical`). 차트는 `tls.enabled` 없이 렌더 실패.
-- `REQ-009` — 비밀번호 무작위성은 생성 경로(`ensure`/`rotate`, OS CSPRNG 32바이트)가 보장한다. 외부 공급 값의 무작위성은 **운영자 책임**이며 엔트리포인트는 위생 검사(길이 ≥ 32, 서로 다른 문자 ≥ 10, 관리자 비밀번호와 불일치)만 하고 이것이 무작위성의 증거가 아님을 문서·메시지에 명시한다.
+- `REQ-009` — 비밀번호 무작위성은 생성 경로(`ensure`/`rotate`, OS CSPRNG 32바이트)가 보장한다. 외부 공급 값의 무작위성은 **운영자 책임**이며 엔트리포인트는 위생 검사(인쇄 가능 ASCII(0x21–0x7E, 공백 없음)만, 길이 ≥ 32, 서로 다른 문자 ≥ 10, 관리자 비밀번호와 불일치; 다바이트 문자는 바이트로 세면 개수가 과대 계산되므로 거부)만 하고 이것이 무작위성의 증거가 아님을 문서·메시지에 명시한다.
 - `REQ-010` — **점검**: 열거된 속성 집합(`userPassword` + 운영자가 지정한 사용자 속성, 기본 `objectClass uid cn sn mail`)만 비교하고 `contextCSN` 등 동적 운영 속성은 비교하지 않는다. 신원 시점 vs root 시점을 `entryCSN` 안정성 확인 후 비교(같은 CSN·다른 내용 = 즉시 실패, CSN 변동 = 경쟁 → 최대 5회 재시도, 지속 쓰기 엔트리만 남으면 경고 통과), 노드 간 교차 비교, 소비자 `olcSyncrepl` 바인드 DN·자격 증명 지문, 노드별 카나리. 게이트는 G1(엔트리 생성 전 설정만)/G2(생성 후 권한·전파)로 분리. 못 잡는 것을 문서화.
 - `REQ-011` — **wipe 복구**: 어느 노드(sid 1 포함)를 지워도 피어가 데이터와 엔트리를 갖고 있으면 올바른 자격 증명으로 복제로 복구되고, 틀린 자격 증명이면 아무것도 만들거나 지우지 않는다. 피어가 없어도 파드는 즉시 Ready가 되어 기본 OrderedReady에서 교착하지 않는다. **전체 소실**은 명시적 절차(백업 복원 또는 신규 클러스터 재초기화)로만 복구한다.
 - `REQ-012` — 차트: `replication.identity`(기본 `admin`), `replication.existingSecret` 사용, `dedicated`+`tls.enabled=false` 렌더 실패, `dedicated`+mTLS 렌더 실패, `networkPolicy.ingressFrom` 기본값 경고, 점검 CronJob·알림(설계).

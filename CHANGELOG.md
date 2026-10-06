@@ -160,8 +160,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   container refuses to start ("not implemented in this image yet"): an invalid
   value, a non-admin mode without `LDAP_REPLICATION_ENABLED`, `LDAP_ADMIN_DN`
   equal to `cn=replicator,<root>`, `prepare` with an explicit replication
-  password, and `dedicated` with a missing or weak replication password (length
-  below 32, fewer than 10 distinct characters, or equal to the admin password;
+  password, and `dedicated` with a missing or weak replication password (non-printable-ASCII
+  or non-ASCII characters, length below 32, fewer than 10 distinct characters, or equal to the admin password;
   a hygiene check, not proof of randomness) are refused with fixed messages.
   Do not set it to anything but `admin` until later units ship.
 - `LDAP_PAGED_TOTAL_LIMIT` (#215), opt-in: lifts the total of a paged search

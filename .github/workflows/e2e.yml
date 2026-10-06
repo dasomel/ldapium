@@ -112,8 +112,41 @@ jobs:
       - name: Wiped serverID-1 node resyncs without peer data loss — #206
         run: ./scripts/test/test-wiped-node-resync.sh ldapium:e2e
 
-      - name: Replication identity env parsing and hygiene refusals — #229 T-010
-        run: ./scripts/test/test-replication-identity-env.sh ldapium:e2e
+      # The admin-mode invariance diff (cn=config + olcSyncrepl vs the base
+      # commit's image, standalone and replicated pair) needs a base image: the
+      # PR base commit, or the previous commit on push. workflow_dispatch has
+      # no base, so there the diff is skipped with an explicit notice.
+      - name: Build base image for the admin-mode invariance diff — #229 T-010
+        id: base_image
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          RUNNER_TMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          base_sha=""
+          case "$EVENT_NAME" in
+            pull_request) base_sha="$PR_BASE_SHA" ;;
+            push) base_sha="$PUSH_BEFORE_SHA" ;;
+          esac
+          case "$base_sha" in
+            ''|0000000000000000000000000000000000000000)
+              echo "::notice::no base commit for this event; the admin-mode invariance diff is SKIPPED"
+              echo "image=" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          git fetch --no-tags --depth=1 origin "$base_sha"
+          mkdir -p "$RUNNER_TMP/base"
+          git archive "$base_sha" image | tar -x -C "$RUNNER_TMP/base"
+          docker build -t ldapium:e2e-base "$RUNNER_TMP/base/image"
+          echo "image=ldapium:e2e-base" >> "$GITHUB_OUTPUT"
+
+      - name: Replication identity env parsing, hygiene refusals and admin-mode invariance — #229 T-010
+        env:
+          BASE_IMAGE: ${{ steps.base_image.outputs.image }}
+        run: ./scripts/test/test-replication-identity-env.sh ldapium:e2e "$BASE_IMAGE"
 
   e2e:
     name: install + helm test (${{ matrix.scenario }})
