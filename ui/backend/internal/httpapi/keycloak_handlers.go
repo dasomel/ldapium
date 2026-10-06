@@ -21,7 +21,7 @@ func (s *Server) keycloakProfile(c echo.Context) (appprofile.Profile, error) {
 		return p, echo.NewHTTPError(404, "application profile not found")
 	}
 	if s.kc == nil {
-		return p, echo.NewHTTPError(503, "Keycloak admin connection is disabled")
+		return p, apiErr(503, codeKeycloakDisabled, keycloakDisabledMessage)
 	}
 	if p.Issuer != s.kc.Issuer() || !s.kc.CanObserve(p.ClientID) {
 		return p, echo.NewHTTPError(403, "application is outside the configured Keycloak boundary")
@@ -37,7 +37,7 @@ func keycloakErr(err error) error {
 		}
 	}
 	// Never forward upstream response bodies or token/network errors.
-	return echo.NewHTTPError(502, "Keycloak operation failed; reload observed state before retrying")
+	return apiErr(502, codeUpstreamFailed, keycloakUpstreamMessage)
 }
 func (s *Server) handleKeycloakRoles(c echo.Context) error {
 	p, err := s.keycloakProfile(c)

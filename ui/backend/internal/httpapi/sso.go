@@ -80,7 +80,7 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.SSOConfig) (*oidcAuthe
 
 func (s *Server) handleSSOStart(c echo.Context) error {
 	if s.sso == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "SSO is not enabled")
+		return apiErr(http.StatusNotFound, codeFeatureDisabled, "SSO is not enabled")
 	}
 
 	redirectURI, err := s.sso.callbackURI(c.Request())
@@ -106,7 +106,7 @@ func (s *Server) handleSSOStart(c echo.Context) error {
 
 func (s *Server) handleSSOCallback(c echo.Context) error {
 	if s.sso == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "SSO is not enabled")
+		return apiErr(http.StatusNotFound, codeFeatureDisabled, "SSO is not enabled")
 	}
 
 	// Cleared before anything else can return: this cookie is single-use,

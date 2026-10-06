@@ -21,7 +21,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 	if s.cfg.SSO.Enabled {
 		// Password authentication is intentionally unavailable in SSO mode:
 		// accepting it would bypass the Keycloak role gate.
-		return echo.NewHTTPError(http.StatusNotFound, "password login is disabled")
+		return apiErr(http.StatusNotFound, codeFeatureDisabled, "password login is disabled")
 	}
 
 	// D3: the per-IP failed-login budget is checked before the request
@@ -34,7 +34,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
 		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "", "")
-		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed login attempts")
+		return apiErr(http.StatusTooManyRequests, codeLoginRateLimited, "too many failed login attempts")
 	}
 
 	var req loginRequest

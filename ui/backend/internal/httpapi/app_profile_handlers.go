@@ -33,7 +33,7 @@ func (s *Server) profileRoutes(api *echo.Group) {
 func (s *Server) requireProfileAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		if s.profiles == nil {
-			return echo.NewHTTPError(404, "application profiles are disabled")
+			return apiErr(404, codeFeatureDisabled, "application profiles are disabled")
 		}
 		sess := currentSession(c)
 		if sess != nil {
@@ -43,7 +43,7 @@ func (s *Server) requireProfileAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 				}
 			}
 		}
-		return echo.NewHTTPError(403, "application profile administrator required")
+		return apiErr(403, codeAdminRequired, "application profile administrator required")
 	}
 }
 func (s *Server) handleListProfiles(c echo.Context) error {
@@ -112,7 +112,7 @@ func (s *Server) handlePutProfile(c echo.Context) error {
 func requireProfileWrite(c echo.Context) error {
 	origin, err := url.Parse(c.Request().Header.Get("Origin"))
 	if err != nil || origin.Host != c.Request().Host || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil || origin.Scheme != c.Scheme() {
-		return echo.NewHTTPError(403, "same-origin request required")
+		return apiErr(403, codeOriginMismatch, "same-origin request required")
 	}
 	if strings.Split(c.Request().Header.Get("Content-Type"), ";")[0] != "application/json" {
 		return echo.NewHTTPError(415, "application/json required")
