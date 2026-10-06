@@ -14,7 +14,7 @@
 - [ ] `T-003` (`AC-001`) 미검증 항목 확정(CHANGE.md 마지막 절 (a)(b)(d)): ① Recover 패닉·라우터 404에서 `X-Request-Id` 설정 여부 ② Echo `OPTIONS`가 `RouteNotFound` 캐치올과 공존할 때의 응답 ③ `session.Store.Create(dn, nil)` + `session.Sign`으로 인증 테스트 서버(임시 `AppProfilesPath`, 백업 비활성/활성)를 만들 수 있는지. **(CLOSE-OUT: NOT DONE: no recorded spike conclusions)**
       불가하면 403/415/428/412/422 검증을 핸들러 단위 테스트로 대체하는 계획을 CHANGE.md에 반영(재검토).
       증거: 임시 테스트 출력(커밋하지 않음) 또는 결론 메모.
-- [ ] `T-004` (`REQ-014`) 다운스트림 검토: #214–#217 이슈·패키지(`machine-principal-auth` 포함)가 요구하는 새 오류 조건을 모아 D218-3 코드 표에 예약 코드(`unavailable` 등) 충돌이 없는지 확인, 소비자 문서(`docs/api.md`, `llms.txt`) 사용 예 점검. **(CLOSE-OUT: NOT DONE: no recorded review)**
+- [x] `T-004` (`REQ-014`) 다운스트림 검토: #214–#217 이슈·패키지(`machine-principal-auth` 포함)가 요구하는 새 오류 조건을 모아 D218-3 코드 표에 예약 코드(`unavailable` 등) 충돌이 없는지 확인, 소비자 문서(`docs/api.md`, `llms.txt`) 사용 예 점검. **(CLOSE-OUT: NOT DONE: no recorded review)** **(DOCS #248: reviewed against main `6c118ac`. Every code the #215, #216 and #217 packages introduce (`cursor_invalid`, `size_limit_exceeded`, `scan_limit_exceeded`, `scan_timeout`; the five `idempotency_*` codes and `partial_failure`; `backup_busy`, `job_not_found`, `job_not_cancellable`, `persistence_unavailable`) is in `codeTable` and in the 35-entry golden list with no name collision, and `docs/api.md` lists each (checked by `api_contract_test.go`). `token_invalid`, `token_expired`, `scope_denied` (#214) and `cursor_expired` stay reserved in D218-3: they are not emitted and not in the golden list, so adding one needs the D218-14 same-PR update. Consumer docs (`docs/api.md`, `llms.txt`) carry the table and examples with both `error` and `message`.)**
 - [ ] `T-005` (`REQ-001`–`REQ-014`) 수용 선행: Owner 지정, Q1·Q2 결정 기록, ADR 초안(D218-1~14), 보안 검토(`/metrics` 노출·CORS) 요청. **수용 표시는 유지보수자만 한다.** **(CLOSE-OUT: NOT DONE: no Owner, ADR draft or security review recorded)**
 
 ## Implement
@@ -45,7 +45,7 @@
 - [x] `T-033` (`REQ-015`) 사전 확인: 프록시 뒤에서 `c.Scheme()`·`Host`가 브라우저 `Origin`과 어떻게 비교되는지(`requireProfileWrite` 비교 `app_profile_handlers.go:112-120`, `X-Forwarded-Proto` 처리 `sso.go:248`, `UI_TRUSTED_PROXIES`), 차트 Ingress(`ui-ingress.yaml`) 구성에서 정상 UI 쓰기가 통과하는지 로컬 Docker/Ingress 또는 단위로 확인. 결과를 CHANGE.md D218-16에 반영(미검증 (d)).
 - [x] `T-034` (`REQ-015`, `AC-016`) 전역 미들웨어: `/api` 상태 변경 메서드에 `Origin` 헤더가 있으면 본인 origin 또는 허용 목록(Phase 3 이전에는 빈 목록)과 비교, 불일치·`null`은 403 `origin_mismatch` 봉투. 헤더 없음은 통과. `GET`/`HEAD`/`OPTIONS` 제외. 기존 `requireProfileWrite`는 유지(더 엄격).
       파일: `BE/origin_gate.go`(신규), `BE/server.go`(미들웨어 등록, `s.echo.Use` 목록 `:87-99`), `BE/origin_gate_test.go`. 증거: 쓰기 라우트 열거 표 주도 테스트(AC-016 (a)–(e)).
-- [ ] `T-035` (`REQ-015`, `AC-016`, `AC-002`) FE e2e: 동일 출처 사용자·그룹·로그인 쓰기가 계속 성공함을 확인하는 회귀(`ui/frontend/e2e`), 릴리스 노트에 Origin 보내는 비브라우저 클라이언트·프록시 영향 기록, `docs/api.md`에 규칙 추가. **(CLOSE-OUT: PARTIAL: origin-gate.spec.ts and docs/api.md exist (PR #240) but CHANGELOG.md [Unreleased] has no Origin-gate note)**
+- [x] `T-035` (`REQ-015`, `AC-016`, `AC-002`) FE e2e: 동일 출처 사용자·그룹·로그인 쓰기가 계속 성공함을 확인하는 회귀(`ui/frontend/e2e`), 릴리스 노트에 Origin 보내는 비브라우저 클라이언트·프록시 영향 기록, `docs/api.md`에 규칙 추가. **(CLOSE-OUT: PARTIAL: origin-gate.spec.ts and docs/api.md exist (PR #240) but CHANGELOG.md [Unreleased] has no Origin-gate note)** **(DOCS #248: CHANGELOG.md [Unreleased] now has the Origin-gate entry, breaking for non-browser clients that send `Origin`, with the proxy note and the rollback.)**
 
 ### Phase 2 — `/metrics` (기본 꺼짐)
 
@@ -77,10 +77,10 @@
 
 ## Synchronize durable truth
 
-- [ ] `T-050` (`REQ-013`) 규범 문서 갱신: `docs/api.md`, `llms.txt`, `charts/ldapium/README.md`, 운영 가이드(스크랩 대상·NetworkPolicy 주의). **(CLOSE-OUT: PARTIAL: docs/api.md, llms.txt, charts README done; no operator guide; openapi/llms.txt still say unconditionally 'no CORS headers')**
-- [ ] `T-051` ADR 작성: D218-1~14 승격(외부 오류 계약, 신규 리스너·의존성, CORS 정책). **(CLOSE-OUT: NOT DONE: no ADR)**
-- [ ] `T-052` (`REQ-013`) 릴리스·마이그레이션·롤백·호환성 노트: 새 오류 키, 새 env/Helm 값, `message` deprecated alias(제거 시점 미정), 되돌리기 절차. **(CLOSE-OUT: NOT DONE: CHANGELOG has the envelope entry only; no notes for Origin gate, METRICS_ADDR, CORS, chart values)**
-- [ ] `T-053` (`REQ-014`, `AC-015`) 다운스트림 반영: #214–#217 패키지가 D218-14를 참조하도록 링크, `docs/IMPLEMENTATION-STATUS.md` 상태 갱신, #218은 분할 후속 이슈로 정리(이슈 트래커 관례: 부분 PR은 “Related to #218 (not closing yet)”). **(CLOSE-OUT: NOT DONE: IMPLEMENTATION-STATUS not updated; no successor issues)**
+- [x] `T-050` (`REQ-013`) 규범 문서 갱신: `docs/api.md`, `llms.txt`, `charts/ldapium/README.md`, 운영 가이드(스크랩 대상·NetworkPolicy 주의). **(CLOSE-OUT: PARTIAL: docs/api.md, llms.txt, charts README done; no operator guide; openapi/llms.txt still say unconditionally 'no CORS headers')** **(DOCS #248: `docs/ui-operations.md` is the operator guide (scrape target, NetworkPolicy peers, public-port 404, proxy/Origin gate); the unconditional "no CORS headers" wording is fixed in `openapi.json` info and `llms.txt:12`, pinned by `TestDocsDoNotClaimUnconditionalNoCORS`.)**
+- [x] `T-051` ADR 작성: D218-1~14 승격(외부 오류 계약, 신규 리스너·의존성, CORS 정책). **(CLOSE-OUT: NOT DONE: no ADR)** **(DOCS #248: [ADR.md](ADR.md) promotes D218-1..14 and records the amendments D218-D4/D6 and #256. The repo has no ADR directory, so it follows the `docs/changes/<package>/` layout.)**
+- [x] `T-052` (`REQ-013`) 릴리스·마이그레이션·롤백·호환성 노트: 새 오류 키, 새 env/Helm 값, `message` deprecated alias(제거 시점 미정), 되돌리기 절차. **(CLOSE-OUT: NOT DONE: CHANGELOG has the envelope entry only; no notes for Origin gate, METRICS_ADDR, CORS, chart values)** **(DOCS #248: CHANGELOG.md [Unreleased] covers the Origin gate, `METRICS_ADDR`, `CORS_ALLOWED_ORIGINS`, the chart values, the `message` alias compatibility note and rollbacks; the same alias note is in the ADR and `docs/ui-operations.md`.)**
+- [x] `T-053` (`REQ-014`, `AC-015`) 다운스트림 반영: #214–#217 패키지가 D218-14를 참조하도록 링크, `docs/IMPLEMENTATION-STATUS.md` 상태 갱신, #218은 분할 후속 이슈로 정리(이슈 트래커 관례: 부분 PR은 “Related to #218 (not closing yet)”). **(CLOSE-OUT: NOT DONE: IMPLEMENTATION-STATUS not updated; no successor issues)** **(DOCS #248: the #214 and #217 packages now link the code table and ADR (#215 and #216 already did), `docs/IMPLEMENTATION-STATUS.md` has an "External HTTP API" section, and the remaining scope is split into successor issues #248 and #249; PRs say "Related to #218 (not closing yet)".)**
 
 ## Traceability matrix
 

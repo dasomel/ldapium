@@ -167,7 +167,9 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 
 - Relevant ADR/design links: [auth-provider-policy](../../auth-provider-policy.md)(“프로세스당 단일 provider” — 머신 수용 경로는 UI 로그인 provider가 아닌 별도 인바운드 인증으로 명시 예외화 필요, T-031),
   [api.md](../../api.md), [openapi.json](../../../ui/backend/internal/httpapi/openapi/openapi.json),
-  [keycloak-federation-e2e.yml](../../../.github/workflows/keycloak-federation-e2e.yml).
+  [keycloak-federation-e2e.yml](../../../.github/workflows/keycloak-federation-e2e.yml),
+  [api-error-envelope](../api-error-envelope/CHANGE.md)(D218-3 코드 표: `token_invalid`·`token_expired`·`scope_denied`는 이 패키지를 위해 예약된 이름이고 아직 방출되지 않는다; D218-14: 새 코드는 표·골든 목록·OpenAPI enum을 같은 PR에서 갱신; [ADR](../api-error-envelope/ADR.md)),
+  [api-cursor-pagination](../api-cursor-pagination/CHANGE.md)(커서는 `cursorBinding`이 로그인 세션 ID에 묶는다. 요청마다 임시 세션을 만드는 머신 주체는 `ui/backend/internal/httpapi/cursor.go`의 그 함수에서 안정적인 주체에 묶어야 한다).
 - ADR threshold result: `required` — 신규 자격 증명 수용 경로, 신뢰 경계 확대, 정책 문서 예외. 수용 전 ADR 초안 필요(T-005).
 
 ### 대안 비교
