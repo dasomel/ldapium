@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Config is the fully resolved runtime configuration for the server.
@@ -482,6 +483,11 @@ func parseCORSOrigins(raw string) ([]string, error) {
 		}
 		if strings.EqualFold(entry, "null") || strings.Contains(entry, "*") {
 			return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: wildcards and null are not allowed", entry)
+		}
+		for _, r := range entry {
+			if r > unicode.MaxASCII {
+				return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: non-ASCII (IDN) origins are not supported, list the punycode (xn--) form a browser sends in Origin", entry)
+			}
 		}
 		u, err := url.Parse(entry)
 		if err != nil || strings.ContainsAny(entry, "?#") || u.Opaque != "" || u.User != nil || u.Path != "" || u.Hostname() == "" ||

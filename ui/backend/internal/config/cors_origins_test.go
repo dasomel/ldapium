@@ -63,6 +63,8 @@ func TestLoad_CORSAllowedOrigins(t *testing.T) {
 		"https://app.example/", "https://app.example/path", "https://app.example?x=1", "https://app.example#f",
 		"https://user@app.example", "https://user:pw@app.example", "app.example", "//app.example", "ftp://app.example",
 		"https://", "https://:443", "https://a.example,,https://b.example", "https://a.example,", ",https://a.example",
+		// IDN: Origin carries punycode, so a non-ASCII entry could never match.
+		"https://bücher.example", "https://пример.рф", "https://ａpp.example", "https://app.example​",
 		"https://app.example:", "https://app.example:0", "https://app.example:65536", "https://app.example:99999", "http://[::1]:",
 		"https://a.example:port", "javascript:alert(1)", "https://app example", "https://a.example https://b.example",
 	}
