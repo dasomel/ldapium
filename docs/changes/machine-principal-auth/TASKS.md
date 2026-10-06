@@ -1,7 +1,7 @@
 # Tasks: 외부 HTTP API용 머신 주체 인증 (읽기 전용)
 
 설계: [CHANGE.md](CHANGE.md) (Status: `Accepted (2026-10-07; Revision 5)`) · 증거: [EVIDENCE.md](EVIDENCE.md).
-T-001·T-004는 완료, 나머지는 미착수이며 Class D 패키지 수용(재검토 통과 후) 전에는 `Implement` 이후 단계를 시작하지 않는다.
+2026-10-07 수용 이후 구현 단위 1–4(#272·#274·#276·#278)와 문서 단위 5b가 기본 꺼짐으로 병합됐거나 진행 중이고, 라이브 Keycloak e2e·CI·release 게이트(단위 5a)는 진행 중이다. 체크 표시는 실제로 끝난 것만 한다.
 구현은 기본 꺼짐 상태로 단계 병합한다(CHANGE.md “병합 단위”). LDAP ACL·`image/entrypoint.sh` 변경이 생기면
 `.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다. 각 항목의 “검수”는 그 항목의 PR이 통과해야 하는 수용 확인이다.
 
@@ -85,11 +85,27 @@ T-001·T-004는 완료, 나머지는 미착수이며 Class D 패키지 수용(�
 
 ## Synchronize durable truth
 
-- [ ] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`, 추가 필수 문구(D25): 직접 노출 구성에서는 핸들러 이전에 서버가 거절하는 요청(431, 잘못된 요청 줄, 헤더 타임아웃, TLS·HTTP/2 사전 오류)이 감사·접근·오류 로그 어디에도 남지 않으며, 기록이 필요하면 ingress/프록시 접근 로그를 켜야 한다는 점.
+- [x] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`, 추가 필수 문구(D25): 직접 노출 구성에서는 핸들러 이전에 서버가 거절하는 요청(431, 잘못된 요청 줄, 헤더 타임아웃, TLS·HTTP/2 사전 오류)이 감사·접근·오류 로그 어디에도 남지 않으며, 기록이 필요하면 ingress/프록시 접근 로그를 켜야 한다는 점.
       Keycloak client 설정 가이드(전용 service account client·standard flow/direct access grant 비활성화·audience mapper를 전용 scope에만·JWKS 키 회전 overlap·TTL), 긴급 차단 절차(D7), ingress XFF 정리 요건.
-- [ ] `T-031` ADR 확정·링크, `IMPLEMENTATION-STATUS.md` 갱신.
-- [ ] `T-032` 릴리스 노트, 롤백·긴급 차단(`MACHINE_AUTH_ENABLED=false`/allowlist 제거 + 전 replica 교체), 호환성(기존 경로·OpenAPI additive) 기록.
+      **구현 단위 5b(#214, 2026-10-07, 문서만)**: `docs/api.md`(머신 절 갱신: 오류·상태 코드 표 400/401/403/422/429/503의 의미, `client_credentials` 토큰 요청 curl 예, audience mapper 요건, 제한이 replica별임, 감사 한계), `docs/auth-provider-policy.md` §6(예외와 충돌하지 않는 이유), `docs/audit-event-schema.md`(D25 절 확장), `ui/README.md`(머신 env 표: 기본값·범위, 기동 실패 규칙, `UI_TRUSTED_PROXIES` 요건, `MACHINE_LDAP_ROOT_DNS` 세미콜론 문법), `charts/ldapium/README.md`(Secret 참조, 파생 `MACHINE_LDAP_ROOT_DNS`, ingress 로그 필수 문구, 예전 "values 없음" 문장 정정), `docs/air-gap.md`(issuer/JWKS 도달성, 인터넷 불필요, 사설 CA 한계), 새 `docs/machine-keycloak-client.md`(필수 client 설정 11항, mapper JSON, 토큰 확인, 잘못 설정했을 때의 `reason`), 새 `docs/machine-auth-operations.md`(긴급 차단·롤백·호환성·켜기 전 점검). 모든 명령·env·기본값·범위·상태/오류 코드·오퍼레이션 이름은 코드(`config/machine.go`, `httpapi/machine*.go`, `machineauth/claims.go`, 차트 템플릿)와 `openapi.json`(`jq`)으로 대조했다. **라이브로 실행하지 않은 것**: 문서의 curl·kubectl·helm 예시(코드 읽기로만 확인), Keycloak 콘솔 메뉴 이름. **남은 한 줄(5a 병합 뒤)**: Keycloak 가이드 5절의 "잘못 설정하면" 표를 5a의 라이브 음성 점검 이름과 연결.
+- [x] `T-031` ADR 확정·링크, `IMPLEMENTATION-STATUS.md` 갱신.
+      **구현 단위 5b**: [ADR.md](ADR.md) 신규(패키지에 ADR 초안 파일이 없어 CHANGE.md의 되돌리기 어려운 결정 D1–D30을 승격, 상태 `Accepted`, 호환·롤백·미검증), `docs/api.md`·`auth-provider-policy.md`·`api-error-envelope/ADR.md`에서 링크, `docs/IMPLEMENTATION-STATUS.md`에 구현·라이브 검증·단위 시험만·미병합(5a)을 구분해 기록. **5a 병합 뒤 `IMPLEMENTATION-STATUS.md`의 "미병합" 문단을 갱신해야 한다(그 전에는 라이브 Keycloak 결과를 주장하지 않는다).**
+- [x] `T-032` 릴리스 노트, 롤백·긴급 차단(`MACHINE_AUTH_ENABLED=false`/allowlist 제거 + 전 replica 교체), 호환성(기존 경로·OpenAPI additive) 기록.
+      **구현 단위 5b**: `CHANGELOG.md` [Unreleased]에 기능 전체 릴리스 노트(추가적·기본 꺼짐·켜기 위한 조건·롤백·긴급 차단·알려진 한계·미검증), [machine-auth-operations.md](../../machine-auth-operations.md)에 절차(Keycloak 비활성화는 발급 토큰을 폐기하지 않음 명시). 절차의 라이브 드릴은 T-027(5a)이며 미실행이다.
 - [ ] `T-033` 포트폴리오/OpenForge 상태 영향 검토 및 검증 완료 후 게시.
+      **검토 결과(5b, 문서만, 2026-10-07)**: (1) 다운스트림 SDK·소비자 저장소 없음(T-001), `llms.txt`는 단위 1·4에서 이미 동기화돼 현재 문서와 일치. (2) 영향 있는 외부 기록은 OpenForge 공개 상태 한 곳이다: 상태는 사람이 `.github/workflows/publish-openforge-status.yml`(`workflow_dispatch`, `OPENFORGE_STATUS_TOKEN` 필요)로 게시한다. (3) 지금 게시하지 않는다 — 이 기능은 라이브 Keycloak e2e·CI 게이트(5a)가 병합되기 전이고 #214가 열려 있어 `implemented`로 올릴 근거가 없다. **외부 조치(수행하지 않음, 유지보수자 몫)**: 5a 병합 + 라이브 e2e 녹색 + 릴리스 후, 위 워크플로를 `development_status`(그때의 검증된 상태)와 `milestone`(예: "machine bearer API auth, read-only, default off")으로 실행. 이 항목은 그때까지 열어 둔다.
+
+## Known limitations and follow-ups
+
+단위 5b 시점(2026-10-07)의 알려진 제한과 후속 과제. 각 항목은 무엇이 남았는지와 어디에 적혀 있는지만 적는다.
+
+- **#266** — 사람 세션의 현재 비밀번호 시도가 제한되지 않는다(틀린 현재 비밀번호가 ppolicy 잠금에 집계되지 않음, [api-error-envelope ADR D264-4](../api-error-envelope/ADR.md)). 머신 경로와 무관한 기존 한계이며 후속 이슈로 추적한다.
+- **#277 / T-034 / D30** — 머신 ACL(`{0}`–`{2}`)과 복제 신원(`LDAP_REPLICATION_IDENTITY=prepare`, 규칙은 `{0}`)의 결합 순서(복제 `{0}` + 머신 `{1}`–`{3}`) 미구현. **함께 쓰지 않는다**([machine-ldap-account.md](../../machine-ldap-account.md) 12절 경고, ADR D30).
+- **D25** — 핸들러 이전에 Go HTTP 서버가 거절한 요청(431, 잘못된 요청 줄, 헤더 timeout, TLS·HTTP/2 사전 오류)은 감사·접근·오류 로그 어디에도 남지 않는다. ingress/프록시 접근 로그가 있어야 기록된다([audit-event-schema.md](../../audit-event-schema.md), 차트 README).
+- **opt-in scope는 기본으로 꺼져 있다** — `audit.read`·`server.settings.read`는 서버의 client 상한에 명시한 경우에만 동작하고, `audit.read`는 accesslog DB의 opt-in ACL이 따로 필요하다. `server.monitor.read`의 accesslog 부분도 `audit.read`가 없으면 비어 있다.
+- **graceful shutdown은 10초 고정** — `ui/backend/cmd/server/main.go`가 종료 시 진행 요청을 최대 10초만 기다린다. 차트는 `terminationGracePeriodSeconds`를 `max(30, 요청 timeout+5)`로 두지만 `MACHINE_REQUEST_TIMEOUT`이 10초를 넘으면 pod 종료 때 10초 넘은 요청이 끊긴다. 긴급 차단 절차 문서에 적었고 코드 변경은 별도 후속 과제다(이 PR은 문서만).
+- **limiter는 replica별** — 한도는 전역이 아니다. 공유 limiter는 ingress/게이트웨이 계층의 일.
+- **미실행** — 라이브 Keycloak e2e·release 게이트(5a), 긴급 차단·롤백 드릴(T-027), 공유 client scope 오염 가설(T-021), 다중 노드·복제·Kubernetes에서의 ACL 적용, 실제 프록시 뒤 XFF 위조, 실제 클러스터 설치.
 
 ## Completion review
 

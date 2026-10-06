@@ -88,6 +88,36 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   allowlist. New stable error code `machine_rate_limited` (429, retryable); the audit
   line uses `reason=rate`. Helm gains `ui.machineAuth.*` (off by default; the
   rendered chart is byte-identical when disabled). Limits are per replica.
+- Machine bearer authentication, unit 5b (#214, documentation only, **default off**;
+  release notes for the feature as a whole). **What it is:** an opt-in way for a
+  Keycloak service client (`client_credentials` access token) to call eight read-only
+  `GET` operations (`listUsers`, `listGroups`, `listTree`, `getEntry`,
+  `listPasswordPolicies`, `getMonitor`, and the opt-in `listAuditActions`,
+  `getServerSettings`) as one dedicated read-only LDAP account. Writes, passwords,
+  backups, application profiles, `entry/move` and `getMe` are never available to a
+  machine. **Compatibility:** with `MACHINE_AUTH_ENABLED` unset (the default, Helm
+  `ui.machineAuth.enabled=false`) nothing changes: no `MACHINE_*` variable is read, the
+  chart renders byte-identical manifests, and `Authorization` is ignored. Existing
+  paths, cookies, sessions and the existing OpenAPI operations are unchanged; the
+  OpenAPI additions (`securitySchemes.machineBearer`, `x-machine-scope`) and the four
+  new stable error codes (`token_invalid`, `token_expired`, `scope_denied`,
+  `machine_rate_limited`) are additive. **Turning it on needs:** the Keycloak client
+  settings in `docs/machine-keycloak-client.md` (audience mapper, lightweight access
+  token off), the LDAP account and ACL on every LDAP node
+  (`docs/machine-ldap-account.md`), and `UI_TRUSTED_PROXIES` set to CIDRs or `none`.
+  **Rollback:** `MACHINE_AUTH_ENABLED=false` (or `ui.machineAuth.enabled=false`) and
+  replace every replica; there is no persisted state. **Emergency revocation:** remove
+  the client from `MACHINE_ALLOWED_CLIENTS` or disable the feature, replace **all**
+  replicas and confirm no old pod remains, then disable the Keycloak client.
+  Disabling the Keycloak client alone does **not** revoke tokens already issued; they
+  stay valid until they expire (at most `MACHINE_TOKEN_MAX_TTL` plus the clock skew).
+  Procedure: `docs/machine-auth-operations.md`. **Known limits:** requests the Go HTTP
+  server rejects before any handler (431, malformed request line, header timeout,
+  TLS/HTTP/2 pre-handler errors) are not audited and leave no log without an ingress
+  access log (D25); limits are per replica; the machine ACL cannot be combined with
+  `LDAP_REPLICATION_IDENTITY=prepare` yet (D30, T-034). **Not yet verified:** the live
+  end-to-end run against a real Keycloak, its CI workflow and the release gate are a
+  separate unit (5a) and are not part of this change.
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause

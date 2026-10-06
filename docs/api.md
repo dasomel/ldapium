@@ -1,7 +1,7 @@
 # ldapium HTTP API
 
 ldapium 웹 콘솔이 사용하는 `/api` JSON API를 스크립트와 AI 에이전트가 쓸 수 있도록 정리한 문서입니다.
-인증 모델은 변경되지 않았습니다. **세션 쿠키만** 지원합니다.
+기본 인증은 **세션 쿠키**입니다. 선택(기본 꺼짐)으로 Keycloak 서비스 계정의 bearer 토큰을 읽기 전용 GET 8개에 한해 받을 수 있습니다([머신 bearer 인증](#머신-bearer-인증-기본-꺼짐)). 그 기능을 켜지 않은 서버의 동작은 달라지지 않습니다.
 
 - 기계 판독용 명세 (OpenAPI 3.1, 실행 중인 빌드와 항상 일치): `GET /api/v1/openapi.json`
 - AI용 요약 인덱스: `GET /llms.txt`
@@ -281,7 +281,7 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 | 404 / 405 | 대상 없음·기능 비활성·알 수 없는 경로 / 허용되지 않는 메서드 |
 | 409 / 412 / 428 | 충돌(`idempotency_key_conflict`·`idempotency_outcome_unknown` 포함) / revision·ETag 불일치(`revision_conflict`) / If-Match 필요(프로필·백업) |
 | 500 | 예상치 못한 실패, 또는 `partial_failure`(사용자 생성 후 비밀번호 단계 미완료) |
-| 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성, 커서 목록의 `scan_timeout`·`unavailable` |
+| 429 / 502 / 503 | 로그인 제한·머신 bearer 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성, 커서 목록의 `scan_timeout`·`unavailable`, 머신 요청의 서명 키 조회 불가·LDAP bind 실패·동시성 소진 |
 
 ## 안전 규칙
 
@@ -309,7 +309,7 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 
 ## 머신 bearer 인증 (기본 꺼짐)
 
-> **이 빌드는 실행 신원과 제한(limiter)까지 들어 있습니다(단위 2·4).** 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. Keycloak e2e는 후속 단위입니다. 운영자용 계정 생성·ACL 절차는 [`machine-ldap-account.md`](machine-ldap-account.md)에 있습니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
+> 읽기 전용 v1이며 **기본 꺼짐**입니다. 쓰기·비밀번호·백업·프로파일은 어떤 경우에도 머신으로 호출할 수 없습니다. 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 운영자 문서: [Keycloak client 설정](machine-keycloak-client.md) · [LDAP 계정과 ACL](machine-ldap-account.md) · [롤백·긴급 차단·호환성](machine-auth-operations.md). 설계와 결정: [`CHANGE.md`](changes/machine-principal-auth/CHANGE.md), [`ADR.md`](changes/machine-principal-auth/ADR.md). **실제 Keycloak을 띄운 라이브 e2e와 release 게이트는 이 문서 작성 시점에 병합되지 않았습니다**([`IMPLEMENTATION-STATUS.md`](IMPLEMENTATION-STATUS.md)).
 
 켜지 않으면(`MACHINE_AUTH_ENABLED` 미설정) `Authorization` 헤더는 완전히 무시되고 기존 동작·응답은 달라지지 않습니다. 켜면 Keycloak 서비스 계정 access token(`client_credentials`)을 `Authorization: Bearer <jwt>`로 보낼 수 있습니다.
 
@@ -324,7 +324,51 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 - **감사:** `Authorization`을 실은 모든 요청(조기 반환 포함)은 로그 한 줄(`event=machine_access`)을 남깁니다. 형식은 [`audit-event-schema.md`](audit-event-schema.md)의 "머신 접근 이벤트".
 - **시작 조건(`MACHINE_AUTH_ENABLED=true`):** issuer는 https만(로컬 테스트용 `MACHINE_OIDC_INSECURE_HTTP=true` 예외, 기동 시 WARN), audience·허용 client·머신 bind DN·`MACHINE_LDAP_ROOT_DNS`(`;` 구분, 리터럴 `;`는 `\3B`) 필수, bind DN이 관리자·서비스 계정·rootdn과 ParseDN 동등이면 기동 실패, `UI_TRUSTED_PROXIES`가 `private`(기본)이면 기동 실패, `MACHINE_CLOCK_SKEW` 0–60s, `MACHINE_TOKEN_MAX_TTL` (0, 1h].
 
+### 머신 호출 예 (Keycloak `client_credentials`)
+
+전제: Keycloak에 [전용 service account client](machine-keycloak-client.md)(audience mapper 포함)가 있고, ldapium이 `MACHINE_ALLOWED_CLIENTS`에 그 client와 scope를 갖고 있습니다.
+**audience mapper가 없으면 토큰의 `aud`가 `"account"`뿐이라 모든 요청이 401입니다**(`MACHINE_OIDC_AUDIENCE`는 `aud` 배열의 정확한 멤버여야 하고, `account` 자체는 audience로 쓸 수 없습니다).
+
+```bash
+ISSUER=https://sso.example.com/realms/example      # = MACHINE_OIDC_ISSUER_URL (토큰 iss와 바이트 단위로 같아야 함)
+BASE=https://ldapium.example.com
+
+# 1. 토큰 (secret은 파일에서 읽는다)
+TOKEN=$(curl -sS -X POST "$ISSUER/protocol/openid-connect/token" \
+  -d grant_type=client_credentials -d client_id=svc-reporting \
+  --data-urlencode client_secret@/run/secrets/svc-reporting | jq -r .access_token)
+
+# 2. bearer로 호출 (쿠키를 함께 보내면 400)
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/users?limit=50"
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/entry" --get \
+  --data-urlencode "dn=uid=jdoe,ou=people,dc=example,dc=org"
+```
+
+한 번 받은 토큰은 `exp`까지 재사용하고(Keycloak 기본 300초, ldapium 상한 `MACHINE_TOKEN_MAX_TTL`), 만료 전에 새로 받으세요. 401 `token_expired`를 받으면 새 토큰으로 한 번만 재시도합니다. 다른 401은 재시도해도 같습니다.
+list의 `cursor`는 토큰을 갱신해도 이어집니다(issuer+client에 묶임).
+
+### 오류 코드와 상태 코드 (머신 요청)
+
+| 상태 · `code` | 의미 | 재시도 |
+|---|---|---|
+| 400 `invalid_request` | 유효 형식 `Authorization`과 `ldapium_session` 쿠키를 함께 보냄(쿠키 이름이 있으면 값·개수와 무관), 또는 로그인·로그아웃·SSO 4개 경로에 `Authorization`을 보냄. 쿠키는 발행·삭제되지 않음 | 쿠키를 빼고 |
+| 401 `token_invalid` | 토큰이 검증을 통과하지 못함: 서명·`alg`·`typ`·`kid`·`iss`·`aud`·`azp`/`client_id`·서비스 계정 규칙·`scope`·시간 규칙·수명 상한, 허용 목록 밖 client, 알 수 없는 `kid`(키를 정상 조회한 뒤), 또는 형식이 틀렸거나 둘 이상인 `Authorization`(쿠키로 폴백하지 않음). 본문은 사유를 말하지 않고(사유는 감사 로그의 `reason`), 검증 실패 응답에는 `WWW-Authenticate: Bearer error="invalid_token"`가 붙음 | 아니오(토큰·설정을 고친 뒤) |
+| 401 `token_expired` | 다른 규칙은 모두 통과했고 `exp`(+`MACHINE_CLOCK_SKEW`)만 지남 | 새 토큰으로 |
+| 403 `scope_denied` | 토큰은 유효하지만 (a) 허용 8개가 아닌 오퍼레이션·비-GET(HEAD 포함)·미등록 경로, (b) 필요한 scope가 토큰 scope ∩ 서버 client 상한에 없음, (c) `getEntry`/`listTree`의 `dn`이 `LDAP_BASE_DN` 밖(`cn=accesslog`·`cn=config`·`cn=Monitor` 포함). bind·핸들러 실행 전에 거부됨 | 아니오 |
+| 429 `machine_rate_limited` | (a) 같은 IP의 실패가 한도(기본 60초에 10회)에 도달 — 서명·JWKS 작업 **이전**에 거부되므로 유효 토큰도 걸림, (b) 검증된 client의 rate/burst/동시 실행 한도. `Retry-After` 정수 초가 항상 있음 | `Retry-After` 후 |
+| 503 `unavailable` | (a) 서명 키(JWKS/discovery) 조회 불가 또는 backoff 중 — `Retry-After`, (b) 전역 인증 동시성 또는 전역 LDAP 슬롯 소진 — `Retry-After: 1`, (c) 머신 LDAP bind 실패·디렉터리 중단·`MACHINE_REQUEST_TIMEOUT` 초과(다른 신원으로 폴백하지 않음) | `Retry-After` 후 |
+| 422 `size_limit_exceeded` | `listTree`의 자식이 1000개를 넘음(머신 요청만. 잘라 내지 않고 거부) | 아니오 |
+
+비-머신 오류(404 `not_found`, 400 `cursor_invalid` 등)는 위 표의 [오류 형식](#오류-형식)과 같습니다.
+
+**제한(rate limit)의 범위:** 모든 한도는 **프로세스(replica)별**입니다. replica가 둘이면 한도도 둘입니다. client별 budget은 limiter 예산만 격리하며 LDAP·JWKS·전역 동시성은 client 사이에 격리되지 않습니다. IP 키는 `UI_TRUSTED_PROXIES`로 정해지므로 ingress가 클라이언트가 보낸 `X-Forwarded-For`를 덮어쓰거나 정리해야 합니다.
+
+**감사와 그 한계:** `Authorization`을 실은 요청은 핸들러에 도달하는 한 정확히 로그 한 줄(`event=machine_access`)을 남깁니다([`audit-event-schema.md`](audit-event-schema.md)).
+Go HTTP 서버가 핸들러 이전에 거절하는 요청(헤더 초과 431, 잘못된 요청 줄 400, 헤더 읽기 timeout, TLS·HTTP/2 사전 오류)은 이 줄도, 접근·오류 로그도 남기지 않습니다. 직접 노출 구성에서는 어디에도 기록되지 않으며, 기록이 필요하면 ingress/프록시의 접근 로그를 켜야 합니다.
+
+**알려진 제한:** [`machine-auth-operations.md`](machine-auth-operations.md)와 변경 패키지의 `TASKS.md` "알려진 제한과 후속 과제"를 보세요. 요약: opt-in scope(`audit.read`, `server.settings.read`)는 서버 상한에 명시하지 않으면 꺼져 있고, 머신 ACL은 `LDAP_REPLICATION_IDENTITY=prepare`와 함께 쓰지 않습니다.
+
 ## 아직 지원하지 않는 것
 
-머신 bearer는 기본 꺼짐이며(운영 가이드·e2e는 후속 단위) 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
+머신 bearer는 기본 꺼짐이며 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.

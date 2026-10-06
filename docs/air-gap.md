@@ -122,3 +122,29 @@ Whichever way it moves, **record when the database was last refreshed** and
 treat that date as part of the scan result. A scan is a statement about a
 database version as much as about an image, and in an air-gapped environment
 the database version is the part that silently goes wrong.
+
+## Machine bearer authentication and issuer reachability
+
+Machine bearer authentication (`MACHINE_AUTH_ENABLED`, off by default; see
+[`api.md`](api.md) and [`machine-auth-operations.md`](machine-auth-operations.md)) needs **no
+internet access**. With it off, nothing in this document changes. With it on, the only
+network requirement is inside your own network:
+
+- The UI pods must reach the OIDC issuer named by `MACHINE_OIDC_ISSUER_URL` (your
+  Keycloak): its discovery document (`<issuer>/.well-known/openid-configuration`) and the
+  `jwks_uri` that document advertises, both over `https`. An issuer hosted inside the
+  air-gapped network is the normal case. No external IdP, CDN or update service is
+  contacted, and ldapium stores no token or key beyond a process-memory key cache.
+- Clients obtain their token from that same Keycloak (`client_credentials`) and send it to
+  ldapium, so they need Keycloak and ldapium, nothing else.
+- The issuer's TLS certificate must chain to a CA the UI container already trusts (its
+  system trust store). There is no setting for an extra CA bundle in this version (deferred
+  in the design, D15); an issuer behind a private CA needs that CA in the UI image's trust
+  store, or the feature cannot be used. The local-test switch `MACHINE_OIDC_INSECURE_HTTP`
+  exists for throw-away tests only and is not a chart value.
+- If your cluster restricts egress, allow the UI pods to the issuer and JWKS endpoints in
+  addition to the directory (the chart creates no NetworkPolicy for this).
+- Keys are cached (`MACHINE_JWKS_CACHE_TTL` 10 m, still used when the issuer is down for up
+  to `MACHINE_JWKS_MAX_STALE` 1 h). When the issuer is unreachable beyond that, bearer
+  requests answer `503` with `Retry-After` (fail closed); cookie login and the rest of the
+  API are unaffected. At startup an unreachable issuer is logged and retried, not fatal.

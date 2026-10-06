@@ -198,6 +198,52 @@ ID token — the same token `sso.go` already verifies signature, issuer,
 audience, and expiry on. Adding native CAS/SAML support to this codebase is
 out of scope; the Keycloak boundary is the intended integration point.
 
+## 6. Exception: machine inbound authentication (bearer)
+
+Sections 1-5 govern the **login provider**: how a human proves who they are
+and gets a session. That rule is unchanged. A deployment that sets
+`MACHINE_AUTH_ENABLED=true` (default `false`, change package
+[`machine-principal-auth`](changes/machine-principal-auth/CHANGE.md), ADR
+[`ADR.md`](changes/machine-principal-auth/ADR.md)) additionally accepts a Keycloak
+service-account access token as a bearer credential on eight read-only `GET`
+operations. This is a deliberate, documented exception to "one authentication
+mechanism per process", and it does not conflict with the policy above because:
+
+- **It is not a login provider.** It never creates a session, never sets or
+  deletes a cookie (a bearer request gets no `Set-Cookie`), and never touches
+  `session.Store`. `SSO_ENABLED` still selects exactly one provider for human
+  login, and `POST /api/login` and the SSO callback behave exactly as before.
+  `GET /api/auth/config` still reports `ldap` or `sso`.
+- **No fallback in either direction.** An `Authorization` header present and
+  malformed (or repeated) is `401 token_invalid`; it never falls back to the
+  cookie. A valid-looking bearer together with a session cookie is `400`.
+  A request with no `Authorization` takes the cookie path exactly as before.
+  The four login/SSO paths refuse an `Authorization` header with `400`.
+  A failed verification, an unreachable JWKS or a failed LDAP bind is a 401/503,
+  never a downgrade to another credential or to another LDAP identity.
+- **A separate issuer and audience.** `MACHINE_OIDC_ISSUER_URL` (https only;
+  inherited from `SSO_ISSUER_URL` when unset and SSO is on, never the other way
+  round), a dedicated `MACHINE_OIDC_AUDIENCE` (never `account`, never the SSO
+  client), and an allowlist of service clients. The SSO browser client is
+  refused as a machine client at startup, and a human SSO token fails
+  verification (`azp`/`client_id`/service-account rules).
+- **Its own execution identity.** Machine requests run as one dedicated,
+  read-only LDAP account bound per request (not `LDAP_SERVICE_ACCOUNT_DN`, not an
+  administrator, not a rootdn; startup refuses a match). The read-only property is
+  enforced by LDAP ACLs, not by the application.
+- **Its own audit stream.** One `event=machine_access` line per
+  `Authorization`-carrying request (`provider=oidc`, see
+  [audit-event-schema.md](audit-event-schema.md)), distinct from the `auth`
+  events of section 3. Limit: requests the Go HTTP server rejects before any
+  handler runs are not recorded unless an ingress access log exists (D25).
+- **Off by default and removable by configuration.** With the flag unset no
+  `MACHINE_*` variable is read and nothing about sections 1-5 changes.
+
+Operator documents: [machine-keycloak-client.md](machine-keycloak-client.md),
+[machine-ldap-account.md](machine-ldap-account.md),
+[machine-auth-operations.md](machine-auth-operations.md) (rollback and emergency
+revocation: disabling the Keycloak client does **not** revoke tokens already issued).
+
 ## See also
 
 - `ui/README.md` — operator-facing configuration for both modes

@@ -366,6 +366,30 @@ contains commas. Limits are per UI pod. For an emergency block, remove the
 client from `allowedClients` (or disable the feature) and replace **every** pod:
 revoking the Keycloak client alone does not invalidate tokens already issued.
 
+**Secrets by reference.** The only secret is the machine LDAP bind password, passed as
+a `secretKeyRef` to `ui.machineAuth.existingSecret` / `existingSecretKey` (default key
+`machine-ldap-bind-password`); create that Secret yourself. Keycloak client secrets
+never reach ldapium, which only verifies token signatures with the issuer's public
+keys. `MACHINE_OIDC_ALGS`, `MACHINE_SA_USERNAME_PREFIX` and `MACHINE_OIDC_INSECURE_HTTP`
+are not chart values (they keep their defaults); the full variable list with bounds is
+in [`ui/README.md`](../../ui/README.md#machine-bearer-authentication).
+
+**Ingress logging is required for a complete record.** The application writes one
+`event=machine_access` line for every `Authorization`-carrying request that reaches a
+handler. Requests the Go HTTP server rejects before a handler (oversized headers 431,
+a malformed request line, header read timeouts, TLS or HTTP/2 pre-handler errors, and
+anything stopped where TLS terminates at the ingress) are recorded nowhere by the
+application, and in a directly exposed deployment nowhere at all
+(`docs/audit-event-schema.md`, D25). Turn on access logging on the ingress, load
+balancer or proxy in front of the UI if you need that record.
+
+**Pod replacement.** `terminationGracePeriodSeconds` is `max(30, requestTimeoutSeconds+5)`
+while the feature is on. The UI server's own graceful shutdown waits a fixed 10 s for
+in-flight requests, so a `requestTimeoutSeconds` above 10 does not extend that wait.
+Emergency block and rollback procedures, including how to confirm that every old pod
+is gone: [`docs/machine-auth-operations.md`](../../docs/machine-auth-operations.md).
+Keycloak client requirements: [`docs/machine-keycloak-client.md`](../../docs/machine-keycloak-client.md).
+
 ## Hardening
 
 **Group A, on by default.** `ldap.limits.*` are always rendered and the image
@@ -433,12 +457,13 @@ LDAP client (SSSD gateways, Keycloak).
 
 ## Machine bearer authentication: LDAP account and ACL
 
-The chart has no `ui.machineAuth.*` values yet (staged rollout, #214). A deployment
-that sets `MACHINE_AUTH_ENABLED` on the UI by hand needs a dedicated read-only LDAP
-account and three `olcAccess` rules on the main database of **every** LDAP pod
-(`cn=config` ACLs are per node and are lost with a fresh `config` volume): follow
+`ui.machineAuth.*` wires the UI configuration only; the LDAP side is an operator
+step the chart never performs. Machine requests run as one dedicated read-only LDAP
+account, which needs three `olcAccess` rules on the main database of **every** LDAP
+pod (`cn=config` ACLs are per node and are lost with a fresh `config` volume): follow
 [`docs/machine-ldap-account.md`](../../docs/machine-ldap-account.md) and verify the
-rule order before enabling it.
+rule order before enabling the feature. Do not combine it with
+`LDAP_REPLICATION_IDENTITY=prepare` on the LDAP image (rule-order conflict, D30; tracked as T-034).
 
 ## Keycloak SSO
 
