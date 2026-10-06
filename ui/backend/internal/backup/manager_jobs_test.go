@@ -142,15 +142,20 @@ func (e *env) readDisk(t *testing.T) disk {
 // fakeWorker is the launcher seam: it counts launches without any process.
 type fakeWorker struct {
 	calls atomic.Int32
-	run   func(ctx context.Context, kind string) ([]byte, error)
+	run   func(ctx context.Context, kind, jobID string) ([]byte, error)
 }
 
-func (f *fakeWorker) fn(ctx context.Context, kind string, _ []byte) ([]byte, error) {
+// okOut is a valid, verified worker result for jobID.
+func okOut(kind, jobID string) []byte {
+	return []byte(fmt.Sprintf(`{"run_id":%q,"kind":%q,"job_id":%q,"verified":true,"local_verified":true,"destinations":[{"id":"local","status":"succeeded"}]}`, runA, kind, jobID))
+}
+
+func (f *fakeWorker) fn(ctx context.Context, kind, jobID string, _ []byte) ([]byte, error) {
 	f.calls.Add(1)
 	if f.run == nil {
-		return []byte(fmt.Sprintf(`{"run_id":%q,"verified":true,"local_verified":true}`, runA)), nil
+		return okOut(kind, jobID), nil
 	}
-	return f.run(ctx, kind)
+	return f.run(ctx, kind, jobID)
 }
 
 func free(m *Manager) { m.lockProbe = func() (bool, error) { return false, nil } }
@@ -347,12 +352,12 @@ func TestStartJobReturnsTheJobItCreated(t *testing.T) {
 func TestConcurrentStartJobBusyCarriesTheWinner(t *testing.T) {
 	e := newEnv(t)
 	release := make(chan struct{})
-	fw := &fakeWorker{run: func(ctx context.Context, _ string) ([]byte, error) {
+	fw := &fakeWorker{run: func(ctx context.Context, kind, jobID string) ([]byte, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
-		return []byte(fmt.Sprintf(`{"run_id":%q,"verified":true,"local_verified":true}`, runA)), nil
+		return okOut(kind, jobID), nil
 	}}
 	m := e.manager(t, func(m *Manager) { free(m); m.runWorker = fw.fn })
 
@@ -434,7 +439,7 @@ func TestCancelWriteFailureSendsNoSignal(t *testing.T) {
 	e := newEnv(t)
 	var failing atomic.Bool
 	started := make(chan context.Context, 1)
-	fw := &fakeWorker{run: func(ctx context.Context, _ string) ([]byte, error) {
+	fw := &fakeWorker{run: func(ctx context.Context, _, _ string) ([]byte, error) {
 		started <- ctx
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -519,12 +524,12 @@ func TestCompletionWriteFailureMarksDirtyAndTickRetries(t *testing.T) {
 func TestStateRestoredFromJobFileAfterStateWriteFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		run        func(ctx context.Context, kind string) ([]byte, error)
+		run        func(ctx context.Context, kind, jobID string) ([]byte, error)
 		wantStatus string
 		wantOK     bool
 	}{
 		{"succeeded", nil, "succeeded", true},
-		{"failed", func(context.Context, string) ([]byte, error) { return nil, errors.New("exit 1") }, "failed", false},
+		{"failed", func(context.Context, string, string) ([]byte, error) { return nil, errors.New("exit 1") }, "failed", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)

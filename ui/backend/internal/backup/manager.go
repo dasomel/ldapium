@@ -38,7 +38,7 @@ type Manager struct {
 	lockProbe LockProbe
 	clock     func() time.Time
 	after     func(time.Duration) <-chan time.Time
-	runWorker func(ctx context.Context, kind string, stdin []byte) ([]byte, error)
+	runWorker func(ctx context.Context, kind, jobID string, stdin []byte) ([]byte, error)
 
 	jobsPath      string
 	jobs          []*Job
@@ -51,6 +51,9 @@ type Manager struct {
 	// orphanDelay is the current poll backoff while an orphan worker holds the
 	// lock; pendingResultDeletes are pruned jobs whose result files may only be
 	// removed once the pruned job file is durably written.
+	jobTimeouts map[string]time.Duration
+	killGrace   time.Duration
+
 	orphanDelay          time.Duration
 	pendingResultDeletes []string
 }

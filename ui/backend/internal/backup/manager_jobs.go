@@ -244,6 +244,7 @@ func (m *Manager) readWorkerResult(j *Job) (*WorkerResult, resultStatus) {
 // before catch-up is scheduled.
 func (m *Manager) reconcileJobLocked(j *Job, now time.Time, mayOwnLock bool) ReconcileDecision {
 	var ev ReconcileEvidence
+	wasOrphan := j.OrphanSuspected
 	if mayOwnLock && m.lockProbe != nil {
 		held, err := m.lockProbe()
 		ev.LockHeld = err == nil && held
@@ -283,7 +284,18 @@ func (m *Manager) reconcileJobLocked(j *Job, now time.Time, mayOwnLock bool) Rec
 		st.NextRun = ScheduleAfterRecovery(m.jobs, j.Kind, p.IntervalMinutes, now)
 	}
 	m.states[j.Kind] = st
-	log.Printf("backup_abandoned_or_settled job_id=%s kind=%s status=%s decision=%s", j.JobID, j.Kind, j.Status, decision)
+	source := "none"
+	switch decision {
+	case DecisionSettledResult:
+		source = "file"
+	case DecisionSettledManifest:
+		source = "manifest"
+	}
+	if j.Status == JobStatusAbandoned {
+		log.Printf("backup_abandoned job_id=%s kind=%s orphan=%t result_source=%s", j.JobID, j.Kind, wasOrphan, source)
+	} else {
+		log.Printf("backup_completed job_id=%s kind=%s status=%s error_code=%s policy_revision=%d orphan=%t result_source=%s", j.JobID, j.Kind, j.Status, jobErrCode(j), j.PolicyRevision, wasOrphan, source)
+	}
 	return decision
 }
 
@@ -411,7 +423,7 @@ func (m *Manager) Jobs(kind, status string, limit int) []*Job {
 		if status != "" && j.Status != status {
 			continue
 		}
-		filtered = append(filtered, cloneJob(j))
+		filtered = append(filtered, m.present(j))
 		if len(filtered) >= limit {
 			break
 		}
@@ -428,7 +440,7 @@ func (m *Manager) GetJob(id string) (*Job, error) {
 	defer m.mu.Unlock()
 	for _, j := range m.jobs {
 		if j.JobID == id {
-			return cloneJob(j), nil
+			return m.present(j), nil
 		}
 	}
 	return nil, &JobNotFoundError{JobID: id}
@@ -519,6 +531,7 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 
 	now := m.now()
 	p := clonePolicy(m.policyFor(kind))
+	deadline := now.Add(m.timeoutFor(kind))
 	job := &Job{
 		JobID:          jobID,
 		Kind:           kind,
@@ -530,6 +543,7 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 		CreatedAt:      now,
 		StartedAt:      now,
 		StagingCleanup: StagingCleanupNotApplicable,
+		DeadlineAt:     deadline,
 	}
 
 	// Step 1 of D217-17: persist the running record before the worker starts.
@@ -554,8 +568,35 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 	}
 	cancelCtx, cancel := context.WithCancel(runCtx)
 	m.cancelFunc = cancel
-	go m.execute(cancelCtx, kind, p, append([]Connection{}, m.connections...), jobID)
-	return cloneJob(job), nil
+	log.Printf("backup_started job_id=%s kind=%s trigger=%s actor_fp=%s request_id=%q", jobID, kind, req.Trigger, actorFP(req), req.RequestID)
+	go m.execute(cancelCtx, kind, p, append([]Connection{}, m.connections...), jobID, deadline)
+	return m.present(job), nil
+}
+
+func jobErrCode(j *Job) string {
+	if j.Error == nil {
+		return ""
+	}
+	return j.Error.Code
+}
+
+func actorFP(req RunRequest) string {
+	if req.RequesterType == JobRequesterScheduler {
+		return "scheduler"
+	}
+	return req.ActorFingerprint
+}
+
+// present returns a copy of j for callers, with staging_cleanup=pending shown
+// as done once no .pending-* directory remains (read-only, D217-6).
+func (m *Manager) present(j *Job) *Job {
+	c := cloneJob(j)
+	if c.StagingCleanup == StagingCleanupPending && m.root != "" {
+		if left, _ := filepath.Glob(filepath.Join(m.root, c.Kind, ".pending-*")); len(left) == 0 {
+			c.StagingCleanup = StagingCleanupDone
+		}
+	}
+	return c
 }
 
 // CancelJob requests cancellation of a running backup job per D217-5 and D217-17.
@@ -577,9 +618,10 @@ func (m *Manager) CancelJob(id string) (*Job, error) {
 		return nil, &JobNotFoundError{JobID: id}
 	}
 	if target.Status == JobStatusCancelled {
-		return cloneJob(target), nil
+		return m.present(target), nil
 	}
-	if target.Status != JobStatusRunning {
+	// An orphan's pid is unknown (never stored: pid reuse), so it cannot be signalled.
+	if target.Status != JobStatusRunning || target.OrphanSuspected {
 		return nil, &JobNotCancellableError{JobID: id, Status: target.Status}
 	}
 
@@ -593,7 +635,7 @@ func (m *Manager) CancelJob(id string) (*Job, error) {
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 	}
-	return cloneJob(target), nil
+	return m.present(target), nil
 }
 
 // SetWriter overrides the atomic persistence writer (for failure testing).
@@ -619,4 +661,11 @@ func (m *Manager) SetIDGenerator(gen *JobIDGenerator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.idGen = gen
+}
+
+// SetKillGrace overrides the SIGTERM->SIGKILL grace period (for testing).
+func (m *Manager) SetKillGrace(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.killGrace = d
 }

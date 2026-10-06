@@ -358,7 +358,7 @@ func TestNoSensitiveInformationReachesRecordsErrorsOrLogs(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 
 	var failWrites atomic.Bool
-	hostile := &fakeWorker{run: func(context.Context, string) ([]byte, error) {
+	hostile := &fakeWorker{run: func(context.Context, string, string) ([]byte, error) {
 		// stdout and the returned error both carry secrets, as a misbehaving
 		// worker or rclone's stderr could.
 		out := fmt.Sprintf(`{"run_id":%q,"verified":false,"local_verified":true,"destinations":[{"id":%q,"status":%q,"error_code":%q}]}`, dn, outside, password, rclone)

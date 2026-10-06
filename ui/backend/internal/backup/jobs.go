@@ -3,6 +3,7 @@ package backup
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -227,6 +228,25 @@ type Job struct {
 	Local             *JobLocal        `json:"local,omitempty"`
 	Destinations      []JobDestination `json:"destinations,omitempty"`
 	Artifact          *JobArtifact     `json:"artifact,omitempty"`
+}
+
+// MarshalJSON omits unset times (omitempty does not apply to time.Time), for
+// both the API and the job file.
+func (j Job) MarshalJSON() ([]byte, error) {
+	type plain Job
+	opt := func(t time.Time) *time.Time {
+		if t.IsZero() {
+			return nil
+		}
+		return &t
+	}
+	return json.Marshal(struct {
+		plain
+		StartedAt         *time.Time `json:"started_at,omitempty"`
+		FinishedAt        *time.Time `json:"finished_at,omitempty"`
+		DeadlineAt        *time.Time `json:"deadline_at,omitempty"`
+		CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
+	}{plain(j), opt(j.StartedAt), opt(j.FinishedAt), opt(j.DeadlineAt), opt(j.CancelRequestedAt)})
 }
 
 // ValidTransition enforces the state machine per D217-2. Initial creation may

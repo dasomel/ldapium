@@ -49,6 +49,15 @@ func waitIdle(t *testing.T, m *Manager) {
 	}
 }
 
+const testRun = "20261006T150000Z-0123456789ab"
+
+// workerScript is a fake worker honouring the --job-id contract: it sleeps,
+// prints a result for its own job and then runs tail (e.g. a non-zero exit).
+func workerScript(sleep, verified, local, tail string) string {
+	return "import sys,time,json\njid=sys.argv[sys.argv.index('--job-id')+1]\ntime.sleep(" + sleep + ")\n" +
+		"print(json.dumps({'run_id':'" + testRun + "','kind':'data','job_id':jid,'verified':" + verified + ",'local_verified':" + local + ",'destinations':[{'id':'local','status':'succeeded'}]}))\n" + tail + "\n"
+}
+
 func testManager(t *testing.T) *Manager {
 	t.Helper()
 	python := pythonForTest(t)
@@ -58,7 +67,7 @@ func testManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	worker := filepath.Join(dir, "worker.py")
-	if err := os.WriteFile(worker, []byte("import time,json\ntime.sleep(.1)\nprint(json.dumps({'run_id':'test-run','verified':True}))\n"), 0600); err != nil {
+	if err := os.WriteFile(worker, []byte(workerScript(".1", "True", "True", "")), 0600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := New(filepath.Join(dir, "policy.json"), operator, worker, python)
@@ -140,7 +149,7 @@ func TestJobsSerializeAndSchedulerRecoversDueState(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stored disk
-	if err = json.Unmarshal(b, &stored); err != nil || stored.States["data"].RunID != "test-run" {
+	if err = json.Unmarshal(b, &stored); err != nil || stored.States["data"].RunID != testRun {
 		t.Fatal(err)
 	}
 }
@@ -183,7 +192,7 @@ func TestCancellationTerminatesWorkerAndChild(t *testing.T) {
 
 func TestRemoteFailureRecordsVerifiedLocalCopy(t *testing.T) {
 	m := testManager(t)
-	script := "import json,sys\nprint(json.dumps({'run_id':'local-only','verified':False,'local_verified':True}))\nsys.exit(1)\n"
+	script := workerScript("0", "False", "True", "sys.exit(1)")
 	if err := os.WriteFile(m.worker, []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +201,7 @@ func TestRemoteFailureRecordsVerifiedLocalCopy(t *testing.T) {
 	}
 	waitIdle(t, m)
 	state := m.View().States["data"]
-	if state.Status != "failed" || !state.LocalVerified || state.RunID != "local-only" || state.LastLocalSuccess.IsZero() || !state.LastSuccess.IsZero() {
+	if state.Status != "failed" || !state.LocalVerified || state.RunID != testRun || state.LastLocalSuccess.IsZero() || !state.LastSuccess.IsZero() {
 		t.Fatal(state)
 	}
 }
