@@ -19,6 +19,7 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 	"github.com/dasomel/ldapium/ui/backend/internal/keycloak"
 	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
+	"github.com/dasomel/ldapium/ui/backend/internal/metrics"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
@@ -39,6 +40,8 @@ type Server struct {
 	// besides the request's own (see originGate). Empty until the CORS
 	// allow-list is wired in; the gate is on regardless.
 	writeOrigins []string
+	// metrics is a no-op until EnableMetrics replaces it (see metrics.go).
+	metrics metrics.Recorder
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
 	apiRoutes     []*echo.Route
@@ -54,6 +57,7 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		dialer:       dialer,
 		sessions:     sessions,
 		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
+		metrics:      metrics.Nop{},
 	}
 	if cfg.AppProfilesPath != "" {
 		if len(cfg.AppProfilesAdminDNs) == 0 {
@@ -88,6 +92,8 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 
 	s.echo.Pre(s.headPreMiddleware())
 
+	// Outermost, so the request counters also see what Recover turns into a 500.
+	s.echo.Use(s.metricsMiddleware())
 	s.echo.Use(middleware.Recover())
 	// RequestID before the logger: the logger's ${id} reads whatever this
 	// middleware set (an inbound X-Request-Id if present, else a fresh
@@ -120,6 +126,11 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 func (s *Server) Handler() http.Handler { return s.echo }
 
 func (s *Server) routes(spa fs.FS) {
+	// The metrics listener is separate (cmd/server, METRICS_ADDR); on this port
+	// /metrics is an explicit 404 rather than the SPA fallback (D218-10).
+	s.echo.GET("/metrics", s.handlePublicMetrics)
+	s.echo.GET("/metrics/", s.handlePublicMetrics)
+
 	api := s.echo.Group("/api")
 
 	api.GET("/auth/config", s.handleAuthConfig)

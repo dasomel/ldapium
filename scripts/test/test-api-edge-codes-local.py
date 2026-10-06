@@ -9,7 +9,8 @@ X-Request-Id, no DN in the body, and a real 5xx (a wrong current password,
 LDAP result 53) is redacted with its cause only in the UI log. The password
 policy refusals the change-password screen shows are checked end to end,
 including that ppm's user DN is stripped. The write Origin gate (#218, D218-16)
-is checked on users/groups/login/logout: foreign and null Origin are 403 and write nothing, no Origin header passes. The conditional-write contract of #216 (ETag/If-Match on every protected route,
+is checked on users/groups/login/logout: foreign and null Origin are 403 and write nothing, no Origin header passes. With METRICS_ADDR=:9331 the UI exposes /metrics on that port only; the public port answers it with the 404 envelope
+(D218-10). The conditional-write contract of #216 (ETag/If-Match on every protected route,
 PATCH, create compensation) runs as a non-root operator. Image tags come from LDAPIUM_IMAGE /
 LDAPIUM_UI_IMAGE (default ldapium:e2e, ldapium-ui:e2e); LDAPIUM_EDGE_PREFIX renames the throwaway docker objects.
 """
@@ -145,15 +146,20 @@ def scaffold():
            'ldapadd -x -H ldap://127.0.0.1 -D "$0" -w "$LDAP_ADMIN_PASSWORD"', admin_dn], input=ldif)
 
 
+metrics_url = ['']
+
+
 def start_ui():
   # --tmpfs + APP_PROFILES_*: the profile routes are what produce 422/412/428/415.
-  command(['docker', 'run', '-d', '--name', ui, '--network', network, '-p', '127.0.0.1::8080', '--tmpfs', '/tmp:rw,mode=1777',
+  command(['docker', 'run', '-d', '--name', ui, '--network', network, '-p', '127.0.0.1::8080', '-p', '127.0.0.1::9331', '--tmpfs', '/tmp:rw,mode=1777',
+           '-e', 'METRICS_ADDR=:9331',
            '-e', 'APP_PROFILES_PATH=/tmp/profiles.json', '-e', 'APP_PROFILES_ADMIN_DNS=' + admin_dn,
            '-e', 'LDAP_URL=ldap://edge-ldap:389', '-e', 'LDAP_BASE_DN=' + root,
            '-e', 'LDAP_USER_CREATE_BASE=ou=people,' + root, '-e', 'LDAP_GROUP_CREATE_BASE=ou=groups,' + root,
            '-e', 'COOKIE_SECURE=false', ui_image])
   containers.append(ui)
-  port = command(['docker', 'port', ui, '8080/tcp']).rsplit(':', 1)[1]
+  port = command(['docker', 'port', ui, '8080/tcp']).splitlines()[0].rsplit(':', 1)[1]
+  metrics_url[0] = 'http://127.0.0.1:' + command(['docker', 'port', ui, '9331/tcp']).splitlines()[0].rsplit(':', 1)[1]
   url = 'http://127.0.0.1:' + port
   for _ in range(60):
     try:
@@ -451,6 +457,62 @@ def envelope(text, headers, code, what, forbidden=()):
   return body
 
 
+def metrics_checks(url):
+  """#218 D218-10: /metrics lives on its own listener; the public port answers it with the 404 envelope."""
+  def fetch(base, path, method='GET'):
+    request = urllib.request.Request(base + path, method=method)
+    try:
+      with urllib.request.urlopen(request) as response:
+        return response.status, response.read().decode(), response.headers
+    except urllib.error.HTTPError as error:
+      return error.code, error.read().decode(), error.headers
+
+  for path in ('/metrics', '/metrics/'):
+    status, text, headers = fetch(url, path)
+    check(status == 404 and 'html' not in text.lower(), 'public %s: status %d body %s' % (path, status, text[:100]))
+    envelope(text, headers, 'not_found', 'public port ' + path)
+  status, text, headers = fetch(url, '/metrics', 'HEAD')
+  check(status == 404 and headers.get('Content-Type', '').startswith('application/json'), 'public HEAD /metrics: %d' % status)
+
+  # One rejected login (wrong password) so the invalid_credentials series exist.
+  bad = urllib.request.Request(url + '/api/login', json.dumps({'identity': admin_dn, 'password': 'wrong-' + admin_password}).encode(),
+                               {'Content-Type': 'application/json', 'Origin': url}, method='POST')
+  try:
+    urllib.request.urlopen(bad).close()
+    raise AssertionError('wrong-password login succeeded')
+  except urllib.error.HTTPError as error:
+    check(error.code == 401, 'wrong-password login: %d' % error.code)
+
+  status, text, headers = fetch(metrics_url[0], '/metrics')
+  check(status == 200 and headers.get('Content-Type', '').startswith('text/plain'), 'metrics port /metrics: %d %s' % (status, headers.get('Content-Type')))
+  check(fetch(metrics_url[0], '/api/auth/config')[0] == 404 and fetch(metrics_url[0], '/')[0] == 404, 'metrics port serves something besides /metrics')
+  # Everything this script did through the real backend is in the scrape.
+  def value(name):
+    match = re.search(r'^' + re.escape(name) + r' ([0-9.e+-]+)$', text, re.M)
+    check(match, 'scrape lacks ' + name)
+    return float(match.group(1))
+  for series in ('ldapium_ui_ldap_operations_total{op="bind",result="ok"}', 'ldapium_ui_ldap_operations_total{op="bind",result="invalid_credentials"}',
+                 'ldapium_ui_ldap_operations_total{op="search",result="ok"}', 'ldapium_ui_ldap_operations_total{op="write",result="ok"}',
+                 'ldapium_ui_api_errors_total{code="origin_mismatch"}', 'ldapium_ui_api_errors_total{code="revision_conflict"}',
+                 'ldapium_ui_http_requests_total{code_class="2xx",method="POST",route="/api/login"}',
+                 'ldapium_ui_http_requests_total{code_class="4xx",method="GET",route="/api/*"}'):
+    check(value(series) >= 1, series + ' did not increase')
+  check(value('ldapium_ui_login_failures_total{reason="invalid_credentials"}') >= 1, 'login failure not counted')
+  check(value('ldapium_ui_sessions_active') >= 1, 'no active session counted')
+  check(value('ldapium_ui_http_requests_in_flight') >= 0, 'in-flight gauge missing')
+  # No secret, DN, uid or client address in any series (AC-009).
+  for secret in (admin_password, user_password, ops_password, admin_dn, 'edge-user', 'gate-user', 'uid=', 'cn=admin'):
+    check(secret not in text, 'scrape contains a secret or identifier: ' + mask(secret)[:12])
+  quad = re.search(r'(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])', re.sub(r'(?m)^#.*$', '', text))
+  check(not quad, 'scrape contains an IP address: ' + str(quad and quad.group(0)))
+  # A flood of arbitrary paths does not grow the route label set.
+  for i in range(300):
+    fetch(url, '/api/arbitrary-%d/%s' % (i, uuid.uuid4().hex))
+  routes = set(re.findall(r'ldapium_ui_http_requests_total\{[^}]*route="([^"]*)"', fetch(metrics_url[0], '/metrics')[1]))
+  check(all(not r.startswith('/api/arbitrary') for r in routes), 'route labels leaked a request path: ' + str(sorted(routes)))
+  print('ok: /metrics on the metrics port only (%d routes in the label set); public /metrics is the 404 envelope; bind/search/write, API error codes, sessions counted; no secrets or paths in labels' % len(routes))
+
+
 def run():
   command(['docker', 'network', 'create', network])
   for volume in volumes:
@@ -591,6 +653,7 @@ def run():
 
   setup_ops()
   conditional_writes(url, login_as)
+  metrics_checks(url)
 
   print('PASS: unlock idempotent (204/404), lock->bind fails->unlock->bind works, group member 204/409/404, error envelope on 400/401/403/404/405/409/412/422/428/500 (error==message, requestId==X-Request-Id, no DN), password-policy text without DN, meta allowlist, no userPassword in /api/entry, conditional writes (If-Match/ETag/PATCH/create rollback)')
 

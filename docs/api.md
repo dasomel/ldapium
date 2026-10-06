@@ -207,7 +207,15 @@ curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
 - `POST /api/users/password`에서 `password`를 생략하면 서버가 생성한 `generatedPassword`를 한 번 반환합니다. 비밀로 취급하고 로그에 남기지 마세요.
 - 삭제, 엔트리 이동, Keycloak 역할 작업, 백업 실행은 되돌릴 수 없습니다. 맹목적 재시도 금지.
 
+## /metrics (프로세스 지표)
+
+UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지연·진행 중 요청, API 오류 코드별 수, 로그인 실패 사유별 수, 디렉터리 호출 수·지연, 활성 세션 수, Go·프로세스 컬렉터)입니다. slapd 지표는 기존 `openldap_exporter` 사이드카(포트 9330)가 냅니다.
+
+- **기본 꺼짐.** 환경 변수 `METRICS_ADDR`(`host:port`, 예: `127.0.0.1:9331`)를 설정한 때만 별도 리스너가 뜨고 `GET /metrics`만 응답합니다(그 밖의 경로 404). 지표 포트는 공개 UI 포트(8080, `LISTEN_ADDR`)와 달라야 하며 같으면 기동이 거부됩니다. 인증은 없으므로(Prometheus 관례) 네트워크 경계로 보호합니다. 차트는 `ui.metrics.*`로 별도 Service·NetworkPolicy(허용 피어 필수)를 만들고 ServiceMonitor/PodMonitor는 기본 꺼짐입니다.
+- **공개 포트의 `/metrics`**는 항상 `application/json` 404 오류 봉투(`code: not_found`)입니다. SPA의 `index.html`이 아닙니다.
+- 라벨은 닫힌 집합입니다: `route`는 등록된 라우트 패턴 또는 `unmatched`, `method`는 GET/POST/PUT/PATCH/DELETE 또는 `other`, `code`는 위 오류 코드 표, 로그인 실패 `reason`은 `invalid_credentials`·`rate_limited`·`malformed`·`upstream`. 사용자·uid·DN·IP·요청 경로 원문·쿼리·오류 문자열은 라벨에도 값에도 들어가지 않습니다.
+
 ## 아직 지원하지 않는 것
 
-머신 토큰/서비스 주체, CORS, 페이지네이션 커서, `/metrics`, 백업 job ID는 지원하지 않습니다.
+머신 토큰/서비스 주체, CORS, 페이지네이션 커서, 백업 job ID는 지원하지 않습니다.
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.

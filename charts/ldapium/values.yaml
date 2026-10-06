@@ -574,6 +574,44 @@ ui:
     type: ClusterIP
     port: 8080
 
+  # -- Process metrics of the UI backend (METRICS_ADDR), off by default. They are
+  #    served on a separate container port that is NEVER part of the public UI
+  #    Service: a dedicated <release>-ldapium-ui-metrics Service carries it, a
+  #    NetworkPolicy admits only the peers listed below, and the scrape endpoint
+  #    has no authentication of its own. This is the UI process (requests,
+  #    latency, login failures, directory calls, sessions); slapd has its own
+  #    exporter under metrics.*.
+  metrics:
+    enabled: false
+    # -- Container/Service port of the metrics listener.
+    port: 9331
+    networkPolicy:
+      # -- REQUIRED when metrics.enabled: raw NetworkPolicy peers allowed to
+      #    reach the metrics port, e.g.
+      #      - namespaceSelector:
+      #          matchLabels: {kubernetes.io/metadata.name: monitoring}
+      #    There is deliberately no default, and an empty list fails the render
+      #    (an empty NetworkPolicy peer list would mean "every source").
+      from: []
+    # -- Prometheus Operator monitors for the UI metrics Service/pods. Both
+    #    off by default; they need the monitoring.coreos.com CRDs.
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+    podMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+
+  # -- NetworkPolicy for the UI pods. Rendered only with ui.metrics.enabled
+  #    (selecting the pods makes them default-deny for ingress, so the HTTP
+  #    port must be admitted explicitly).
+  networkPolicy:
+    # -- Peers allowed on the UI HTTP port. Empty (default) keeps today's
+    #    behaviour: every source, i.e. the rule carries no `from`.
+    httpFrom: []
+
   podAnnotations: {}
   podLabels: {}
   resources: {}

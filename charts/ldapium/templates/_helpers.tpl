@@ -73,6 +73,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ui
 {{- end -}}
 
+{{/* Labels of the UI metrics Service. A distinct component keeps it out of the selector of every other Service/ServiceMonitor of this chart. */}}
+{{- define "ldapium.ui.metricsLabels" -}}
+helm.sh/chart: {{ include "ldapium.chart" . }}
+app.kubernetes.io/name: {{ include "ldapium.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: ui-metrics
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{/* Backup labels / selector labels. */}}
 {{- define "ldapium.backup.labels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}

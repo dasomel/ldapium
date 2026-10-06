@@ -1,0 +1,24 @@
+{{- if and .Values.ui.enabled .Values.ui.metrics.podMonitor.enabled }}
+{{- if not .Values.ui.metrics.enabled }}
+{{- fail "ui.metrics.podMonitor.enabled requires ui.metrics.enabled" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "ldapium.ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.ui.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ldapium.ui.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    - port: ui-metrics
+      path: /metrics
+      interval: {{ .Values.ui.metrics.podMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.ui.metrics.podMonitor.scrapeTimeout | default "10s" }}
+{{- end }}
