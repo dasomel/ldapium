@@ -66,9 +66,6 @@ func TestCORS_OffByDefault(t *testing.T) {
 	if rec.Code != http.StatusNoContent || !strings.Contains(rec.Header().Get("Allow"), "GET") {
 		t.Errorf("OPTIONS with CORS off: status %d Allow %q, want #230's 204 + Allow", rec.Code, rec.Header().Get("Allow"))
 	}
-	if len(f.s.writeOrigins) != 0 {
-		t.Errorf("write gate allow-list = %v with CORS off", f.s.writeOrigins)
-	}
 }
 
 // AC-012: who gets which header, on every kind of response.
@@ -120,22 +117,39 @@ func TestCORS_ActualRequests(t *testing.T) {
 	}
 }
 
-// Writes never get CORS headers: a listed origin may reach the write gate,
-// but its page cannot read the response.
-func TestCORS_WritesGetNoCORSHeaders(t *testing.T) {
+// A listed origin is for reading only: its writes, including the preflight-less
+// simple POST a page can send with the session cookie, are refused by the write
+// Origin gate with 403 origin_mismatch before any handler runs, and carry no CORS
+// headers either.
+func TestCORS_ListedOriginCannotWrite(t *testing.T) {
 	f := corsFixture(t)
 	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 		rec := f.do(contractReq{method: m, path: "/api/users", cookie: f.admin, body: `{}`,
 			header: map[string]string{"Origin": corsOrigin, "Content-Type": "application/json"}})
+		env := requireEnvelope(t, m+" from a listed origin", rec)
+		if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch || env.Error != originGateMessage {
+			t.Errorf("%s from a listed origin: %d %+v, want the gate's 403 origin_mismatch", m, rec.Code, env)
+		}
 		if got := acHeaders(rec.Header()); len(got) != 0 {
 			t.Errorf("%s from a listed origin: CORS headers %v", m, got)
 		}
 		if !varyHas(rec.Header(), "Origin") {
 			t.Errorf("%s: no Vary: Origin", m)
 		}
-		if rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), originGateMessage) {
-			t.Errorf("%s from a listed origin was refused by the write gate (D218-16 lets it through)", m)
-		}
+	}
+	// The reported repro: a simple cross-origin POST /api/logout must not end the session.
+	me := func() int { return f.do(contractReq{method: "GET", path: "/api/me", cookie: f.admin}).Code }
+	if me() != http.StatusOK {
+		t.Fatal("fixture session is not valid before the attack")
+	}
+	rec := f.do(contractReq{method: "POST", path: "/api/logout", cookie: f.admin,
+		header: map[string]string{"Origin": corsOrigin, "Content-Type": "text/plain"}})
+	env := requireEnvelope(t, "logout from a listed origin", rec)
+	if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch {
+		t.Errorf("logout from a listed origin: %d %+v, want 403 origin_mismatch", rec.Code, env)
+	}
+	if me() != http.StatusOK {
+		t.Error("a listed origin's simple POST /api/logout ended the session")
 	}
 }
 
@@ -210,21 +224,18 @@ func TestCORS_Preflight(t *testing.T) {
 // AC-013: listing an origin for reads does not loosen the write protections.
 func TestCORS_DoesNotWeakenWriteProtection(t *testing.T) {
 	f := corsFixture(t)
-	if len(f.s.writeOrigins) != 1 || f.s.writeOrigins[0] != corsOrigin {
-		t.Fatalf("write gate allow-list = %v, want the CORS list", f.s.writeOrigins)
-	}
 	profile := contractReq{method: "PUT", path: "/api/v1/applications/x-id/integration-profile", cookie: f.admin, body: `{}`,
 		header: map[string]string{"Origin": corsOrigin, "Content-Type": "application/json", "If-Match": `"0"`}}
 	rec := f.do(profile)
 	env := requireEnvelope(t, "profile write from a listed origin", rec)
-	if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch || env.Error == originGateMessage {
-		t.Errorf("profile write from a listed origin: %d %+v, want requireProfileWrite's own 403 origin_mismatch", rec.Code, env)
+	if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch {
+		t.Errorf("profile write from a listed origin: %d %+v, want 403 origin_mismatch", rec.Code, env)
 	}
 	backup := contractReq{method: "PUT", path: "/api/v1/backups/policies", cookie: f.admin, body: `{}`,
 		header: map[string]string{"Origin": corsOrigin, "Content-Type": "application/json", "If-Match": `"0"`}}
 	rec = f.do(backup)
 	env = requireEnvelope(t, "backup write from a listed origin", rec)
-	if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch || env.Error == originGateMessage {
+	if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch {
 		t.Errorf("backup write from a listed origin: %d %+v", rec.Code, env)
 	}
 	// An origin that is not listed is stopped by the gate itself, simple form post included.

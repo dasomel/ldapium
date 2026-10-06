@@ -17,16 +17,19 @@ const originGateMessage = "request origin not allowed"
 
 // originGate is the write Origin gate (change package api-error-envelope,
 // D218-16). A state-changing /api request that carries an Origin header is
-// handled only when that Origin is the request's own origin or one of
-// s.writeOrigins; anything else, including "null", is refused with 403
-// origin_mismatch before routing reaches a handler. A request with no Origin
+// handled only when that Origin is the request's own origin; anything else,
+// including "null" and every CORS-listed origin, is refused with 403
+// origin_mismatch before routing reaches a handler. CORS_ALLOWED_ORIGINS is for
+// reading (cors.go) and never opens a write path here: a listed page could
+// otherwise send a preflight-less simple POST (even /api/logout) with the
+// session cookie. A request with no Origin
 // header (curl, services, machine principals) is not a browser form post and
 // passes untouched. Origin is not authentication; this closes the path where a
 // same-site but unlisted origin submits a form that the SameSite=Lax session
 // cookie rides along with. There is deliberately no switch to turn it off.
 //
 // requireProfileWrite stays on the profile, backup and Keycloak writes: it is
-// stricter (Origin required, same origin only, allow-list ignored).
+// stricter (Origin required, same origin only).
 func (s *Server) originGate() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -42,7 +45,7 @@ func (s *Server) originGate() echo.MiddlewareFunc {
 			if len(values) > 0 {
 				origin = values[0]
 			}
-			if sameOrigin(origin, req.Host, c.Scheme()) || originListed(origin, s.writeOrigins) {
+			if sameOrigin(origin, req.Host, c.Scheme()) {
 				return next(c)
 			}
 			return apiErr(http.StatusForbidden, codeOriginMismatch, originGateMessage)
@@ -130,13 +133,4 @@ func canonAuthority(scheme, authority string) (string, bool) {
 		host += ":" + port
 	}
 	return host, true
-}
-
-func originListed(origin string, allowed []string) bool {
-	for _, a := range allowed {
-		if origin == a {
-			return true
-		}
-	}
-	return false
 }

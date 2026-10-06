@@ -24,7 +24,8 @@ import (
 //     Access-Control-* at all) and answered like any other OPTIONS (#230: 204
 //     with Allow, or the 404 envelope), because a preflight is not what stops a
 //     cross-origin write. That is the write Origin gate's job (origin_gate.go),
-//     which shares this list.
+//     which does NOT consult this list: a listed origin's write is refused there
+//     like any other foreign origin.
 //   - A granted preflight (OPTIONS + Access-Control-Request-Method for GET, HEAD
 //     or OPTIONS) is answered right here with 204, before routing reaches the
 //     handler, because #230's OPTIONS handler would otherwise answer it.
@@ -84,4 +85,13 @@ func addVary(h http.Header, token string) {
 		}
 	}
 	h.Add("Vary", token)
+}
+
+func originListed(origin string, allowed []string) bool {
+	for _, a := range allowed {
+		if origin == a {
+			return true
+		}
+	}
+	return false
 }

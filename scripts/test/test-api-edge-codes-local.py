@@ -494,16 +494,25 @@ def cors_checks(url, call):
   status, text, headers = call('OPTIONS', '/api/users', None, {'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'GET'})
   check(status == 204 and not cors_headers(headers) and vary_origin(headers), 'CORS preflight from an unlisted origin was granted')
 
-  # Listing an origin does not weaken writes: the write gate lets it through (user
-  # create works, its response carries no CORS header), requireProfileWrite still refuses it.
+  # CORS is read-only: a listed origin gets NO write path. Its simple cross-origin
+  # POSTs (user create, and logout with a form-ish content type) are refused by the
+  # write gate before any handler runs, write nothing and do not end the session.
   status, text, headers = call('POST', '/api/users', {'uid': 'cors-user', 'cn': 'Cors User', 'sn': 'User'}, {'Origin': cors_origin})
-  check(status == 201 and not cors_headers(headers), 'CORS-listed origin user create: %d %s' % (status, cors_headers(headers)))
+  envelope(text, headers, 'origin_mismatch', 'user create from a CORS-listed origin')
+  check(status == 403 and not cors_headers(headers), 'CORS-listed origin user create: %d %s' % (status, cors_headers(headers)))
+  status, text, headers = call('GET', '/api/entry?' + urllib.parse.urlencode({'dn': 'uid=cors-user,ou=people,' + root}))
+  check(status == 404, 'the refused create from a listed origin wrote an entry: %d' % status)
+  status, text, headers = call('POST', '/api/logout', None, {'Origin': cors_origin, 'Content-Type': 'text/plain'})
+  envelope(text, headers, 'origin_mismatch', 'logout from a CORS-listed origin')
+  check(status == 403, 'logout from a CORS-listed origin: %d' % status)
+  status, text, headers = call('GET', '/api/me')
+  check(status == 200, 'a listed origin logged the session out: /api/me %d' % status)
   status, text, headers = call('PUT', '/api/v1/applications/cors-app/integration-profile', {}, {'Origin': cors_origin, 'If-Match': '"0"'})
   envelope(text, headers, 'origin_mismatch', 'profile write from a CORS-listed origin')
   check(status == 403 and not cors_headers(headers), 'profile write from a CORS-listed origin: %d' % status)
   status, text, headers = call('POST', '/api/users', {'uid': 'cors-evil', 'cn': 'x', 'sn': 'x'}, {'Origin': 'https://evil.example'})
   envelope(text, headers, 'origin_mismatch', 'unlisted origin write')
-  print('ok: CORS read-only for %s (Vary: Origin on every response, preflight GET/HEAD/OPTIONS only, writes ungranted, profile writes still same-origin)' % cors_origin)
+  print('ok: CORS read-only for %s (Vary: Origin on every response, preflight GET/HEAD/OPTIONS only, listed origins cannot write: user create and logout are 403, session survives)' % cors_origin)
 
 
 def metrics_checks(url):
