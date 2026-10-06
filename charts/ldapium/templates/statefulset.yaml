@@ -114,6 +114,10 @@ spec:
               value: {{ .Values.ldap.limits.sockbufMaxIncomingAuth | int64 | quote }}
             - name: LDAP_MAX_FILTER_DEPTH
               value: {{ .Values.ldap.limits.maxFilterDepth | int64 | quote }}
+            {{- if .Values.ldap.limits.pagedTotal }}
+            - name: LDAP_PAGED_TOTAL_LIMIT
+              value: {{ (kindIs "float64" .Values.ldap.limits.pagedTotal | ternary (int64 .Values.ldap.limits.pagedTotal) .Values.ldap.limits.pagedTotal) | quote }}
+            {{- end }}
             - name: LDAP_LASTBIND_ENABLED
               value: {{ .Values.ldap.lastBind.enabled | quote }}
             - name: LDAP_LASTBIND_PRECISION

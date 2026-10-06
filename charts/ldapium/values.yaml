@@ -114,6 +114,17 @@ ldap:
     #    (connMaxPending*/sockbufMaxIncoming* pin slapd's compiled defaults
     #    explicitly; idle/write timeouts and maxFilterDepth are the new caps.)
     maxFilterDepth: 20
+    # -- LDAP_PAGED_TOTAL_LIMIT: opt-in, empty (default) renders nothing and
+    #    changes nothing. OpenLDAP counts a paged search's TOTAL against
+    #    olcSizeLimit (10000), so a non-admin identity cannot page past that
+    #    many entries (GET /api/users?limit=... then fails with
+    #    size_limit_exceeded); the admin DN is exempt. A positive number or
+    #    "unlimited" renders `olcLimits: {0}users size.prtotal=<value>` for
+    #    every authenticated DN (anonymous excluded); unpaged searches keep
+    #    olcSizeLimit. Trade-off: any authenticated user can then page through
+    #    everything their ACLs let them read. Reconciled on every start, so
+    #    emptying it again removes the limit.
+    pagedTotal: ""
 
   # -- Last-bind tracking (slapo-lastbind -> pwdLastSuccess): records when each
   #    entry last authenticated, so stale accounts can be found. Opt-in until
