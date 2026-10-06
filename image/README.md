@@ -219,7 +219,14 @@ file of remembered state; every start converges to what the variable says
 | `off` | Remove exactly `users size.prtotal=<any value>`. A differently shaped `users` rule is left alone and logged. Nothing to remove: no-op. |
 
 Because the selector `users` is reserved while the setting is on, the rule
-this setting manages is recognised by its shape, not by a remembered marker, so
+this setting manages is recognised by its shape, not by a remembered marker. The
+shape is parsed, not text-matched: the value is split on any whitespace (tabs
+included), selector and keys compare case-insensitively like slapd, and the
+value is read semantically (`unlimited`, `none`, `-1` and `-01` are the same,
+leading zeros and `+` are ignored, `disabled` and `hard` are their own values), so
+`USERS<TAB>SIZE.PRTOTAL=NONE` is the reserved rule and an already equal rule is
+not rewritten; `users` with any other limit alongside is a different shape. An
+unreadable or empty config dump aborts before anything is changed. So
 there is no state that can drift, go stale or survive a crash half-written.
 slapd applies only the *first* matching `olcLimits` rule and allows one rule per
 selector: the rule is appended, so a rule you wrote for a DN or a group keeps its

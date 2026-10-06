@@ -385,16 +385,53 @@ expect_eq "base64: off removes only ours" "$(count_all "$c")" "1"
 expect_eq "base64: ... the Korean DN stays capped" "$(paged "$c" "$kr_dn" "$user_pw")" "100 4"
 clear_limits
 
-# --- every spelling slapd accepts for the prtotal value (slapd 2.6.15, any case). -
-for sp in unlimited UNLIMITED none NONE None disabled Disabled hard HARD -1 +5 007 0; do
-  add_limit "{0}users size.prtotal=${sp}"
+# --- parser: spellings, case, whitespace (slapd 2.6.15 accepts them all). -----
+# The reserved rule is recognised SEMANTICALLY (selector `users` with only a
+# size.prtotal limit), whatever the case, the whitespace or the value spelling.
+specs=(
+  'users size.prtotal=unlimited'
+  $'users\tsize.prtotal=unlimited'
+  'USERS size.prtotal=unlimited'
+  'users SIZE.PRTOTAL=unlimited'
+  'users   size.prtotal=unlimited'
+  'users size.prtotal=-01'
+  'users size.prtotal=-1'
+  'users size.prtotal=NONE'
+  'users size.prtotal=None'
+  'users size.prtotal=+007'
+  'Users Size.PrTotal=Disabled'
+  $'users \t size.prtotal=HARD'
+  'users size.prtotal=0100'
+  'users size.prtotal=0'
+)
+for spec in "${specs[@]}"; do
+  q="$(printf '%q' "$spec")"
+  add_limit "{0}${spec}"
   start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
-  expect_eq "spelling '${sp}': off removes it" "$(olc_limits "$c")" ""
-done
-for sp in none NONE +5 hard; do
-  add_limit "{0}users size.prtotal=${sp}"
+  expect_eq "parser ${q}: off removes it" "$(count_all "$c")" "0"
+  add_limit "{0}${spec}"
   start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
-  expect_eq "spelling '${sp}': a set request converges it instead of aborting" "$(olc_limits "$c")" "{0}users size.prtotal=900"
+  expect_eq "parser ${q}: a set request converges to the one canonical rule" "$(olc_limits "$c")" "{0}users size.prtotal=900"
+  expect_eq "parser ${q}: ... and nothing else is left" "$(count_all "$c")" "1"
+  clear_limits
+done
+# Equal by VALUE (not by text) and already last: left exactly as written.
+for pair in 'USERS size.prtotal=0900|900' 'users size.prtotal=NONE|unlimited' 'users size.prtotal=-01|unlimited' 'Users   Size.PrTotal=+5|5'; do
+  spec="${pair%|*}"
+  want="${pair#*|}"
+  add_limit "{0}${spec}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT="${want}"
+  expect_eq "by value: '${spec}' already equals ${want}, left untouched" "$(olc_limits "$c")" "{0}${spec}"
+  clear_limits
+done
+# `users` with ANY other limit is not the reserved shape: conflict for set, left alone for off.
+for spec in 'users size.prtotal=100 size.hard=50' 'USERS size.hard=50' 'users size.prtotal=100 time.soft=5'; do
+  add_limit "{0}${spec}"
+  expect_eq "other shape '${spec}': set aborts as a conflict" \
+    "$(run_abort "$real_image" "already exists in another shape" -e LDAP_PAGED_TOTAL_LIMIT=unlimited)" "abort ok (exit 1)"
+  expect_eq "other shape '${spec}': the rule is untouched" "$(offline_limits)" "${spec}|"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+  expect_eq "other shape '${spec}': off leaves it alone" "$(olc_limits "$c")" "{0}${spec}"
   clear_limits
 done
 
@@ -449,14 +486,55 @@ cat > "${shim_dir}/Dockerfile" <<DOCKERFILE
 FROM ${real_image}
 USER root
 COPY slapmodify-shim /tmp/slapmodify-shim
+COPY slapcat-shim /tmp/slapcat-shim
+RUN p="\$(command -v slapcat)" && mkdir /opt/real-slapcat && mv "\$p" /opt/real-slapcat/slapcat && cp /tmp/slapcat-shim "\$p" && chmod 755 "\$p"
 RUN p="\$(command -v slapmodify)" && mkdir /opt/real-slapmodify && mv "\$p" /opt/real-slapmodify/slapmodify && cp /tmp/slapmodify-shim "\$p" && chmod 755 "\$p"
 USER ldap
 DOCKERFILE
+cat > "${shim_dir}/slapcat-shim" <<'SHIM'
+#!/bin/sh
+real=/opt/real-slapcat/slapcat # same basename: the tool picks its mode from argv[0]
+case " $* " in
+  *ldif-wrap=no*)
+    if [ -n "$FAKE_SLAPCAT" ]; then
+      n=$(cat /tmp/slapcat.n 2>/dev/null || echo 0)
+      n=$((n + 1))
+      echo "$n" > /tmp/slapcat.n
+      case "$FAKE_SLAPCAT" in
+        fail) exit 1 ;;
+        empty)
+          file=""
+          prev=""
+          for a in "$@"; do
+            if [ "$prev" = "-l" ]; then file="$a"; fi
+            prev="$a"
+          done
+          : > "$file"
+          exit 0
+          ;;
+        second) if [ "$n" -ge 2 ]; then exit 1; fi ;;
+      esac
+    fi
+    ;;
+esac
+exec "$real" "$@"
+SHIM
 shim_image="l3-ptl-shim-${suffix}"
 docker build -q -t "$shim_image" "$shim_dir" >/dev/null
 images+=("$shim_image")
 
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
+expect_eq "dump read fails (slapcat exits 1): set aborts before changing anything" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=100 -e FAKE_SLAPCAT=fail)" "abort ok (exit 1)"
+expect_eq "dump read fails: off aborts too" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off -e FAKE_SLAPCAT=fail)" "abort ok (exit 1)"
+expect_eq "dump read fails: the stored policy is untouched" "$(offline_limits)" "users size.prtotal=900|"
+expect_eq "dump comes back EMPTY with exit 0: off aborts instead of reading 'no rules'" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off -e FAKE_SLAPCAT=empty)" "abort ok (exit 1)"
+expect_eq "empty dump: the stored policy is untouched" "$(offline_limits)" "users size.prtotal=900|"
+expect_eq "post-apply verification cannot read the dump: rolled back, then startup aborts" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=100 -e FAKE_SLAPCAT=second)" "abort ok (exit 1)"
+expect_eq "post-apply verification failure: the previous policy is restored" "$(offline_limits)" "users size.prtotal=900|"
 expect_eq "partial application (set): the applied change is rolled back, then startup aborts" \
   "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=100 -e FAKE_SLAPMODIFY=partial)" "abort ok (exit 1)"
 expect_eq "partial application (set): the stored policy is the previous one" "$(offline_limits)" "users size.prtotal=900|"

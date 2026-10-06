@@ -1332,53 +1332,98 @@ rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 #      verified or rolled back aborts startup instead of serving an unproven
 #      policy; the previous config file is restored atomically first.
 # ---------------------------------------------------------------------------
-# Prints "<index> <spec>" for EVERY olcLimits value of the main database, in
-# the order slapd holds them (first match wins, so order is the policy).
+# paged_total_rules <dump> <out>: writes "<index> <spec>" for EVERY olcLimits
+# value of the main database to <out>, in the order slapd holds them (first
+# match wins, so order is the policy). Every step is a separate command whose
+# status is checked (POSIX sh has no pipefail), and an unreadable dump, a missing
+# database entry or an empty block is a FAILURE, never an empty rule list.
 # slapcat writes a value as `olcLimits:: <base64>` when it is not plain ASCII
 # text (a Korean DN, a tab, a leading space), so both forms are read, long lines
 # are unfolded, and a value that cannot be decoded still counts as a rule (index
-# 999999, spec "<undecodable>") instead of silently dropping out of the order.
+# 999999, spec "<undecodable>") so it keeps its place in the ordering.
 paged_total_rules() {
-  sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$1" \
-    | sed -e ':a' -e '$!N' -e 's/\n //' -e 'ta' -e 'P' -e 'D' \
-    | while IFS= read -r pt_line; do
-      case "$pt_line" in
-        "olcLimits: "*) pt_val=${pt_line#olcLimits: } ;;
-        "olcLimits:: "*)
-          if ! pt_val=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null); then
-            pt_val='{999999}<undecodable>'
-          fi
-          ;;
-        *) continue ;;
-      esac
-      case "$pt_val" in
-        "{"[0-9]*"}"*)
-          pt_i=${pt_val#"{"}
-          pt_i=${pt_i%%"}"*}
-          printf '%s %s\n' "$pt_i" "${pt_val#*"}"}"
-          ;;
-        *) printf '999999 %s\n' "$pt_val" ;;
-      esac
-    done
+  pt_blk=$(mktemp) || return 1
+  pt_unf=$(mktemp) || return 1
+  if ! sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$1" > "$pt_blk" || [ ! -s "$pt_blk" ]; then
+    rm -f "$pt_blk" "$pt_unf"
+    return 1
+  fi
+  if ! sed -e ':a' -e '$!N' -e 's/\n //' -e 'ta' -e 'P' -e 'D' "$pt_blk" > "$pt_unf"; then
+    rm -f "$pt_blk" "$pt_unf"
+    return 1
+  fi
+  : > "$2" || return 1
+  while IFS= read -r pt_line; do
+    case "$pt_line" in
+      "olcLimits: "*) pt_val=${pt_line#olcLimits: } ;;
+      "olcLimits:: "*)
+        if ! pt_val=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null); then
+          pt_val='{999999}<undecodable>'
+        fi
+        ;;
+      *) continue ;;
+    esac
+    case "$pt_val" in
+      "{"[0-9]*"}"*)
+        pt_i=${pt_val#"{"}
+        pt_i=${pt_i%%"}"*}
+        printf '%s %s\n' "$pt_i" "${pt_val#*"}"}" >> "$2" || return 1
+        ;;
+      *) printf '999999 %s\n' "$pt_val" >> "$2" || return 1 ;;
+    esac
+  done < "$pt_unf"
+  rm -f "$pt_blk" "$pt_unf"
 }
 paged_total_fail() { die "paged-total reconcile failed; refusing to start"; }
-# The setting's own shape: `users size.prtotal=<value>` and nothing else, with
-# every spelling slapd accepts for the value (verified against the image's slapd
-# 2.6.15, case-insensitive like slapd): unlimited, none, disabled, hard, an
-# integer (optionally with a leading +), and -1.
-paged_total_shaped() {
-  case "$1" in
-    "users size.prtotal="*) ;;
-    *) return 1 ;;
+# paged_total_parse <spec>: the ONE tokenizer for a decoded olcLimits value.
+# Like slapd it splits on any run of whitespace (tabs included) and compares the
+# selector and the keys case-insensitively. Sets
+#   pt_p_sel       lowercased selector (first word)
+#   pt_p_reserved  1 when the rule is exactly `users` with ONLY a size.prtotal
+#                  limit (the one shape this setting owns), else empty
+#   pt_p_val       its value, parsed: unlimited (unlimited, none, -1, -01 ...),
+#                  disabled, hard, or the integer without sign or leading zeros
+# A `users` rule with any other limit (size.hard, time.soft, ...) is NOT the
+# reserved shape, and neither is a value slapd would not accept.
+paged_total_parse() {
+  pt_p_sel=''
+  pt_p_reserved=''
+  pt_p_val=''
+  set -f
+  # shellcheck disable=SC2086
+  set -- $1
+  set +f
+  [ "$#" -gt 0 ] || return 0
+  pt_p_sel=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [ "$pt_p_sel" = users ] || return 0
+  [ "$#" -eq 2 ] || return 0
+  case "$2" in
+    *=*) ;;
+    *) return 0 ;;
   esac
-  pts_v=$(printf '%s' "${1#users size.prtotal=}" | tr '[:upper:]' '[:lower:]')
-  case "$pts_v" in
-    unlimited|none|disabled|hard|-1) return 0 ;;
+  pt_k=$(printf '%s' "${2%%=*}" | tr '[:upper:]' '[:lower:]')
+  [ "$pt_k" = size.prtotal ] || return 0
+  pt_v=$(printf '%s' "${2#*=}" | tr '[:upper:]' '[:lower:]')
+  pt_sign=''
+  case "$pt_v" in
+    unlimited|none) pt_p_val=unlimited; pt_p_reserved=1; return 0 ;;
+    disabled) pt_p_val=disabled; pt_p_reserved=1; return 0 ;;
+    hard) pt_p_val=hard; pt_p_reserved=1; return 0 ;;
+    -*) pt_sign=-; pt_v=${pt_v#-} ;;
+    +*) pt_v=${pt_v#+} ;;
   esac
-  pts_v=${pts_v#+}
-  case "$pts_v" in
-    ''|*[!0-9]*) return 1 ;;
+  case "$pt_v" in
+    ''|*[!0-9]*) return 0 ;;
   esac
+  while [ "${#pt_v}" -gt 1 ] && [ "${pt_v#0}" != "$pt_v" ]; do pt_v=${pt_v#0}; done
+  if [ -n "$pt_sign" ]; then
+    # only -1 is a value slapd accepts, and it means unlimited
+    [ "$pt_v" = 1 ] || return 0
+    pt_p_val=unlimited
+  else
+    pt_p_val=$pt_v
+  fi
+  pt_p_reserved=1
   return 0
 }
 if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
@@ -1386,38 +1431,51 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
   pt_dump=$(mktemp)
   pt_list=$(mktemp)
   pt_ops=$(mktemp)
+  # Fail closed BEFORE changing anything: an unreadable or empty dump aborts.
   slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no -l "$pt_dump" || paged_total_fail
-  paged_total_rules "$pt_dump" > "$pt_list"
+  paged_total_rules "$pt_dump" "$pt_list" || paged_total_fail
   pt_users_idx=''
   pt_users_spec=''
+  pt_users_reserved=''
+  pt_users_val=''
+  pt_n_users=0
   pt_last_idx=''
   while IFS=' ' read -r pt_idx pt_spec; do
     pt_last_idx="{${pt_idx}}"
-    case "$pt_spec" in
-      users|"users "*) pt_users_idx="{${pt_idx}}"; pt_users_spec=$pt_spec ;;
-    esac
+    paged_total_parse "$pt_spec"
+    if [ "$pt_p_sel" = users ]; then
+      pt_n_users=$((pt_n_users + 1))
+      pt_users_idx="{${pt_idx}}"
+      pt_users_spec=$pt_spec
+      pt_users_reserved=$pt_p_reserved
+      pt_users_val=$pt_p_val
+    fi
   done < "$pt_list"
-  pt_users_shaped=''
-  if paged_total_shaped "$pt_users_spec"; then pt_users_shaped=1; fi
+  if [ "$pt_n_users" -gt 1 ]; then
+    die "more than one olcLimits rule for the selector 'users' is present; refusing to start (LDAP_PAGED_TOTAL_LIMIT=${LDAP_PAGED_TOTAL_LIMIT})"
+  fi
+  # delete values are sent base64 encoded: the stored text may hold tabs or
+  # runs of spaces that must match byte for byte
+  pt_del="olcLimits:: $(printf '%s' "${pt_users_idx}${pt_users_spec}" | base64 | tr -d '\n')"
   if [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
-    if [ -n "$pt_users_shaped" ]; then
-      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_users_idx" "$pt_users_spec" > "$pt_ops"
+    if [ -n "$pt_users_reserved" ]; then
+      printf 'delete: olcLimits\n%s\n-\n' "$pt_del" > "$pt_ops"
       log "LDAP_PAGED_TOTAL_LIMIT=off: removing '${pt_users_spec}'"
-    elif [ -n "$pt_users_spec" ]; then
+    elif [ "$pt_n_users" -eq 1 ]; then
       log "LDAP_PAGED_TOTAL_LIMIT=off: leaving the differently shaped olcLimits rule '${pt_users_spec}' alone"
     fi
   else
     pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
-    if [ -z "$pt_users_spec" ]; then
+    if [ "$pt_n_users" -eq 0 ]; then
       printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" > "$pt_ops"
-    elif [ "$pt_users_spec" = "$pt_want" ] && [ "$pt_users_idx" = "$pt_last_idx" ]; then
-      : # converged: the one owned rule, and it is the LAST value (first match wins)
-    elif [ -n "$pt_users_shaped" ]; then
+    elif [ -z "$pt_users_reserved" ]; then
+      die "LDAP_PAGED_TOTAL_LIMIT is set but an olcLimits rule for the selector 'users' already exists in another shape; that selector is reserved for this setting while it is enabled. Remove that rule or unset the variable; refusing to start"
+    elif [ "$pt_users_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_users_idx" = "$pt_last_idx" ]; then
+      : # converged by VALUE (not text): the one owned rule, and it is the LAST value (first match wins)
+    else
       # another value, or the right value in the wrong place (an operator rule
       # behind it would never be reached): delete and re-append
-      printf 'delete: olcLimits\nolcLimits: %s%s\n-\nadd: olcLimits\nolcLimits: %s\n-\n' "$pt_users_idx" "$pt_users_spec" "$pt_want" > "$pt_ops"
-    else
-      die "LDAP_PAGED_TOTAL_LIMIT is set but an olcLimits rule for the selector 'users' already exists in another shape; that selector is reserved for this setting while it is enabled. Remove that rule or unset the variable; refusing to start"
+      printf 'delete: olcLimits\n%s\n-\nadd: olcLimits\nolcLimits: %s\n-\n' "$pt_del" "$pt_want" > "$pt_ops"
     fi
   fi
   if [ -s "$pt_ops" ]; then
@@ -1429,25 +1487,31 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
       paged_total_fail
     fi
     pt_ok=''
-    if slapmodify -n 0 -F "$CONFIG_DIR" -l "$pt_ldif" && slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no -l "$pt_dump"; then
-      # verify what is stored now, not what was asked for
-      paged_total_rules "$pt_dump" > "$pt_list"
+    if slapmodify -n 0 -F "$CONFIG_DIR" -l "$pt_ldif" \
+      && slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no -l "$pt_dump" \
+      && paged_total_rules "$pt_dump" "$pt_list"; then
+      # verify what is stored now (semantically), not what was asked for
       pt_n=0
-      pt_now=''
       pt_now_idx=''
+      pt_now_val=''
+      pt_now_reserved=''
       pt_left=0
       pt_last_now=''
       while IFS=' ' read -r pt_idx pt_spec; do
         pt_last_now="{${pt_idx}}"
-        case "$pt_spec" in
-          users|"users "*) pt_n=$((pt_n + 1)); pt_now=$pt_spec; pt_now_idx="{${pt_idx}}" ;;
-        esac
-        if paged_total_shaped "$pt_spec"; then pt_left=$((pt_left + 1)); fi
+        paged_total_parse "$pt_spec"
+        if [ "$pt_p_sel" = users ]; then
+          pt_n=$((pt_n + 1))
+          pt_now_idx="{${pt_idx}}"
+          pt_now_val=$pt_p_val
+          pt_now_reserved=$pt_p_reserved
+        fi
+        if [ -n "$pt_p_reserved" ]; then pt_left=$((pt_left + 1)); fi
       done < "$pt_list"
       if [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
-        # no `users size.prtotal=` rule may remain, whatever its value form
+        # no reserved-shape rule may remain, whatever its spelling
         if [ "$pt_left" -eq 0 ]; then pt_ok=1; fi
-      elif [ "$pt_n" -eq 1 ] && [ "$pt_now" = "$pt_want" ] && [ "$pt_now_idx" = "$pt_last_now" ]; then
+      elif [ "$pt_n" -eq 1 ] && [ -n "$pt_now_reserved" ] && [ "$pt_now_val" = "$LDAP_PAGED_TOTAL_LIMIT" ] && [ "$pt_now_idx" = "$pt_last_now" ]; then
         pt_ok=1
       fi
     fi
