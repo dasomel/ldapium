@@ -172,6 +172,25 @@ func retryableFor(code, method string) bool {
 	return false
 }
 
+// maxLogDetail bounds how much of an error text one log line carries.
+const maxLogDetail = 512
+
+// logQuote makes a client-influenced value (an inbound X-Request-Id, a method)
+// safe for a log line: quoted, so control characters and newlines are escaped.
+func logQuote(v string) string { return strconv.Quote(v) }
+
+// logDetail renders an error for the log. LDAP diagnostics can carry text an
+// attacker chose (a submitted username), including newlines, so the detail is
+// escaped with strconv.Quote and cut at maxLogDetail bytes; a forged
+// "[id] ..." line can then never appear as a separate log event.
+func logDetail(err error) string {
+	text := err.Error()
+	if len(text) > maxLogDetail {
+		text = strings.ToValidUTF8(text[:maxLogDetail], "") + "...(truncated)"
+	}
+	return strconv.Quote(text)
+}
+
 // writeAPIError is the single builder of the envelope; respondErr and
 // apiErrorHandler both end here.
 func writeAPIError(c echo.Context, status int, code, msg string, cause error) error {
@@ -186,7 +205,7 @@ func writeAPIError(c echo.Context, status int, code, msg string, cause error) er
 		if cause == nil {
 			cause = errors.New(msg)
 		}
-		log.Printf("internal error [%s] %s %s: %v", reqID, req.Method, c.Path(), cause)
+		log.Printf("internal error [%s] %s %s: %s", logQuote(reqID), logQuote(req.Method), c.Path(), logDetail(cause))
 		msg = codeTable[code].static
 		if msg == "" {
 			msg = internalErrorMessage
@@ -238,7 +257,7 @@ func respondErr(c echo.Context, err error) error {
 	if status, code, sentinel, ok := domainStatus(err); ok {
 		msg, withheld := publicDomainMessage(sentinel, err)
 		if withheld {
-			log.Printf("error detail withheld from response [%s] %s %s: %v", c.Response().Header().Get(echo.HeaderXRequestID), c.Request().Method, c.Path(), err)
+			log.Printf("error detail withheld from response [%s] %s %s: %s", logQuote(c.Response().Header().Get(echo.HeaderXRequestID)), logQuote(c.Request().Method), c.Path(), logDetail(err))
 		}
 		return writeAPIError(c, status, code, msg, err)
 	}

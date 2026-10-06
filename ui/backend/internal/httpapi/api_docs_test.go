@@ -351,6 +351,7 @@ func TestAccessLogRecordsHEADMethod(t *testing.T) {
 	}
 	orig := os.Stdout
 	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = orig })
 	s := newDocsTestServer(t, config.Config{})
 	os.Stdout = orig
 

@@ -1,10 +1,8 @@
 package httpapi
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"net/http/httptest"
 	"sort"
 	"strings"
@@ -148,9 +146,7 @@ func TestEnvelope_FivexxBodiesNeverCarryHandlerOrCauseText(t *testing.T) {
 }
 
 func TestEnvelope_FivexxLogsOriginalUnderRequestID(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(log.Writer())
+	buf := captureAuthLog(t)
 	c, rec := envelopeContext("GET", "/api/x")
 	_ = writeFromError(c, echo.NewHTTPError(500, "could not save thing: open /var/lib/x/profiles.json: permission denied"))
 	if !strings.Contains(buf.String(), "req-123") || !strings.Contains(buf.String(), "profiles.json") {
@@ -198,9 +194,7 @@ func TestRespondErr_WithholdsLDAPDiagnostics(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			log.SetOutput(&buf)
-			defer log.SetOutput(log.Writer())
+			buf := captureAuthLog(t)
 			c, rec := envelopeContext("POST", "/api/users")
 			if err := respondErr(c, fmt.Errorf("%w: %s", tc.sentinel, diag)); err != nil {
 				t.Fatal(err)
