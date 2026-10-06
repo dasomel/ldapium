@@ -516,7 +516,7 @@ except Exception:
   raise
 finally:
   for c in (ui, ldap, minio, ftp, sftp):
-    subprocess.run(['docker', 'rm', '-f', c], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['docker', 'rm', '-fv', c], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   subprocess.run(['docker', 'network', 'rm', network], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   for vol in volumes.values():
     subprocess.run(['docker', 'volume', 'rm', vol], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

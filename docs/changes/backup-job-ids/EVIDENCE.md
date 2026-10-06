@@ -44,7 +44,7 @@ Images:
 - FTP: `delfer/alpine-ftp-server@sha256:60bb774d8408d9d4d5c74d05d1c086a34ce192c6c1a142ffac268cac0dbc6fac` (script default, verified with `docker image inspect`)
 - SFTP: `atmoz/sftp@sha256:6d41b9200f8115ce925bbd295376cb3c6b72634a267f41946e5aee4efe482186` (script default, verified with `docker image inspect`)
 
-Command: `LDAPIUM_IMAGE=ldapium:lane-255b LDAPIUM_UI_IMAGE=ldapium-ui:lane-255b LDAPIUM_TEST_PREFIX=lane255b- python3 scripts/test/test-backup-jobs-remotes-live.py` -> exit 0, `ALL LIVE CHECKS PASSED` (49 PASS lines). Remote artifact checks assert the exit status of `test -s` and a non-zero size; the script first proves them non-vacuous (negative self-test: the same check fails for a missing path on each remote and for a missing container). Remote passwords travel via 0600 env/volume files and stdin, never argv; failure text is masked. MinIO stores each object as a directory, so the S3 check asserts `complete.json/xl.meta`.
+Command: `LDAPIUM_IMAGE=ldapium:lane-255b LDAPIUM_UI_IMAGE=ldapium-ui:lane-255b LDAPIUM_TEST_PREFIX=lane255b- python3 scripts/test/test-backup-jobs-remotes-live.py` -> exit 0, `ALL LIVE CHECKS PASSED` (48 PASS lines). Remote artifact checks assert the exit status of `test -s` and a non-zero size; the script first proves them non-vacuous (negative self-test: the same check fails for a missing path on each remote and for a missing container). Remote passwords travel via 0600 env/volume files and stdin, never argv; failure text is masked. MinIO stores each object as a directory, so the S3 check asserts `complete.json/xl.meta`.
 
 Observed results:
 1. **Remote destinations (S3, FTP, SFTP)**:
@@ -70,3 +70,5 @@ Observed results:
 ## Not verified
 
 Accepted as unit-only (no live proof): remote failure injection (per-destination failure outcomes against a real remote); the real `backup_worker.py` cleaning its staging directory on a deadline SIGTERM (the live deadline run uses a stand-in worker); remote destinations beyond the success path. Idempotency-Key (#216 part B) was verified live in `test-api-idempotency-local.py` (#241).
+
+Round-2 re-run (UI/LDAP/remote containers now removed with `docker rm -fv`, because the UI image declares `VOLUME /var/lib/ldapium/secrets`): same command with `LDAPIUM_TEST_PREFIX=lane255d-` -> exit 0, `ALL LIVE CHECKS PASSED`, `grep -c '^PASS:'` = 48, 0 FAIL. `docker volume ls -q` before/after diff empty; no `lane255*` containers left.
