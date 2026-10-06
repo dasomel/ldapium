@@ -6,11 +6,11 @@
 
 ## Inspect and establish evidence
 
-- [ ] `T-001` (`REQ-002`, `REQ-013`) 소스 오브 트루스 재확인: CHANGE.md가 인용한 줄 번호(`run.go`, `manager.go`, `backup_handlers.go`, `backup_worker.py`)가 구현 시점 main에서도 유효한지, `GET /api/v1/backups`·`states` 소비처(UI·e2e·`docs/api.md`·스크립트) 전수.
-- [ ] `T-002` (`AC-012`) 워커 매니페스트에 `job_id` 키를 추가해도 `verify`·`prune`·원격 `complete.json` 동등 비교·`restore.sh`·`storage()` 소유 검사가 영향 없음을 코드와 실행으로 확인. 기준선으로 현행 `go test -race ./...`, `python3 scripts/test/test_backup_worker.py`(4건) 결과 캡처.
-- [ ] `T-003` (`AC-010`) 다운스트림 검토: `states[kind].status` 어휘에 `cancelled` 추가가 깨뜨릴 소비자(UI `statusNames`, 외부 폴링 스크립트), OpenAPI enum 소비자, `ui-e2e`의 `@fixture` 백업 스펙 2건(#227)의 전제.
-- [ ] `T-004` (`REQ-006`, `REQ-008`, `AC-013`) 고아 워커 라이브 시나리오(R1): 느린 워커 실행 중 컨트롤러만 SIGKILL → 워커 생존·`flock` 보유 여부, 컨테이너 재시작 시 워커 종료 여부, 현행 `flock` 경합 종료 코드와 `NextRun` 동작([run.go:83](../../../ui/backend/internal/backup/run.go))을 기준선으로 캡처. 결과를 CHANGE.md 위험 항목에 반영하고 T-021의 동일 시나리오 기대값으로 삼는다.
-- [ ] `T-005` 수용 선행: Owner 지정, Q1–Q3 유지보수자 결정, #216·#218 진행 상태 확인(오류 envelope·멱등 규약 참조 정합). **수용 표시는 유지보수자만 한다.**
+- [ ] `T-001` (`REQ-002`, `REQ-013`) 소스 오브 트루스 재확인: CHANGE.md가 인용한 줄 번호(`run.go`, `manager.go`, `backup_handlers.go`, `backup_worker.py`)가 구현 시점 main에서도 유효한지, `GET /api/v1/backups`·`states` 소비처(UI·e2e·`docs/api.md`·스크립트) 전수. **(CLOSE-OUT: NOT DONE: no recorded re-check)**
+- [ ] `T-002` (`AC-012`) 워커 매니페스트에 `job_id` 키를 추가해도 `verify`·`prune`·원격 `complete.json` 동등 비교·`restore.sh`·`storage()` 소유 검사가 영향 없음을 코드와 실행으로 확인. 기준선으로 현행 `go test -race ./...`, `python3 scripts/test/test_backup_worker.py`(4건) 결과 캡처. **(CLOSE-OUT: NOT DONE as a recorded baseline (test_backup_worker.py grew to 12 tests, EVIDENCE.md))**
+- [ ] `T-003` (`AC-010`) 다운스트림 검토: `states[kind].status` 어휘에 `cancelled` 추가가 깨뜨릴 소비자(UI `statusNames`, 외부 폴링 스크립트), OpenAPI enum 소비자, `ui-e2e`의 `@fixture` 백업 스펙 2건(#227)의 전제. **(CLOSE-OUT: NOT DONE: no recorded downstream review)**
+- [ ] `T-004` (`REQ-006`, `REQ-008`, `AC-013`) 고아 워커 라이브 시나리오(R1): 느린 워커 실행 중 컨트롤러만 SIGKILL → 워커 생존·`flock` 보유 여부, 컨테이너 재시작 시 워커 종료 여부, 현행 `flock` 경합 종료 코드와 `NextRun` 동작([run.go:83](../../../ui/backend/internal/backup/run.go))을 기준선으로 캡처. 결과를 CHANGE.md 위험 항목에 반영하고 T-021의 동일 시나리오 기대값으로 삼는다. **(CLOSE-OUT: NOT DONE as a baseline; the orphan scenario itself is covered live in test-backup-jobs-live.py (EVIDENCE.md))**
+- [ ] `T-005` 수용 선행: Owner 지정, Q1–Q3 유지보수자 결정, #216·#218 진행 상태 확인(오류 envelope·멱등 규약 참조 정합). **수용 표시는 유지보수자만 한다.** **(CLOSE-OUT: NOT DONE: no Owner or Q1-Q3 record)**
 
 ## Implement
 
@@ -27,7 +27,7 @@
 ## Verify
 
 - [x] `T-020` (`AC-001`, `AC-003`, `AC-004`, `AC-005`, `AC-006`, `AC-008`, `AC-009`, `AC-010`, `AC-013`, `AC-014`, `AC-015`) Go 단위·정적: 전이·복구(`reconcile` 표: 잠금 유지/해제×결과 파일/매니페스트/없음, 백오프, 만회·가드)·`worker_busy` 스케줄 표·**주입 writer 실패 분기 표**(시작·취소·종료·복구 각 실패 → 503/신호 없음/`dirty` 재시도)·가지치기 표 테스트, ID 형식·충돌, 취소·타임아웃 프로세스 그룹(`TestCancellationTerminatesWorkerAndChild` 확장, SIGTERM 무시 워커), 핸들러 경계(202/`Location`/409 본문/404/403/415), **비밀 센티널 테스트**(알려진 비밀·경로·DN을 심고 모든 응답·`backup-jobs.json`·로그 캡처에서 부분 문자열 0건), OpenAPI 드리프트·완전성. `go test -race ./...`, `go vet ./...`.
-- [x] `T-021` (`AC-002`, `AC-003`, `AC-004`, `AC-006`, `AC-007`, `AC-013`) 라이브(실제 워커, local transport): job 시작→폴링→성공→`complete.json`·sha256 대조, 긴 job 취소(SIGTERM 처리 시 `staging_cleanup=done`, SIGTERM 무시 워커로 SIGKILL 시 `pending`→다음 실행 후 정리·로컬 사본 규칙), 워커까지 죽은 재기동 → `abandoned`·`interrupted` 디스크 확인·만회 1회, **고아 시나리오(T-004 기준선)**: 워커 생존 중 재기동 → `running`+`orphan_suspected`·409·만회 보류 → 워커 종료 후 결과 파일로 실제 결과 확정, 원격 대상 실패 주입으로 대상별 결과. 로컬·일회용 환경만 사용하고 공유 스토리지는 건드리지 않는다.
+- [x] `T-021` (`AC-002`, `AC-003`, `AC-004`, `AC-006`, `AC-007`, `AC-013`) 라이브(실제 워커, local transport): job 시작→폴링→성공→`complete.json`·sha256 대조, 긴 job 취소(SIGTERM 처리 시 `staging_cleanup=done`, SIGTERM 무시 워커로 SIGKILL 시 `pending`→다음 실행 후 정리·로컬 사본 규칙), 워커까지 죽은 재기동 → `abandoned`·`interrupted` 디스크 확인·만회 1회, **고아 시나리오(T-004 기준선)**: 워커 생존 중 재기동 → `running`+`orphan_suspected`·409·만회 보류 → 워커 종료 후 결과 파일로 실제 결과 확정, 원격 대상 실패 주입으로 대상별 결과. 로컬·일회용 환경만 사용하고 공유 스토리지는 건드리지 않는다. **(CLOSE-OUT: ticked by the PR; EVIDENCE.md lists 23 live checks, not re-run here (needs Docker), UNVERIFIED locally; remote destinations, SIGKILL-after-grace and deadline are unit-test only)**
 - [x] `T-022` (`AC-010`, `AC-011`) UI: Playwright 모킹 스펙(실행 중→성공, 취소, 대상 부분 실패 렌더, 좁은 뷰포트), 기존 `@fixture` 백업 스펙 2건 무수정 통과 확인 및 job 목록 단언 추가(#227 CI 연결 기준). 프런트 `npm run build`.
 - [x] `T-023` (`AC-007`, `AC-012`) `scripts/test/test_backup_worker.py` 확장: `--job-id`·매니페스트 호환, 대상 중간 실패 시 대상별 결과, 결과 파일 원자 기록(성공·실패), SIGTERM 정리, 종료 코드 75. 기존 4건 무회귀.
 - [x] `T-024` 실패·성공·환경·명령을 `EVIDENCE.md`에 실제 출력으로 기록(검증 실패와 수정 포함).
@@ -36,9 +36,9 @@
 ## Synchronize durable truth
 
 - [x] `T-030` 규범 문서·운영 가이드: `docs/api.md`, `ui/README.md`, 차트 README, 운영 가이드(`abandoned` 해석, `worker_busy`, 고아 워커 확인, `backup-jobs.json` 삭제 안전성).
-- [ ] `T-031` #216(idempotency convention)·#218(envelope) 확정 시 D217-9·오류 코드 표기를 정합시키고 이 패키지에 변경 기록. #216 확정 후 멱등 키 가산 여부 결정(규약이 202+`Location` 재생·키 충돌·TTL·인가 결합·정책 리비전 결합을 제공해야 함, CHANGE.md D217-9). “Error codes introduced” 4개(`backup_busy`, `job_not_found`, `job_not_cancellable`, `persistence_unavailable`)를 #218 코드 표에 전달.
-- [ ] `T-032` 릴리스·호환 노트: 신규 엔드포인트, `states[kind].status`의 `cancelled`, 409 본문 가산 필드, 시작 영속 실패 422→503 분리, `backup_started` 로그의 `actor`(DN)→`actor_fp` 변경, `<root>/.results/` 신규, 백업 대응 이미지 재빌드 필요. 롤백 시 구버전이 job 파일을 무시함을 명시.
-- [ ] `T-033` 포트폴리오/다운스트림 영향 검토 후 검증된 상태만 게시. #217 PR 본문은 모든 REQ가 덮일 때만 닫음 표기, 아니면 “Related to #217 (not closing yet)”와 후속 이슈 분리.
+- [ ] `T-031` #216(idempotency convention)·#218(envelope) 확정 시 D217-9·오류 코드 표기를 정합시키고 이 패키지에 변경 기록. #216 확정 후 멱등 키 가산 여부 결정(규약이 202+`Location` 재생·키 충돌·TTL·인가 결합·정책 리비전 결합을 제공해야 함, CHANGE.md D217-9). “Error codes introduced” 4개(`backup_busy`, `job_not_found`, `job_not_cancellable`, `persistence_unavailable`)를 #218 코드 표에 전달. **(CLOSE-OUT: NOT DONE: CHANGE.md D217-9 and Q2 still say keys are out of scope although #241 added keyed backup start; error codes are in the #218 table)**
+- [ ] `T-032` 릴리스·호환 노트: 신규 엔드포인트, `states[kind].status`의 `cancelled`, 409 본문 가산 필드, 시작 영속 실패 422→503 분리, `backup_started` 로그의 `actor`(DN)→`actor_fp` 변경, `<root>/.results/` 신규, 백업 대응 이미지 재빌드 필요. 롤백 시 구버전이 job 파일을 무시함을 명시. **(CLOSE-OUT: NOT DONE: CHANGELOG.md has no backup-job entry (422->503 split, actor_fp log change, .results/, image rebuild))**
+- [ ] `T-033` 포트폴리오/다운스트림 영향 검토 후 검증된 상태만 게시. #217 PR 본문은 모든 REQ가 덮일 때만 닫음 표기, 아니면 “Related to #217 (not closing yet)”와 후속 이슈 분리. **(CLOSE-OUT: NOT DONE: no portfolio review; PR #236 said Related to #217 (not closing yet))**
 
 ## Completion review
 
