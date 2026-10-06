@@ -54,6 +54,10 @@ export function UsersPage() {
   const prevDnRef = useRef(dn)
   const isMountedRef = useRef(false)
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
+  // Latest view (cursor/stack/q/limit), refreshed every render: async write
+  // callbacks close over stale state, so they read the view from here instead.
+  const viewRef = useRef({ cursor, cursorStack, q: debouncedQuery, pageSize })
+  viewRef.current = { cursor, cursorStack, q: debouncedQuery, pageSize }
 
   // Every request takes a generation; a response (or error) whose generation
   // is no longer current is dropped, so a slow older request cannot overwrite
@@ -153,13 +157,23 @@ export function UsersPage() {
   // Re-read after a conflict or a lost response (keeps current page).
   async function reread() {
     const gen = requestGenRef.current
+    const startQ = viewRef.current.q
+    const v = viewRef.current
     const { items } = await api.listUsers({
-      limit: pageSize,
-      cursor,
-      q: debouncedQuery || undefined,
+      limit: v.pageSize,
+      cursor: v.cursor,
+      q: startQ || undefined,
     })
-    if (gen === requestGenRef.current) setUsers(items)
+    if (gen === requestGenRef.current && viewRef.current.q === startQ) setUsers(items)
     return items
+  }
+
+  // Post-write refresh: always the CURRENT view, and skipped entirely when the
+  // query changed since the write began (the new query already loads its own page).
+  function refreshAfterWrite(startQ: string) {
+    const v = viewRef.current
+    if (v.q !== startQ) return
+    loadPage(v.cursor, v.cursorStack, v.q, v.pageSize)
   }
 
   const handleNext = () => {
@@ -188,6 +202,7 @@ export function UsersPage() {
   }
 
   async function handleCreateOrUpdate(input: UserFormInput) {
+    const startQ = viewRef.current.q
     if (editing) {
       const target = editing
       await write(
@@ -217,7 +232,7 @@ export function UsersPage() {
     }
     setFormOpen(false)
     setEditing(null)
-    loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+    refreshAfterWrite(startQ)
   }
 
   async function handleSetPassword(dn: string, password: string) {
@@ -228,6 +243,7 @@ export function UsersPage() {
   }
 
   async function handleDelete() {
+    const startQ = viewRef.current.q
     if (!deleting) return
     const target = deleting
     try {
@@ -241,24 +257,26 @@ export function UsersPage() {
     }
     notify('success', t('users.deletedToast', { uid: target.uid }))
     setDeleting(null)
-    loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+    refreshAfterWrite(startQ)
   }
 
   async function handleUnlock(u: User) {
+    const startQ = viewRef.current.q
     try {
       await api.unlockUser(u.dn)
       notify('success', t('users.unlockedToast', { uid: u.uid }))
-      loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+      refreshAfterWrite(startQ)
     } catch (err) {
       notify('error', err instanceof ApiError ? err.message : t('users.unlockFailedToast', { uid: u.uid }))
     }
   }
 
   async function handleLock(u: User) {
+    const startQ = viewRef.current.q
     try {
       await api.lockUser(u.dn)
       notify('success', t('users.lockedToast', { uid: u.uid }))
-      loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+      refreshAfterWrite(startQ)
     } catch (err) {
       notify('error', err instanceof ApiError ? err.message : t('users.lockFailedToast', { uid: u.uid }))
     }

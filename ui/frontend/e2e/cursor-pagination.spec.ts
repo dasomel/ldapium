@@ -518,4 +518,41 @@ test.describe('Cursor pagination and error recovery', () => {
     // Capture screenshot of the narrow viewport
     await page.screenshot({ path: 'test-results/narrow-viewport.png', fullPage: true })
   })
+
+  test('a write response that lands after a new search does not refresh with the old query', async ({ page }) => {
+    await mockSession(page)
+    const qs: string[] = []
+    let releaseLock: () => void = () => undefined
+    const lockGate = new Promise<void>((resolve) => (releaseLock = resolve))
+    const user = (uid: string) => ({ dn: `uid=${uid},dc=example,dc=org`, uid, cn: uid, sn: 'T', locked: false })
+
+    await page.route('**/api/users/lock', async (r) => {
+      await lockGate
+      await r.fulfill({ status: 204 })
+    })
+    await page.route('**/api/users?*', (r) => {
+      const q = new URL(r.request().url()).searchParams.get('q') ?? ''
+      qs.push(q)
+      return r.fulfill({
+        json: { users: [user(q === 'new' ? 'fresh-row' : 'initial-row')], truncated: false, hasMore: false },
+      })
+    })
+
+    await page.goto('/users')
+    const rows = page.locator('tbody tr')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toContainText('initial-row')
+
+    await rows.first().getByRole('button', { name: 'Disable account' }).click()
+    await page.getByPlaceholder('Filter users…').fill('new')
+    await expect(rows.first()).toContainText('fresh-row')
+    expect(qs.slice(qs.indexOf('new'))).toEqual(['new'])
+
+    releaseLock()
+    // Give the stale post-write refresh (if any) time to fire and settle.
+    await page.waitForTimeout(500)
+    await expect(rows.first()).toContainText('fresh-row')
+    // Dev StrictMode may double the initial load; nothing may follow the 'new' search.
+    expect(qs.slice(qs.indexOf('new'))).toEqual(['new'])
+  })
 })

@@ -53,8 +53,13 @@ async function filterUsers(page: import('@playwright/test').Page, query: string)
     return url.pathname === '/api/users' && (url.searchParams.get('q') ?? '') === query
   })
   await input.fill(query)
-  await filtered
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const body = (await (await filtered).json()) as { users?: Array<{ uid: string }> | null }
+  const uids = (body.users ?? []).map((u) => u.uid)
+  // A response arriving is not the same as React having rendered it: wait until the
+  // table shows exactly the rows of the filtered response (no stale rows left, none
+  // missing), so callers never conclude "absent" from the previous page.
+  await expect(page.locator('tbody tr')).toHaveCount(uids.length)
+  for (const uid of uids) await expect(userRow(page, uid)).toBeVisible()
 }
 
 async function deleteUserIfPresent(page: import('@playwright/test').Page, uid: string) {

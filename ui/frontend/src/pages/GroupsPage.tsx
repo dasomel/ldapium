@@ -78,6 +78,10 @@ export function GroupsPage() {
   const prevDnRef = useRef(dn)
   const isMountedRef = useRef(false)
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
+  // Latest view (cursor/stack/q/limit), refreshed every render: async write
+  // callbacks close over stale state, so they read the view from here instead.
+  const viewRef = useRef({ cursor, cursorStack, q: debouncedQuery, pageSize })
+  viewRef.current = { cursor, cursorStack, q: debouncedQuery, pageSize }
 
   // Every request takes a generation; a response (or error) whose generation
   // is no longer current is dropped, so a slow older request cannot overwrite
@@ -177,13 +181,23 @@ export function GroupsPage() {
   // Re-read after a conflict or a lost response (keeps the current page).
   async function reread() {
     const gen = requestGenRef.current
+    const startQ = viewRef.current.q
+    const v = viewRef.current
     const { items } = await api.listGroups({
-      limit: pageSize,
-      cursor,
-      q: debouncedQuery || undefined,
+      limit: v.pageSize,
+      cursor: v.cursor,
+      q: startQ || undefined,
     })
-    if (gen === requestGenRef.current) setGroups(items)
+    if (gen === requestGenRef.current && viewRef.current.q === startQ) setGroups(items)
     return items
+  }
+
+  // Post-write refresh: always the CURRENT view, and skipped entirely when the
+  // query changed since the write began (the new query already loads its own page).
+  function refreshAfterWrite(startQ: string) {
+    const v = viewRef.current
+    if (v.q !== startQ) return
+    loadPage(v.cursor, v.cursorStack, v.q, v.pageSize)
   }
 
   const handleNext = () => {
@@ -212,6 +226,7 @@ export function GroupsPage() {
   }
 
   async function handleCreateOrUpdate(input: GroupFormInput) {
+    const startQ = viewRef.current.q
     if (editing) {
       const target = editing
       await write(
@@ -236,10 +251,11 @@ export function GroupsPage() {
     }
     setFormOpen(false)
     setEditing(null)
-    loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+    refreshAfterWrite(startQ)
   }
 
   async function handleDelete() {
+    const startQ = viewRef.current.q
     if (!deleting) return
     const target = deleting
     try {
@@ -259,10 +275,11 @@ export function GroupsPage() {
     }
     notify('success', t('groups.deletedToast', { cn: target.cn }))
     setDeleting(null)
-    loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+    refreshAfterWrite(startQ)
   }
 
   async function handleSaveMembers(groupDn: string, members: string[]) {
+    const startQ = viewRef.current.q
     const group = groups?.find((g) => g.dn === groupDn)
     if (!group) return
     const previous = new Set(group.members)
@@ -271,7 +288,7 @@ export function GroupsPage() {
       ...members.filter((memberDn) => !previous.has(memberDn)).map((memberDn) => api.addMember(groupDn, memberDn)),
       ...group.members.filter((memberDn) => !next.has(memberDn)).map((memberDn) => api.removeMember(groupDn, memberDn)),
     ])
-    loadPage(cursor, cursorStack, debouncedQuery, pageSize)
+    refreshAfterWrite(startQ)
   }
 
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
