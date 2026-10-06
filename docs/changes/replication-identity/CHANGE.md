@@ -321,6 +321,7 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 ## Review record
 
 - Accepted scope/requirements: 미수용.
+- Implementation authorized by the maintainer on 2026-10-07 (user instruction), staged per TASKS.md; unit 1 = T-010
 - Material changes after acceptance and re-review: 없음.
 - **개정 4 (세 번째 검토 반영) — 접근을 단순화했다.** 지적 → 처리:
 

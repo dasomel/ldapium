@@ -128,6 +128,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_REPLICATION_BIND_DN` | no | `$LDAP_ADMIN_DN` | Identity peers use to bind for replication. |
 | `LDAP_REPLICATION_PASSWORD` | no | `$LDAP_ADMIN_PASSWORD` | |
 | `LDAP_REPLICATION_PASSWORD_FILE` | no | — | Path to a file containing the replication password; takes precedence if set and readable. |
+| `LDAP_REPLICATION_IDENTITY` | no | `admin` | Staged, not yet effective (change package `docs/changes/replication-identity`, #229). `admin` is today's behavior and changes nothing. `prepare` and `dedicated` are validated and then the container **refuses to start** ("not implemented in this image yet"); an invalid value, a non-admin mode without `LDAP_REPLICATION_ENABLED`, or `LDAP_ADMIN_DN` equal to `cn=replicator,<LDAP_ROOT_DN>` is refused too. `dedicated` also requires an explicit `LDAP_REPLICATION_PASSWORD` that passes a hygiene check (≥ 32 characters, ≥ 10 distinct, different from the admin password; a hygiene check, not proof of randomness), and `prepare` refuses an explicit replication password. |
 | `LDAP_REPLICATION_RETRY` | no | `5 10 30 +` | `olcSyncrepl` `retry=` value. |
 | `LDAP_REPLICATION_INTERVAL` | no | `00:00:00:10` | `olcSyncrepl` `interval=` value. |
 

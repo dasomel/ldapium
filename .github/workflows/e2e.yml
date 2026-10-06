@@ -112,6 +112,9 @@ jobs:
       - name: Wiped serverID-1 node resyncs without peer data loss — #206
         run: ./scripts/test/test-wiped-node-resync.sh ldapium:e2e
 
+      - name: Replication identity env parsing and hygiene refusals — #229 T-010
+        run: ./scripts/test/test-replication-identity-env.sh ldapium:e2e
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
