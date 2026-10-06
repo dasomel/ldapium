@@ -89,5 +89,6 @@ func (s *Server) handleGetServerSettings(c echo.Context) error {
 		TLSVerified:         security != "LDAP" && !s.cfg.TLSInsecureSkipVerify,
 		SessionTTLSeconds:   int64(s.cfg.SessionTTL.Seconds()),
 		CookieSecure:        s.cfg.CookieSecure,
+		IdempotencyEnabled:  s.idem != nil,
 	})
 }

@@ -125,6 +125,26 @@ type Config struct {
 	// over.
 	LoginFailureWindow time.Duration
 
+	// IdempotencyEnabled (UI_IDEMPOTENCY_ENABLED, default false) lets the
+	// core user/group writes honour an Idempotency-Key from the in-memory
+	// store (#216, D216-9a). Off, a keyed write is refused with 422
+	// idempotency_unsupported rather than silently unprotected. The chart sets
+	// it only for a single replica with a Recreate rollout.
+	IdempotencyEnabled bool
+	// IdempotencyTTL (UI_IDEMPOTENCY_TTL, default 24h, 1m..7d) is how long a
+	// completed record replays.
+	IdempotencyTTL time.Duration
+	// IdempotencyKeyFile (UI_IDEMPOTENCY_KEY_FILE, absolute, optional) holds
+	// the persisted fingerprint master key (D216-9b): line 1 current, an
+	// optional line 2 previous (rotation). Created 0600 in a 0700 directory on
+	// first start, like the session secret. Without it the in-memory store
+	// uses a per-process random key and backup start refuses keys.
+	IdempotencyKeyFile string
+	// IdempotencyKey / IdempotencyPreviousKey are the master secrets read from
+	// that file. Never logged, never printed.
+	IdempotencyKey         string
+	IdempotencyPreviousKey string
+
 	// TrustedProxies controls how the login-failure limiter resolves a
 	// request's client IP (UI_TRUSTED_PROXIES), via httpapi's
 	// ipExtractorFor. One of:
@@ -284,6 +304,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 	cfg.MetricsAddr, err = validateMetricsAddr(getenv("METRICS_ADDR"), cfg.ListenAddr)
 	if err != nil {
+		return Config{}, err
+	}
+
+	if err := loadIdempotency(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
 

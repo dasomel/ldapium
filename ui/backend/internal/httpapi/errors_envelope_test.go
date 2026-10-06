@@ -19,7 +19,8 @@ import (
 // the same commit.
 var goldenCodes = []string{
 	"admin_required", "already_exists", "backup_busy", "conflict", "feature_disabled",
-	"forbidden", "if_match_required", "internal", "invalid_credentials", "invalid_request",
+	"forbidden", "idempotency_capacity", "idempotency_key_conflict", "idempotency_key_reused", "idempotency_outcome_unknown",
+	"idempotency_unsupported", "if_match_required", "internal", "invalid_credentials", "invalid_request",
 	"job_not_cancellable", "job_not_found", "keycloak_disabled", "login_rate_limited", "method_not_allowed", "not_found",
 	"origin_mismatch", "partial_failure", "persistence_unavailable", "revision_conflict", "session_expired", "unauthenticated",
 	"unavailable", "unsupported_media_type", "upstream_failed", "validation_failed",

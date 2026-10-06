@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/backup"
+	"github.com/dasomel/ldapium/ui/backend/internal/idempotency"
 	"github.com/labstack/echo/v4"
 )
 
@@ -18,6 +20,7 @@ func (s *Server) StartBackground(ctx context.Context) {
 	if s.backups != nil {
 		s.backups.Start(ctx)
 	}
+	s.sweepIdempotency(ctx)
 }
 func (s *Server) backupRoutes(api *echo.Group) {
 	g := api.Group("/v1/backups", s.requireBackupAdmin)
@@ -183,18 +186,77 @@ func (s *Server) handleBackupRun(c echo.Context) error {
 	// destinations come from this request. The worker runs the saved policy
 	// with operator-owned secrets. The requester is recorded as a one-way
 	// fingerprint only (D217-12).
+	idem, err := s.backupIdempotency(c)
+	if err != nil {
+		return err
+	}
 	job, err := s.backups.StartJob(context.Background(), backup.RunRequest{
 		Kind:             c.Param("id"),
 		Trigger:          backup.JobTriggerManual,
 		RequesterType:    backup.JobRequesterUser,
 		ActorFingerprint: fingerprintIdentity(currentSession(c).DN),
 		RequestID:        requestIDOf(c),
+		Idempotency:      idem,
 	})
+	var hit *backup.IdempotentJobError
+	if errors.As(err, &hit) {
+		return replayBackupStart(c, hit)
+	}
 	if err != nil {
 		return s.backupJobError(c, err)
 	}
 	c.Response().Header().Set(echo.HeaderLocation, "/api/v1/backups/jobs/"+job.JobID)
 	return c.JSON(202, map[string]string{"job_id": job.JobID, "kind": job.Kind, "status": job.Status})
+}
+
+// backupIdempotency reads the optional Idempotency-Key of a backup start (#216,
+// D216-12). The key lives in the durable job record, so unlike the core routes
+// it does not depend on the in-memory switch: it needs backups enabled (this
+// route) and the persisted fingerprint key (UI_IDEMPOTENCY_KEY_FILE), without
+// which a restart could not recognise the request and the key is refused
+// instead of silently unprotected. No header: nil, the unchanged behaviour.
+func (s *Server) backupIdempotency(c echo.Context) (*backup.RequestIdempotency, error) {
+	values := c.Request().Header.Values(headerIdempotencyKey)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	key, err := idempotency.ParseKey(values)
+	if err != nil {
+		return nil, apiErr(http.StatusBadRequest, codeInvalidRequest, err.Error())
+	}
+	if s.idemKeys == nil {
+		return nil, apiErr(http.StatusUnprocessableEntity, codeIdempotencyUnsupported,
+			"Idempotency-Key for backups needs the persisted fingerprint key (UI_IDEMPOTENCY_KEY_FILE); repeat the request without it")
+	}
+	// The kind is part of the request: the same key for another kind is a reuse.
+	parts := [][]byte{[]byte(c.Request().Method), []byte("/api/v1/backups/jobs/" + c.Param("id"))}
+	fp, keyID := s.idemKeys.Fingerprint(parts...)
+	keys := s.idemKeys
+	return &backup.RequestIdempotency{
+		KeyHash:     idempotency.KeyHash(currentSession(c).DN, key),
+		Fingerprint: hex.EncodeToString(fp),
+		KeyID:       keyID,
+		Verify: func(id string, stored []byte) idempotency.Verdict {
+			return keys.Verify(id, stored, parts...)
+		},
+	}, nil
+}
+
+// replayBackupStart answers a keyed start whose key already started a job: the
+// same 202 and Location for the same request (the body shows the job's current
+// status; Location is the authority), 422 for another request, and 409
+// outcome_unknown when the fingerprint key that made the record is gone.
+func replayBackupStart(c echo.Context, hit *backup.IdempotentJobError) error {
+	switch hit.Verdict {
+	case idempotency.VerdictSame:
+		h := c.Response().Header()
+		h.Set(headerIdempotentReplayed, "true")
+		h.Set(echo.HeaderLocation, "/api/v1/backups/jobs/"+hit.Job.JobID)
+		return c.JSON(202, map[string]string{"job_id": hit.Job.JobID, "kind": hit.Job.Kind, "status": hit.Job.Status})
+	case idempotency.VerdictDifferent:
+		return apiErr(http.StatusUnprocessableEntity, codeIdempotencyKeyReused, "this Idempotency-Key was already used for a different request")
+	}
+	return apiErr(http.StatusConflict, codeIdempotencyOutcomeUnknown, "the Idempotency-Key cannot be verified (its fingerprint key is no longer configured); read the backup job list to check what was started")
 }
 
 func (s *Server) handleBackupConnection(c echo.Context) error {

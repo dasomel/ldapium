@@ -17,6 +17,7 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/appprofile"
 	"github.com/dasomel/ldapium/ui/backend/internal/backup"
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/idempotency"
 	"github.com/dasomel/ldapium/ui/backend/internal/keycloak"
 	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 	"github.com/dasomel/ldapium/ui/backend/internal/metrics"
@@ -42,6 +43,11 @@ type Server struct {
 	writeOrigins []string
 	// metrics is a no-op until EnableMetrics replaces it (see metrics.go).
 	metrics metrics.Recorder
+	// idem is the in-memory Idempotency-Key store (nil unless
+	// UI_IDEMPOTENCY_ENABLED); idemKeys is the persisted fingerprint keyring
+	// (nil without UI_IDEMPOTENCY_KEY_FILE), which backup start needs.
+	idem     *idempotency.Store
+	idemKeys *idempotency.Keyring
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
 	apiRoutes     []*echo.Route
@@ -59,11 +65,14 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
 		metrics:      metrics.Nop{},
 	}
+	var err error
+	if s.idem, s.idemKeys, err = newIdempotency(cfg); err != nil {
+		return nil, fmt.Errorf("initialize idempotency: %w", err)
+	}
 	if cfg.AppProfilesPath != "" {
 		if len(cfg.AppProfilesAdminDNs) == 0 {
 			return nil, fmt.Errorf("profile admin DNs are required")
 		}
-		var err error
 		s.profiles, err = appprofile.Open(cfg.AppProfilesPath)
 		if err != nil {
 			return nil, fmt.Errorf("open application profiles: %w", err)
@@ -110,7 +119,6 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	s.echo.Use(s.originGate())
 
 	if cfg.BackupOperatorConfig != "" {
-		var err error
 		s.backups, err = backup.New(cfg.BackupPolicyPath, cfg.BackupOperatorConfig, cfg.BackupWorkerPath, cfg.BackupPython)
 		if err != nil {
 			return nil, fmt.Errorf("initialize backups: %w", err)
@@ -153,26 +161,26 @@ func (s *Server) routes(spa fs.FS) {
 
 	authed.GET("/tree", s.handleTreeChildren)
 	authed.GET("/entry", s.handleGetEntry)
-	authed.POST("/entry/move", s.handleMoveEntry)
+	authed.POST("/entry/move", s.handleMoveEntry, s.idempotentRoute)
 
 	authed.GET("/password-policies", s.handleListPasswordPolicies)
 
 	authed.GET("/users", s.handleListUsers)
-	authed.POST("/users", s.handleCreateUser)
-	authed.PUT("/users", s.handleUpdateUser)
-	authed.PATCH("/users", s.handlePatchUser)
-	authed.DELETE("/users", s.handleDeleteUser)
-	authed.POST("/users/password", s.handleSetPassword)
-	authed.POST("/users/unlock", s.handleUnlockUser)
-	authed.POST("/users/lock", s.handleLockUser)
+	authed.POST("/users", s.handleCreateUser, s.idempotentRoute)
+	authed.PUT("/users", s.handleUpdateUser, s.idempotentRoute)
+	authed.PATCH("/users", s.handlePatchUser, s.idempotentRoute)
+	authed.DELETE("/users", s.handleDeleteUser, s.idempotentRoute)
+	authed.POST("/users/password", s.handleSetPassword, s.idempotentPasswordRoute)
+	authed.POST("/users/unlock", s.handleUnlockUser, s.idempotentRoute)
+	authed.POST("/users/lock", s.handleLockUser, s.idempotentRoute)
 
 	authed.GET("/groups", s.handleListGroups)
-	authed.POST("/groups", s.handleCreateGroup)
-	authed.PUT("/groups", s.handleUpdateGroup)
-	authed.PATCH("/groups", s.handlePatchGroup)
-	authed.DELETE("/groups", s.handleDeleteGroup)
-	authed.POST("/groups/members", s.handleAddMember)
-	authed.DELETE("/groups/members", s.handleRemoveMember)
+	authed.POST("/groups", s.handleCreateGroup, s.idempotentRoute)
+	authed.PUT("/groups", s.handleUpdateGroup, s.idempotentRoute)
+	authed.PATCH("/groups", s.handlePatchGroup, s.idempotentRoute)
+	authed.DELETE("/groups", s.handleDeleteGroup, s.idempotentRoute)
+	authed.POST("/groups/members", s.handleAddMember, s.idempotentRoute)
+	authed.DELETE("/groups/members", s.handleRemoveMember, s.idempotentRoute)
 
 	authed.GET("/v1/application-profile-types", s.handleApplicationCapabilities, s.requireProfileAdmin)
 	s.profileRoutes(authed)

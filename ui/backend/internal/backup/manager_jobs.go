@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/idempotency"
 )
 
 // Orphan polling backoff per D217-16: 5s doubling up to 30s.
@@ -515,6 +518,11 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// A key that already started a job is answered before anything else
+	// (before busy, D216-12): the retry gets the same job, never a second run.
+	if hit := m.idempotentHitLocked(req); hit != nil {
+		return nil, hit
+	}
 	if m.running {
 		return nil, &BusyError{ActiveJobID: m.activeJobID, ActiveKind: m.activeJobKind}
 	}
@@ -571,6 +579,9 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 		StagingCleanup: StagingCleanupNotApplicable,
 		DeadlineAt:     deadline,
 	}
+	if k := req.Idempotency; k != nil && req.Trigger != JobTriggerSchedule {
+		job.Idempotency = &JobIdempotency{KeyHash: k.KeyHash, Fingerprint: k.Fingerprint, KeyID: k.KeyID}
+	}
 
 	// Step 1 of D217-17: persist the running record before the worker starts.
 	if err := m.commitJobsLocked(append(append([]*Job{}, m.jobs...), job)); err != nil {
@@ -599,6 +610,27 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 	return m.present(job), nil
 }
 
+// idempotentHitLocked finds the job a key already started. Records of jobs that
+// retention removed are gone with them: a key is as durable as its job record.
+func (m *Manager) idempotentHitLocked(req RunRequest) *IdempotentJobError {
+	k := req.Idempotency
+	if k == nil || k.KeyHash == "" {
+		return nil
+	}
+	for _, j := range m.jobs {
+		if j.Idempotency == nil || j.Idempotency.KeyHash != k.KeyHash {
+			continue
+		}
+		stored, err := hex.DecodeString(j.Idempotency.Fingerprint)
+		verdict := idempotency.VerdictUnknownKey
+		if err == nil && k.Verify != nil {
+			verdict = k.Verify(j.Idempotency.KeyID, stored)
+		}
+		return &IdempotentJobError{Job: m.present(j), Verdict: verdict}
+	}
+	return nil
+}
+
 func jobErrCode(j *Job) string {
 	if j.Error == nil {
 		return ""
@@ -617,6 +649,7 @@ func actorFP(req RunRequest) string {
 // as done once no .pending-* directory remains (read-only, D217-6).
 func (m *Manager) present(j *Job) *Job {
 	c := cloneJob(j)
+	c.Idempotency = nil // durable bookkeeping, never part of an API view
 	if k, ok := fixedKind(c.Kind); ok && c.StagingCleanup == StagingCleanupPending && m.root != "" {
 		pattern := filepath.Join(filepath.Clean(m.root), k, ".pending-*")
 		if strings.HasPrefix(pattern, filepath.Clean(m.root)+string(filepath.Separator)) {
