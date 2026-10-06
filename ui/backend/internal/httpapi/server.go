@@ -35,6 +35,10 @@ type Server struct {
 	sessions     *session.Store
 	sso          *oidcAuthenticator
 	loginLimiter *loginLimiter
+	// writeOrigins are the extra origins the write Origin gate accepts
+	// besides the request's own (see originGate). Empty until the CORS
+	// allow-list is wired in; the gate is on regardless.
+	writeOrigins []string
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
 	apiRoutes     []*echo.Route
@@ -97,6 +101,7 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}))
 	s.echo.Use(s.restoreMethodMiddleware())
 	s.echo.Use(middleware.Secure())
+	s.echo.Use(s.originGate())
 
 	if cfg.BackupOperatorConfig != "" {
 		var err error

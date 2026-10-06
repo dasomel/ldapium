@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -110,8 +109,7 @@ func (s *Server) handlePutProfile(c echo.Context) error {
 }
 
 func requireProfileWrite(c echo.Context) error {
-	origin, err := url.Parse(c.Request().Header.Get("Origin"))
-	if err != nil || origin.Host != c.Request().Host || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil || origin.Scheme != c.Scheme() {
+	if !sameOrigin(c.Request().Header.Get("Origin"), c.Request().Host, c.Scheme()) {
 		return apiErr(403, codeOriginMismatch, "same-origin request required")
 	}
 	if strings.Split(c.Request().Header.Get("Content-Type"), ";")[0] != "application/json" {

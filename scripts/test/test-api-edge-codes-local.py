@@ -8,7 +8,8 @@ Also pins the error envelope (#218): every checked error carries exactly
 X-Request-Id, no DN in the body, and a real 5xx (a wrong current password,
 LDAP result 53) is redacted with its cause only in the UI log. The password
 policy refusals the change-password screen shows are checked end to end,
-including that ppm's user DN is stripped. The conditional-write contract of #216 (ETag/If-Match on every protected route,
+including that ppm's user DN is stripped. The write Origin gate (#218, D218-16)
+is checked on users/groups/login/logout: foreign and null Origin are 403 and write nothing, no Origin header passes. The conditional-write contract of #216 (ETag/If-Match on every protected route,
 PATCH, create compensation) runs as a non-root operator. Image tags come from LDAPIUM_IMAGE /
 LDAPIUM_UI_IMAGE (default ldapium:e2e, ldapium-ui:e2e); LDAPIUM_EDGE_PREFIX renames the throwaway docker objects.
 """
@@ -463,7 +464,9 @@ def run():
 
   def call(method, path, body=None, headers=None, who=None):
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(url + path, data, {'Content-Type': 'application/json', 'Origin': url, **(headers or {})}, method=method)
+    # A header whose value is None is left out (no Origin at all, like curl).
+    merged = {k: v for k, v in {'Content-Type': 'application/json', 'Origin': url, **(headers or {})}.items() if v is not None}
+    request = urllib.request.Request(url + path, data, merged, method=method)
     try:
       with (who or opener).open(request) as response:
         return response.status, response.read().decode(), response.headers
@@ -534,6 +537,25 @@ def run():
   envelope(text, headers, 'if_match_required', 'precondition required 428')
   text, headers = expect(403, 'PUT', path, profile, 'foreign origin', headers={'Origin': 'https://evil.example', 'If-Match': '"0"'})
   envelope(text, headers, 'origin_mismatch', 'foreign origin 403')
+  # #218 D218-16: the write Origin gate covers every /api write, not just the
+  # profile/backup ones. A foreign or null Origin never reaches the handler
+  # (the user below is not created); a request with no Origin header (curl,
+  # scripts) and the same-origin browser call (every other write in this script)
+  # go through.
+  gate_user = {'uid': 'gate-user', 'cn': 'Gate User', 'sn': 'User'}
+  for origin in ('https://evil.example', 'null'):
+    text, headers = expect(403, 'POST', '/api/users', gate_user, 'user create with Origin ' + origin, headers={'Origin': origin})
+    envelope(text, headers, 'origin_mismatch', 'write gate 403 for ' + origin)
+  expect(404, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': 'uid=gate-user,ou=people,' + root}), None, 'refused create wrote nothing')
+  text, headers = expect(403, 'POST', '/api/groups', {'cn': 'gate-group'}, 'group create, foreign origin', headers={'Origin': 'https://evil.example'})
+  envelope(text, headers, 'origin_mismatch', 'write gate 403 on groups')
+  text, headers = expect(403, 'POST', '/api/logout', None, 'logout, foreign origin', headers={'Origin': 'https://evil.example'})
+  envelope(text, headers, 'origin_mismatch', 'write gate 403 on logout')
+  expect(200, 'GET', '/api/me', None, 'session survives the refused logout')
+  text, headers = expect(403, 'POST', '/api/login', {'identity': admin_dn, 'password': admin_password}, 'login, foreign origin', headers={'Origin': 'https://evil.example'}, who=anonymous)
+  envelope(text, headers, 'origin_mismatch', 'write gate 403 on login')
+  expect(201, 'POST', '/api/users', gate_user, 'user create without an Origin header', headers={'Origin': None})
+  expect(200, 'POST', '/api/login', {'identity': admin_dn, 'password': admin_password}, 'login without an Origin header', headers={'Origin': None}, who=anonymous)
   profile['scope'] = 'app'
   expect(200, 'PUT', path, profile, 'create profile', headers={'If-Match': '"0"'})
   text, headers = expect(412, 'PUT', path, profile, 'stale revision', headers={'If-Match': '"0"'})
