@@ -1,0 +1,28 @@
+# Machine execution identity ACL for the MAIN database
+# (docs/changes/machine-principal-auth, "Machine LDAP account and ACL").
+#
+# The single place this LDIF text lives: the live test applies it with the
+# tokens below substituted, and the operator guide (T-015) turns the same text
+# into the documented artifact.
+#
+#   @MACHINE_DN@  the dedicated read-only account (outside the allowed subtree)
+#   @ALLOWED_DN@  the allowed subtree B (default: the base DN)
+#   @MAIN_DB_DN@  the config entry of the main database, e.g.
+#                 olcDatabase={1}mdb,cn=config
+#
+# The three rules go in front of EVERY existing allow rule ({0}-{2}); each ends
+# in "by * break" so every other identity continues to the existing rules
+# unchanged. Two leading spaces on a continuation line are required: LDIF
+# folding strips one, the other is the separator before "by".
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to attrs=userPassword,shadowLastChange
+  by dn.exact="@MACHINE_DN@" none
+  by * break
+olcAccess: {1}to dn.subtree="@ALLOWED_DN@"
+  by dn.exact="@MACHINE_DN@" read
+  by * break
+olcAccess: {2}to *
+  by dn.exact="@MACHINE_DN@" none
+  by * break

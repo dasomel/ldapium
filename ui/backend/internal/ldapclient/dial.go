@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -46,7 +48,7 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 	// The reported "bind" is the whole login handshake (dial, optional uid
 	// lookup, simple bind), since that is the operation an operator waits on.
 	err := observe(d.observer(), "bind", func() (err error) {
-		bound, err = d.bind(identity, password)
+		bound, err = d.bind(ctx, identity, password)
 		return err
 	})
 	if err != nil {
@@ -55,29 +57,56 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 	return bound, nil
 }
 
-func (d *dialer) bind(identity, password string) (Client, error) {
-	c, err := d.newConn()
+func (d *dialer) bind(ctx context.Context, identity, password string) (Client, error) {
+	c, err := d.newConn(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Only a context that carries a deadline gets a watchdog, so the interactive
+	// login path (no deadline) is untouched. At the deadline, or when the caller
+	// cancels, the connection is closed from the side, which also ends a search
+	// that is blocked on the wire (the machine path's request deadline, D4).
+	stopWatch := watchDeadline(ctx, c)
 	oc := &obsConn{Conn: c, obs: d.observer()}
 
 	dn := identity
 	if !LooksLikeDN(identity) {
 		resolved, err := resolveUID(oc, d.cfg, identity)
 		if err != nil {
+			stopWatch()
 			c.Close()
-			return nil, err
+			return nil, ctxOr(ctx, err)
 		}
 		dn = resolved
 	}
 
 	if err := c.Bind(dn, password); err != nil {
+		stopWatch()
 		c.Close()
-		return nil, mapErr("bind", err)
+		return nil, ctxOr(ctx, mapErr("bind", err))
 	}
 
-	return &client{conn: oc, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}, scanSem: make(chan struct{}, 1)}, nil
+	return &client{conn: oc, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}, scanSem: make(chan struct{}, 1), stopWatch: stopWatch}, nil
+}
+
+// watchDeadline closes c when ctx ends, if ctx has a deadline. The returned
+// func disarms the watchdog and is never nil.
+func watchDeadline(ctx context.Context, c *ldap.Conn) func() {
+	if _, ok := ctx.Deadline(); !ok {
+		return func() {}
+	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	return func() { stop() }
+}
+
+// ctxOr reports the context's own error when the context has ended: a
+// connection closed by the watchdog surfaces as an opaque network error, and
+// the caller must tell "my deadline passed" from "the directory said no".
+func ctxOr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	return err
 }
 
 // Ping is the unauthenticated counterpart to Bind: it proves the LDAP
@@ -91,7 +120,7 @@ func (d *dialer) Ping(ctx context.Context) error {
 		return err
 	}
 	return observe(d.observer(), "ping", func() error {
-		c, err := d.newConn()
+		c, err := d.newConn(ctx)
 		if err != nil {
 			return err
 		}
@@ -136,8 +165,14 @@ func resolveUID(c searcher, cfg config.Config, uid string) (string, error) {
 	}
 }
 
-func (d *dialer) newConn() (*ldap.Conn, error) {
+func (d *dialer) newConn(ctx context.Context) (*ldap.Conn, error) {
 	opts := []ldap.DialOpt{}
+	// A context deadline bounds the TCP dial and, below, every later operation
+	// on the connection (StartTLS included). Without one nothing changes.
+	deadline, hasDeadline := ctx.Deadline()
+	if hasDeadline {
+		opts = append(opts, ldap.DialWithDialer(&net.Dialer{Deadline: deadline}))
+	}
 
 	u, err := url.Parse(d.cfg.LDAPURL)
 	if err != nil {
@@ -154,7 +189,12 @@ func (d *dialer) newConn() (*ldap.Conn, error) {
 
 	c, err := ldap.DialURL(d.cfg.LDAPURL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("connect to LDAP server: %w", err)
+		return nil, fmt.Errorf("connect to LDAP server: %w", ctxOr(ctx, err))
+	}
+	if hasDeadline {
+		if remaining := time.Until(deadline); remaining > 0 {
+			c.SetTimeout(remaining)
+		}
 	}
 
 	if u.Scheme == "ldap" && d.cfg.StartTLS {

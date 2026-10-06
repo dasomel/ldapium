@@ -21,7 +21,7 @@ type fakeMonitorClient struct {
 	err   error
 }
 
-func (f *fakeMonitorClient) MonitorStats(_ context.Context) (*domain.MonitorStats, error) {
+func (f *fakeMonitorClient) MonitorStats(_ context.Context, _ bool) (*domain.MonitorStats, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

@@ -90,7 +90,7 @@ func (f *fakeLoginClient) GetEntry(context.Context, string) (*domain.Entry, erro
 func (f *fakeLoginClient) MoveEntry(context.Context, string, string, string) error {
 	return nil
 }
-func (f *fakeLoginClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
+func (f *fakeLoginClient) MonitorStats(context.Context, bool) (*domain.MonitorStats, error) {
 	return nil, nil
 }
 func (f *fakeLoginClient) AuditActions(context.Context, int, string) ([]domain.AuditEvent, string, bool, error) {

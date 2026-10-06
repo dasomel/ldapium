@@ -89,7 +89,7 @@ func (s *Server) parseListPage(c echo.Context, resource, defaultSort string) (li
 		query:    domain.PageQuery{Limit: limit, Q: q},
 		resource: resource,
 		key:      key,
-		binding:  cursorBinding(key, currentSession(c)),
+		binding:  s.requestCursorBinding(c, key),
 	}
 	if token := c.QueryParam("cursor"); token != "" {
 		pos, err := decodeCursor(key, token, resource, q, req.binding)

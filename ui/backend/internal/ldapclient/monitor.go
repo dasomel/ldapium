@@ -41,7 +41,7 @@ var monitorAttrs = []string{
 // the shared LDAP service account) a read ACL on cn=Monitor — see
 // charts/ldapium/README.md's "Web console health view" section for the
 // exact grant.
-func (c *client) MonitorStats(ctx context.Context) (*domain.MonitorStats, error) {
+func (c *client) MonitorStats(ctx context.Context, includeAccessLog bool) (*domain.MonitorStats, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -95,9 +95,12 @@ func (c *client) MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
 		})
 	}
 
-	// Read recent logs from cn=accesslog (best-effort, up to 50 entries)
-	if recent, recentErr := c.recentLogsLocked(ctx, 50); recentErr == nil {
-		stats.RecentLogs = recent
+	// Read recent logs from cn=accesslog (best-effort, up to 50 entries). When
+	// the caller is not entitled to them the search is never issued.
+	if includeAccessLog {
+		if recent, recentErr := c.recentLogsLocked(ctx, 50); recentErr == nil {
+			stats.RecentLogs = recent
+		}
 	}
 
 	return &stats, nil

@@ -29,6 +29,10 @@ const (
 	hSecret   = "0123456789012345678901234567890123456789"
 	hAudience = "ldapium-api"
 	hKid      = "kid-1"
+	// The machine execution identity of the harness; the password is a
+	// recognizable sentinel the log-capture tests search for.
+	hBindDN       = "uid=machine,ou=system,dc=example,dc=org"
+	hBindPassword = "BIND-PASSWORD-SENTINEL-4711"
 )
 
 // hNow is the fixed server clock of the machine tests.
@@ -66,6 +70,9 @@ type harnessOpt struct {
 	defaultEx bool // use the production default exec (fail closed) instead of the stub
 	// startErr: expect newServer to fail and return it in harness.startErr.
 	startErr bool
+	// dialer replaces the counting dialer that refuses every bind; with it the
+	// production execution step runs real handlers against a fake directory.
+	dialer ldapclient.Dialer
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -108,7 +115,13 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 				{ID: "machine-a", Scopes: allScopes()},
 				{ID: "machine-b", Scopes: []string{"directory.groups.read"}},
 				{ID: "machine-c", Scopes: []string{"directory.users.read", "directory.entry.read"}},
+				{ID: "machine-d", Scopes: []string{"directory.users.read", "directory.groups.read"}},
+				// monitor without audit.read, and the same with it, for the D14 b tests
+				{ID: "machine-m", Scopes: []string{"server.monitor.read"}},
+				{ID: "machine-ma", Scopes: []string{"server.monitor.read", "audit.read"}},
 			},
+			BindDN: hBindDN, BindPassword: hBindPassword, RootDNs: []string{"cn=admin,dc=example,dc=org"},
+			RequestTimeout: 5 * time.Second, MaxConcurrency: 8,
 			MaxTTL: 10 * time.Minute, ClockSkew: 30 * time.Second,
 			JWKSCacheTTL: 10 * time.Minute, JWKSMaxStale: time.Hour, JWKSMinRefresh: 30 * time.Second,
 			SAUsernamePrefix: "service-account-",
@@ -130,7 +143,11 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 		}
 	}
 	spa := fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}
-	s, err := newServer(cfg, h.dialer, h.store, spa, withMachineDeps(deps))
+	var dialer ldapclient.Dialer = h.dialer
+	if opt.dialer != nil {
+		dialer = opt.dialer
+	}
+	s, err := newServer(cfg, dialer, h.store, spa, withMachineDeps(deps))
 	if opt.startErr {
 		h.startErr = err
 		return h
