@@ -1332,25 +1332,54 @@ rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 #      verified or rolled back aborts startup instead of serving an unproven
 #      policy; the previous config file is restored atomically first.
 # ---------------------------------------------------------------------------
-# prints "<index> <spec>" per olcLimits value of the main database, unfolded
+# Prints "<index> <spec>" for EVERY olcLimits value of the main database, in
+# the order slapd holds them (first match wins, so order is the policy).
+# slapcat writes a value as `olcLimits:: <base64>` when it is not plain ASCII
+# text (a Korean DN, a tab, a leading space), so both forms are read, long lines
+# are unfolded, and a value that cannot be decoded still counts as a rule (index
+# 999999, spec "<undecodable>") instead of silently dropping out of the order.
 paged_total_rules() {
-  sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$1" | sed -n 's/^olcLimits: {\([0-9][0-9]*\)}\(.*\)$/\1 \2/p'
+  sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$1" \
+    | sed -e ':a' -e '$!N' -e 's/\n //' -e 'ta' -e 'P' -e 'D' \
+    | while IFS= read -r pt_line; do
+      case "$pt_line" in
+        "olcLimits: "*) pt_val=${pt_line#olcLimits: } ;;
+        "olcLimits:: "*)
+          if ! pt_val=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null); then
+            pt_val='{999999}<undecodable>'
+          fi
+          ;;
+        *) continue ;;
+      esac
+      case "$pt_val" in
+        "{"[0-9]*"}"*)
+          pt_i=${pt_val#"{"}
+          pt_i=${pt_i%%"}"*}
+          printf '%s %s\n' "$pt_i" "${pt_val#*"}"}"
+          ;;
+        *) printf '999999 %s\n' "$pt_val" ;;
+      esac
+    done
 }
 paged_total_fail() { die "paged-total reconcile failed; refusing to start"; }
 # The setting's own shape: `users size.prtotal=<value>` and nothing else, with
-# every value form slapd accepts for prtotal (an integer, -1, unlimited,
-# disabled, hard).
+# every spelling slapd accepts for the value (verified against the image's slapd
+# 2.6.15, case-insensitive like slapd): unlimited, none, disabled, hard, an
+# integer (optionally with a leading +), and -1.
 paged_total_shaped() {
   case "$1" in
-    "users size.prtotal="*)
-      case "${1#users size.prtotal=}" in
-        unlimited|disabled|hard|-1) return 0 ;;
-        ''|*[!0-9]*) return 1 ;;
-      esac
-      return 0
-      ;;
+    "users size.prtotal="*) ;;
+    *) return 1 ;;
   esac
-  return 1
+  pts_v=$(printf '%s' "${1#users size.prtotal=}" | tr '[:upper:]' '[:lower:]')
+  case "$pts_v" in
+    unlimited|none|disabled|hard|-1) return 0 ;;
+  esac
+  pts_v=${pts_v#+}
+  case "$pts_v" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  return 0
 }
 if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
   pt_db_file="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"

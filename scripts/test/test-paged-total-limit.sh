@@ -113,6 +113,11 @@ olc_limits() {
 }
 sorted_limits() { olc_limits "$1" | sort | tr '\n' '|'; }
 count_limits() { olc_limits "$1" | wc -l | tr -d ' '; }
+# every olcLimits value, plain or base64 (`olcLimits::`, e.g. a rule naming a Korean DN)
+count_all() {
+  docker exec "$1" ldapsearch -x -LLL -o ldif-wrap=no -H "$ldapi" -D "cn=admin,cn=config" -w "$admin_pw" \
+    -b "$db" -s base olcLimits 2>/dev/null | grep -c '^olcLimits::\? ' || true
+}
 
 # paged <container> <bind dn> <password>: "<entries> <rc>" of a paged search.
 paged() {
@@ -195,6 +200,8 @@ unlock_cfg() {
 admin_dn="cn=admin,${base}"
 user_dn="uid=pagedtest,ou=people,${base}"
 other_dn="uid=pagedother,ou=people,${base}"
+kr_cn="한국"
+kr_dn="cn=${kr_cn},ou=people,${base}"
 
 # --- Values: anything the image cannot honour never starts slapd. -----------
 for bad_val in abc 0 -5 1.5 01 2147483648 99999999999999999999 OFF Off; do
@@ -239,7 +246,13 @@ sn: Test
 EOF
   docker exec "$c" ldappasswd -x -H ldap://localhost -D "$admin_dn" -w "$admin_pw" -s "$user_pw" "uid=${uid},ou=people,${base}" >/dev/null
 done
-total="$((entries + 2))"
+# A non-ASCII DN: slapcat prints olcLimits rules that name it as `olcLimits:: <base64>`.
+{
+  printf 'dn:: %s\nobjectClass: inetOrgPerson\ncn:: %s\nsn: Han\n' \
+    "$(printf '%s' "$kr_dn" | base64 | tr -d '\n')" "$(printf '%s' "$kr_cn" | base64 | tr -d '\n')"
+} | docker exec -i "$c" ldapadd -x -H ldap://localhost -D "$admin_dn" -w "$admin_pw" >/dev/null
+docker exec "$c" ldappasswd -x -H ldap://localhost -D "$admin_dn" -w "$admin_pw" -s "$user_pw" "$kr_dn" >/dev/null
+total="$((entries + 3))"
 
 # --- unset: hands off (olcSizeLimit-only config, then operator rules). -------
 expect_eq "unset: an olcSizeLimit-only config has no olcLimits" "$(olc_limits "$c")" ""
@@ -355,6 +368,36 @@ start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
 expect_eq "prtotal=disabled: off removes it" "$(olc_limits "$c")" ""
 clear_limits
 
+# --- non-ASCII operator rules (olcLimits:: base64) must count for the order. ---
+kr_rule="dn.exact=\"${kr_dn}\" size.soft=100 size.hard=100 size.prtotal=100"
+add_limit '{0}users size.prtotal=unlimited'
+add_limit "{1}${kr_rule}"
+expect_eq "base64: setup, ours first and the Korean-DN rule behind it, so the DN is NOT capped" "$(paged "$c" "$kr_dn" "$user_pw")" "${total} 0"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "base64: the owned rule was moved to the end (index 1, the base64 rule is {0})" "$(olc_limits "$c")" "{1}users size.prtotal=unlimited"
+expect_eq "base64: both rules are there" "$(count_all "$c")" "2"
+expect_eq "base64: the Korean DN is capped by the operator's rule again (behavioural)" "$(paged "$c" "$kr_dn" "$user_pw")" "100 4"
+expect_eq "base64: every other identity keeps the lifted total" "$(paged "$c" "$other_dn" "$user_pw")" "${total} 0"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "base64: converged, left alone on the next start" "$(olc_limits "$c")" "{1}users size.prtotal=unlimited"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+expect_eq "base64: off removes only ours" "$(count_all "$c")" "1"
+expect_eq "base64: ... the Korean DN stays capped" "$(paged "$c" "$kr_dn" "$user_pw")" "100 4"
+clear_limits
+
+# --- every spelling slapd accepts for the prtotal value (slapd 2.6.15, any case). -
+for sp in unlimited UNLIMITED none NONE None disabled Disabled hard HARD -1 +5 007 0; do
+  add_limit "{0}users size.prtotal=${sp}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+  expect_eq "spelling '${sp}': off removes it" "$(olc_limits "$c")" ""
+done
+for sp in none NONE +5 hard; do
+  add_limit "{0}users size.prtotal=${sp}"
+  start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
+  expect_eq "spelling '${sp}': a set request converges it instead of aborting" "$(olc_limits "$c")" "{0}users size.prtotal=900"
+  clear_limits
+done
+
 # --- failed apply aborts, in both directions (unwritable config). ------------
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
 lock_cfg
@@ -390,6 +433,9 @@ for a in "$@"; do
   if [ "$prev" = "-l" ]; then file="$a"; fi
   prev="$a"
 done
+if [ -n "$file" ] && [ "$FAKE_SLAPMODIFY" = noop ] && grep -qE '^(add|delete): olcLimits$' "$file" 2>/dev/null; then
+  exit 0 # claims success without applying anything
+fi
 "$real" "$@"
 rc=$?
 if [ -n "$file" ] && [ -n "$FAKE_SLAPMODIFY" ] && grep -qE '^(add|delete): olcLimits$' "$file" 2>/dev/null; then
@@ -417,6 +463,9 @@ expect_eq "partial application (set): the stored policy is the previous one" "$(
 expect_eq "partial application (off): rolled back, then startup aborts" \
   "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off -e FAKE_SLAPMODIFY=partial)" "abort ok (exit 1)"
 expect_eq "partial application (off): the stored policy is the previous one" "$(offline_limits)" "users size.prtotal=900|"
+expect_eq "off aborts loudly when the removal leaves a rule behind (shim: the delete is a no-op)" \
+  "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off -e FAKE_SLAPMODIFY=noop)" "abort ok (exit 1)"
+expect_eq "off aborts: ... and the rule is still stored" "$(offline_limits)" "users size.prtotal=900|"
 expect_eq "partial application (raising) aborts too: nothing is served on an unproven policy" \
   "$(run_abort "$shim_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=unlimited -e FAKE_SLAPMODIFY=partial)" "abort ok (exit 1)"
 
