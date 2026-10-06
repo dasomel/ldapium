@@ -389,4 +389,9 @@ All checks (a), (b), (c), (d) passed successfully!
 Cleaning up test containers and network...
 ```
 
+Run 2026-10-06 (Codex round 2 fixes), `LDAPIUM_IMAGE=ldapium:lane-251b LDAPIUM_UI_IMAGE=ldapium-ui:lane-251b LDAPIUM_TEST_PREFIX=ldapium-cw-251c-`, three consecutive runs: exit 0, 0, 0 (no flakes).
+- Mid-write drop now goes through a one-shot `DropProxy` that RSTs the client only after the full request is forwarded to the backend, and asserts no response bytes reached the client.
+- The compensation intercept scans a rolling stream (`OIDScanner`); the startup self-test feeds the OID split at all 33 boundaries and byte-by-byte. Mutant (rolling tail disabled) failed with `OIDScanner missed OID split at byte 10`; reverted.
+- `assertion_live_test.go` post-delete check accepts only `LDAPResultNoSuchObject`; `go vet -tags live ./...` and `go test ./... -count=1` pass.
+
 Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1), delete/recreate stress, assertion-unsupported-server case.

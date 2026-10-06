@@ -140,6 +140,111 @@ class ApiClient:
     check(status == 200, f'LDAP login as {identity} (status={status})')
 
 
+PWD_MODIFY_OID = b'1.3.6.1.4.1.4203.1.11.1'
+
+
+class OIDScanner:
+  """Detects an OID in a TCP byte stream even when split across recv() chunks.
+
+  Keeps a rolling tail of len(OID)-1 bytes so a match straddling any chunk
+  boundary is still found (D1: recv() chunking is not a protocol boundary).
+  """
+  def __init__(self, oid=PWD_MODIFY_OID):
+    self.oid = oid
+    self.tail = b''
+
+  def feed(self, data):
+    window = self.tail + data
+    found = self.oid in window
+    self.tail = window[-(len(self.oid) - 1):]
+    return found
+
+
+def selftest_oid_scanner():
+  pad = b'\x30\x1d\x02\x01\x02\x77\x18\x80\x17'
+  stream = pad + PWD_MODIFY_OID + b'\x81\x00'
+  for cut in range(1, len(stream)):
+    sc = OIDScanner()
+    hit = sc.feed(stream[:cut]) or sc.feed(stream[cut:])
+    if not hit:
+      raise AssertionError(f'OIDScanner missed OID split at byte {cut}')
+  sc = OIDScanner()
+  for i in range(len(stream)):
+    if sc.feed(stream[i:i + 1]):
+      break
+  else:
+    raise AssertionError('OIDScanner missed OID fed byte-by-byte')
+  sc = OIDScanner()
+  if sc.feed(pad) or sc.feed(b'\x81\x00'):
+    raise AssertionError('OIDScanner false positive')
+  print(f'PASS: OIDScanner detects the OID split at all {len(stream) - 1} boundaries and byte-by-byte')
+
+
+class DropProxy:
+  """One-shot HTTP proxy that RSTs the client once the full request is at the backend.
+
+  Forwards exactly one request (headers + Content-Length body) to the backend,
+  sets `forwarded`, never relays any response bytes, then resets the client
+  socket and closes the backend side. This makes 'closed while in flight'
+  deterministic: the request is fully delivered before the drop.
+  """
+  def __init__(self, target_host, target_port):
+    self.target = (target_host, target_port)
+    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.sock.bind(('127.0.0.1', 0))
+    self.port = self.sock.getsockname()[1]
+    self.sock.listen(1)
+    self.forwarded = threading.Event()
+    self.response_bytes_to_client = 0
+    threading.Thread(target=self._run, daemon=True).start()
+
+  def _run(self):
+    try:
+      client, _ = self.sock.accept()
+      backend = socket.create_connection(self.target, timeout=10)
+      buf = b''
+      while b'\r\n\r\n' not in buf:
+        chunk = client.recv(4096)
+        if not chunk:
+          return
+        buf += chunk
+      head, _, body = buf.partition(b'\r\n\r\n')
+      length = 0
+      for line in head.split(b'\r\n')[1:]:
+        k, _, v = line.partition(b':')
+        if k.strip().lower() == b'content-length':
+          length = int(v.strip())
+      while len(body) < length:
+        chunk = client.recv(4096)
+        if not chunk:
+          return
+        body += chunk
+      backend.sendall(head + b'\r\n\r\n' + body)
+      self.forwarded.set()
+      client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+      client.close()
+      backend.close()
+    except Exception:
+      pass
+    finally:
+      self.sock.close()
+
+
+def drop_in_flight(ui_port, raw_req):
+  """Send raw_req through a DropProxy; return after the proxy has RST the client."""
+  dp = DropProxy('127.0.0.1', ui_port)
+  s = socket.create_connection(('127.0.0.1', dp.port), timeout=10)
+  s.sendall(raw_req)
+  check(dp.forwarded.wait(timeout=10), 'full request reached the backend before the drop')
+  s.settimeout(5)
+  try:
+    got = s.recv(4096)
+  except ConnectionResetError:
+    got = b''
+  check(got == b'', f'client saw no response bytes before/at the drop (got {len(got)} bytes)')
+  s.close()
+
+
 # --- TCP Proxy for intercepting LDAP traffic (used in parts a & c) ---
 class LDAPProxy:
   def __init__(self, target_host, target_port):
@@ -173,6 +278,7 @@ class LDAPProxy:
       return
 
     def fwd(src, dst, is_upstream):
+      scanner = OIDScanner()
       try:
         while self.running:
           data = src.recv(4096)
@@ -186,7 +292,7 @@ class LDAPProxy:
               src.close()
               dst.close()
               return
-            if self.intercept_pwd_modify and b'1.3.6.1.4.1.4203.1.11.1' in data:
+            if scanner.feed(data) and self.intercept_pwd_modify:
               self.pwd_modify_event.set()
               # Hold the request until the external entryCSN bump has landed in slapd
               self.bump_done.wait(timeout=30)
@@ -373,6 +479,7 @@ def start_ui_container(container_name, extra_env=None, fixed_port=None):
 
 def main():
   global created_network
+  selftest_oid_scanner()
   try:
     print(f'Starting test run {name_prefix} using LDAP image {ldap_image} and UI image {ui_image}...')
     subprocess.run(['docker', 'network', 'create', network], check=True)
@@ -470,9 +577,6 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     user_body = {'uid': 'cw-idem-1', 'cn': 'CW Idem 1', 'sn': 'Idem'}
     user_body_json = json.dumps(user_body)
 
-    # Send write over raw TCP socket and abruptly drop (RST) before response
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(('127.0.0.1', ui_port))
     raw_req = (
         f'POST /api/users HTTP/1.1\r\n'
         f'Host: 127.0.0.1:{ui_port}\r\n'
@@ -483,10 +587,8 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
         f'Content-Length: {len(user_body_json)}\r\n\r\n'
         f'{user_body_json}'
     ).encode()
-    s.sendall(raw_req)
-    # Force immediate TCP RST: linger timeout 0
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-    s.close()
+    # Request is forwarded in full to the backend, then the client is RST (no response relayed)
+    drop_in_flight(ui_port, raw_req)
 
     # Wait until the decoupled write (context.WithoutCancel) is observable in the directory
     idem_dn = f'uid=cw-idem-1,ou=people,{base_dn}'
@@ -508,8 +610,6 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     idem_key_lock = 'idem-key-' + secrets.token_hex(8)
     lock_body = {'dn': f'uid=cw-idem-1,ou=people,{base_dn}'}
     lock_body_json = json.dumps(lock_body)
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(('127.0.0.1', ui_port))
     raw_lock_req = (
         f'POST /api/users/lock HTTP/1.1\r\n'
         f'Host: 127.0.0.1:{ui_port}\r\n'
@@ -520,9 +620,7 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
         f'Content-Length: {len(lock_body_json)}\r\n\r\n'
         f'{lock_body_json}'
     ).encode()
-    s.sendall(raw_lock_req)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-    s.close()
+    drop_in_flight(ui_port, raw_lock_req)
     wait_until(lambda: 'pwdAccountLockedTime:' in entry_snapshot(idem_dn), 'dropped lock to reach the directory')
     locked_before = entry_snapshot(idem_dn)
 

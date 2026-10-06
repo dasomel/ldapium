@@ -108,4 +108,7 @@ func TestLiveAssertionDelete(t *testing.T) {
 	if err == nil && len(sr3.Entries) > 0 {
 		t.Fatal("entry should be deleted")
 	}
+	if err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+		t.Fatalf("post-delete search failed with an unexpected error (not NoSuchObject): %v", err)
+	}
 }
