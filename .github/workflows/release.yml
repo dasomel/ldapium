@@ -170,6 +170,7 @@ jobs:
             "rolling upgrade + rollback (replicated)"
             "backup → verify → corrupt-check → restore"
             "3-node backup → bad delete → restore → resync"
+            "machine bearer auth (real Keycloak)"
           )
           missing=0
           for context in "${release_critical[@]}"; do

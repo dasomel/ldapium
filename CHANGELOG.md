@@ -307,6 +307,17 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   started up to ~16 of these image-build/cluster-create jobs at once; each
   lane now caps that at three concurrent heavy jobs, queued (not
   cancelled) via `queue: max`. Required status check names are unchanged.
+- Machine bearer authentication, unit 5a (#214; tests, CI and drills only, no product
+  change): the new `machine-keycloak-e2e.yml` workflow (no paths filter; Keycloak
+  `quay.io/keycloak/keycloak:26.7.4`) runs four live scripts against a real Keycloak, a real
+  slapd and the real UI backend: both UI auth modes with the valid, invalid-token and
+  never-allowed-operation matrices (slapd bind counts, JWKS outage, rate limits, secret
+  scan of every container log), the Keycloak client settings an operator must apply
+  (lightweight tokens, scopes, token exchange incl. the legacy feature, human tokens),
+  JWKS key rotation / floods / hostile issuer responses / discovery recovery behind a
+  counting proxy, and the emergency revocation and rollback drill across replicas.
+  `release.yml` now also requires the job `machine bearer auth (real Keycloak)` to have
+  succeeded on the tagged commit.
 
 ## [0.1.1] — 2026-09-24
 
