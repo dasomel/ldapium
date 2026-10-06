@@ -60,14 +60,39 @@ check "enabled without backups: no key file" "" "$(env_value UI_IDEMPOTENCY_KEY_
 
 out=$(render --set ui.idempotency.enabled=true --set ui.replicaCount=2)
 check "enabled, 2 replicas: env stays off" false "$(env_value UI_IDEMPOTENCY_ENABLED <<<"$out")"
-# NOTES.txt is only printed by install/upgrade; a client-side dry run needs no cluster.
-if ! helm install idem charts/ldapium --dry-run=client --set ui.enabled=true --set ui.idempotency.enabled=true --set ui.replicaCount=2 \
-	--set-string "ldap.adminDN=$ADMIN_DN" --set-string auth.adminPassword=x --set-string "ui.session.secret=$SECRET" \
-	2>/dev/null | grep -q 'Idempotency-Key stays OFF'; then
+# NOTES.txt is only printed by install/upgrade (needs a cluster in Helm 3) and
+# `helm template --show-only` cannot select it. Render a copy of the chart in
+# which it is an ordinary template, with the same helm template call under
+# Helm 3 and 4.
+copy=$(mktemp -d "${TMPDIR:-/tmp}/idem-notes.XXXXXX")
+trap 'rm -rf "$copy"' EXIT
+cp -R charts/ldapium "$copy/ldapium"
+# Wrapped as a block scalar of a ConfigMap so the output is valid YAML.
+{
+	printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes-check\ndata:\n  notes: |\n'
+	sed 's/^/    /' "$copy/ldapium/templates/NOTES.txt"
+} >"$copy/ldapium/templates/notes-check.yaml"
+rm "$copy/ldapium/templates/NOTES.txt"
+
+notes() {
+	helm template idem "$copy/ldapium" --show-only templates/notes-check.yaml \
+		--set-string "ldap.adminDN=$ADMIN_DN" --set-string auth.adminPassword=x \
+		--set ui.enabled=true --set-string "ui.session.secret=$SECRET" "$@"
+}
+
+notes_out=$(notes --set ui.idempotency.enabled=true --set ui.replicaCount=2)
+if grep -q 'Idempotency-Key stays OFF' <<<"$notes_out"; then
+	echo "ok: 2 replicas: NOTES.txt warns"
+else
 	echo "FAIL: 2 replicas: NOTES.txt must warn that idempotency is off" >&2
 	fail=1
+fi
+notes_out=$(notes --set ui.idempotency.enabled=true)
+if grep -q 'Idempotency-Key stays OFF' <<<"$notes_out"; then
+	echo "FAIL: 1 replica: NOTES.txt must not warn" >&2
+	fail=1
 else
-	echo "ok: 2 replicas: NOTES.txt warns"
+	echo "ok: 1 replica: no warning"
 fi
 
 out=$(render --set ui.idempotency.enabled=true "${profile_args[@]}" "${backup_args[@]}")
