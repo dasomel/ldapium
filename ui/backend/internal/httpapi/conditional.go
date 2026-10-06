@@ -66,15 +66,16 @@ func errInvalidIfMatch() error {
 // policy rejection, forbidden, else internal) whose text starts "user not
 // created"; the directory's own text passes the same allowlist filter as every
 // other 4xx (publicDomainMessage), so a ppm "Password for dn=..." diagnostic
-// never reaches the response. Every other state is 500 partial_failure with
-// the entry's dn (what a 201 would have carried: the one deliberate DN in an
-// error body, the caller needs it to clean up), a state, and the static text.
-// Directory text only goes to the log, escaped and bounded.
+// never reaches the response. Every other state (partial, unknown,
+// identity_changed) is 500 partial_failure with the entry's dn (what a 201
+// would have carried: the one deliberate DN in an error body, the caller needs
+// it to clean up), the state, and the static text. Directory text only goes to
+// the log, escaped and bounded.
 func respondCreateFailure(c echo.Context, ce *domain.CreateError, uid string) error {
 	reqID := requestIDOf(c)
 	fp := fingerprintIdentity(uid)
-	if ce.State == domain.CreatePartial {
-		log.Printf("user_create_partial request_id=%s uid_fp=%s cause=%s", logQuote(reqID), fp, logDetail(ce.Err))
+	if ce.State != domain.CreateRolledBack {
+		log.Printf("user_create_%s request_id=%s uid_fp=%s cause=%s", ce.State, logQuote(reqID), fp, logDetail(ce.Err))
 		return writeAPIErrorExt(c, http.StatusInternalServerError, codePartialFailure, "", ce, string(ce.State), ce.DN)
 	}
 

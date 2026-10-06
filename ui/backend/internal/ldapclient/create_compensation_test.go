@@ -17,7 +17,10 @@ const (
 )
 
 func goodIdentity() entryIdentity {
-	return entryIdentity{UUID: testUUID, CSN: testCSN, Creator: adminDN}
+	return entryIdentity{
+		UUID: testUUID, CSN: testCSN, Creator: adminDN, Modifier: adminDN,
+		Created: "20261006123456Z", Modified: "20261006123456Z",
+	}
 }
 
 func TestSameDN(t *testing.T) {
@@ -54,6 +57,19 @@ func TestTrustedIdentity(t *testing.T) {
 		{"read fine, created by us", goodIdentity(), nil, true},
 		{"creator differs (another administrator)", bad(func(i *entryIdentity) { i.Creator = "cn=other,dc=example,dc=org" }), nil, false},
 		{"creator unreadable", bad(func(i *entryIdentity) { i.Creator = "" }), nil, false},
+		{"another administrator modified it (modifier differs, creator unchanged)", bad(func(i *entryIdentity) { i.Modifier = "cn=other,dc=example,dc=org" }), nil, false},
+		{"same-second modify by another administrator (timestamps equal, modifier differs)", bad(func(i *entryIdentity) {
+			i.Modifier = "cn=other,dc=example,dc=org"
+			i.Modified = i.Created
+		}), nil, false},
+		{"modified in a later second by the same DN", bad(func(i *entryIdentity) { i.Modified = "20261006123457Z" }), nil, false},
+		{"modifier unreadable", bad(func(i *entryIdentity) { i.Modifier = "" }), nil, false},
+		{"timestamps unreadable", bad(func(i *entryIdentity) { i.Created, i.Modified = "", "" }), nil, false},
+		{"timestamps malformed but equal", bad(func(i *entryIdentity) { i.Created, i.Modified = "x", "x" }), nil, false},
+		{"replaced entry (created by another administrator, same DN)", bad(func(i *entryIdentity) {
+			i.UUID = otherUUID
+			i.Creator, i.Modifier = "cn=other,dc=example,dc=org", "cn=other,dc=example,dc=org"
+		}), nil, false},
 		{"uuid missing", bad(func(i *entryIdentity) { i.UUID = "" }), nil, false},
 		{"csn missing", bad(func(i *entryIdentity) { i.CSN = "" }), nil, false},
 		{"uuid malformed", bad(func(i *entryIdentity) { i.UUID = "x)(uid=*" }), nil, false},
@@ -88,11 +104,18 @@ func TestCreateOutcome(t *testing.T) {
 			domain.CreatePartial, true},
 		{"trusted but delete result lost (network)", goodIdentity(), nil,
 			func([]ldap.Control) error { return ldap.NewError(ldap.ErrorNetwork, errors.New("eof")) },
-			domain.CreatePartial, true},
-		{"identity read failed: never deletes", goodIdentity(), errors.New("read failed"), deleteOK, domain.CreatePartial, false},
-		{"foreign creator: never deletes", entryIdentity{UUID: testUUID, CSN: testCSN, Creator: "cn=other,dc=example,dc=org"}, nil, deleteOK, domain.CreatePartial, false},
-		{"no creator: never deletes", entryIdentity{UUID: testUUID, CSN: testCSN}, nil, deleteOK, domain.CreatePartial, false},
-		{"malformed uuid: never deletes", entryIdentity{UUID: "nope", CSN: testCSN, Creator: adminDN}, nil, deleteOK, domain.CreatePartial, false},
+			domain.CreateUnknown, true},
+		{"trusted but delete failed with a non-LDAP error", goodIdentity(), nil,
+			func([]ldap.Control) error { return errors.New("write: broken pipe") }, domain.CreateUnknown, true},
+		{"identity read failed: never deletes", goodIdentity(), errors.New("read failed"), deleteOK, domain.CreateIdentityChanged, false},
+		{"foreign creator: never deletes", entryIdentity{UUID: testUUID, CSN: testCSN, Creator: "cn=other,dc=example,dc=org"}, nil, deleteOK, domain.CreateIdentityChanged, false},
+		{"no creator: never deletes", entryIdentity{UUID: testUUID, CSN: testCSN}, nil, deleteOK, domain.CreateIdentityChanged, false},
+		{"malformed uuid: never deletes", entryIdentity{UUID: "nope", CSN: testCSN, Creator: adminDN}, nil, deleteOK, domain.CreateIdentityChanged, false},
+		{"other administrator edited it: never deletes", func() entryIdentity {
+			i := goodIdentity()
+			i.Modifier = "cn=other,dc=example,dc=org"
+			return i
+		}(), nil, deleteOK, domain.CreateIdentityChanged, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,6 +146,9 @@ func TestCreateOutcome(t *testing.T) {
 func TestCompensationAssertionBindsUUIDAndCSN(t *testing.T) {
 	var ctrl ldap.Control
 	createOutcome(goodIdentity(), nil, adminDN, func(c []ldap.Control) error { ctrl = c[0]; return nil })
+	if ctrl == nil {
+		t.Fatal("no delete issued for a trusted identity")
+	}
 	got := ctrl.Encode().Bytes()
 	for _, want := range []string{"entryUUID", testUUID, "entryCSN", testCSN} {
 		if !bytes.Contains(got, []byte(want)) {
@@ -138,7 +164,8 @@ func TestCompensationAssertionBindsUUIDAndCSN(t *testing.T) {
 
 func TestEntryToIdentity(t *testing.T) {
 	e := ldap.NewEntry("uid=a,dc=x", map[string][]string{
-		"entryUUID": {testUUID}, "entryCSN": {testCSN}, "creatorsName": {adminDN},
+		"entryUUID": {testUUID}, "entryCSN": {testCSN}, "creatorsName": {adminDN}, "modifiersName": {adminDN},
+		"createTimestamp": {"20261006123456Z"}, "modifyTimestamp": {"20261006123456Z"},
 	})
 	if got := entryToIdentity(e); got != goodIdentity() {
 		t.Errorf("identity = %+v", got)

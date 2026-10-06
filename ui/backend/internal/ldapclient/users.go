@@ -122,16 +122,26 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 		add.Attribute("ou", []string{in.OrganizationalUnit})
 	}
 	err = c.conn.Add(add)
+	var id entryIdentity
+	var readErr error
+	if err == nil && in.Password != "" {
+		// Pin down which entry this request created, under the same lock as
+		// the Add so this session's own operations cannot interleave (see
+		// create_compensation.go).
+		id, readErr = c.readIdentity(dn)
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return "", mapErr("create user", err)
 	}
 
 	if in.Password != "" {
-		// Pin down which entry this request created before the second
-		// step can fail (see create_compensation.go). A failed read is not
-		// fatal here: it only disables the compensating delete.
-		id, readErr := c.readIdentity(dn)
+		// Never set a password on an entry this request cannot prove it
+		// created and that nobody else touched: 201 must not be returned for
+		// someone else's entry.
+		if err := identityGuard(dn, id, readErr, c.dn); err != nil {
+			return dn, err
+		}
 		// No old password: this is the initial password on a brand new
 		// entry, set by whoever is authorized to create users, not a
 		// self-service change.
