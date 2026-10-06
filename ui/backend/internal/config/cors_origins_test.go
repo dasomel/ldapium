@@ -30,13 +30,22 @@ func TestLoad_CORSAllowedOrigins(t *testing.T) {
 	}
 
 	good := map[string][]string{
-		"https://app.example":                             {"https://app.example"},
-		"http://localhost:5173":                           {"http://localhost:5173"},
-		"https://a.example, https://b.example:8443":       {"https://a.example", "https://b.example:8443"},
-		"HTTPS://App.Example":                             {"https://app.example"},
-		"https://a.example,https://a.example":             {"https://a.example"},
+		"https://app.example":                       {"https://app.example"},
+		"http://localhost:5173":                     {"http://localhost:5173"},
+		"https://a.example, https://b.example:8443": {"https://a.example", "https://b.example:8443"},
+		"HTTPS://App.Example":                       {"https://app.example"},
+		"https://a.example,https://a.example":       {"https://a.example"},
+		// A browser omits the scheme's default port, so the stored entry must too.
+		"https://app.example:443":                         {"https://app.example"},
+		"http://app.example:80":                           {"http://app.example"},
+		"https://[::1]:443":                               {"https://[::1]"},
+		"https://a.example:443,https://a.example":         {"https://a.example"},
+		"http://app.example:443":                          {"http://app.example:443"},
+		"https://app.example:80":                          {"https://app.example:80"},
+		"https://app.example:0443":                        {"https://app.example"},
+		"https://app.example:65535":                       {"https://app.example:65535"},
 		"http://[::1]:3000":                               {"http://[::1]:3000"},
-		"https://console.corp.example,http://10.0.0.5:80": {"https://console.corp.example", "http://10.0.0.5:80"},
+		"https://console.corp.example,http://10.0.0.5:80": {"https://console.corp.example", "http://10.0.0.5"},
 	}
 	for raw, want := range good {
 		cfg, err := load(raw)
@@ -54,6 +63,7 @@ func TestLoad_CORSAllowedOrigins(t *testing.T) {
 		"https://app.example/", "https://app.example/path", "https://app.example?x=1", "https://app.example#f",
 		"https://user@app.example", "https://user:pw@app.example", "app.example", "//app.example", "ftp://app.example",
 		"https://", "https://:443", "https://a.example,,https://b.example", "https://a.example,", ",https://a.example",
+		"https://app.example:", "https://app.example:0", "https://app.example:65536", "https://app.example:99999", "http://[::1]:",
 		"https://a.example:port", "javascript:alert(1)", "https://app example", "https://a.example https://b.example",
 	}
 	for _, raw := range bad {

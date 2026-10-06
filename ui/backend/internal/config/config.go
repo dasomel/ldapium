@@ -149,8 +149,8 @@ type Config struct {
 
 	// CORSAllowedOrigins (CORS_ALLOWED_ORIGINS, comma separated) are the exact
 	// scheme://host[:port] origins whose browsers may read /api GET/HEAD
-	// responses cross-origin, and the extra origins the write Origin gate
-	// accepts (D218-12, D218-16). Empty (the default) means no CORS headers on
+	// responses cross-origin (D218-12). It never opens a write path:
+	// the write Origin gate accepts only the request's own origin (D218-16). Empty (the default) means no CORS headers on
 	// any response. Values are validated and lower-cased at load time.
 	CORSAllowedOrigins []string
 }
@@ -488,7 +488,27 @@ func parseCORSOrigins(raw string) ([]string, error) {
 			(u.Scheme != "http" && u.Scheme != "https") {
 			return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: want exactly http(s)://host[:port]", entry)
 		}
-		origin := strings.ToLower(u.Scheme + "://" + u.Host)
+		host := strings.ToLower(u.Hostname())
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		if port := u.Port(); port != "" || strings.HasSuffix(u.Host, ":") {
+			n, err := strconv.ParseUint(port, 10, 16)
+			if port == "" || err != nil || n == 0 {
+				return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: port must be 1-65535", entry)
+			}
+			// A browser leaves the scheme's default port out of Origin, so an
+			// entry that spells it would never match.
+			if (u.Scheme == "http" && n == 80) || (u.Scheme == "https" && n == 443) {
+				port = ""
+			} else {
+				port = strconv.FormatUint(n, 10)
+			}
+			if port != "" {
+				host += ":" + port
+			}
+		}
+		origin := strings.ToLower(u.Scheme) + "://" + host
 		if !seen[origin] {
 			seen[origin] = true
 			out = append(out, origin)
