@@ -341,6 +341,8 @@ func respondErr(c echo.Context, err error) error {
 	}
 	if isOutcomeUnknown(err) {
 		markOutcomeUnknown(c)
+	} else {
+		markDefinitive(c)
 	}
 	return writeAPIError(c, http.StatusInternalServerError, codeInternal, "", err)
 }

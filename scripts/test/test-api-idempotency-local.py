@@ -269,8 +269,10 @@ try:
   check(bkey not in jobfile and admin_dn not in jobfile and '"key_id"' in jobfile and '"fingerprint"' in jobfile, 'job file holds key hash/fingerprint/key_id only (no key, no DN)')
   logs = subprocess.run(['docker', 'logs', ui], capture_output=True, text=True)
   text = logs.stdout + logs.stderr
-  for secret in (key, lock_key, del_key, ckey, pkey, bkey, user_password, password):
-    check(secret not in text, 'UI log does not contain a key/password (%s...)' % secret[:12])
+  # Labels only: no part of a key or password is ever printed.
+  for label, secret in (('create key', key), ('lock key', lock_key), ('delete key', del_key), ('concurrent key', ckey),
+                        ('password-route key', pkey), ('backup key', bkey), ('user password', user_password), ('admin password', password)):
+    check(secret not in text, 'UI log does not contain the ' + label)
 
   # 4. restart: core keys forgotten (documented), backup key survives ---------------------------------------------------------
   sh(['docker', 'restart', ui])
@@ -297,7 +299,10 @@ try:
 except BaseException:
   for container in containers:
     out = subprocess.run(['docker', 'logs', '--tail', '40', container], capture_output=True, text=True)
-    print('--- logs ' + container + '\n' + (out.stdout + out.stderr)[-3000:])
+    dump = out.stdout + out.stderr
+    for secret in (password, user_password, session_secret):
+      dump = dump.replace(secret, '***')
+    print('--- logs ' + container + '\n' + dump[-3000:])
   raise
 finally:
   for container in reversed(containers):

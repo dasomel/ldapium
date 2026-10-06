@@ -282,3 +282,9 @@ Non-vacuity (code deliberately broken, tests fail, code restored): the store ign
 Not verified: browser UI (no frontend change); a real LDAP connection drop in the middle of a write
 (`outcome_unknown` is proven with an injected go-ldap `ErrorNetwork` and a panic, not on a live socket);
 a multi-replica deployment; helm install against a cluster (only `helm template` and `--dry-run=client`).
+
+Review follow-up (Codex high): the lost-response classifier, strict keyed bodies and the oversized
+`partial_failure` record are covered by `idempotency_review_test.go` with the real go-ldap error shape (a `net.Pipe`
+peer that reads the request and closes). Key persistence, stated exactly: only backup-start keys live in the durable job
+record and survive a backend restart; the keys of every other route are process memory and are forgotten on restart
+(the live script checks both: the core retry after a restart meets 409 already_exists, the backup retry returns the same job).

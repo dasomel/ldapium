@@ -7,8 +7,9 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
+	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -41,6 +42,7 @@ const (
 
 	envelopeCodeKey    = "ldapium_envelope_code"
 	outcomeUnknownKey  = "ldapium_outcome_unknown"
+	definitiveKey      = "ldapium_definitive"
 	outcomeUnknownText = "the result of this request could not be determined; read the resource to check its state before retrying"
 )
 
@@ -119,10 +121,13 @@ func (s *Server) idempotent(next echo.HandlerFunc, password bool) echo.HandlerFu
 			return apiErr(http.StatusBadRequest, codeInvalidRequest, "request body too large or unreadable")
 		}
 		req.Body = io.NopCloser(bytes.NewReader(raw))
-		canon, valid := canonicalJSON(raw)
-		if !valid {
-			// Not JSON: the handler answers 400 and a 400 is never stored.
-			return next(c)
+		// A keyed request whose body cannot be normalised never reaches the
+		// handler (D216-22, revised): the fingerprint and the body the handler
+		// executes must be the same thing, and the handler's decoder reads only
+		// the first JSON value and is case-insensitive about field names.
+		canon, err := strictBody(req.Method, req.Header.Get(echo.HeaderContentType), raw)
+		if err != nil {
+			return apiErr(http.StatusBadRequest, codeInvalidRequest, err.Error())
 		}
 		if password && generatesPassword(raw) {
 			return apiErr(http.StatusUnprocessableEntity, codeValidationFailed,
@@ -155,31 +160,90 @@ func generatesPassword(raw []byte) bool {
 	var body struct {
 		Password string `json:"password"`
 	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return true
+	}
 	return json.Unmarshal(raw, &body) == nil && body.Password == ""
 }
 
-// canonicalJSON re-serializes a JSON body with sorted keys and no insignificant
-// whitespace so that two spellings of one request fingerprint alike. An empty
-// body is valid (DELETE, lock without body fields). ok is false for anything
-// that is not exactly one JSON value.
-func canonicalJSON(raw []byte) (canon []byte, ok bool) {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, true
+var errBodyNotNormalizable = errors.New("with Idempotency-Key the body must be exactly one JSON value, without duplicate or case-colliding field names, sent as application/json")
+
+// strictBody normalises the body of a keyed request for fingerprinting and
+// refuses everything that could make the fingerprint differ from what the
+// handler executes: trailing data after the first value (the handler's decoder
+// ignores it), invalid JSON, a field name given twice or twice under different
+// case (encoding/json folds case, so the later one silently wins), a body on a
+// DELETE (the handlers ignore it) and a wrong Content-Type. Once past this, the
+// decoded struct is a function of the sorted-key canonical form. An empty body
+// is valid (DELETE, lock without fields).
+func strictBody(method, contentType string, raw []byte) ([]byte, error) {
+	empty := len(bytes.TrimSpace(raw)) == 0
+	if method == http.MethodDelete {
+		if !empty {
+			return nil, errBodyNotNormalizable
+		}
+		return nil, nil
+	}
+	if empty {
+		return nil, nil
+	}
+	if mt, _, err := mime.ParseMediaType(contentType); err != nil || (mt != "application/json" && mt != "application/merge-patch+json") {
+		return nil, errBodyNotNormalizable
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	var v any
-	if dec.Decode(&v) != nil {
-		return nil, false
+	if err := walkNoDuplicates(dec); err != nil {
+		return nil, errBodyNotNormalizable
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, false
+		return nil, errBodyNotNormalizable
 	}
-	out, err := json.Marshal(v) // map keys are emitted sorted
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, errBodyNotNormalizable
+	}
+	return json.Marshal(v) // map keys are emitted sorted
+}
+
+// walkNoDuplicates consumes one JSON value from dec and fails on a duplicate
+// object key at any depth, comparing case-insensitively like encoding/json.
+func walkNoDuplicates(dec *json.Decoder) error {
+	tok, err := dec.Token()
 	if err != nil {
-		return nil, false
+		return err
 	}
-	return out, true
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if d == '[' {
+		for dec.More() {
+			if err := walkNoDuplicates(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	}
+	var seen []string
+	for dec.More() {
+		k, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key := k.(string)
+		for _, other := range seen {
+			if strings.EqualFold(key, other) { // the fold encoding/json uses
+				return errBodyNotNormalizable
+			}
+		}
+		seen = append(seen, key)
+		if err := walkNoDuplicates(dec); err != nil {
+			return err
+		}
+	}
+	_, err = dec.Token()
+	return err
 }
 
 // captureWriter buffers a response so the middleware can decide what the client
@@ -237,7 +301,14 @@ func (s *Server) runIdempotent(c echo.Context, next echo.HandlerFunc, h *idempot
 		status = http.StatusOK
 	}
 	code, _ := c.Get(envelopeCodeKey).(string)
+	definitive, _ := c.Get(definitiveKey).(bool)
 	body := buf.body.Bytes()
+	// A server error nobody classified as a definitive directory answer may
+	// hide an applied write: the key stays taken (outcome_unknown), whatever
+	// text the handler chose.
+	if status >= http.StatusInternalServerError && !definitive && code != codePartialFailure {
+		unknown = true
+	}
 
 	switch {
 	case unknown:
@@ -253,10 +324,20 @@ func (s *Server) runIdempotent(c echo.Context, next echo.HandlerFunc, h *idempot
 		} else {
 			h.Complete(idempotency.Result{Status: status, Location: res.Header().Get(echo.HeaderLocation), Body: append([]byte(nil), body...)})
 		}
-	case code == codePartialFailure && len(body) <= idempotency.MaxResultBody:
-		h.Complete(idempotency.Result{Status: status, Body: append([]byte(nil), body...), Envelope: true})
+	case code == codePartialFailure:
+		if len(body) > idempotency.MaxResultBody {
+			// The DN in the body is unbounded. The attempt may have left an entry
+			// behind, so the key must not be released: record that the outcome
+			// is unknown (only the fixed code, never this body).
+			h.Complete(unknownResult(c))
+		} else {
+			h.Complete(idempotency.Result{Status: status, Body: append([]byte(nil), body...), Envelope: true})
+		}
 	default:
-		h.Release() // ordinary 4xx/5xx: not stored, the key may be retried (D216-8)
+		// Rejected before the write (validation, auth, If-Match 412, key
+		// conflict) or answered definitively by the directory (404, 409,
+		// 403, ...): not stored, the key may be retried (D216-8).
+		h.Release()
 	}
 
 	orig.WriteHeader(status)
@@ -309,14 +390,24 @@ func replayIdempotent(c echo.Context, r idempotency.Result) error {
 	return c.Blob(r.Status, echo.MIMEApplicationJSON, r.Body)
 }
 
-// isOutcomeUnknown reports a failure after which a write may or may not have
-// been applied: the connection died (go-ldap's ErrorNetwork, or a net error).
+// isOutcomeUnknown is deliberately conservative (D216-20): once a write may have
+// been sent, the ONLY failure that proves "not applied" is a definitive answer
+// from the server, a typed *ldap.Error carrying a result code the server
+// returned. Everything else is unknown: a lost response arrives from go-ldap as
+// a plain "unable to read LDAP response packet: EOF" error, and io.EOF,
+// connection resets, deadlines, cancellations and go-ldap's own client-side
+// codes (200-206: network, unexpected message/response, ...) say nothing about
+// what the server did.
 func isOutcomeUnknown(err error) bool {
-	if ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
-		return true
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		return le.ResultCode >= ldap.ErrorNetwork && le.ResultCode <= ldap.ErrorEmptyPassword
 	}
-	var ne net.Error
-	return errors.As(err, &ne)
+	return true
 }
 
 func markOutcomeUnknown(c echo.Context) { c.Set(outcomeUnknownKey, true) }
+
+// markDefinitive notes that the directory itself answered with an error
+// result, so a write that failed this way was not applied.
+func markDefinitive(c echo.Context) { c.Set(definitiveKey, true) }

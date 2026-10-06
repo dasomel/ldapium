@@ -196,7 +196,8 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 - 키: 한 개, 16-128자, `[A-Za-z0-9._~:-]`(따옴표 문자열 허용). 형식 위반·중복 헤더는 400.
 - 범위: (요청한 신원, 키). 다른 신원이 같은 키를 써도 독립이며 첫 신원의 결과·존재 여부는 드러나지 않습니다.
 - 같은 키 + 같은 요청(method, 경로, 정렬된 쿼리, 정규화한 JSON 본문; `If-Match`는 제외)은 최초의 상태·본문·`Location`을 `Idempotent-Replayed: true`와 함께 재생하고 디렉터리에 다시 쓰지 않습니다. 재생은 `If-Match` 평가보다 먼저입니다. 같은 키 + 다른 요청은 422 `idempotency_key_reused`, 아직 처리 중이면 409 `idempotency_key_conflict`(`retryable`).
-- 저장되는 결과: 2xx, `partial_failure`, `idempotency_outcome_unknown`(연결 유실·패닉으로 결과를 모를 때; 같은 키는 같은 응답을 재생하고 두 번째 실행은 없음). 그 밖의 4xx·5xx는 저장하지 않으므로 같은 키로 다시 시도할 수 있습니다. 요청 중 클라이언트가 끊겨도 쓰기는 끝까지 수행되고 결과가 기록됩니다. 처리 중 기록은 시간으로 풀리지 않습니다.
+- 본문: 키가 붙은 요청의 본문은 정확히 하나의 JSON 값이어야 합니다. 뒤따르는 데이터, 잘못된 JSON, 중복(대소문자만 다른 것 포함) 필드명, DELETE의 본문, `application/json`이 아닌 Content-Type은 핸들러 실행 전에 400 `invalid_request`이며 키를 점유하지 않습니다.
+- 저장되는 결과: 2xx, `partial_failure`, `idempotency_outcome_unknown`(연결 유실·패닉으로 결과를 모를 때; 같은 키는 같은 응답을 재생하고 두 번째 실행은 없음). 쓰기에 도달하기 전에 거부된 요청(검증·인증·`If-Match` 412)과 디렉터리의 확정 오류 응답(404, 409, 403 등)만 저장하지 않으므로 같은 키로 다시 시도할 수 있습니다. 서버 오류가 디렉터리의 확정 응답인지 알 수 없으면(응답 유실 포함) 불확정으로 기록합니다. 요청 중 클라이언트가 끊겨도 쓰기는 끝까지 수행되고 결과가 기록됩니다. 처리 중 기록은 시간으로 풀리지 않습니다.
 - 비밀: 기록에는 요청 본문·비밀번호·`generatedPassword`·요청자 DN이 없습니다(키·요청 지문은 HMAC 값뿐). `POST /api/users/password`는 명시적 `password`일 때만 키를 받고(재생 본문은 `{}`), 빈 `password`+키는 422 `validation_failed`.
 - 저장소: 프로세스 메모리, 기본 TTL 24h(`UI_IDEMPOTENCY_TTL`, 1m-7d), 전체 10,000건·신원당 1,000건. 상한에 도달하면 **새 키만** 503 `idempotency_capacity`(`Retry-After`)로 거부하고 만료되지 않은 기록은 쫓아내지 않습니다.
 - **한계:** 기록은 재시작·복제본 간에 유지되지 않습니다. 재시작 뒤 같은 키로 재시도하면 새 요청으로 실행되어(생성은 409 `already_exists`, 삭제는 404) 오늘의 동작이 됩니다. 중단된 요청이 디렉터리에 남긴 효과는 복구할 수 없습니다. 그래서 `UI_IDEMPOTENCY_ENABLED`(기본 `false`, 차트 `ui.idempotency.enabled`)가 켜져 있을 때만 키를 처리하고, 꺼져 있으면 키가 붙은 쓰기를 조용히 무시하지 않고 422 `idempotency_unsupported`로 거부합니다. 차트는 복제본이 1개일 때만 켭니다. 활성 여부는 `GET /api/server-settings`의 `idempotencyEnabled`.

@@ -314,10 +314,9 @@ func TestIdempotency_MalformedIfMatchIsStillChecked(t *testing.T) {
 
 func TestIdempotency_OrdinaryFailuresAreNotStored(t *testing.T) {
 	for name, failure := range map[string]error{
-		"404":           domain.ErrNotFound,
-		"412":           domain.ErrRevisionConflict,
-		"500 (generic)": errors.New("boom"),
-		"403":           domain.ErrPermissionDenied,
+		"404": domain.ErrNotFound,
+		"412": domain.ErrRevisionConflict,
+		"403": domain.ErrPermissionDenied,
 	} {
 		c := newIdemClient()
 		c.hook = func(context.Context, string) error { return failure }
