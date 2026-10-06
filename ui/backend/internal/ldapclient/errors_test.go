@@ -213,6 +213,32 @@ func TestMapSetPasswordErr_UnwillingToPerform(t *testing.T) {
 	}
 }
 
+// The text gate (D264-1): result 53 with any other diagnostic is NOT a rejected
+// current password, even with an old password in the request. Fail closed.
+func TestMapSetPasswordErr_Other53DiagnosticsAreNotMapped(t *testing.T) {
+	for _, diag := range []string{
+		"operation restricted", // olcReadOnly=TRUE, correct current password
+		"new password value is empty",
+		"Must supply correct old password to change to new one",
+		"Unwilling to verify old password", // case-sensitive: a reworded text must not map
+		"unwilling to verify the old password",
+		"",
+	} {
+		var inner error
+		if diag != "" {
+			inner = errors.New(diag)
+		}
+		le := &ldap.Error{ResultCode: ldap.LDAPResultUnwillingToPerform, Err: inner}
+		got := mapSetPasswordErr("OldSecret1!", le)
+		if errors.Is(got, domain.ErrCurrentPasswordRejected) {
+			t.Errorf("53 %q mapped to ErrCurrentPasswordRejected: %v", diag, got)
+		}
+		if !errors.Is(got, le) {
+			t.Errorf("53 %q: unmapped error must keep its cause: %v", diag, got)
+		}
+	}
+}
+
 func TestMapSetPasswordErr_OtherResultsUnchanged(t *testing.T) {
 	cases := []struct {
 		code uint16

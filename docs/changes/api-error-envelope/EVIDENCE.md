@@ -48,6 +48,18 @@ Run 2026-10-07 against locally built `ldapium:fix264` and `ldapium-ui:fix264` (C
 - The new assertions can fail: with the expected code mutated to `current_password_rejectedX` the script exited 1 (`AssertionError: wrong current password: 400, code current_password_rejected, screen shows the ambiguous-cause message`); reverted afterwards.
 - `scripts/test/test-api-edge-codes-local.py` (LDAP 53 now expects 400 `current_password_rejected`, UI log still holds `LDAP Result Code 53` under the requestId) with the same images -> exit 0. Its first run, before the script was updated, failed on the old `expected 500, got 400`, which is the intended behaviour change.
 
+### Review round: text gate, read-only control, bind checks (D264-1 text gate, D264-4)
+
+Independent review reproduced on the real image that with `olcReadOnly=TRUE` and the CORRECT current password slapd answers `53 operation restricted`, which the first mapping reported as 400 `current_password_rejected`. The mapping now also requires slapd's diagnostic `unwilling to verify old password`. Re-run 2026-10-07 with `ldapium:fix264b` / `ldapium-ui:fix264b` (`LDAPIUM_CP_PREFIX=ldapium-cp-fix264b-`) -> exit 0. New live assertions in `test-change-password-live.py`:
+- after the three rejected changes the OLD password still binds;
+- `olcDatabase={1}mdb` `olcReadOnly: TRUE` (reverted in a `finally`), CORRECT current password: `500 internal` (requestId `IYcgGXNnGFQnderDlifXHsEHPtUCNVsD`), UI log under that id holds `operation restricted`; the OLD password still binds afterwards;
+- normal mode: wrong current -> 400 `current_password_rejected`; correct current -> 200, then the NEW password binds and the OLD one no longer does;
+- slapd stopped: still `500 internal`.
+- Mutation: the text gate replaced by an always-true condition (image `ldapium-ui:fix264b-mut`) -> script exit 1, `AssertionError: read-only slapd, CORRECT current password: 500 internal, not current_password_rejected ({"error": "the current password was not accepted ...` (the P1 reproduced); gate restored.
+- Lockout observation: after the wrong current passwords `pwdFailureTime` and `pwdAccountLockedTime` were absent on the user (script `OBSERVATION` line); an independent run on slapd 2.6.15 with this image's default policy (`pwdSafeModify TRUE`, `pwdMaxFailure 5`) saw 7 consecutive wrong old passwords leave `pwdFailureTime` at 0. Wrong old passwords in the Password Modify extop are not throttled (accepted risk D264-4, follow-up issue).
+- `test-api-edge-codes-local.py` with the same images -> exit 0. Go/frontend/Playwright results are in the PR body.
+- Not asserted live: the admin no-old path (an independent run saw a no-old self change end in 50 -> the existing 403 mapping). An empty new password with an old one cannot reach slapd: the handler returns 400 first (`TestSetPassword_OldPasswordWithEmptyNewPasswordNeverReachesTheDirectory`).
+
 The text below is the 2026-10-06 run and its "Decision: NO" on a UI branch. Scenario 1 and that decision are **superseded by D264-1..3**: the UI now branches on the dedicated code `current_password_rejected`, not on `internal` and not on message text, so real server faults are not reported as a wrong password.
 
 ## Live Change-Password Check & Decision (T-017, AC-017)

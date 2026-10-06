@@ -66,6 +66,38 @@ func TestSetPassword_CurrentPasswordRejectedEnvelope(t *testing.T) {
 	}
 }
 
+type countingSetPasswordClient struct {
+	*fakeLoginClient
+	calls *int
+}
+
+func (c countingSetPasswordClient) SetPassword(context.Context, string, string, string) (string, error) {
+	*c.calls++
+	return "", nil
+}
+
+// An empty new password can never reach slapd together with an old password:
+// the handler rejects it first (400, the directory is not asked), so slapd's
+// "new password value is empty" 53 cannot occur on this path.
+func TestSetPassword_OldPasswordWithEmptyNewPasswordNeverReachesTheDirectory(t *testing.T) {
+	calls := 0
+	body := `{"dn":"uid=alice,ou=people,dc=example,dc=org","oldPassword":"old","password":""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/users/password", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	rec.Header().Set(echo.HeaderXRequestID, "RID264")
+	c.Set(sessionContextKey, &session.Session{ID: "s", DN: leakDN, Bound: countingSetPasswordClient{&fakeLoginClient{}, &calls}})
+	err := (&Server{}).handleSetPassword(c)
+	he, ok := err.(*echo.HTTPError)
+	if !ok || he.Code != http.StatusBadRequest {
+		t.Fatalf("got %v (rec %d), want a 400 HTTPError", err, rec.Code)
+	}
+	if calls != 0 {
+		t.Errorf("SetPassword reached the directory %d time(s)", calls)
+	}
+}
+
 // D264-3: an error that is not the sentinel (53 elsewhere, an outage) is still
 // the redacted 500.
 func TestSetPassword_UnclassifiedStays500(t *testing.T) {

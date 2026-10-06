@@ -97,8 +97,11 @@ const (
 	codeScanLimitExceeded = "scan_limit_exceeded"
 	codeScanTimeout       = "scan_timeout"
 	// codeCurrentPasswordRejected: self-service password change whose current
-	// password slapd refused to verify (#264, D264-1). 400, not 401: the UI
-	// treats 401 as session loss.
+	// password slapd refused to verify (#264, D264-1). 400 like the other
+	// input/policy rejections (invalid_request family); 403 stays for
+	// permission/Origin and 422 for separate validation. The fixed text comes
+	// from the producer (domain.ErrCurrentPasswordRejected), never from
+	// codeTable.static, which is for 5xx only.
 	codeCurrentPasswordRejected = "current_password_rejected"
 )
 

@@ -22,12 +22,13 @@ func mapErr(op string, err error) error {
 		case ldap.LDAPResultInvalidCredentials:
 			// For a bind, the server deliberately sends no diagnostic text
 			// here (to avoid user enumeration), so le.Err is empty and this
-			// falls back to the generic message. For a self-service
-			// Password Modify with a wrong current password, some servers
-			// do include useful diagnostic text on this same result code —
-			// e.g. slapd rejecting a mismatched old password under
-			// ppolicy's pwdSafeModify — so it's surfaced when present
-			// rather than always discarded.
+			// falls back to the generic message. 49 only occurs on a BIND
+			// (wrong password, locked or expired account), where slapd may
+			// add diagnostic text; the diagnostic is surfaced when present
+			// rather than always discarded. It is NOT what a wrong old
+			// password in a Password Modify returns: slapd answers that
+			// with 53 "unwilling to verify old password" (see
+			// mapSetPasswordErr, D264-1).
 			if le.Err != nil && le.Err.Error() != "" {
 				return fmt.Errorf("%w: %s", domain.ErrInvalidCredentials, le.Err)
 			}
