@@ -91,6 +91,60 @@ if [ -n "${LDAP_ADMIN_PASSWORD_FILE:-}" ]; then
   [ -r "$LDAP_ADMIN_PASSWORD_FILE" ] || die "LDAP_ADMIN_PASSWORD_FILE is set but not readable: ${LDAP_ADMIN_PASSWORD_FILE}"
   LDAP_ADMIN_PASSWORD=$(cat "$LDAP_ADMIN_PASSWORD_FILE")
 fi
+
+# D50 (docs/changes/replication-identity, #229, T-010): syncrepl bind identity
+# mode. Only `admin` (default) is effective and it changes nothing; `prepare` and
+# `dedicated` are checked and then refused until T-011/T-012 land (fail closed,
+# never a silent fallback to the admin identity). Every refusal sits BEFORE the
+# first state change (admin-password generation below creates files on the data
+# volume), so a refused start leaves the volume untouched. Messages are fixed and
+# never contain password material.
+LDAP_REPLICATION_IDENTITY="${LDAP_REPLICATION_IDENTITY:-admin}"
+case "$LDAP_REPLICATION_IDENTITY" in
+  admin) ;;
+  prepare|dedicated)
+    case "${LDAP_REPLICATION_ENABLED:-false}" in
+      true|1) ;;
+      *) die "LDAP_REPLICATION_IDENTITY=${LDAP_REPLICATION_IDENTITY} requires LDAP_REPLICATION_ENABLED=true" ;;
+    esac
+    # REQ-014: the reserved DN must not be a rootDN (rootDN bypasses ACLs).
+    # Only LDAP_ADMIN_DN is compared here; stored olcRootDN needs the config
+    # read that T-011/T-012 add.
+    ldap_dn_norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[[:space:]]*,[[:space:]]*/,/g' -e 's/[[:space:]]*=[[:space:]]*/=/g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+    [ "$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}")" != "$(ldap_dn_norm "$LDAP_ADMIN_DN")" ] ||
+      die "LDAP_ADMIN_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN> (a rootDN bypasses ACLs)"
+    ldap_repl_pw="${LDAP_REPLICATION_PASSWORD:-}"
+    if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
+      [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
+      ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
+    fi
+    if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
+      # REQ-015: prepare still replicates as the admin identity; a separate
+      # replication password would silently stall every consumer with rc 49.
+      [ -z "${LDAP_REPLICATION_PASSWORD:-}${LDAP_REPLICATION_PASSWORD_FILE:-}" ] ||
+        die "LDAP_REPLICATION_IDENTITY=prepare replicates as the admin identity; unset LDAP_REPLICATION_PASSWORD and LDAP_REPLICATION_PASSWORD_FILE"
+    else
+      [ -n "$ldap_repl_pw" ] ||
+        die "LDAP_REPLICATION_IDENTITY=dedicated requires an explicit LDAP_REPLICATION_PASSWORD or LDAP_REPLICATION_PASSWORD_FILE"
+      # REQ-009: a hygiene check only; it does NOT prove the value is random
+      # (that is the operator's responsibility). The value is a machine secret,
+      # so it must be printable ASCII (0x21-0x7E, no spaces) and "distinct
+      # characters" then means distinct bytes. Counting bytes of multibyte text
+      # would overstate the distinct characters.
+      [ -z "$(printf '%s' "$ldap_repl_pw" | LC_ALL=C tr -d '!-~')" ] ||
+        die "replication password failed the hygiene check: only printable ASCII characters (0x21-0x7E, no spaces) are allowed (a hygiene check, not proof of randomness)"
+      [ "${#ldap_repl_pw}" -ge 32 ] ||
+        die "replication password failed the hygiene check: length must be at least 32 (a hygiene check, not proof of randomness)"
+      [ "$(printf '%s' "$ldap_repl_pw" | fold -w1 | sort -u | wc -l)" -ge 10 ] ||
+        die "replication password failed the hygiene check: at least 10 distinct characters required (a hygiene check, not proof of randomness)"
+      [ "$ldap_repl_pw" != "${LDAP_ADMIN_PASSWORD:-}" ] ||
+        die "replication password failed the hygiene check: must differ from the admin password (a hygiene check, not proof of randomness)"
+    fi
+    die "LDAP_REPLICATION_IDENTITY=${LDAP_REPLICATION_IDENTITY} is not implemented in this image yet (replication-identity change package T-011/T-012); use LDAP_REPLICATION_IDENTITY=admin"
+    ;;
+  *) die "LDAP_REPLICATION_IDENTITY must be one of: admin, prepare, dedicated" ;;
+esac
+
 # D40: random credentials are created once on the durable data volume. Existing
 # directories must never acquire an unrelated password after a missing Secret.
 GENERATED_PASSWORD_DIR="${DATA_DIR}/.credentials"
