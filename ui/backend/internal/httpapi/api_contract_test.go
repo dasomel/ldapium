@@ -275,3 +275,24 @@ func TestOpenAPIDocumentsKeysetListing(t *testing.T) {
 		}
 	}
 }
+
+// CORS is opt-in (CORS_ALLOWED_ORIGINS), so neither the OpenAPI description nor
+// llms.txt may claim flatly that the API sends no CORS headers (#248). Both must
+// name the switch and say that writes are never CORS-enabled.
+func TestDocsDoNotClaimUnconditionalNoCORS(t *testing.T) {
+	for _, name := range []string{"openapi/openapi.json", "openapi/llms.txt"} {
+		raw, err := apiDocsFS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.ToLower(string(raw))
+		if strings.Contains(text, "no cors headers") {
+			t.Errorf("%s still says there are no CORS headers without qualification", name)
+		}
+		for _, want := range []string{"cors_allowed_origins", "writes are never cors-enabled"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not mention %q", name, want)
+			}
+		}
+	}
+}
