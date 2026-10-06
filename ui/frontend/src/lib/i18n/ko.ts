@@ -312,6 +312,13 @@ const ko: Record<DictKey, string> = {
   'userForm.initialPasswordLabel': '초기 비밀번호 (선택)',
   'userForm.initialPasswordHint':
     'LDAP Password Modify 오퍼레이션(RFC 3062)으로 설정됩니다. 비워두면 나중에 설정할 수 있습니다.',
+  'writes.revisionConflict':
+    '목록을 불러온 뒤 다른 곳에서 이 항목이 변경되어 요청을 적용하지 않았습니다. 목록을 새로 고쳤으니 현재 값을 확인한 뒤 다시 시도하세요.',
+  'writes.outcomeUnknown':
+    '서버가 이 변경이 적용되었는지 확인하지 못했습니다. 새로 고친 목록을 확인한 뒤 다시 시도하세요.',
+  'writes.inProgress': '같은 요청을 아직 처리하고 있습니다. 잠시 기다린 뒤 다시 시도하세요.',
+  'writes.keyReused': '이 요청 식별자가 이미 다른 변경에 사용되었습니다. 창을 닫았다가 다시 열어 시도하세요.',
+  'writes.capacity': '서버가 일시적으로 새 변경을 받지 않고 있습니다. 잠시 후 다시 시도하세요.',
   'userForm.genericError': '사용자 저장에 실패했습니다',
   'userForm.createButton': '사용자 생성',
 

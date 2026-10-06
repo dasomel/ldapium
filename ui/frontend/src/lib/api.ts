@@ -19,10 +19,30 @@ import type {
 /** Thrown for any non-2xx API response, carrying the server's message. */
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** The stable machine-readable `code` of the error envelope, when the
+   * server sends one (older servers do not). */
+  code?: string
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
+  }
+}
+
+/** Optional per-request preconditions for the core user/group writes
+ * (docs/api.md, "ETag / If-Match" and "Idempotency-Key"). Both are opt-in on
+ * the server: leaving a field out sends today's unconditional request. */
+export interface WriteOptions {
+  /** The item's `etag` exactly as listed (a quoted strong ETag). */
+  ifMatch?: string
+  idempotencyKey?: string
+}
+
+function writeHeaders(opts?: WriteOptions): Record<string, string> {
+  return {
+    ...(opts?.ifMatch ? { 'If-Match': opts.ifMatch } : {}),
+    ...(opts?.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
   }
 }
 
@@ -45,7 +65,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const err = body as ApiErrorBody | undefined
-    throw new ApiError(res.status, err?.error ?? err?.message ?? res.statusText)
+    throw new ApiError(res.status, err?.error ?? err?.message ?? res.statusText, err?.code)
   }
   return body as T
 }
@@ -82,11 +102,12 @@ export const api = {
     request<{ users: User[]; truncated: boolean }>('/users').then(
       ({ users, truncated }): ListResult<User> => ({ items: users, truncated }),
     ),
-  createUser: (input: UserFormInput) =>
-    request<{ dn: string }>('/users', { method: 'POST', body: JSON.stringify(input) }),
-  updateUser: (input: UserFormInput) =>
-    request<void>('/users', { method: 'PUT', body: JSON.stringify(input) }),
-  deleteUser: (dn: string) => request<void>(`/users${qs({ dn })}`, { method: 'DELETE' }),
+  createUser: (input: UserFormInput, opts?: WriteOptions) =>
+    request<{ dn: string }>('/users', { method: 'POST', body: JSON.stringify(input), headers: writeHeaders(opts) }),
+  updateUser: (input: UserFormInput, opts?: WriteOptions) =>
+    request<void>('/users', { method: 'PUT', body: JSON.stringify(input), headers: writeHeaders(opts) }),
+  deleteUser: (dn: string, opts?: WriteOptions) =>
+    request<void>(`/users${qs({ dn })}`, { method: 'DELETE', headers: writeHeaders(opts) }),
   setPassword: (dn: string, password?: string, oldPassword?: string) =>
     request<{ generatedPassword?: string }>('/users/password', {
       method: 'POST',
@@ -99,11 +120,12 @@ export const api = {
     request<{ groups: Group[]; truncated: boolean }>('/groups').then(
       ({ groups, truncated }): ListResult<Group> => ({ items: groups, truncated }),
     ),
-  createGroup: (input: GroupFormInput) =>
-    request<{ dn: string }>('/groups', { method: 'POST', body: JSON.stringify(input) }),
-  updateGroup: (input: GroupFormInput) =>
-    request<void>('/groups', { method: 'PUT', body: JSON.stringify(input) }),
-  deleteGroup: (dn: string) => request<void>(`/groups${qs({ dn })}`, { method: 'DELETE' }),
+  createGroup: (input: GroupFormInput, opts?: WriteOptions) =>
+    request<{ dn: string }>('/groups', { method: 'POST', body: JSON.stringify(input), headers: writeHeaders(opts) }),
+  updateGroup: (input: GroupFormInput, opts?: WriteOptions) =>
+    request<void>('/groups', { method: 'PUT', body: JSON.stringify(input), headers: writeHeaders(opts) }),
+  deleteGroup: (dn: string, opts?: WriteOptions) =>
+    request<void>(`/groups${qs({ dn })}`, { method: 'DELETE', headers: writeHeaders(opts) }),
   addMember: (groupDn: string, memberDn: string) =>
     request<void>('/groups/members', {
       method: 'POST',

@@ -24,8 +24,13 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
   const isEdit = Boolean(group)
 
   useEffect(() => {
+    if (open) setError(null)
+  }, [open])
+
+  // Separate from the effect above: a conflict re-seeds the open form from
+  // the re-read entry and must not wipe the notice that explains it.
+  useEffect(() => {
     if (!open) return
-    setError(null)
     setForm(group ? { dn: group.dn, cn: group.cn, description: group.description } : emptyForm)
   }, [open, group])
 
