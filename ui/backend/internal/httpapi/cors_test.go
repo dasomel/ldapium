@@ -256,6 +256,21 @@ func TestCORS_DoesNotWeakenWriteProtection(t *testing.T) {
 	}
 }
 
+// CORS and the write gate agree: more than one Origin header is never a match.
+func TestCORS_MultipleOriginHeadersAreIgnored(t *testing.T) {
+	f := corsFixture(t)
+	req := httptest.NewRequest("GET", "/api/auth/config", nil)
+	req.Header["Origin"] = []string{corsOrigin, corsOrigin}
+	rec := httptest.NewRecorder()
+	f.s.Handler().ServeHTTP(rec, req)
+	if got := acHeaders(rec.Header()); len(got) != 0 {
+		t.Errorf("two Origin headers were granted: %v", got)
+	}
+	if !varyHas(rec.Header(), "Origin") {
+		t.Error("no Vary: Origin")
+	}
+}
+
 // The Vary token is added next to whatever a handler already set, never over it.
 func TestCORS_KeepsExistingVary(t *testing.T) {
 	e := echo.New()

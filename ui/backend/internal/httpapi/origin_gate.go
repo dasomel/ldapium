@@ -41,11 +41,9 @@ func (s *Server) originGate() echo.MiddlewareFunc {
 			if !present {
 				return next(c)
 			}
-			origin := ""
-			if len(values) > 0 {
-				origin = values[0]
-			}
-			if sameOrigin(origin, req.Host, c.Scheme()) {
+			// Exactly one value, like the CORS middleware: several Origin headers
+			// are ambiguous and never a match, whatever the first one says.
+			if len(values) == 1 && sameOrigin(values[0], req.Host, c.Scheme()) {
 				return next(c)
 			}
 			return apiErr(http.StatusForbidden, codeOriginMismatch, originGateMessage)
