@@ -70,7 +70,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@# does not compile until ui/frontend has been built at least once.
 	@cd ui/frontend && npm run lint && npm run build
 	@cd ui/backend && test -z "$$(gofmt -l .)" || { echo "gofmt would reformat files in ui/backend" >&2; exit 1; }
-	@cd ui/backend && go vet ./... && go test ./... && go build ./...
+	@cd ui/backend && go vet ./... && go vet -tags live ./... && go test ./... && go build ./...
 	@helm lint charts/ldapium
 	@./scripts/check-versions.sh
 	@./scripts/check-modules.sh

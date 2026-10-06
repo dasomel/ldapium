@@ -100,6 +100,8 @@ done
 | 503 | `scan_timeout` | true | 요청 deadline 30초 초과 — `q`로 좁히거나 나중에 재시도 (`Retry-After`) |
 | 503 | `unavailable` | true | 같은 세션의 다른 커서 요청이 끝나지 않음 (`Retry-After`) |
 
+커서 목록은 두 단계(키 스캔, `entryUUID` 조회)로 읽으므로 **비-root 신원은 목록에 나올 모든 엔트리의 `entryUUID` 읽기 권한이 필요합니다**(항목 ETag에는 `entryCSN`도 필요). `entryUUID`를 읽을 수 없는 엔트리가 하나라도 있으면 그 엔트리를 조용히 빼지 않고(누락 금지) 목록 전체가 500 `internal`로 끝나며, 서버 로그에 `entryUUID of "<dn>" is not readable by this identity`가 남습니다. ACL을 직접 좁힌 배포는 목록을 읽는 신원에 두 속성의 `read`를 허용해야 합니다.
+
 커서 한 개는 2048바이트가 상한입니다. 정렬 키(`uid`/`cn`)와 소문자 DN, `q`를 합쳐 약 1.4KB가 넘는 위치에서는 다음 커서를 만들 수 없어 그 목록 요청이 500 `internal`로 끝납니다(상세는 서버 로그). 정상적인 디렉터리에서는 일어나지 않는 크기입니다. 이전 형식(`v1.`) 커서는 `cursor_invalid`입니다.
 
 ## 오류 형식
