@@ -87,6 +87,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_TLS_AUTHZ_DN` | if mutual auth enabled | `uid=$1,${LDAP_ROOT_DN}` | `olcAuthzRegexp` replacement DN. The default maps the matching certificate CN to a `uid` below the base DN; override it for your DIT. An explicitly empty value is rejected. |
 | `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on the first bootstrap of the node that creates the base DIT**. A failed seed rolls back the whole bootstrap and is retried on the next start; replicas skip seeding and receive the data by replication. Your extension point for OUs, groups, real users, ACLs, etc. |
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
+| `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in. A positive integer or `unlimited`: renders `olcLimits: {0}users size.prtotal=<value>` on the `mdb` database so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT` (see [Paged-search total](#paged-search-total-ldap_paged_total_limit)). Unset renders nothing. `0`, leading zeros and non-digits are refused at startup. Reconciled on every start. |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_HASH` | no | `{ARGON2}` | `olcPasswordHash` on the frontend database, and the scheme used to mint the bootstrap admin hash. Any `{SCHEME}`-shaped value slapd supports (e.g. `{SSHA}`). Applied at bootstrap only (see below). |
 | `LDAP_UNIQUE_ATTRIBUTES` | no | `uid,mail` | Comma-separated attributes the `unique` overlay enforces uniqueness on. **Empty string disables the overlay entirely** — it is not created at all, rather than created with nothing to check. See [Uniqueness enforcement](#uniqueness-enforcement). Applied at bootstrap only (see below). |
@@ -190,6 +191,58 @@ overwritten each start. An opt-in switched OFF removes its attribute
 entrypoint writes; any other value was set by an operator and is left in place
 with a `leaving operator-set ...` log line. `olcTLSECName` is env-driven: it is
 removed when `LDAP_TLS_EC_NAME` is empty or TLS is off.
+
+### Paged-search total (`LDAP_PAGED_TOTAL_LIMIT`)
+
+`LDAP_SIZE_LIMIT` (default `10000`) is also a ceiling on the **total** of an
+RFC 2696 paged search: a non-root identity cannot page past it however small
+the pages are. Measured on this image against a 12001-entry subtree
+(`ldapsearch -E pr=500/noprompt`): a normal user receives exactly 10000
+entries and then `Size limit exceeded (4)`, while `LDAP_ADMIN_DN` (rootDN,
+exempt from limits) receives all 12001. Clients that must enumerate more than
+`LDAP_SIZE_LIMIT` entries as a non-root identity (for example the `limit`/
+`cursor` mode of `GET /api/users` when the UI is bound as a normal user or an
+SSO service account) need the paged total lifted:
+
+```bash
+docker run -e LDAP_PAGED_TOTAL_LIMIT=unlimited ... ldapium   # or e.g. 50000
+```
+
+This renders `olcLimits: {0}users size.prtotal=<value>` on
+`olcDatabase={1}mdb,cn=config`. What it does and does not change (verified
+live, `scripts/test/test-paged-total-limit.sh`):
+
+- `users` matches every **authenticated** DN; anonymous binds keep the old cap.
+- An **unpaged** search by the same identity is still capped by
+  `LDAP_SIZE_LIMIT`; only paged searches are affected. The per-page size is
+  not capped: `size.pr` is never set because a client asking for a larger page
+  than `size.pr` fails with `Administrative limit exceeded (11)`.
+- A number caps the paged total at that number (also with
+  `sizeLimitExceeded` at the cap); `unlimited` removes the cap.
+- Unset (the default) renders nothing, so an existing install is unchanged.
+
+**Security cost.** Any authenticated user can then page through everything
+their ACLs let them read, which weakens `LDAP_SIZE_LIMIT`'s role as a last
+backstop against a bulk dump. ACLs still apply. Leave it unset unless an API
+or sync client needs a full non-root enumeration.
+
+**Reconciled, not bootstrap-only.** Like the hardening settings it is applied
+on every start, so it works on an existing volume and emptying the variable
+removes it again. The entrypoint owns only a value of exactly the form it
+writes (`{N}users size.prtotal=<word>`); any other `olcLimits` value an
+operator set (for instance `dn.exact=...`) is left alone in both directions.
+To change it without a restart, as `cn=admin,cn=config`:
+
+```ldif
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcLimits
+olcLimits: {0}users size.prtotal=unlimited
+```
+
+(use `delete: olcLimits` with the same value to remove it). A value set this
+way for the exact `users size.prtotal=` form is overwritten or removed at the
+next start according to the variable.
 
 ### Rollback and downgrade
 

@@ -172,6 +172,26 @@ case "$LDAP_SIZE_LIMIT" in
   ''|*[!0-9]*) die "LDAP_SIZE_LIMIT must be a number or 'unlimited' (got: ${LDAP_SIZE_LIMIT})" ;;
 esac
 
+# LDAP_PAGED_TOTAL_LIMIT (opt-in, unset = nothing rendered): OpenLDAP applies
+# olcSizeLimit to the TOTAL of an RFC 2696 paged search, so a non-root
+# identity can never page past LDAP_SIZE_LIMIT entries however small the
+# pages are (verified live: a 12000-entry subtree stops at exactly 10000 with
+# sizeLimitExceeded; rootDN is exempt). `size.prtotal` is the knob that lifts
+# that total for paged searches only — an unpaged search keeps olcSizeLimit.
+# Reconciled into cn=config on every start (section 3b), as
+# `olcLimits: {0}users size.prtotal=<value>`: `users` = every authenticated
+# DN, so anonymous is unaffected. Raising it lets any authenticated user page
+# through the whole readable directory (ACLs still apply), which weakens the
+# "last backstop" argument above — hence opt-in. Positive integer without a
+# leading zero, or `unlimited`; 0 is refused because its meaning varies
+# between slapd limit keywords. Never set size.pr here: a per-page cap makes
+# a client asking for a bigger page fail with adminLimitExceeded.
+LDAP_PAGED_TOTAL_LIMIT="${LDAP_PAGED_TOTAL_LIMIT:-}"
+case "$LDAP_PAGED_TOTAL_LIMIT" in
+  ''|unlimited) ;;
+  0*|*[!0-9]*) die "LDAP_PAGED_TOTAL_LIMIT must be a positive number or 'unlimited' (got: ${LDAP_PAGED_TOTAL_LIMIT})" ;;
+esac
+
 LDAP_TIME_LIMIT="${LDAP_TIME_LIMIT:-3600}"
 case "$LDAP_TIME_LIMIT" in
   unlimited) ;;
@@ -1272,6 +1292,23 @@ hd_clear() {
     sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -q '^olcLastBindPrecision: ' && printf 'delete: olcLastBindPrecision\n-\n' >> "$hd_db"
   elif sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -q '^olcLastBind'; then
     log "leaving operator-set olcLastBind on the main database untouched"
+  fi
+  # paged total (see LDAP_PAGED_TOTAL_LIMIT): owns ONLY an olcLimits value of
+  # exactly the form this script writes (`{N}users size.prtotal=<word>`), so
+  # an operator's other olcLimits values survive in both directions. Set:
+  # replace our value when it differs (delete + add in one modify, no
+  # window); unset: remove it, which restores the default behaviour.
+  pt_cur=$(sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" \
+    | sed -n 's/^olcLimits: \({[0-9]*}users size\.prtotal=[A-Za-z0-9]*\)$/\1/p' | head -n 1)
+  pt_want=''
+  [ -z "$LDAP_PAGED_TOTAL_LIMIT" ] || pt_want="{0}users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
+  if [ "$pt_cur" != "$pt_want" ]; then
+    if [ -n "$pt_cur" ]; then
+      printf 'delete: olcLimits\nolcLimits: %s\n-\n' "$pt_cur" >> "$hd_db"
+    fi
+    if [ -n "$pt_want" ]; then
+      printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$hd_db"
+    fi
   fi
   if [ -s "$hd_db" ]; then
     printf '\ndn: olcDatabase={1}mdb,cn=config\nchangetype: modify\n'

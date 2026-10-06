@@ -106,6 +106,9 @@ jobs:
       - name: Bootstrap seed semantics (failed seed retried, replicas skip) — #203
         run: ./scripts/test/test-bootstrap-seed.sh ldapium:e2e
 
+      - name: Paged-search total opt-in (LDAP_PAGED_TOTAL_LIMIT) — #215
+        run: ./scripts/test/test-paged-total-limit.sh ldapium:e2e
+
       - name: Wiped serverID-1 node resyncs without peer data loss — #206
         run: ./scripts/test/test-wiped-node-resync.sh ldapium:e2e
 
