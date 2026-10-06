@@ -214,6 +214,49 @@ case "$LDAP_REPLICATION_IDENTITY" in
       done
       return 0
     }
+    # retry="<interval> <count> [<interval> <count> ...]": pairs of positive integers
+    # separated by single spaces; only the LAST count may be `+` (forever). slapd rejects
+    # anything else ("incomplete syncrepl retry list"), and an offline slapmodify stores
+    # it anyway, so the value is checked here, before anything is written.
+    ri_retry_valid() {
+      case "$1" in
+        ''|*[!0-9\ +]*|\ *|*\ |*\ \ *) return 1 ;;
+      esac
+      _ro=$IFS
+      IFS=' '
+      # shellcheck disable=SC2086
+      set -- $1
+      IFS=$_ro
+      [ $(($# % 2)) -eq 0 ] || return 1
+      _rk=0
+      _rc=$#
+      for _rt in "$@"; do
+        _rk=$((_rk + 1))
+        if [ $((_rk % 2)) -eq 1 ]; then
+          case "$_rt" in
+            ''|0*|*[!0-9]*) return 1 ;;
+          esac
+          [ "${#_rt}" -le 6 ] || return 1
+        elif [ "$_rt" = "+" ]; then
+          [ "$_rk" -eq "$_rc" ] || return 1
+        else
+          case "$_rt" in
+            ''|0*|*[!0-9]*) return 1 ;;
+          esac
+          [ "${#_rt}" -le 4 ] || return 1
+        fi
+      done
+      return 0
+    }
+    # interval=dd:hh:mm:ss (two digits each, hh < 24, mm and ss < 60, not all zero)
+    ri_interval_valid() {
+      case "$1" in
+        00:00:00:00) return 1 ;;
+        [0-9][0-9]:[01][0-9]:[0-5][0-9]:[0-5][0-9]) return 0 ;;
+        [0-9][0-9]:2[0-3]:[0-5][0-9]:[0-5][0-9]) return 0 ;;
+      esac
+      return 1
+    }
     ri_id_norm=$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}") ||
       die "cannot normalize the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>; refusing"
     ri_admin_norm=$(ldap_dn_norm "$LDAP_ADMIN_DN") ||
@@ -289,12 +332,10 @@ case "$LDAP_REPLICATION_IDENTITY" in
       ri_peers_valid "${LDAP_REPLICATION_PEERS:-}" ||
         die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries (no whitespace, userinfo, path, options or empty entries; replication must run over verified TLS)"
       # The other operator text rendered into olcSyncrepl values.
-      case "${LDAP_REPLICATION_RETRY:-5 10 30 +}" in
-        *[!0-9\ +]*) die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_RETRY to contain only digits, spaces and +" ;;
-      esac
-      case "${LDAP_REPLICATION_INTERVAL:-00:00:00:10}" in
-        ''|*[!0-9:]*) die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_INTERVAL to contain only digits and colons" ;;
-      esac
+      ri_retry_valid "${LDAP_REPLICATION_RETRY:-5 10 30 +}" ||
+        die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_RETRY to be <interval> <count> pairs of positive integers separated by single spaces, where only the last count may be + (e.g. \"5 10 30 +\")"
+      ri_interval_valid "${LDAP_REPLICATION_INTERVAL:-00:00:00:10}" ||
+        die "LDAP_REPLICATION_IDENTITY=dedicated requires LDAP_REPLICATION_INTERVAL in the form dd:hh:mm:ss (not all zero)"
     fi
     ;;
   *) die "LDAP_REPLICATION_IDENTITY must be one of: admin, prepare, dedicated" ;;
@@ -1465,6 +1506,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3a1. dedicated recovery from a stored olcSyncrepl that slapd can no longer load
+#      (an older build stored a retry list such as `+`: "incomplete syncrepl retry
+#      list", and every offline tool then fails with "bad configuration directory").
+#      The values are re-rendered from the (validated) environment in section 4 on
+#      every start anyway, so when cn=config is unreadable ONLY in this mode the
+#      stored olcSyncrepl and olcMultiProvider values are cut out of the main
+#      database's config file, and readability is re-checked. Nothing else is touched;
+#      if cn=config is still unreadable the start is refused.
+# ---------------------------------------------------------------------------
+if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ] && [ -f "$MARKER" ]; then
+  if ! slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
+    ri_cf="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
+    [ -f "$ri_cf" ] || die "replication identity dedicated: cn=config is unreadable and the main database config is missing; refusing to start"
+    grep -q '^olcSyncrepl:' "$ri_cf" ||
+      die "replication identity dedicated: cn=config is unreadable and the cause is not a stored olcSyncrepl; refusing to start"
+    log "replication identity dedicated: stored olcSyncrepl makes cn=config unreadable; removing the stored olcSyncrepl/olcMultiProvider values (re-rendered from the environment below)"
+    ri_cft=$(mktemp) || die "replication identity dedicated: cannot create a temporary file"
+    awk 'BEGIN { skip = 0 }
+      /^olcSyncrepl:/ || /^olcMultiProvider:/ { skip = 1; next }
+      skip && /^ / { next }
+      { skip = 0; print }' "$ri_cf" > "$ri_cft" || { rm -f "$ri_cft"; die "replication identity dedicated: cannot rewrite the main database config; refusing to start"; }
+    [ -s "$ri_cft" ] || { rm -f "$ri_cft"; die "replication identity dedicated: rewritten main database config is empty; refusing to start"; }
+    cat "$ri_cft" > "$ri_cf" || { rm -f "$ri_cft"; die "replication identity dedicated: cannot write the main database config; refusing to start"; }
+    rm -f "$ri_cft"
+    slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1 ||
+      die "replication identity dedicated: cn=config is still unreadable after removing the stored olcSyncrepl; refusing to start"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 3a2. LDAP_REPLICATION_IDENTITY=prepare|dedicated (D51/D52, #229 T-011/T-012). Installs the
 #      read-only replication identity's FIRST ACL rule and its olcLimits with
 #      one OFFLINE slapmodify on cn=config (like every cn=config edit here,
@@ -2306,7 +2377,32 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
     ri_nstored=$(printf '%s\n' "$ri_stored" | grep -c . || true)
     [ "$ri_nstored" -eq "$emitted_count" ] ||
       die "replication identity dedicated: stored olcSyncrepl value count does not match; refusing to start"
-    ri_badprov=$(printf '%s\n' "$ri_stored" | awk '{ n = gsub(/provider=/, "&"); if (n != 1 || $0 !~ /provider=ldaps:\/\/[^ ]+/) bad++ } END { print bad + 0 }')
+    # Quote-aware, like slapd: a quoted value (credentials, binddn, ...) is one token
+    # whatever it contains, so `provider=` inside a password is not an option.
+    ri_badprov=$(printf '%s\n' "$ri_stored" | awk '
+      function handle(t) {
+        if (t ~ /^provider=/) { nprov++; if (t !~ /^provider=ldaps:\/\/[^ ]+$/) bad++ }
+      }
+      {
+        line = $0; sub(/^olcSyncrepl: /, "", line); sub(/^\{[0-9]+\}/, "", line)
+        n = length(line); inq = 0; tok = ""; nprov = 0
+        for (i = 1; i <= n; i++) {
+          c = substr(line, i, 1)
+          if (inq) {
+            if (c == "\\") { tok = tok c substr(line, i + 1, 1); i++; continue }
+            if (c == "\"") inq = 0
+            tok = tok c
+            continue
+          }
+          if (c == "\"") { inq = 1; tok = tok c; continue }
+          if (c == " ") { if (tok != "") handle(tok); tok = ""; continue }
+          tok = tok c
+        }
+        if (inq) bad++
+        if (tok != "") handle(tok)
+        if (nprov != 1) bad++
+      }
+      END { print bad + 0 }')
     [ "$ri_badprov" = "0" ] ||
       die "replication identity dedicated: a stored olcSyncrepl value does not have exactly one ldaps:// provider; refusing to start"
   fi

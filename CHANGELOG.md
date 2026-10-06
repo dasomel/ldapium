@@ -234,7 +234,11 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `ldaps://<host>[:<port>]` entries (strict grammar: no whitespace, userinfo, path or
   option text, so a smuggled `provider=ldap://...` cannot send the identity's bind in
   clear text; re-checked before `olcSyncrepl` is rendered and read back after), a
-  password with a quote or backslash, odd retry/interval text, a `_FILE` secret that is
+  password with a quote or backslash, a retry list or interval outside a strict
+  grammar slapd can always load (`retry=+` used to store a config that no offline
+  tool could read; a `dedicated` start now removes such an unreadable stored
+  `olcSyncrepl` and re-renders it from the corrected environment; the read-back
+  check is quote-aware, so a password containing `provider=` starts normally), a `_FILE` secret that is
   read once (never twice, never substituted by the admin password),
   `LDAP_TLS_MUTUAL_AUTH`, a custom `LDAP_REPLICATION_BIND_DN`; stored-config
   refusals (`olcAuthzRegexp`, `olcAuthIDRewrite`, `olcAuthzPolicy`,
