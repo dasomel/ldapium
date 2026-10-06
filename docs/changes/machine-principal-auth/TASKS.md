@@ -80,7 +80,7 @@ T-001·T-004는 완료, 나머지는 미착수이며 Class D 패키지 수용(�
 
 ## Synchronize durable truth
 
-- [ ] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`,
+- [ ] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`, 추가 필수 문구(D25): 직접 노출 구성에서는 핸들러 이전에 서버가 거절하는 요청(431, 잘못된 요청 줄, 헤더 타임아웃, TLS·HTTP/2 사전 오류)이 감사·접근·오류 로그 어디에도 남지 않으며, 기록이 필요하면 ingress/프록시 접근 로그를 켜야 한다는 점.
       Keycloak client 설정 가이드(전용 service account client·standard flow/direct access grant 비활성화·audience mapper를 전용 scope에만·JWKS 키 회전 overlap·TTL), 긴급 차단 절차(D7), ingress XFF 정리 요건.
 - [ ] `T-031` ADR 확정·링크, `IMPLEMENTATION-STATUS.md` 갱신.
 - [ ] `T-032` 릴리스 노트, 롤백·긴급 차단(`MACHINE_AUTH_ENABLED=false`/allowlist 제거 + 전 replica 교체), 호환성(기존 경로·OpenAPI additive) 기록.
