@@ -604,6 +604,17 @@ ui:
       interval: 30s
       scrapeTimeout: 10s
 
+  # -- CORS for the UI API, off by default. allowedOrigins are exact
+  #    scheme://host[:port] origins (no wildcard, no null, no path) whose
+  #    browsers may READ /api GET/HEAD responses with the session cookie, and
+  #    which the write Origin gate additionally accepts. The session cookie is
+  #    SameSite=Lax, so this only helps a page on the same site (e.g.
+  #    console.example.com -> ldapium.example.com); other sites' scripts never
+  #    carry the cookie. Writes are never CORS-enabled, and machine clients do
+  #    not need CORS. Empty (default) = no CORS headers on any response.
+  cors:
+    allowedOrigins: []
+
   # -- NetworkPolicy for the UI pods. Rendered only with ui.metrics.enabled
   #    (selecting the pods makes them default-deny for ingress, so the HTTP
   #    port must be admitted explicitly).

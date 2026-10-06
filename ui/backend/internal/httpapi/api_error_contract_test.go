@@ -108,6 +108,13 @@ func (leakyClient) ListUsers(context.Context, string) ([]domain.User, bool, erro
 
 func newContractFixture(t *testing.T) *contractFixture {
 	t.Helper()
+	return newContractFixtureWith(t, nil)
+}
+
+// newContractFixtureWith builds the same fixture after letting tweak adjust the
+// server configuration (CORS origins, ...).
+func newContractFixtureWith(t *testing.T, tweak func(*config.Config)) *contractFixture {
+	t.Helper()
 	dir := t.TempDir()
 	operator := filepath.Join(dir, "operator.json")
 	if err := os.WriteFile(operator, []byte(`{"root":"`+dir+`","instance_id":"contract","destinations":[{"id":"local","type":"local","name":"Local"}]}`), 0o600); err != nil {
@@ -127,6 +134,9 @@ func newContractFixture(t *testing.T) *contractFixture {
 		BackupWorkerPath:     filepath.Join(dir, "worker.py"),
 		BackupPython:         filepath.Join(dir, "python"),
 		BackupAdminDNs:       []string{"cn=admin"},
+	}
+	if tweak != nil {
+		tweak(&cfg)
 	}
 	spa := fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}
 	s, err := New(cfg, dialer, store, spa)

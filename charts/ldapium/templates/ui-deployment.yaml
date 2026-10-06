@@ -315,6 +315,10 @@ spec:
               value: {{ .Values.ui.session.loginFailureWindow | quote }}
             - name: UI_TRUSTED_PROXIES
               value: {{ .Values.ui.trustedProxies | quote }}
+            {{- if .Values.ui.cors.allowedOrigins }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ join "," .Values.ui.cors.allowedOrigins | quote }}
+            {{- end }}
             {{- if .Values.ui.metrics.enabled }}
             - name: METRICS_ADDR
               value: {{ printf ":%s" (include "ldapium.ui.metricsPort" .) | quote }}
