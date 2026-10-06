@@ -235,6 +235,11 @@ jobs:
 
       - run: helm lint charts/ldapium
 
+      # UI /metrics wiring (change package api-error-envelope, AC-018): off by
+      # default, never on the public UI Service, scrape peers required.
+      - name: UI metrics chart assertions
+        run: ./scripts/test/test-chart-ui-metrics.sh
+
       # The chart deliberately refuses to render without an admin password
       # (the image refuses to start without one), so every template call must
       # supply a throwaway value. This is a CI fixture, not a credential.
@@ -444,6 +449,7 @@ jobs:
             proxy.golang.org:443
             sum.golang.org:443
             golang.org:443
+            google.golang.org:443
             go.dev:443
             nodejs.org:443
 

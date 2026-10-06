@@ -65,6 +65,21 @@ func main() {
 
 	srv.StartBackground(janitorCtx)
 
+	// Optional process metrics on their own listener (METRICS_ADDR); nothing is
+	// collected, and nothing listens, when it is unset.
+	var metricsServer *http.Server
+	if cfg.MetricsAddr != "" {
+		handler := srv.EnableMetrics(sessions.Len)
+		ldapclient.SetObserver(dialer, srv.Recorder())
+		metricsServer = newMetricsServer(cfg.MetricsAddr, handler)
+		go func() {
+			log.Printf("metrics listening on %s", cfg.MetricsAddr)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("metrics server: %v", err)
+			}
+		}()
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           srv.Handler(),
@@ -87,6 +102,11 @@ func main() {
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
+	}
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("metrics shutdown failed: %v", err)
+		}
 	}
 }
 

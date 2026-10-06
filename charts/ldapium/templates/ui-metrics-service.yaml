@@ -1,0 +1,19 @@
+{{- if and .Values.ui.enabled .Values.ui.metrics.enabled }}
+{{- /* The metrics port lives on this Service only, never on the public UI Service (ui-service.yaml). */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ldapium.ui.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.ui.metricsLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: ui-metrics
+      port: {{ include "ldapium.ui.metricsPort" . }}
+      targetPort: ui-metrics
+      protocol: TCP
+  selector:
+    {{- include "ldapium.ui.selectorLabels" . | nindent 4 }}
+{{- end }}

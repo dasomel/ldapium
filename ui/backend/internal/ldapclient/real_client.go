@@ -3,8 +3,6 @@ package ldapclient
 import (
 	"sync"
 
-	"github.com/go-ldap/ldap/v3"
-
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 )
 
@@ -13,7 +11,7 @@ import (
 // concurrent use and a session may receive overlapping HTTP requests (e.g.
 // a slow tree fetch alongside a save).
 type client struct {
-	conn *ldap.Conn
+	conn *obsConn
 	dn   string
 	cfg  config.Config
 	mu   *sync.Mutex

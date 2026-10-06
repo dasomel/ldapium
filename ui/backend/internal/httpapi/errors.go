@@ -243,6 +243,7 @@ func buildEnvelope(c echo.Context, status int, code, msg string, cause error, st
 	if _, known := codeTable[code]; !known {
 		code = codeForStatus(status)
 	}
+	recorderOf(c).APIError(code)
 	reqID := c.Response().Header().Get(echo.HeaderXRequestID)
 	req := c.Request()
 	if status >= http.StatusInternalServerError {

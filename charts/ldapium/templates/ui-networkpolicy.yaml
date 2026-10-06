@@ -1,0 +1,39 @@
+{{- if and .Values.ui.enabled .Values.ui.metrics.enabled }}
+{{- /*
+  Selecting the UI pods turns them default-deny for ingress, so the HTTP port
+  is admitted explicitly (ui.networkPolicy.httpFrom; empty = every source, which
+  is how the UI behaved before this policy existed) and the metrics port only
+  for the configured peers. An empty `from` in a NetworkPolicy rule means "all
+  sources", the opposite of an empty allow-list, so an empty metrics peer list
+  is refused instead of rendered (same stance as networkpolicy.yaml).
+*/}}
+{{- if not .Values.ui.metrics.networkPolicy.from }}
+{{- fail "ui.metrics.networkPolicy.from is empty: an empty `from` list in a NetworkPolicy rule allows ALL sources. List the peers allowed to scrape the UI metrics port (e.g. the monitoring namespace), or set ui.metrics.enabled=false." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ldapium.ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.ui.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ldapium.ui.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - {{- with .Values.ui.networkPolicy.httpFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        {{- toYaml .Values.ui.metrics.networkPolicy.from | nindent 8 }}
+      ports:
+        - port: {{ include "ldapium.ui.metricsPort" . }}
+          protocol: TCP
+{{- end }}

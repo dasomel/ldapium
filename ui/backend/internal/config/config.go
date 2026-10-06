@@ -140,6 +140,12 @@ type Config struct {
 	// re-parsed into net.IPNet here) so httpapi can build the concrete
 	// echo.IPExtractor without this package importing echo.
 	TrustedProxies string
+
+	// MetricsAddr (METRICS_ADDR, host:port) is where the optional /metrics
+	// listener binds. Empty (the default) means no listener at all; the public
+	// ListenAddr never serves /metrics. Unauthenticated by Prometheus
+	// convention, so reachability is the operator's boundary (D218-10).
+	MetricsAddr string
 }
 
 // SSOConfig is the configuration required to use a confidential OIDC client
@@ -276,6 +282,11 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.MetricsAddr, err = validateMetricsAddr(getenv("METRICS_ADDR"), cfg.ListenAddr)
+	if err != nil {
+		return Config{}, err
+	}
+
 	if cfg.UserSearchBase == "" {
 		cfg.UserSearchBase = cfg.BaseDN
 	}
@@ -407,6 +418,34 @@ func validateTrustedProxies(raw string) (string, error) {
 		}
 		if _, _, err := net.ParseCIDR(entry); err != nil {
 			return "", fmt.Errorf("invalid UI_TRUSTED_PROXIES entry %q: %w", entry, err)
+		}
+	}
+	return v, nil
+}
+
+// validateMetricsAddr checks METRICS_ADDR: empty (off), or host:port with a
+// numeric port in 1-65535 and a host free of whitespace and URL syntax. It must
+// not claim the public listener's port on an overlapping host, which would only
+// fail later at bind time.
+func validateMetricsAddr(raw, listenAddr string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", nil
+	}
+	host, port, err := net.SplitHostPort(v)
+	if err != nil {
+		return "", fmt.Errorf("invalid METRICS_ADDR %q: want host:port", v)
+	}
+	if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+		return "", fmt.Errorf("invalid METRICS_ADDR %q: port must be 1-65535", v)
+	}
+	if strings.ContainsAny(host, " 	/?#@") {
+		return "", fmt.Errorf("invalid METRICS_ADDR %q: host must be a bare name or address", v)
+	}
+	if lh, lp, err := net.SplitHostPort(listenAddr); err == nil && lp == port {
+		wild := func(h string) bool { return h == "" || h == "0.0.0.0" || h == "::" }
+		if lh == host || wild(lh) || wild(host) {
+			return "", fmt.Errorf("METRICS_ADDR %q collides with LISTEN_ADDR %q", v, listenAddr)
 		}
 	}
 	return v, nil

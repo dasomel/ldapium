@@ -34,18 +34,50 @@ need() {
 need go "install Go"
 need npx "install Node"
 
+# The inventory is the linux build's: CI and the shipped distroless image are
+# linux, and some modules (prometheus/procfs) only compile there, so a run on
+# macOS would otherwise disagree with CI about what is current. The tool itself
+# has to run on the host, so a go-licenses that is not on PATH is installed for
+# the host into a private mktemp -d directory (0700, owned by this user, removed
+# afterwards; go install verifies the module against the checksum database), and
+# only its package loading is pointed at linux. Nothing is ever executed from a
+# predictable shared path such as /tmp/<name>.
 go_licenses() {
+	local bin dir="" rc=0
 	if command -v go-licenses >/dev/null 2>&1; then
-		go-licenses "$@"
+		bin=$(command -v go-licenses)
 	else
-		go run github.com/google/go-licenses@v1.6.0 "$@"
+		dir=$(mktemp -d)
+		# go_licenses always runs in a subshell, so this EXIT trap only fires there
+		# and also removes the directory when go install or the tool aborts the run.
+		# Expanded now on purpose: $dir is local and gone when the trap fires.
+		# shellcheck disable=SC2064
+		trap "rm -rf '$dir'" EXIT
+		GOBIN="$dir" go install github.com/google/go-licenses@v1.6.0 || {
+			echo "could not install go-licenses v1.6.0 (see the go error above); put a go-licenses binary on PATH to run offline" >&2
+			return 1
+		}
+		bin="$dir/go-licenses"
 	fi
+	GOOS=linux "$bin" "$@" || rc=$?
+	[ -z "$dir" ] || rm -rf "$dir"
+	return "$rc"
 }
 
 # go-licenses reports this repo's own packages as Unknown (the LICENSE lives at
 # the repo root, above the Go module), so they are excluded rather than
 # silencing Unknown in general — an actually unknown dependency must still fail.
-go_csv=$(cd ui/backend && go_licenses csv ./... 2>/dev/null | grep -v '^github.com/dasomel/ldapium' | sort)
+# The tool's stderr is kept (go-licenses warns on stderr even when it succeeds, so
+# it is only shown when the run fails): a failing install or scan must say why
+# instead of ending the script silently.
+go_err=$(mktemp)
+trap 'rm -f "$go_err"' EXIT
+if ! go_raw=$(cd ui/backend && go_licenses csv ./... 2>"$go_err"); then
+	echo "go-licenses csv failed:" >&2
+	cat "$go_err" >&2
+	exit 2
+fi
+go_csv=$(printf '%s\n' "$go_raw" | grep -v '^github.com/dasomel/ldapium' | sort)
 # license-checker reads ui/frontend/node_modules. Without it (a fresh checkout
 # or worktree) it exits quietly with a partial list, the regenerated inventory
 # silently loses dependencies, and --check then agrees with itself. Refuse.

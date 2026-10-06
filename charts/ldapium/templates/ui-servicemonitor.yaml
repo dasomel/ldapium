@@ -1,0 +1,27 @@
+{{- if and .Values.ui.enabled .Values.ui.metrics.serviceMonitor.enabled }}
+{{- if not .Values.ui.metrics.enabled }}
+{{- fail "ui.metrics.serviceMonitor.enabled requires ui.metrics.enabled" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ldapium.ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.ui.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- /* Only the UI metrics Service carries component ui-metrics. */}}
+      app.kubernetes.io/name: {{ include "ldapium.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ui-metrics
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: ui-metrics
+      path: /metrics
+      interval: {{ .Values.ui.metrics.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.ui.metrics.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- end }}

@@ -122,6 +122,7 @@ LDAP connection details and a session secret explicitly.
 | `UI_LOGIN_FAILURE_LIMIT` | no | `10` | Failed `POST /api/login` attempts allowed per client IP (see `UI_TRUSTED_PROXIES` below for how that IP is resolved) within the window before a `429` is returned; `0` disables the limiter. In-memory and per-pod — with multiple UI replicas the OpenLDAP ppolicy lockout is the backstop that holds cluster-wide |
 | `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
 | `UI_TRUSTED_PROXIES` | no | `private` | How the login limiter resolves a request's client IP: `private`, a comma-separated CIDR list, or `none` — see "Login throttling and trusted proxies" below |
+| `METRICS_ADDR` | no | _(empty)_ | `host:port` of an optional second listener that serves only `GET /metrics` (Prometheus text, `ldapium_ui_*` process metrics). Empty = no listener and nothing collected. Must differ from `LISTEN_ADDR`; unauthenticated, so bind it to loopback or protect it with a NetworkPolicy. The public port answers `/metrics` with a 404 JSON error body. See `docs/api.md` |
 | `SSO_ENABLED` | no | `false` | Enable Keycloak SSO; disables LDAP password login |
 | `SSO_ISSUER_URL` | SSO | — | Keycloak realm issuer, e.g. `https://sso.example.com/realms/example` |
 | `SSO_CLIENT_ID` | SSO | — | Confidential Keycloak OIDC client ID |

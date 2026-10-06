@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -18,6 +19,7 @@ import (
 // dialer is the config-backed Dialer implementation used in production.
 type dialer struct {
 	cfg config.Config
+	obs atomic.Pointer[observerBox] // see SetObserver; nil means nothing is reported
 }
 
 // NewDialer returns a Dialer that opens connections to the LDAP server
@@ -40,14 +42,29 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 		return nil, err
 	}
 
+	var bound Client
+	// The reported "bind" is the whole login handshake (dial, optional uid
+	// lookup, simple bind), since that is the operation an operator waits on.
+	err := observe(d.observer(), "bind", func() (err error) {
+		bound, err = d.bind(identity, password)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
+}
+
+func (d *dialer) bind(identity, password string) (Client, error) {
 	c, err := d.newConn()
 	if err != nil {
 		return nil, err
 	}
+	oc := &obsConn{Conn: c, obs: d.observer()}
 
 	dn := identity
 	if !LooksLikeDN(identity) {
-		resolved, err := d.resolveUID(c, identity)
+		resolved, err := resolveUID(oc, d.cfg, identity)
 		if err != nil {
 			c.Close()
 			return nil, err
@@ -60,7 +77,7 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 		return nil, mapErr("bind", err)
 	}
 
-	return &client{conn: c, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}}, nil
+	return &client{conn: oc, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}}, nil
 }
 
 // Ping is the unauthenticated counterpart to Bind: it proves the LDAP
@@ -73,12 +90,14 @@ func (d *dialer) Ping(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c, err := d.newConn()
-	if err != nil {
-		return err
-	}
-	c.Close()
-	return nil
+	return observe(d.observer(), "ping", func() error {
+		c, err := d.newConn()
+		if err != nil {
+			return err
+		}
+		c.Close()
+		return nil
+	})
 }
 
 // resolveUID looks up the DN for a bare uid using an anonymous search with
@@ -87,11 +106,7 @@ func (d *dialer) Ping(ctx context.Context) error {
 // lets the app avoid holding any directory credentials of its own; it
 // requires the directory to permit anonymous read of the uid attribute
 // under UserSearchBase, which is documented in the README.
-func (d *dialer) resolveUID(c *ldap.Conn, uid string) (string, error) {
-	return resolveUID(c, d.cfg, uid)
-}
-
-func resolveUID(c *ldap.Conn, cfg config.Config, uid string) (string, error) {
+func resolveUID(c searcher, cfg config.Config, uid string) (string, error) {
 	if cfg.UserSearchFilter == "" {
 		return "", fmt.Errorf("%w: %q is not a DN and no LDAP_USER_SEARCH_FILTER is configured", domain.ErrInvalidInput, uid)
 	}

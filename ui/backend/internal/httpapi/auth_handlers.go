@@ -34,6 +34,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 	if allowed, retryAfter := s.loginLimiter.allow(ip); !allowed {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
 		logAuthEvent(authProviderLDAP, authResultRateLimited, requestIDOf(c), "", "", "")
+		s.rec().LoginFailure("rate_limited")
 		return apiErr(http.StatusTooManyRequests, codeLoginRateLimited, "too many failed login attempts")
 	}
 
@@ -42,10 +43,12 @@ func (s *Server) handleLogin(c echo.Context) error {
 		// The body never parsed, so no identity was even extracted to
 		// fingerprint.
 		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "malformed_request", "")
+		s.rec().LoginFailure("malformed")
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	if req.Identity == "" || req.Password == "" {
 		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", "missing_credentials", fingerprintIdentity(req.Identity))
+		s.rec().LoginFailure("malformed")
 		return echo.NewHTTPError(http.StatusBadRequest, "identity and password are required")
 	}
 
@@ -66,6 +69,11 @@ func (s *Server) handleLogin(c echo.Context) error {
 		// pasted secret can look like one too. Only its fingerprint goes
 		// in the line.
 		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), "", authFailureReason(err), fingerprintIdentity(req.Identity))
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			s.rec().LoginFailure("invalid_credentials")
+		} else {
+			s.rec().LoginFailure("upstream")
+		}
 		return respondErr(c, err)
 	}
 
@@ -76,6 +84,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 		// not raw client-submitted identity text, so it is safe to log
 		// as-is even though this outcome is a failure.
 		logAuthEvent(authProviderLDAP, authResultFailure, requestIDOf(c), bound.WhoAmI(), "session_create_error", "")
+		s.rec().LoginFailure("upstream")
 		return respondErr(c, err)
 	}
 
