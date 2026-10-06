@@ -314,6 +314,8 @@ const ko: Record<DictKey, string> = {
     'LDAP Password Modify 오퍼레이션(RFC 3062)으로 설정됩니다. 비워두면 나중에 설정할 수 있습니다.',
   'writes.revisionConflict':
     '목록을 불러온 뒤 다른 곳에서 이 항목이 변경되어 요청을 적용하지 않았습니다. 목록을 새로 고쳤으니 현재 값을 확인한 뒤 다시 시도하세요.',
+  'writes.formReset':
+    '양식을 현재 값으로 초기화했습니다. 저장되지 않은 변경 내용: {values}. 여전히 필요하면 직접 다시 입력하세요.',
   'writes.outcomeUnknown':
     '서버가 이 변경이 적용되었는지 확인하지 못했습니다. 새로 고친 목록을 확인한 뒤 다시 시도하세요.',
   'writes.inProgress': '같은 요청을 아직 처리하고 있습니다. 잠시 기다린 뒤 다시 시도하세요.',

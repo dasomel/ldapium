@@ -85,7 +85,7 @@ export function GroupFormDialog({ open, onOpenChange, group, onSubmit }: GroupFo
               </p>
             )}
             {error && (
-              <div className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+              <div role="alert" className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
                 {error}
               </div>
             )}

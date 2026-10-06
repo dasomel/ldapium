@@ -32,6 +32,16 @@ function newKey(): string {
   return 'ui-' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** `label: "typed value"` for every field the operator changed in a form that a
+ * 412 is about to reset, so they can re-apply them on purpose. Pass only
+ * fields that are safe to echo: never a password. */
+export function describeChanges(fields: Array<[label: string, before: string | undefined, after: string | undefined]>): string {
+  return fields
+    .filter(([, before, after]) => (before ?? '') !== (after ?? ''))
+    .map(([label, , after]) => `${label}: "${after ?? ''}"`)
+    .join('; ')
+}
+
 export interface WriteRun {
   /** Identifies the logical request (operation, target and body). The same
    * fingerprint is the same attempt and reuses its key; a different one (the
@@ -40,6 +50,9 @@ export interface WriteRun {
   fingerprint: unknown
   /** The listed item's etag; omitted for creates and for older servers. */
   etag?: string
+  /** What the operator typed that a 412 will discard (see describeChanges);
+   * named in the notice because the form is reset to the current values. */
+  discarded?: string
   /** Called for outcomes after which the operator must look at fresh data
    * (412, outcome unknown): re-read the list here. Failures are ignored. */
   onStale?: () => Promise<unknown>
@@ -58,6 +71,11 @@ export function useWriteAttempt() {
   const attempt = useRef<{ fingerprint: string; key: string } | null>(null)
 
   return async function run<T>(opts: WriteRun, call: (write: WriteOptions) => Promise<T>): Promise<T> {
+    // The etag is deliberately not part of the fingerprint: the server leaves
+    // If-Match out of its own (method, route, body) fingerprint and replays
+    // before it evaluates If-Match. After a lost response a retry with a newer
+    // etag (our own write moved it) must reuse the key and be replayed, not run
+    // a second time under a new key.
     const fingerprint = JSON.stringify(opts.fingerprint)
     let key: string | undefined
     if (await idempotencyEnabled()) {
@@ -89,7 +107,10 @@ export function useWriteAttempt() {
           await opts.onStale?.().catch(() => undefined)
           throw new ApiError(
             err.status,
-            t(err.code === 'revision_conflict' ? 'writes.revisionConflict' : 'writes.outcomeUnknown'),
+            err.code === 'revision_conflict'
+              ? t('writes.revisionConflict') +
+                  (opts.discarded ? ' ' + t('writes.formReset', { values: opts.discarded }) : '')
+              : t('writes.outcomeUnknown'),
             err.code,
           )
         case 'idempotency_key_conflict':

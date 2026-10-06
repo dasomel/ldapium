@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pencil, Plus, Search, Trash2, Users2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
-import { useWriteAttempt } from '@/lib/useWriteAttempt'
+import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { Group, GroupFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
 import { useT } from '@/context/LanguageContext'
@@ -100,6 +100,10 @@ export function GroupsPage() {
         {
           fingerprint: ['update', target.dn, input],
           etag: target.etag,
+          discarded: describeChanges([
+            ['cn', target.cn, input.cn],
+            [t('common.description'), target.description, input.description],
+          ]),
           onStale: async () => {
             const fresh = (await reread()).find((g) => g.dn === target.dn)
             if (fresh) setEditing(fresh)

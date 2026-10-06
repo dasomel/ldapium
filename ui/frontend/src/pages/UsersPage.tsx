@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronsLeft, ChevronsRight, CircleAlert, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
-import { useWriteAttempt } from '@/lib/useWriteAttempt'
+import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
 import { useLanguage } from '@/context/LanguageContext'
@@ -93,6 +93,15 @@ export function UsersPage() {
         {
           fingerprint: ['update', target.dn, input],
           etag: target.etag,
+          discarded: describeChanges([
+            ['cn', target.cn, input.cn],
+            ['sn', target.sn, input.sn],
+            ['mail', target.mail, input.mail],
+            [t('userForm.givenNameLabel'), target.givenName, input.givenName],
+            [t('userForm.organizationalUnitLabel'), target.organizationalUnit, input.organizationalUnit],
+            [t('userForm.departmentLabel'), target.department, input.department],
+            [t('userForm.organizationLabel'), target.organization, input.organization],
+          ]),
           // Re-seed the open form from the re-read entry: it carries the new
           // etag, and the notice tells the operator the values are current.
           onStale: async () => {

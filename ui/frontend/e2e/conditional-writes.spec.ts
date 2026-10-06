@@ -156,7 +156,10 @@ test('stale edit: 412 shows the re-read notice, refetches and re-seeds the form 
   const getsBefore = mock.listGets()
   await saveCn(page, 'My edit')
   const dialog = page.getByRole('dialog')
-  await expect(dialog).toContainText('changed elsewhere')
+  // role=alert, names the discarded typed value, and says the form was reset.
+  await expect(dialog.getByRole('alert')).toContainText('changed elsewhere')
+  await expect(dialog.getByRole('alert')).toContainText('The form was reset to the current values')
+  await expect(dialog.getByRole('alert')).toContainText('cn: "My edit"')
   await expect(dialog).toContainText('refreshed')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await expect(dialog.getByText('changed elsewhere')).toBeInViewport()
@@ -168,6 +171,9 @@ test('stale edit: 412 shows the re-read notice, refetches and re-seeds the form 
   await expect(page.getByText('Updated jdoe')).toBeVisible()
   expect(puts).toBe(2)
   expect(header(mock.writes[1], 'If-Match')).toBe(ETAG_2)
+  // The discarded value is never sent: the retry carries the CURRENT values.
+  expect(mock.writes.some((w) => w.postDataJSON().cn === 'My edit' && header(w, 'If-Match') === ETAG_2)).toBe(false)
+  expect(mock.writes[1].postDataJSON().cn).toBe('J. Doe (changed elsewhere)')
   // 412 is never stored server-side and the user re-read: a fresh attempt, fresh key.
   expect(header(mock.writes[1], 'Idempotency-Key')).not.toBe(header(mock.writes[0], 'Idempotency-Key'))
 })

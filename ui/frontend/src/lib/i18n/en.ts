@@ -320,6 +320,8 @@ const en = {
     'Set via the LDAP Password Modify operation (RFC 3062). Leave blank to set it later.',
   'writes.revisionConflict':
     'This entry was changed elsewhere after the list was loaded, so your change was not applied. The list has been refreshed; review the current values and try again.',
+  'writes.formReset':
+    'The form was reset to the current values. Your unsaved changes were: {values}. Re-apply them deliberately if they still apply.',
   'writes.outcomeUnknown':
     'The server could not confirm whether this change was applied. Check the refreshed list before trying again.',
   'writes.inProgress': 'The same request is still being processed. Wait a moment, then try again.',
