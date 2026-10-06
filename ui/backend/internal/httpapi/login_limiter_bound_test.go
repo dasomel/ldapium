@@ -258,6 +258,30 @@ func TestLoginLimiterBound_ReclassifiedBlockedEntryIsReclaimed(t *testing.T) {
 	checkInvariants(t, l)
 }
 
+// Documented behaviour (D270-3): eviction compares the failure counts stored
+// as of each entry's last update, not a time-decayed count. A's first two
+// failures have aged out by t=61s (real count 1) but its stored state is still
+// 3/3 (blocked), so the fresher-looking B (stored 2) is the one evicted.
+func TestLoginLimiterBound_EvictionUsesStoredCountsNotTimeDecayed(t *testing.T) {
+	l, advance := boundedTestLimiter(3, time.Minute, 2)
+	failN(l, "192.0.2.1", 2) // A at t=0
+	advance(30 * time.Second)
+	l.recordFailure("192.0.2.1") // A at t=30: stored 3
+	advance(10 * time.Second)
+	failN(l, "192.0.2.2", 2) // B at t=40: stored 2
+	advance(20 * time.Second)
+	l.allow("198.51.100.9") // t=60: the normal sweep; cutoff t=0 is inclusive, nothing ages out
+	advance(time.Second)    // t=61: A's first two failures are now out of the window
+	l.recordFailure("192.0.2.9")
+	if has(l, "192.0.2.2") || !has(l, "192.0.2.1") || !has(l, "192.0.2.9") {
+		t.Fatalf("expected B (stored 2) evicted and A (stored 3, real 1) kept: %v", l.failures)
+	}
+	if count(l, "192.0.2.1") != 3 {
+		t.Errorf("A's stored count = %d, want 3 until its next update or sweep", count(l, "192.0.2.1"))
+	}
+	checkInvariants(t, l)
+}
+
 // No spacing delay: expired slots are usable on the very next call.
 func TestLoginLimiterBound_ExpiredSlotUsableImmediately(t *testing.T) {
 	l, advance := boundedTestLimiter(1, time.Minute, 1)

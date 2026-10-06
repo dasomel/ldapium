@@ -43,9 +43,12 @@ const defaultLoginLimiterMaxEntries = 10000
 // lockout is per account and does not replace this per-source throttle across
 // many accounts.
 //
-// D270-3 (exact guarantees, counts as last refreshed — a failure that has aged
-// out is dropped on the source's next access or the once-per-window sweep, so
-// a stale count only ever protects an entry longer):
+// D270-3 (exact guarantees). Eviction compares the STORED failure counts as of
+// each entry's last update (its own access or the once-per-window sweep), not
+// a time-decayed count: a failure that has aged out is dropped only then, so
+// an entry with partially expired failures can still look fuller (or still
+// blocked) than it really is and be kept over an entry whose real count is
+// higher. Wholly expired entries are always reclaimed first.
 //  1. A victim with f failures is evicted only when the other maxEntries-1
 //     slots hold entries that are blocked or have >= f failures (and, among
 //     equals, the victim is the oldest). A single failure from a fresh address
