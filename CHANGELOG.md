@@ -69,7 +69,7 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   untouched; otherwise the password is not set and nothing is deleted
   (`state: identity_changed`), and a compensating delete whose outcome is
   not observed is `state: unknown`. Idempotency keys
-  are not part of this change.
+  are not part of this change (see the Idempotency-Key entry above).
 
 - **Breaking for some non-browser clients:** every state-changing `/api`
   request (`POST`/`PUT`/`PATCH`/`DELETE`, including login and logout) that

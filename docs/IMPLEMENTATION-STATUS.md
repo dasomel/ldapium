@@ -68,7 +68,7 @@ Contract: `docs/api.md`. Operator procedures: `docs/ui-operations.md`. Decisions
 - same-origin gate on state-changing requests that carry an `Origin` header (403 `origin_mismatch`); requests without `Origin` are unaffected and there is no switch to turn it off
 - opt-in `/metrics` on a separate listener (`METRICS_ADDR`, chart `ui.metrics.*` with a required scrape-peer list); `GET /metrics` on the public port is a 404 envelope
 - opt-in read-only CORS (`CORS_ALLOWED_ORIGINS`, chart `ui.cors.*`); writes are never CORS-enabled
-- cursor pagination for `GET /api/users` and `/api/groups` (`limit`, `cursor`, `q`; legacy response byte-for-byte unchanged), with the opt-in image setting `LDAP_PAGED_TOTAL_LIMIT` (chart `ldap.limits.pagedTotal`) for non-root enumeration past `LDAP_SIZE_LIMIT` (#215; PRs #237, #243, #244, #256)
+- cursor pagination for `GET /api/users` and `/api/groups` (`limit`, `cursor`, `q`, `sort`; legacy response byte-for-byte unchanged), with the opt-in image setting `LDAP_PAGED_TOTAL_LIMIT` (chart `ldap.limits.pagedTotal`) for non-root enumeration past `LDAP_SIZE_LIMIT` (#215; PRs #237, #243, #244, #256)
 - conditional writes: `etag`/`ETag` from `entryCSN`, `If-Match` enforced by slapd through the RFC 4528 assertion control, `PATCH` for users and groups, identity-bound compensation for a user create whose password step fails (#216 part A, PR #235)
 - opt-in `Idempotency-Key` for core writes and backup start (#216 part B, PR #241)
 - backup job IDs, `GET`/`cancel` job endpoints, durable job records, orphan-aware restart recovery, per-kind deadline (#217, PR #236)

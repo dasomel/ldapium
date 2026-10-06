@@ -2,7 +2,7 @@
 
 관리 UI(`ldapium-ui`)의 HTTP API를 운영하는 사람을 위한 절차와 주의점이다. 계약(필드·코드·상태)의 정본은 [api.md](api.md), 결정의 이유는 [오류 봉투 ADR](changes/api-error-envelope/ADR.md)와 [조건부 쓰기 ADR](changes/api-conditional-writes/ADR.md)에 있다. 차트 값은 [charts/ldapium/README.md](../charts/ldapium/README.md), 환경 변수는 [ui/README.md](../ui/README.md)가 정본이다.
 
-> 검증 범위: 아래 YAML은 `helm template`으로 렌더해 확인했다. 클러스터에서 실제 스크랩·NetworkPolicy 집행·프록시 동작은 이 문서를 쓰는 동안 실행하지 않았다.
+> 검증 범위: 아래 YAML은 필수 시크릿(`ui.session.secret`, `auth.adminPassword`, `auth.configPassword`)을 더해 `helm template`으로 렌더해 확인했다(이 YAML만으로는 오프라인 렌더가 되지 않는다). 클러스터에서 실제 스크랩·NetworkPolicy 집행·프록시 동작은 이 문서를 쓰는 동안 실행하지 않았다.
 
 ## `/metrics` 켜기와 스크랩
 
