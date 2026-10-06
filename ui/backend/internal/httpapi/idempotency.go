@@ -299,7 +299,8 @@ func (s *Server) runIdempotent(c echo.Context, next echo.HandlerFunc, h *idempot
 
 	unknown, _ := c.Get(outcomeUnknownKey).(bool)
 	if panicked != nil {
-		log.Printf("idempotent_write_panic request_id=%s", logQuote(requestIDOf(c)))
+		// The panic's type only: its value and stack can carry request data.
+		log.Printf("idempotent_write_panic request_id=%s type=%T", logQuote(requestIDOf(c)), panicked)
 		unknown = true
 	}
 	status := buf.status
@@ -405,11 +406,32 @@ func replayIdempotent(c echo.Context, r idempotency.Result) error {
 // codes (200-206: network, unexpected message/response, ...) say nothing about
 // what the server did.
 func isOutcomeUnknown(err error) bool {
-	var le *ldap.Error
-	if errors.As(err, &le) {
+	if err == nil {
+		return true
+	}
+	// Judge the whole tree (errors.Join, multi-%w), not the first typed error
+	// found: a lost response joined with a definitive answer stays unknown.
+	if le, ok := err.(*ldap.Error); ok {
 		return le.ResultCode >= ldap.ErrorNetwork && le.ResultCode <= ldap.ErrorEmptyPassword
 	}
-	return true
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := u.Unwrap()
+		if len(children) == 0 {
+			return true
+		}
+		for _, child := range children {
+			if isOutcomeUnknown(child) {
+				return true
+			}
+		}
+		return false
+	case interface{ Unwrap() error }:
+		if child := u.Unwrap(); child != nil {
+			return isOutcomeUnknown(child)
+		}
+	}
+	return true // a leaf that is not a server result code
 }
 
 func markOutcomeUnknown(c echo.Context) { c.Set(outcomeUnknownKey, true) }

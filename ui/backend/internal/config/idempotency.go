@@ -36,7 +36,10 @@ func loadIdempotency(getenv func(string) string, cfg *Config) error {
 	}
 	value, err := loadOrGenerateSecret(cfg.IdempotencyKeyFile)
 	if err != nil {
-		return fmt.Errorf("UI_IDEMPOTENCY_KEY_FILE: %w", err)
+		// loadOrGenerateSecret is shared with the session secret and words its
+		// errors for that; say what this file is.
+		text := strings.NewReplacer("SESSION_SECRET_STORE", "UI_IDEMPOTENCY_KEY_FILE", "session secret store", "idempotency key file", "session secret", "idempotency key").Replace(err.Error())
+		return fmt.Errorf("UI_IDEMPOTENCY_KEY_FILE: %s", text)
 	}
 	keys := strings.Fields(value)
 	if len(keys) < 1 || len(keys) > 2 {

@@ -139,3 +139,20 @@ func TestLoad_IdempotencyKeyNeverInErrorText(t *testing.T) {
 		t.Fatalf("error must exist and not carry the key: %v", err)
 	}
 }
+
+func TestLoad_IdempotencyKeyFileErrorsDoNotTalkAboutTheSessionSecret(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "idempotency-key")
+	if err := os.WriteFile(path, []byte(strings.Repeat("e", 64)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"relative/key", path} {
+		_, err := Load(idemEnv(map[string]string{"UI_IDEMPOTENCY_KEY_FILE": p}))
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "session") {
+			t.Errorf("%s: error = %v", p, err)
+		}
+	}
+}
