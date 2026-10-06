@@ -37,7 +37,7 @@ func (c *countingTreeClient) GetEntry(context.Context, string) (*domain.Entry, e
 	return &domain.Entry{}, nil
 }
 
-func (c *countingTreeClient) MoveEntry(_ context.Context, dn, newParentDN string) error {
+func (c *countingTreeClient) MoveEntry(_ context.Context, dn, newParentDN, _ string) error {
 	c.moveCalls++
 	c.lastMoveDN = dn
 	c.lastMoveNewParentDN = newParentDN

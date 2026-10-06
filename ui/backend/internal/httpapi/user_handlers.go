@@ -63,7 +63,12 @@ func (s *Server) handleUpdateUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	err := currentSession(c).Bound.UpdateUser(c.Request().Context(), req.DN, domain.UserInput{
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	err = currentSession(c).Bound.UpdateUser(c.Request().Context(), req.DN, domain.UserInput{
 		CN:                 req.CN,
 		SN:                 req.SN,
 		GivenName:          req.GivenName,
@@ -71,7 +76,7 @@ func (s *Server) handleUpdateUser(c echo.Context) error {
 		Department:         req.Department,
 		Organization:       req.Organization,
 		OrganizationalUnit: req.OrganizationalUnit,
-	})
+	}, ifMatch)
 	if err != nil {
 		return respondErr(c, err)
 	}
@@ -84,7 +89,12 @@ func (s *Server) handleDeleteUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.DeleteUser(c.Request().Context(), dn); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.DeleteUser(c.Request().Context(), dn, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -104,6 +114,9 @@ func (s *Server) handleSetPassword(c echo.Context) error {
 	var req setPasswordRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	if err := rejectIfMatch(c); err != nil {
+		return err
 	}
 	if err := validate.DN(req.DN); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -154,7 +167,12 @@ func (s *Server) handleUnlockUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.Unlock(c.Request().Context(), req.DN); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.Unlock(c.Request().Context(), req.DN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -175,7 +193,12 @@ func (s *Server) handleLockUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.Lock(c.Request().Context(), req.DN); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.Lock(c.Request().Context(), req.DN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

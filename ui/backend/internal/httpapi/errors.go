@@ -236,6 +236,10 @@ func domainStatus(err error) (status int, code string, sentinel error, ok bool) 
 		return http.StatusForbidden, codeForbidden, domain.ErrPermissionDenied, true
 	case errors.Is(err, domain.ErrInvalidInput):
 		return http.StatusBadRequest, codeInvalidRequest, domain.ErrInvalidInput, true
+	case errors.Is(err, domain.ErrRevisionConflict):
+		// A conditional write whose If-Match no longer matches (#216). The
+		// sentinel text is fixed; no DN or filter ever reaches the body.
+		return http.StatusPreconditionFailed, codeRevisionConflict, domain.ErrRevisionConflict, true
 	}
 	return 0, "", nil, false
 }

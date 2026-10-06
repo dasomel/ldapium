@@ -16,7 +16,7 @@ import (
 // same as any other requested attribute here.
 var userAttrs = []string{
 	"uid", "cn", "sn", "givenName", "mail", "displayName", "memberOf", "pwdAccountLockedTime",
-	"departmentNumber", "o", "ou",
+	"departmentNumber", "o", "ou", "entryCSN",
 }
 
 // buildUserDN keeps the user-controlled RDN value separate from the
@@ -64,6 +64,7 @@ func entryToUser(e *ldap.Entry) domain.User {
 		Department:         e.GetAttributeValue("departmentNumber"),
 		Organization:       e.GetAttributeValue("o"),
 		OrganizationalUnit: e.GetAttributeValue("ou"),
+		ETag:               domain.ETagFromCSN(e.GetAttributeValue("entryCSN")),
 	}
 	// Locked is derived from the attribute's mere presence, independent of
 	// whether its value happens to parse as a timestamp (see
@@ -137,7 +138,7 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 // UpdateUser replaces cn/sn/givenName/mail on the user at dn. A field left
 // empty in in is removed from the entry rather than written as an empty
 // string, which LDAP does not allow.
-func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput) error {
+func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -145,10 +146,15 @@ func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput)
 		return fmt.Errorf("%w: cn and sn are required", domain.ErrInvalidInput)
 	}
 
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	mod := ldap.NewModifyRequest(dn, nil)
+	mod := ldap.NewModifyRequest(dn, ctrls)
 	mod.Replace("cn", []string{in.CN})
 	mod.Replace("sn", []string{in.SN})
 	replaceOrClear(mod, "givenName", in.GivenName)
@@ -185,14 +191,19 @@ func replaceOrClear(mod *ldap.ModifyRequest, attrType, value string) {
 }
 
 // DeleteUser removes the user entry at dn.
-func (c *client) DeleteUser(ctx context.Context, dn string) error {
+func (c *client) DeleteUser(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.conn.Del(ldap.NewDelRequest(dn, nil)); err != nil {
+	if err := c.conn.Del(ldap.NewDelRequest(dn, ctrls)); err != nil {
 		return mapErr("delete user", err)
 	}
 	return nil
@@ -251,14 +262,21 @@ func unlockModify(dn string) *ldap.ModifyRequest {
 // Unlock clears a password-policy lockout on dn (see unlockModify for
 // exactly what it does and does not touch). Calling it on an account that
 // isn't locked succeeds as a no-op (idempotent).
-func (c *client) Unlock(ctx context.Context, dn string) error {
+func (c *client) Unlock(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.conn.Modify(unlockModify(dn)); err != nil {
+	mod := unlockModify(dn)
+	mod.Controls = ctrls
+	if err := c.conn.Modify(mod); err != nil {
 		return mapErr("unlock user", err)
 	}
 	return nil
@@ -291,14 +309,21 @@ func lockModify(dn string) *ldap.ModifyRequest {
 // other method here, this performs no authorization check of its own;
 // whether the bound user may write dn's pwdAccountLockedTime is entirely
 // up to the directory's ACLs.
-func (c *client) Lock(ctx context.Context, dn string) error {
+func (c *client) Lock(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.conn.Modify(lockModify(dn)); err != nil {
+	mod := lockModify(dn)
+	mod.Controls = ctrls
+	if err := c.conn.Modify(mod); err != nil {
 		return mapErr("lock user", err)
 	}
 	return nil

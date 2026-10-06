@@ -17,4 +17,8 @@ type TreeNode struct {
 type Entry struct {
 	DN         string              `json:"dn"`
 	Attributes map[string][]string `json:"attributes"`
+	// ETag is the entry's revision (entryCSN as a quoted strong ETag),
+	// served as the ETag response header and deliberately kept out of the
+	// JSON body and out of Attributes. Empty when unreadable.
+	ETag string `json:"-"`
 }

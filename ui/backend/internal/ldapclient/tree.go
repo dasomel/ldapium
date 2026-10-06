@@ -114,7 +114,7 @@ func (c *client) GetEntry(ctx context.Context, dn string) (*domain.Entry, error)
 		dn,
 		ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 0, false,
 		"(objectClass=*)",
-		[]string{"*"},
+		[]string{"*", "entryCSN"},
 		nil,
 	)
 	res, err := c.conn.Search(req)
@@ -140,9 +140,14 @@ func entryToDomainEntry(e *ldap.Entry) *domain.Entry {
 		if entryRedactedAttrs[strings.ToLower(baseName)] {
 			continue
 		}
+		// entryCSN is requested only to become the ETag; it is the
+		// revision, not an editable attribute, so it stays out of the body.
+		if strings.EqualFold(a.Name, "entryCSN") {
+			continue
+		}
 		attrs[a.Name] = a.Values
 	}
-	return &domain.Entry{DN: e.DN, Attributes: attrs}
+	return &domain.Entry{DN: e.DN, Attributes: attrs, ETag: domain.ETagFromCSN(e.GetAttributeValue("entryCSN"))}
 }
 
 // rdnOf returns the leftmost RDN component of dn, e.g. "ou=people" from
@@ -188,7 +193,7 @@ func buildMoveRequest(dn, newParentDN string) (*ldap.ModifyDNRequest, error) {
 
 // MoveEntry moves the entry at dn under newParentDN using the LDAP ModifyDN
 // operation (preserving the entry's current RDN and deleting the old DN).
-func (c *client) MoveEntry(ctx context.Context, dn, newParentDN string) error {
+func (c *client) MoveEntry(ctx context.Context, dn, newParentDN, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -196,6 +201,12 @@ func (c *client) MoveEntry(ctx context.Context, dn, newParentDN string) error {
 	if err != nil {
 		return err
 	}
+
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+	req.Controls = ctrls
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

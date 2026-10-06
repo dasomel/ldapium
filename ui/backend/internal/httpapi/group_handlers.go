@@ -48,10 +48,15 @@ func (s *Server) handleUpdateGroup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	err := currentSession(c).Bound.UpdateGroup(c.Request().Context(), req.DN, domain.GroupInput{
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	err = currentSession(c).Bound.UpdateGroup(c.Request().Context(), req.DN, domain.GroupInput{
 		CN:          req.CN,
 		Description: req.Description,
-	})
+	}, ifMatch)
 	if err != nil {
 		return respondErr(c, err)
 	}
@@ -64,7 +69,12 @@ func (s *Server) handleDeleteGroup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.DeleteGroup(c.Request().Context(), dn); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.DeleteGroup(c.Request().Context(), dn, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -79,7 +89,12 @@ func (s *Server) handleAddMember(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.AddMember(c.Request().Context(), req.GroupDN, req.MemberDN); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.AddMember(c.Request().Context(), req.GroupDN, req.MemberDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -94,7 +109,12 @@ func (s *Server) handleRemoveMember(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.RemoveMember(c.Request().Context(), req.GroupDN, req.MemberDN); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.RemoveMember(c.Request().Context(), req.GroupDN, req.MemberDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

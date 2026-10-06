@@ -46,7 +46,7 @@ type Client interface {
 
 	// MoveEntry moves the entry at dn under newParentDN without changing
 	// its RDN.
-	MoveEntry(ctx context.Context, dn, newParentDN string) error
+	MoveEntry(ctx context.Context, dn, newParentDN, ifMatch string) error
 
 	// MonitorStats reads slapd's cn=Monitor subtree for the admin UI's
 	// health view. cn=Monitor's own ACL restricts it to a dedicated bind
@@ -80,9 +80,9 @@ type Client interface {
 	// extended operation (RFC 3062).
 	CreateUser(ctx context.Context, base string, in domain.UserInput) (string, error)
 	// UpdateUser replaces the given attributes on the user at dn.
-	UpdateUser(ctx context.Context, dn string, in domain.UserInput) error
+	UpdateUser(ctx context.Context, dn string, in domain.UserInput, ifMatch string) error
 	// DeleteUser removes the user entry at dn.
-	DeleteUser(ctx context.Context, dn string) error
+	DeleteUser(ctx context.Context, dn, ifMatch string) error
 	// SetPassword changes the password of dn via RFC 3062 Password Modify.
 	// oldPassword is forwarded to the extended operation as-is; it may be
 	// empty (an administrator resetting another user's password typically
@@ -98,12 +98,12 @@ type Client interface {
 	// here, this package performs no authorization check of its own —
 	// whether the bound user may write dn's pwdAccountLockedTime is
 	// entirely up to the directory's ACLs.
-	Unlock(ctx context.Context, dn string) error
+	Unlock(ctx context.Context, dn, ifMatch string) error
 	// Lock administratively disables dn — the symmetric counterpart to
 	// Unlock, for taking an account out of service rather than clearing a
 	// ppolicy-applied lockout. No authorization check of its own; the
 	// directory's ACLs decide who may write dn's pwdAccountLockedTime.
-	Lock(ctx context.Context, dn string) error
+	Lock(ctx context.Context, dn, ifMatch string) error
 
 	// ListGroups returns all groupOfNames entries under base, paging
 	// transparently past the server's admin size limit. truncated is true
@@ -113,13 +113,13 @@ type Client interface {
 	// CreateGroup creates a new groupOfNames entry under base.
 	CreateGroup(ctx context.Context, base string, in domain.GroupInput) (string, error)
 	// UpdateGroup replaces the given attributes on the group at dn.
-	UpdateGroup(ctx context.Context, dn string, in domain.GroupInput) error
+	UpdateGroup(ctx context.Context, dn string, in domain.GroupInput, ifMatch string) error
 	// DeleteGroup removes the group entry at dn.
-	DeleteGroup(ctx context.Context, dn string) error
+	DeleteGroup(ctx context.Context, dn, ifMatch string) error
 	// AddMember adds memberDN to the group's member attribute.
-	AddMember(ctx context.Context, groupDN, memberDN string) error
+	AddMember(ctx context.Context, groupDN, memberDN, ifMatch string) error
 	// RemoveMember removes memberDN from the group's member attribute.
-	RemoveMember(ctx context.Context, groupDN, memberDN string) error
+	RemoveMember(ctx context.Context, groupDN, memberDN, ifMatch string) error
 }
 
 // Dialer opens a new bound Client, authenticating dn/password via an actual

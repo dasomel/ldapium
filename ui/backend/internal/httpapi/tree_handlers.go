@@ -43,6 +43,9 @@ func (s *Server) handleGetEntry(c echo.Context) error {
 	if err != nil {
 		return respondErr(c, err)
 	}
+	if entry.ETag != "" {
+		c.Response().Header().Set("ETag", entry.ETag)
+	}
 	return c.JSON(http.StatusOK, entry)
 }
 
@@ -59,7 +62,12 @@ func (s *Server) handleMoveEntry(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	if err := currentSession(c).Bound.MoveEntry(c.Request().Context(), req.DN, req.NewParentDN); err != nil {
+	ifMatch, err := ifMatchCSN(c)
+	if err != nil {
+		return err
+	}
+
+	if err := currentSession(c).Bound.MoveEntry(c.Request().Context(), req.DN, req.NewParentDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

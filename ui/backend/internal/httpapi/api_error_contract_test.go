@@ -99,7 +99,7 @@ func (leakyClient) SetPassword(context.Context, string, string, string) (string,
 func (leakyClient) CreateUser(context.Context, string, domain.UserInput) (string, error) {
 	return "", diagErr(domain.ErrConflict)
 }
-func (leakyClient) AddMember(context.Context, string, string) error {
+func (leakyClient) AddMember(context.Context, string, string, string) error {
 	return diagErr(domain.ErrConflict)
 }
 func (leakyClient) ListUsers(context.Context, string) ([]domain.User, bool, error) {
