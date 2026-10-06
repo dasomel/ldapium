@@ -1506,34 +1506,76 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3a1. dedicated recovery from a stored olcSyncrepl that slapd can no longer load
-#      (an older build stored a retry list such as `+`: "incomplete syncrepl retry
-#      list", and every offline tool then fails with "bad configuration directory").
-#      The values are re-rendered from the (validated) environment in section 4 on
-#      every start anyway, so when cn=config is unreadable ONLY in this mode the
-#      stored olcSyncrepl and olcMultiProvider values are cut out of the main
-#      database's config file, and readability is re-checked. Nothing else is touched;
-#      if cn=config is still unreadable the start is refused.
+# 3a1. dedicated: a stored olcSyncrepl that slapd can no longer load (an older build
+#      stored a retry list such as `+`: "incomplete syncrepl retry list", and every
+#      offline tool then fails with "bad configuration directory"). The values are
+#      re-rendered from the validated environment in section 4 on every start, so such
+#      a stored value is cut out of the main database's config file. Ordering and
+#      safety rules:
+#        - every refusal comes FIRST: section 3a2 runs all of its stored-config checks
+#          (authz, rootDN, TLS verify, existing entry, ...) against a throwaway COPY of
+#          the config with the stored values already cut out, and nothing in the real
+#          volume is touched until none of them applies;
+#        - the repair itself is the last step before the ACL install and is crash-safe:
+#          the new file is written next to the original (mode 600), checked, a backup is
+#          taken, both are flushed, and only then does an atomic rename replace the
+#          original; a failure at any step removes the temporary files and leaves the
+#          original as it was, and a failed verification puts the backup back. The
+#          backup (olcDatabase={1}mdb.ldif.bak-<UTC time>) is kept, the newest only.
 # ---------------------------------------------------------------------------
+ri_rdir="$CONFIG_DIR"
+ri_pending=""
+ri_cf="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
+# ri_cut_syncrepl <source> <destination>: <source> without its olcSyncrepl/olcMultiProvider
+# values (and their continuation lines), then verified: not empty, main database entry and
+# directory present, no olcSyncrepl left, strictly shorter than the source.
+ri_cut_syncrepl() {
+  awk 'BEGIN { skip = 0 }
+    /^olcSyncrepl:/ || /^olcMultiProvider:/ { skip = 1; next }
+    skip && /^ / { next }
+    { skip = 0; print }' "$1" > "$2" || return 1
+  [ -s "$2" ] || return 1
+  grep -q '^dn: olcDatabase={1}mdb' "$2" || return 1
+  grep -q '^olcDbDirectory:' "$2" || return 1
+  if grep -q '^olcSyncrepl:' "$2"; then return 1; fi
+  [ "$(wc -l < "$2")" -lt "$(wc -l < "$1")" ] || return 1
+  return 0
+}
 if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ] && [ -f "$MARKER" ]; then
   if ! slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
-    ri_cf="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
     [ -f "$ri_cf" ] || die "replication identity dedicated: cn=config is unreadable and the main database config is missing; refusing to start"
     grep -q '^olcSyncrepl:' "$ri_cf" ||
       die "replication identity dedicated: cn=config is unreadable and the cause is not a stored olcSyncrepl; refusing to start"
-    log "replication identity dedicated: stored olcSyncrepl makes cn=config unreadable; removing the stored olcSyncrepl/olcMultiProvider values (re-rendered from the environment below)"
-    ri_cft=$(mktemp) || die "replication identity dedicated: cannot create a temporary file"
-    awk 'BEGIN { skip = 0 }
-      /^olcSyncrepl:/ || /^olcMultiProvider:/ { skip = 1; next }
-      skip && /^ / { next }
-      { skip = 0; print }' "$ri_cf" > "$ri_cft" || { rm -f "$ri_cft"; die "replication identity dedicated: cannot rewrite the main database config; refusing to start"; }
-    [ -s "$ri_cft" ] || { rm -f "$ri_cft"; die "replication identity dedicated: rewritten main database config is empty; refusing to start"; }
-    cat "$ri_cft" > "$ri_cf" || { rm -f "$ri_cft"; die "replication identity dedicated: cannot write the main database config; refusing to start"; }
-    rm -f "$ri_cft"
-    slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1 ||
-      die "replication identity dedicated: cn=config is still unreadable after removing the stored olcSyncrepl; refusing to start"
+    log "replication identity dedicated: stored olcSyncrepl makes cn=config unreadable; the checks run on a repaired copy first, the volume is only changed once none of them refuses"
+    ri_cfail="replication identity dedicated: cannot evaluate the repaired configuration; nothing was modified; refusing to start"
+    ri_tmpd=$(mktemp -d) || die "$ri_cfail"
+    trap 'rm -rf "$ri_tmpd"' EXIT
+    cp -a "$CONFIG_DIR/." "$ri_tmpd/" || die "$ri_cfail"
+    ri_cut_syncrepl "$ri_cf" "${ri_tmpd}/cn=config/olcDatabase={1}mdb.ldif" || die "$ri_cfail"
+    slapcat -n 0 -F "$ri_tmpd" >/dev/null 2>&1 || die "$ri_cfail"
+    ri_rdir="$ri_tmpd"
+    ri_pending=1
   fi
 fi
+# ri_apply_repair: only called after every refusal of section 3a2 has passed.
+ri_apply_repair() {
+  ri_nofix() { die "replication identity dedicated: $1; the stored configuration was not modified; refusing to start"; }
+  ri_new="${ri_cf}.repair-tmp"
+  ri_bak="${ri_cf}.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+  rm -f "$ri_new"
+  (umask 077; ri_cut_syncrepl "$ri_cf" "$ri_new") || { rm -f "$ri_new"; ri_nofix "cannot prepare the repaired main database config"; }
+  cp -p "$ri_cf" "$ri_bak" || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot back up the main database config"; }
+  sync || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot flush the repaired config to disk"; }
+  mv "$ri_new" "$ri_cf" || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot replace the main database config"; }
+  if ! sync || ! slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
+    mv "$ri_bak" "$ri_cf" || die "replication identity dedicated: the repaired config failed verification and the previous file could NOT be restored; it is kept as ${ri_bak}; refusing to start"
+    die "replication identity dedicated: the repaired config failed verification; the previous main database config was restored; refusing to start"
+  fi
+  for ri_oldbak in "${ri_cf}".bak-*; do
+    if [ "$ri_oldbak" != "$ri_bak" ]; then rm -f "$ri_oldbak"; fi
+  done
+  log "replication identity dedicated: removed the unloadable stored olcSyncrepl/olcMultiProvider values (backup kept as ${ri_bak}); they are re-rendered from the environment below"
+}
 
 # ---------------------------------------------------------------------------
 # 3a2. LDAP_REPLICATION_IDENTITY=prepare|dedicated (D51/D52, #229 T-011/T-012). Installs the
@@ -1566,7 +1608,7 @@ if [ "$LDAP_REPLICATION_IDENTITY" != "admin" ]; then
   # ri_scan: read cn=config (held in a variable only: it contains credentials)
   # and set ri_cfg, ri_mdb, ri_have_acl, ri_have_lim.
   ri_scan() {
-    ri_cfg=$(slapcat -n 0 -F "$CONFIG_DIR" -o ldif-wrap=no) || die "$ri_fail"
+    ri_cfg=$(slapcat -n 0 -F "$ri_rdir" -o ldif-wrap=no) || die "$ri_fail"
     ri_mdb=$(printf '%s\n' "$ri_cfg" | sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p')
     # An empty read must never mean "nothing stored": the main database entry
     # always exists, so its absence is a failed read.
@@ -1630,7 +1672,7 @@ EOF
   # authzTo/authzFrom on any entry (offline read; the DB file only exists once
   # slapd or slapadd has created it).
   if [ -e "${MDB_DIR}/data.mdb" ]; then
-    ri_authz=$(slapcat -n 1 -F "$CONFIG_DIR" -o ldif-wrap=no -a '(|(authzTo=*)(authzFrom=*))') || die "$ri_fail"
+    ri_authz=$(slapcat -n 1 -F "$ri_rdir" -o ldif-wrap=no -a '(|(authzTo=*)(authzFrom=*))') || die "$ri_fail"
     [ -z "$ri_authz" ] ||
       die "replication identity ${LDAP_REPLICATION_IDENTITY} refused: an entry carries authzTo/authzFrom (proxy authorization could assume the replication identity)"
   fi
@@ -1643,10 +1685,20 @@ EOF
     ri_esc=$(printf '%s' "$ri_dn" | sed -e 's/\\/\\5c/g' -e 's/\*/\\2a/g' -e 's/(/\\28/g' -e 's/)/\\29/g')
     ri_entry=""
     if [ -e "${MDB_DIR}/data.mdb" ]; then
-      ri_entry=$(slapcat -n 1 -F "$CONFIG_DIR" -o ldif-wrap=no -a "(entryDN=${ri_esc})") || die "$ri_fail"
+      ri_entry=$(slapcat -n 1 -F "$ri_rdir" -o ldif-wrap=no -a "(entryDN=${ri_esc})") || die "$ri_fail"
     fi
     [ -z "$ri_entry" ] ||
       die "replication identity ${LDAP_REPLICATION_IDENTITY} refused: ${ri_dn} already exists on this node but the identity ACL is not installed; delete the entry first (operator retire) and restart"
+  fi
+
+  # Every refusal above has passed: only now may the volume change (3a1).
+  if [ -n "$ri_pending" ]; then
+    ri_apply_repair
+    rm -rf "$ri_tmpd"
+    trap - EXIT
+    ri_rdir="$CONFIG_DIR"
+    ri_pending=""
+    ri_scan
   fi
 
   if [ "$ri_have_acl" -eq 1 ] && [ "$ri_have_lim" -eq 1 ]; then

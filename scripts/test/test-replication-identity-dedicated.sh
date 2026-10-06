@@ -23,6 +23,12 @@
 #   listing). Includes stored olcAuthzRegexp (service42 -> identity), olcAuthIDRewrite,
 #   olcAuthzPolicy, authzTo, olcTLSVerifyClient=try, a stored rootDN equal to the
 #   reserved DN, a misplaced rule and a pre-existing entry; plus the admin rollback.
+# Part 3b (repair): a stored olcSyncrepl slapd cannot load. Matrix {unloadable, loadable, no stored
+#   retry} x {stored olcAuthzRegexp, olcAuthIDRewrite, authzTo, none} x {env valid, invalid}: every
+#   refusal leaves the whole config+data volumes byte-identical, the repair happens only when nothing
+#   refuses. Fault injection (awk, cp, sync, mv failing at each step, SIGKILL during a stalled flush,
+#   a full disk on a tmpfs sized to the config) must leave the original file intact, and a later normal
+#   start repairs and runs.
 # Part 4 (only with a base image): `prepare` pair is byte-identical to the base image
 #   (cn=config and olcSyncrepl). The admin comparison is test-replication-identity-env.sh.
 #
@@ -32,7 +38,7 @@
 #
 # Usage: scripts/test/test-replication-identity-dedicated.sh [image] [base-image]
 #   image defaults to ldapium:e2e. Requires Docker. RIDDED_TIMEOUT (seconds, default
-#   120) bounds every wait; RIDDED_ONLY=cluster|refusals|base runs one part.
+#   120) bounds every wait; RIDDED_ONLY=cluster|refusals|repair|base runs one part.
 #   Resources are named ldapium-ridded-* and only those are removed on exit.
 set -euo pipefail
 # Never pipe into `grep -q` (SIGPIPE + pipefail): match captured variables.
@@ -922,6 +928,263 @@ EOF
   check "admin rollback: olcSyncrepl binds as the admin DN again, without TLS options" "1:0" \
     "$(grep -c "binddn=\"${admin}\"" <<<"$rb" || true):$(grep -c 'tls_reqcert' <<<"$rb" || true)"
   docker rm -fv "$rv" >/dev/null
+fi
+
+# ============================================================================
+# Part 3b: refusal ordering and the crash-safe repair of an unloadable stored olcSyncrepl
+# ============================================================================
+if want repair; then
+  echo "== Part 3b: repair ordering matrix and crash-safe repair"
+  rp_common=(-e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${idpw}")
+  rp_tls=(-v "${certs}:/certs:ro" -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem -e LDAP_TLS_CA_FILE=/certs/ca.pem)
+  rp_peers_ok=(-e "LDAP_REPLICATION_PEERS=ldaps://rbx.test:636,ldaps://rby.test:636")
+  rp_peers_bad=(-e "LDAP_REPLICATION_PEERS=ldaps://rbx.test:636 provider=ldap://x:389,ldaps://rby.test:636")
+  peermsg="requires LDAP_REPLICATION_PEERS to be a comma-separated list of exactly ldaps://<host>[:<port>] entries"
+  rpn=0
+  reg_rp() { reg_vols+=("${1}-cfg" "${1}-data"); docker volume create "${1}-cfg" >/dev/null; docker volume create "${1}-data" >/dev/null; }
+  # offline tool on a volume pair (stdin passes through)
+  rp_off() { local v="$1" t="$2"; shift 2; docker run --rm -i -v "${v}-cfg:/etc/openldap/slapd.d" -v "${v}-data:/var/lib/openldap/data" --entrypoint "$t" "$image" "$@"; }
+  # sha256 over the names and contents of every file of both volumes (lock.mdb is rewritten by any
+  # read-only slapcat -n 1, so it is excluded)
+  vol_sum() {
+    local o
+    o="$(docker run --rm -v "${1}-cfg:/c:ro" -v "${1}-data:/d:ro" --entrypoint sh "$image" -c 'find /c /d -type f ! -name lock.mdb -exec sha256sum {} + | sort | sha256sum' 2>&1)" || { helper_fail "vol_sum $1: ${o:0:300}"; return 1; }
+    [ -n "$o" ] || { helper_fail "vol_sum $1: empty"; return 1; }
+    printf '%s\n' "$o"
+  }
+  cfg_file_sum() {
+    local o
+    o="$(docker run --rm -v "${1}-cfg:/c:ro" --entrypoint sha256sum "$image" '/c/cn=config/olcDatabase={1}mdb.ldif' 2>&1)" || { helper_fail "cfg_file_sum $1: ${o:0:300}"; return 1; }
+    printf '%s\n' "${o%% *}"
+  }
+  rp_loads() { # volume: does slapd load the config (slapcat -n 0)?
+    docker run --rm -v "${1}-cfg:/etc/openldap/slapd.d:ro" -v "${1}-data:/var/lib/openldap/data:ro" --entrypoint slapcat "$image" -n 0 -F /etc/openldap/slapd.d >/dev/null 2>&1
+  }
+  rp_clone() { # src dst
+    reg_rp "$2"
+    docker run --rm --user 0 -v "${1}-cfg:/f:ro" -v "${2}-cfg:/t" --entrypoint cp "$image" -a /f/. /t/
+    docker run --rm --user 0 -v "${1}-data:/f:ro" -v "${2}-data:/t" --entrypoint cp "$image" -a /f/. /t/
+  }
+  rp_settle() { # container: wait until it stopped or answers
+    local n="$1" w=0
+    while [ "$w" -lt 60 ]; do
+      [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null || echo gone)" = "false" ] && return 0
+      ready "$n" && return 0
+      sleep 1
+      w=$((w + 1))
+    done
+    return 1
+  }
+  rp_run() { # name volume [docker args...]: dedicated sid 1 on an existing volume pair
+    local name="$1" v="$2"
+    shift 2
+    reg_containers+=("$name")
+    docker run -d --name "$name" --network "$net" --hostname "$name" -v "${v}-cfg:/etc/openldap/slapd.d" -v "${v}-data:/var/lib/openldap/data" \
+      "${rp_common[@]}" "${rp_tls[@]}" "$@" "$image" >/dev/null
+  }
+
+  # Base volumes: rp_none (no replication ever, base DIT present) and rp_load (admin-mode sid 1
+  # with a valid stored olcSyncrepl and the base DIT).
+  rp_none="ldapium-ridded-rpnone-${suffix}"
+  rp_load="ldapium-ridded-rpload-${suffix}"
+  reg_rp "$rp_none"
+  reg_rp "$rp_load"
+  reg_containers+=("${rp_none}-c" "${rp_load}-c")
+  docker run -d --name "${rp_none}-c" -v "${rp_none}-cfg:/etc/openldap/slapd.d" -v "${rp_none}-data:/var/lib/openldap/data" -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" "$image" >/dev/null
+  wait_ready "${rp_none}-c" || bad "repair base (none) never ready"
+  docker rm -f "${rp_none}-c" >/dev/null
+  docker run -d --name "${rp_load}-c" -v "${rp_load}-cfg:/etc/openldap/slapd.d" -v "${rp_load}-data:/var/lib/openldap/data" -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" \
+    -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 -e "LDAP_REPLICATION_PEERS=ldap://rbx.test:389,ldap://rby.test:389" "$image" >/dev/null
+  wait_ready "${rp_load}-c" || bad "repair base (loadable) never ready"
+  docker rm -f "${rp_load}-c" >/dev/null
+
+  apply_authz() { # kind volume
+    if [ "$1" = regexp ]; then
+      rp_off "$2" slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: cn=config
+changetype: modify
+add: olcAuthzRegexp
+olcAuthzRegexp: {0}^cn=service42\$ ${iddn}
+EOF
+    elif [ "$1" = rewrite ]; then
+      rp_off "$2" slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: cn=config
+changetype: modify
+add: olcAuthIDRewrite
+olcAuthIDRewrite: {0}rewriteRule "^(.*)\$" "uid=\$1,${base}" ":@"
+EOF
+    elif [ "$1" = authzto ]; then
+      rp_off "$2" slapmodify -n 1 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: uid=proxy,${base}
+changetype: add
+objectClass: inetOrgPerson
+objectClass: extensibleObject
+uid: proxy
+cn: proxy
+sn: proxy
+authzTo: dn:${iddn}
+EOF
+    fi
+  }
+  break_retry() { # volume: store a retry list slapd cannot load (the offline modify accepts it)
+    printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\nreplace: olcSyncrepl\nolcSyncrepl: rid=001 provider=ldaps://rbx.test:636 bindmethod=simple binddn="cn=admin,%s" credentials="x" searchbase="%s" type=refreshAndPersist retry="+" interval=00:00:00:10\n' "$base" "$base" |
+      rp_off "$1" slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null
+  }
+
+  # --- matrix: stored syncrepl {unloadable, loadable, none} x stored authz {4} x env {valid, invalid}
+  for rstate in unloadable loadable none; do
+    for rauthz in regexp rewrite authzto none; do
+      for renv in valid invalid; do
+        rpn=$((rpn + 1))
+        cv="ldapium-ridded-rm${rpn}-${suffix}"
+        src="$rp_load"
+        [ "$rstate" = none ] && src="$rp_none"
+        rp_clone "$src" "$cv"
+        apply_authz "$rauthz" "$cv"
+        [ "$rstate" = unloadable ] && break_retry "$cv"
+        label="matrix [stored retry ${rstate}] [authz ${rauthz}] [env ${renv}]"
+        if [ "$rstate" = unloadable ]; then
+          if rp_loads "$cv"; then bad "${label}: precondition failed, cn=config still loads"; continue; fi
+        fi
+        pre="$(vol_sum "$cv")"
+        penv=("${rp_peers_ok[@]}")
+        [ "$renv" = invalid ] && penv=("${rp_peers_bad[@]}")
+        rp_run "${cv}-c" "$cv" "${penv[@]}"
+        rp_settle "${cv}-c" || bad "${label}: neither stopped nor ready"
+        rout="$(dlogs "${cv}-c")"
+        running="$(docker inspect -f '{{.State.Running}}' "${cv}-c")"
+        if [ "$renv" = invalid ] || [ "$rauthz" != none ]; then
+          want_msg="$peermsg"
+          case "$rauthz" in
+            regexp) want_msg="olcAuthzRegexp is stored" ;;
+            rewrite) want_msg="olcAuthIDRewrite is stored" ;;
+            authzto) want_msg="an entry carries authzTo/authzFrom" ;;
+          esac
+          [ "$renv" = invalid ] && want_msg="$peermsg"
+          docker rm -fv "${cv}-c" >/dev/null
+          post="$(vol_sum "$cv")"
+          if [ "$running" = "false" ] && [[ "$rout" == *"$want_msg"* ]]; then ok "${label}: refused with the fixed message"; else bad "${label}: expected a refusal containing '${want_msg}' (running=${running}); got: $(printf '%s' "$rout" | tail -n 2)"; fi
+          check "${label}: whole config+data volumes byte-identical after the refusal" "$pre" "$post"
+        else
+          check "${label}: node starts" "true" "$running"
+          nbak="$(docker run --rm -v "${cv}-cfg:/c:ro" --entrypoint sh "$image" -c 'ls /c/cn=config | grep -c "\.bak-"' 2>/dev/null || true)"
+          if [ "$rstate" = unloadable ]; then
+            check "${label}: repaired, one backup kept" "1" "$nbak"
+          else
+            check "${label}: no repair, no backup" "0" "$nbak"
+          fi
+          docker rm -fv "${cv}-c" >/dev/null
+        fi
+        docker volume rm -f "${cv}-cfg" "${cv}-data" >/dev/null
+      done
+    done
+  done
+
+  # --- fault injection into every step of the repair
+  rp_bk="ldapium-ridded-rpbk-${suffix}"
+  rp_clone "$rp_load" "$rp_bk"
+  break_retry "$rp_bk"
+  rp_loads "$rp_bk" && bad "fault base: cn=config still loads"
+  fb="ldapium-ridded-fb-${suffix}"
+  reg_vols+=("$fb")
+  docker volume create "$fb" >/dev/null
+  docker run --rm -i --user 0 -v "${fb}:/fb" --entrypoint sh "$image" -c 'cat > /fb/wrap; for n in awk mv cp sync; do cp /fb/wrap "/fb/$n"; done; chmod 755 /fb/*; rm /fb/wrap' <<'EOF'
+#!/bin/sh
+# fault wrapper: RIDDED_FAULT=<name> RIDDED_FAULT_AT=<n> [RIDDED_FAULT_MODE=stall]; only calls that belong to the repair count
+me=${0##*/}
+hit=0
+case "$me" in
+  awk) case "$*" in *olcSyncrepl*) hit=1 ;; esac ;;
+  mv|cp) case "$*" in *repair-tmp*|*.bak-*) hit=1 ;; esac ;;
+  sync) hit=1 ;;
+esac
+if [ "$hit" = 1 ] && [ "${RIDDED_FAULT:-}" = "$me" ]; then
+  f="/tmp/ridded-fault-$me"
+  n=$(cat "$f" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" > "$f"
+  if [ "$n" = "${RIDDED_FAULT_AT:-1}" ]; then
+    if [ "${RIDDED_FAULT_MODE:-fail}" = stall ]; then echo "ridded: stalling $me" >&2; sleep 600; fi
+    echo "ridded: injected $me failure" >&2
+    exit 1
+  fi
+fi
+exec "/usr/bin/$me" "$@"
+EOF
+  fault_path="/faultbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  orig_sum="$(cfg_file_sum "$rp_bk")"
+  for fcase in "awk|1|cannot evaluate the repaired configuration" "awk|2|cannot prepare the repaired main database config" "cp|1|cannot back up the main database config" \
+    "sync|1|cannot flush the repaired config to disk" "mv|1|cannot replace the main database config" "sync|2|the previous main database config was restored"; do
+    IFS='|' read -r fname fat fmsg <<<"$fcase"
+    rpn=$((rpn + 1))
+    fv="ldapium-ridded-rf${rpn}-${suffix}"
+    rp_clone "$rp_bk" "$fv"
+    flabel="fault ${fname}#${fat}"
+    pre="$(vol_sum "$fv")"
+    rp_run "${fv}-c" "$fv" "${rp_peers_ok[@]}" -v "${fb}:/faultbin:ro" -e "PATH=${fault_path}" -e "RIDDED_FAULT=${fname}" -e "RIDDED_FAULT_AT=${fat}"
+    rp_settle "${fv}-c" || bad "${flabel}: neither stopped nor ready"
+    fout="$(dlogs "${fv}-c")"
+    frun="$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "${fv}-c")"
+    docker rm -fv "${fv}-c" >/dev/null
+    if [ "$frun" != "false 0" ] && [[ "$frun" == false* ]] && [[ "$fout" == *"$fmsg"* ]]; then ok "${flabel}: refused with '${fmsg}'"; else bad "${flabel}: expected exit != 0 with '${fmsg}' (${frun}); got: $(printf '%s' "$fout" | tail -n 2)"; fi
+    check "${flabel}: the original main database config file is intact" "$orig_sum" "$(cfg_file_sum "$fv")"
+    check "${flabel}: whole volumes identical to before the attempt (no temp or backup file left)" "$pre" "$(vol_sum "$fv")"
+    if rp_loads "$fv"; then bad "${flabel}: cn=config unexpectedly loads (the original must still be the unloadable one)"; else ok "${flabel}: the volume is exactly as unrecoverable as before the attempt"; fi
+    rp_run "${fv}-c2" "$fv" "${rp_peers_ok[@]}"
+    if wait_ready "${fv}-c2"; then ok "${flabel}: a later normal start repairs the volume and runs"; else bad "${flabel}: later start failed"; dlogs "${fv}-c2" | tail -n 4 >&2 || true; fi
+    docker rm -fv "${fv}-c2" >/dev/null
+    docker volume rm -f "${fv}-cfg" "${fv}-data" >/dev/null
+  done
+
+  # SIGKILL while the flush step is stalled
+  rpn=$((rpn + 1))
+  fv="ldapium-ridded-rf${rpn}-${suffix}"
+  rp_clone "$rp_bk" "$fv"
+  rp_run "${fv}-c" "$fv" "${rp_peers_ok[@]}" -v "${fb}:/faultbin:ro" -e "PATH=${fault_path}" -e RIDDED_FAULT=sync -e RIDDED_FAULT_AT=1 -e RIDDED_FAULT_MODE=stall
+  # shellcheck disable=SC2317,SC2329 # invoked through poll
+  stalled() { local o; o="$(dlogs "${fv}-c")" || return 1; [[ "$o" == *"ridded: stalling sync"* ]]; }
+  if poll stalled; then ok "kill test: the repair reached the stalled flush step"; else bad "kill test: never reached the stalled step"; fi
+  docker kill "${fv}-c" >/dev/null
+  docker rm -fv "${fv}-c" >/dev/null
+  check "kill mid-repair: the original main database config file is intact" "$orig_sum" "$(cfg_file_sum "$fv")"
+  if rp_loads "$fv"; then bad "kill mid-repair: cn=config unexpectedly loads"; else ok "kill mid-repair: the volume is as unrecoverable as before"; fi
+  rp_run "${fv}-c2" "$fv" "${rp_peers_ok[@]}"
+  if wait_ready "${fv}-c2"; then ok "kill mid-repair: a later normal start repairs the volume and runs"; else bad "kill mid-repair: later start failed"; dlogs "${fv}-c2" | tail -n 4 >&2 || true; fi
+  nleft="$(docker run --rm -v "${fv}-cfg:/c:ro" --entrypoint sh "$image" -c 'ls /c/cn=config | grep -c "repair-tmp\|\.bak-"' 2>/dev/null || true)"
+  check "kill mid-repair: after the later repair only the newest backup remains, no temp file" "1" "$nleft"
+  docker rm -fv "${fv}-c2" >/dev/null
+  docker volume rm -f "${fv}-cfg" "${fv}-data" >/dev/null
+
+  # disk full: the config volume is a tmpfs sized to exactly its content, so any new file fails with ENOSPC
+  rpn=$((rpn + 1))
+  fv="ldapium-ridded-rf${rpn}-${suffix}"
+  rp_clone "$rp_bk" "$fv"
+  used_kb="$(docker run --rm --mount type=tmpfs,destination=/t,tmpfs-size=64m -v "${fv}-cfg:/seed:ro" --entrypoint sh "$image" -c 'for e in /seed/* /seed/.[!.]*; do cp -a "$e" /t/ || exit 90; done; df -k /t | tail -n 1 | tr -s " " | cut -d" " -f3' 2>&1)" || helper_fail "disk-full sizing failed: ${used_kb:0:200}"
+  case "$used_kb" in ''|*[!0-9]*) helper_fail "disk-full sizing returned '${used_kb:0:100}'" ;; esac
+  full_bytes=$((used_kb * 1024))
+  reg_containers+=("${fv}-c")
+  docker run -d --name "${fv}-c" --network "$net" --hostname "${fv}-c" --mount "type=tmpfs,destination=/etc/openldap/slapd.d,tmpfs-size=${full_bytes},tmpfs-mode=0777" \
+    -v "${fv}-cfg:/seed:ro" -v "${fv}-data:/var/lib/openldap/data" "${rp_common[@]}" "${rp_tls[@]}" "${rp_peers_ok[@]}" --entrypoint sh "$image" -c '
+for e in /seed/* /seed/.[!.]*; do cp -a "$e" /etc/openldap/slapd.d/ || exit 90; done
+f="/etc/openldap/slapd.d/cn=config/olcDatabase={1}mdb.ldif"
+echo "SUM_BEFORE=$(sha256sum "$f" | cut -d" " -f1)"
+/usr/local/bin/entrypoint.sh
+rc=$?
+echo "SUM_AFTER=$(sha256sum "$f" | cut -d" " -f1)"
+echo "LEFTOVER=$(ls /etc/openldap/slapd.d/cn=config | grep -c "repair-tmp\|\.bak-")"
+exit "$rc"' >/dev/null
+  rp_settle "${fv}-c" || bad "disk full: neither stopped nor ready"
+  fout="$(dlogs "${fv}-c")"
+  frun="$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "${fv}-c")"
+  docker rm -fv "${fv}-c" >/dev/null
+  sb="$(sed -n 's/^SUM_BEFORE=//p' <<<"$fout")"
+  sa="$(sed -n 's/^SUM_AFTER=//p' <<<"$fout")"
+  lo="$(sed -n 's/^LEFTOVER=//p' <<<"$fout")"
+  if [[ "$frun" == false* ]] && [ "$frun" != "false 0" ] && [[ "$fout" == *"the stored configuration was not modified"* ]]; then ok "disk full: refused, 'the stored configuration was not modified'"; else bad "disk full: expected a refusal (${frun}); got: $(printf '%s' "$fout" | tail -n 3)"; fi
+  check "disk full: the original main database config file is byte-identical" "$sb" "$sa"
+  check "disk full: no temp or backup file left behind" "0" "$lo"
+  [ -n "$sb" ] || bad "disk full: no checksum was printed"
+  docker volume rm -f "${fv}-cfg" "${fv}-data" >/dev/null
 fi
 
 # ============================================================================

@@ -237,7 +237,9 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   password with a quote or backslash, a retry list or interval outside a strict
   grammar slapd can always load (`retry=+` used to store a config that no offline
   tool could read; a `dedicated` start now removes such an unreadable stored
-  `olcSyncrepl` and re-renders it from the corrected environment; the read-back
+  `olcSyncrepl` and re-renders it from the corrected environment, only after every
+  stored-config refusal has passed (checks run on a throwaway copy) and with a
+  crash-safe atomic replace plus a kept backup; the read-back
   check is quote-aware, so a password containing `provider=` starts normally), a `_FILE` secret that is
   read once (never twice, never substituted by the admin password),
   `LDAP_TLS_MUTUAL_AUTH`, a custom `LDAP_REPLICATION_BIND_DN`; stored-config
