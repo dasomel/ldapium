@@ -10,6 +10,30 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### API
+
+- Every `/api` error is now one JSON envelope
+  `{"error", "message", "code", "requestId", "retryable"}` (change package
+  `docs/changes/api-error-envelope`, #218). `error` keeps its text and
+  `message` is an identical, deprecated alias, so existing clients keep
+  working; new keys are `code` (a closed, append-only set — see
+  `docs/api.md`), `requestId` (= `X-Request-Id`) and `retryable`. Bodies that
+  used to be `{"message"}` only (sessions, validation, profiles, backups,
+  Keycloak, login 429) and router 404/405 now carry all five keys; 5xx
+  responses carry a fixed per-code text instead of a handler-chosen one (for
+  example `could not save application profile` is now `internal error`; the
+  cause is in the server log under the same `requestId`). 429 and retryable
+  503 responses carry `Retry-After`. OpenAPI now has one `Error` schema and
+  shared error responses.
+- 4xx messages no longer carry text derived from LDAP diagnostics, which can
+  include DNs. They are replaced by the code's fixed text (for example
+  `invalid input`) and the original is logged. Known password-policy texts
+  from `ppolicy`/`ppm` still reach the change-password screen; ppm's
+  `Password for dn="…"` prefix is dropped, so that screen now reads
+  `Password does not pass required number of strength checks (1 of 3)`.
+- Rollback: additive for clients that read `error` or `message`; revert the
+  commits to restore the old bodies. No configuration, chart or image change.
+
 ### CI
 
 - Heavy E2E jobs (anything that builds the OpenLDAP server image and/or

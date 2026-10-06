@@ -29,7 +29,7 @@ In the OpenAPI document, `security: []` means public, operations with `x-admin: 
 
 ## Conventions
 
-- Errors are JSON in one of two shapes: {"error": "..."} (directory/auth handlers; 500s add "requestId") or {"message": "..."} (validation, session, admin gates, profiles, backups). Read `error` first, then `message`. Unknown /api paths return 404 and wrong methods 405, both as {"error": "..."}.
+- Every error (4xx/5xx, including unknown paths and wrong methods) is one JSON body: {"error", "message", "code", "requestId", "retryable"}. `error` and `message` carry the same text (`message` is a deprecated alias), `code` is a stable snake_case name from a closed, append-only table (see the Error schema and docs/api.md) - branch on `code`, not on the text. `requestId` equals the X-Request-Id response header and the server log line holding the cause. 5xx text is fixed and never carries internal detail; 4xx text never carries a DN. 429 and retryable 503 responses include Retry-After. Exceptions: GET /api/health/ldap ({"reachable": bool}), redirects, and bodiless responses (OPTIONS 204, HEAD).
 - HEAD mirrors GET (with an empty body) on every route that has a GET handler, and OPTIONS on routed /api paths returns 204 with an Allow header.
 - Writes to application profiles, integration methods and backups are conditional: read the resource, take the ETag response header, send it as If-Match (quoted integer revision; "0" creates). Missing If-Match is 428, stale is 412. Keycloak role operations use the quoted 64-hex fingerprint ETag instead.
 - Those same write endpoints also require an `Origin` header equal to the server's own origin and `Content-Type: application/json` (403 / 415 otherwise).
