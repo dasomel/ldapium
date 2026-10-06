@@ -1,61 +1,85 @@
 # Tasks: 외부 HTTP API용 머신 주체 인증 (읽기 전용)
 
-설계: [CHANGE.md](CHANGE.md) (Status: `Proposed / awaiting review`). 모든 항목은 미착수이며, Class D 패키지 수용 전에는
-`Implement` 이후 단계를 시작하지 않는다. 구현은 기본 꺼짐 상태로 단계 병합한다. LDAP ACL·`image/entrypoint.sh` 변경이 생기면
-`.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다.
+설계: [CHANGE.md](CHANGE.md) (Status: `Accepted (2026-10-07; Revision 5)`) · 증거: [EVIDENCE.md](EVIDENCE.md).
+T-001·T-004는 완료, 나머지는 미착수이며 Class D 패키지 수용(재검토 통과 후) 전에는 `Implement` 이후 단계를 시작하지 않는다.
+구현은 기본 꺼짐 상태로 단계 병합한다(CHANGE.md “병합 단위”). LDAP ACL·`image/entrypoint.sh` 변경이 생기면
+`.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다. 각 항목의 “검수”는 그 항목의 PR이 통과해야 하는 수용 확인이다.
 
 ## Inspect and establish evidence
 
-- [ ] `T-001` (`REQ-002`, `REQ-012`) 소스 오브 트루스 확인: `openapi.json` 오퍼레이션 집계(48/보호 40 vs 요청서 39 — Q9),
-      `getMonitor`·`getServerSettings`·`listPasswordPolicies` 응답 필드(비밀·민감 정보 여부), `llms.txt` 생성 방식,
-      `api_contract_test.go`가 `security`를 검사하는 범위, `httpapi.New`의 SSO 초기화 실패 시 동작(기동 실패 vs 지연), `ui.sso` Helm 검증 패턴.
+- [x] `T-001` (`REQ-002`, `REQ-012`) 소스 오브 트루스 확인 — 2026-10-07 완료. 증거: [EVIDENCE §1](EVIDENCE.md). 결과: 전체 53(공개 8·보호 45, GET 20/비-GET 25), 초안 누락 5개,
+      `getMonitor` accesslog 노출·`getEntry` 임의 DN `*`·`reqMod` 비밀 값 우회, 속성 요청 전수(`*`는 `getEntry`뿐), `llms.txt`·`openapi.json` 수작업 관리, 계약 테스트 범위.
+      이관: `httpapi.New`의 SSO 초기화 실패 동작과 `ui.sso` Helm 검증 패턴은 T-006으로.
 - [ ] `T-002` (`AC-014`) 사전 기준선: 현재 `GET /api/users`에 bearer만 보냈을 때 401 `not logged in`임을 기록, 기존 `go test ./...`·ui-e2e 결과 캡처.
 - [ ] `T-003` 다운스트림·소비자 검토: API 소비자·SDK·`docs/api.md` 사용 예, 프런트가 `securitySchemes`에 의존하는지, 포트폴리오 영향.
-- [ ] `T-004` (`REQ-001`, `AC-002`) 실제 Keycloak(고정 태그)에서 확인: service account 클라이언트의 access token 클레임(`aud` 기본값과 audience mapper 필요 여부,
-      `azp`, `scope` 형식, 토큰 종류 claim 이름·값, `sub`), 클라이언트 비활성화 후 토큰 거동. 결과를 CHANGE.md의 “검증 필요” 항목에 반영.
-- [ ] `T-005` (`REQ-001`–`REQ-014`) 수용 선행: Owner 지정, ~~Q1–Q10 결정 기록~~(2026-10-04 완료, CHANGE.md Resolved questions), ADR 초안(신규 자격 증명 수용 경로·`auth-provider-policy` 예외), security-reviewer 검토 요청.
-      **수용 표시는 유지보수자만 한다.**
+- [x] `T-004` (`REQ-001`, `AC-002`) 실제 Keycloak 확인 — 2026-10-07 완료(26.7.4, 실제 실행). 증거: [EVIDENCE §2](EVIDENCE.md). 결과: `aud` 기본 `"account"`·mapper 후 배열, 토큰 종류 구분표, 같은 client 사람 토큰 동일성,
+      scope 형식, 비활성화 후 구토큰 통과, JWKS 회전·재조회 거동. 미실행 항목(SSO 공유 scope 오염, `InsecureIssuerURLContext` 분리, 실제 skew)은 T-021에 이관.
+- [ ] `T-005` (`REQ-001`–`REQ-018`) 수용 선행: Owner 지정, ~~Q1–Q10 결정 기록~~(2026-10-04 완료), ADR 초안(신규 자격 증명 수용 경로·`auth-provider-policy` 예외),
+      ~~security-reviewer 1차 검토~~(2026-10-06 Codex: BLOCKER → Revision 2), ~~2차 재검토~~(BLOCKER 2 + FIX-IN-PACKAGE 4 → Revision 3), ~~3차 재검토~~(FIX-IN-PACKAGE 3 + ACL 라이브 읽기 → Revision 4), **Revision 4 재검토 요청**.
+      검수: 재검토가 모든 7개 영역에서 BLOCKER 없음(PASS 또는 FIX-IN-CODE만). **수용 표시는 별도 PR로 유지보수자만 한다**(2026-10-07 지시 '승인 후 구현까지'는 재검토 통과 후 적용).
+- [ ] `T-006` (`REQ-008`, `REQ-013`) 잔여 확인: `httpapi.New`의 SSO 초기화 실패 시 동작(기동 실패 vs 지연), `ui.sso` Helm `required` 패턴, `listTree`의 루트·자식 수 거동과 DTO의 `truncated` 유무.
+      검수: 결과를 CHANGE.md에 반영(D8 기동 정책, T-013 상한 결정).
 
 ## Implement
 
 수용 이후에만 착수. 순서는 병합 단위(각 단위는 기능 꺼짐 상태에서 기존 테스트 통과).
 
-- [ ] `T-010` (`REQ-013`, `REQ-011`) `internal/config`: 머신 인증 env 파싱·검증(기본 꺼짐, 활성 시 issuer/aud/allowed clients/bind DN 필수, `MAX_TTL`·`CLOCK_SKEW` 범위, 허용 클라이언트 문법). 단위 테스트 포함.
-- [ ] `T-011` (`REQ-001`, `REQ-008`, `REQ-011`) 토큰 검증기: 기존 `go-oidc` 재사용, 순수 claim 검증 함수(`iss/aud/exp/nbf/azp/토큰 종류/alg/수명 상한`)와 JWKS 재조회 최소 간격,
-      미캐시 `kid`+IdP 불가 시 503. 신규 의존성 추가 금지(필요 시 Class C로 분리). 시계는 주입 가능.
-- [ ] `T-012` (`REQ-002`, `REQ-003`, `REQ-006`) 인증 선택·allowlist: 순수 `selectAuth`(헤더/쿠키 → cookie|bearer|reject|none), `operation→scope` 정적 allowlist,
-      client 상한 ∩ 토큰 scope 해석, 비-GET·미등록 오퍼레이션 거부, bearer 요청 `Set-Cookie` 금지, CORS 미확장. 기존 핸들러 본문은 수정하지 않는다.
-- [ ] `T-013` (`REQ-004`, `REQ-008`) 머신 실행 신원: 요청별 bind 후 종료하는 임시 `Session` 주입, bind 실패 503(root 폴백 없음),
-      기동 시 머신 bind DN이 `BACKUP_ADMIN_DNS`·프로파일 관리자 DN·`LDAP_SERVICE_ACCOUNT_DN`·rootdn과 같으면 실패.
-- [ ] `T-014` (`REQ-003`, `REQ-012`) OpenAPI: `securitySchemes.machineBearer`, 허용 오퍼레이션 `security`+`x-machine-scope`, 전역 기본 `cookieAuth` 유지.
-      계약 테스트 확장: (a) `machineBearer` 보유 집합 == 코드 allowlist, (b) denylist 31개는 `machineBearer` 부재, (c) 비-GET에는 `machineBearer` 금지. `/api/v1/meta`에 노출 필드를 추가한다면 `TestMetaExposesOnlyDiscoveryFields` 갱신(Q7: opt-in scope는 포함하되 기본 비허용으로 결정됨).
-- [ ] `T-015` (`REQ-004`, `REQ-013`) 머신 LDAP 계정 운영 가이드: 읽기 전용 ACL 예시 LDIF(`userPassword`·기타 비밀 속성 접근 거부 포함)와 점검 절차.
-      계정 생성은 Q2 결정대로 운영자 수동 + 문서 LDIF 예시(`image` 변경 시 로컬 Docker 규칙 준수: `ldapium:e2e` 재빌드).
-- [ ] `T-016` (`REQ-013`) Helm: `ui.machineAuth.*` 값·`required` 검증·Secret 참조(차트가 비밀을 생성·출력하지 않음), `helm template` 렌더로 기본 꺼짐과 활성 시 env 확인.
-- [ ] `T-017` (`REQ-009`, `REQ-014`) 감사 이벤트: 순수 `buildMachineEvent`(actor=`azp`, `sub` fingerprint, request id, operation, result, reason 코드), 허용·거부·인증 실패 모두 기록. 토큰·`Authorization` 값 비기록.
-- [ ] `T-018` (`REQ-010`) 제한: client별 token bucket(주입 `now`), client별 동시 실행 상한, IP별 인증 실패 throttling(`loginLimiter` 선례), 429+`Retry-After`.
+- [ ] `T-010` (`REQ-013`, `REQ-011`, `REQ-016`, `REQ-004`) `internal/config`: 머신 env 파싱·검증(기본 꺼짐). 활성 시 필수: issuer(https만, `MACHINE_OIDC_INSECURE_HTTP` 예외+WARN)·aud·allowed clients·bind DN·`MACHINE_LDAP_ROOT_DNS`(**`;` 구분**, `splitEntries` 재사용, 항목은 ParseDN 가능, 리터럴 `;`는 `\3B`; 내장 금지 rootdn 3종 `cn=monitoring,cn=Monitor`·`cn=admin,cn=accesslog`·`cn=admin,cn=config`는 항상 비교). `MACHINE_SA_USERNAME_PREFIX`, `MACHINE_AUTH_FAILURE_LIMIT/_WINDOW` 범위 검증.
+      범위 검증: `MAX_TTL`∈(0,1h], `CLOCK_SKEW`∈[0,60s], JWKS TTL/stale/min-refresh, 한도 값, `MACHINE_OIDC_ALGS`(비대칭만, `none`/`HS*`/빈 값 실패). 머신 활성+`UI_TRUSTED_PROXIES=private` 실패.
+      DN 비교는 `ldap.ParseDN` 동등(관리자·프로파일 관리자·`LDAP_SERVICE_ACCOUNT_DN`·rootdn). SSO `validateIssuerURL`은 변경하지 않는다.
+      검수: 단위 — 원격 `http://` 실패, 예외 플래그 시 통과, `cn=admin,dc=example,dc=org`가 `MACHINE_LDAP_ROOT_DNS`/`BACKUP_ADMIN_DNS`와 같을 때 기동 실패(쉼표로 쪼개지 않음), 쉼표로 이은 목록·파싱 불가 항목 실패, 내장 rootdn 3종 충돌 실패, DN 변형(대소문자·공백·escape·`\3B`·hex·다중값 RDN) 충돌 실패, skew -1/61 실패, 기본 `private` 실패.
+- [ ] `T-011` (`REQ-001`, `REQ-008`, `REQ-011`) 클레임 검증기: 순수 함수로 D5 표 전 항목(크기·alg·JOSE/payload `typ`·`kid`·`iss`·`aud` 멤버십·`azp`==`client_id`·SA 판별(`client_id==azp` AND `preferred_username==prefix+client_id` AND `sub`, **`sid` 미사용**)·`scope`·`iat`/`exp`/`nbf`/TTL). go-oidc `SkipClientIDCheck:true`·`SkipExpiryCheck:true`·`SupportedSigningAlgs`, 시계 주입, 원문 오류 대신 reason enum 반환. 신규 의존성 금지.
+      검수: AC-002 음성 표 전 행 401+양성 대조 200, AC-012 경계 표를 **실제 서명 검증기·로컬 JWKS**로 통과(5분 nbf leeway 회귀 포함), 변조·`alg=none`·HS256 혼동, 그리고 EVIDENCE §2.9의 실제 토큰 claim 세트를 고정 픽스처로 둔 SA 판별 표(행 1–8, 11: 행 1·3 통과, 행 2·4–8·11 거부, `preferred_username`만 같은 토큰 거부).
+- [ ] `T-012` (`REQ-002`, `REQ-003`, `REQ-006`) 인증 선택·가드: 순수 `selectAuth`(분류·우선순위 매트릭스; Authorization 없는 요청의 쿠키 경로는 **기존 그대로**, 중복 쿠키는 첫 쿠키만 — 새 규칙 없음), `operation→scope` 정적 allowlist, **런타임 deny-by-default 가드**(`method+route`가 allowlist에 없으면 bind·핸들러 이전 403 `scope_denied`),
+      client 상한 ∩ 토큰 scope, bearer 요청 `Set-Cookie` 금지, 공개 auth 4경로 bearer 400, Origin gate 최외곽 불변, CORS 미확장. 새 오류 코드(`token_invalid`·`token_expired`·`scope_denied`·`machine_rate_limited`)는 D218-14대로 표·골든·OpenAPI enum 동시 갱신.
+      검수: 중복 쿠키 회귀([유효, 무효]=200·[무효, 유효]=401, 변경 전후 동일), AC-006 매트릭스 전 셀(셀당 단일 결과, 중복 규칙 없음), 상태 변경 메서드의 foreign/null/중복 Origin+bearer에서 핸들러 미실행·GET은 gate 비대상, preflight `authorization` 거부, 기능 꺼짐 시 bearer 무시.
+- [ ] `T-013` (`REQ-004`, `REQ-008`, `REQ-010`) 머신 실행 신원: 요청별 bind 후 종료하는 임시 `Session` 주입(응답·취소·패닉에서 해제), 전역 LDAP 슬롯 bind **이전** 비차단 획득, 요청 deadline(`MACHINE_REQUEST_TIMEOUT`)을 dial/bind/search에 적용
+      (deadline이 있는 ctx에서만 — 사람 경로 무변경), 결과 상한(`listTree` 자식 수 등; 초과 시 응답은 T-006 결과로 결정), bind 실패 503(root 폴백 없음).
+      검수: AC-009 — 느린 LDAP 모의(실제 slapd 앞 지연 프록시)에서 deadline 안 503, 클라이언트 끊김 50건 후 슬롯·`cn=Monitor` 연결 수 기준선 복귀.
+- [ ] `T-014` (`REQ-003`, `REQ-012`) OpenAPI: `securitySchemes.machineBearer`, 허용 8개 `security`+`x-machine-scope`, 전역 기본 `cookieAuth` 유지. 계약 테스트: (a) `machineBearer` 집합 == 코드 allowlist(8), (b) denylist 36+`getMe`에는 부재, (c) 비-GET 금지, (d) 공개 8개 불변.
+      `/api/v1/meta` 노출 필드를 추가한다면 `TestMetaExposesOnlyDiscoveryFields` 갱신. 검수: AC-013, 기존 `TestOpenAPI*` 통과.
+- [ ] `T-015` (`REQ-004`, `REQ-013`) 머신 LDAP 계정 운영 가이드와 ACL LDIF(Q2: 운영자 수동): CHANGE.md의 `{0}`–`{2}` 규칙(**기존 모든 allow보다 앞**, 비밀 속성 none → `B` read → 나머지 none, 전부 `by * break`)을 확정 LDIF로 작성, 이미지 스키마에서 비밀 속성 목록 도출, accesslog·monitor opt-in 조각, 모든 노드 적용·재초기화 후 재적용 절차.
+      slapd first-match 의미를 라이브로 확인. `image` 변경이 필요하면 로컬 Docker 규칙 준수(`ldapium:e2e` 재빌드). 검수: T-026(AC-018) — 두 렌더링 분기 모두.
+- [ ] `T-016` (`REQ-013`) Helm: `ui.machineAuth.*`(insecure http는 미노출), `required` 검증, Secret 참조(비밀 생성·출력 없음), `MACHINE_LDAP_ROOT_DNS`를 `ldap.adminDN`(기본 `cn=admin,<rootDN>`)에서 파생(`;` 결합, 선택 `ui.machineAuth.extraRootDNs`; monitor·accesslog·config rootdn은 앱 내장 목록이라 차트가 넣지 않음), `terminationGracePeriodSeconds` ≥ 요청 timeout, `UI_TRUSTED_PROXIES` 요건.
+      검수: `helm template`으로 기본 꺼짐·활성 시 env 확인(쉼표가 든 adminDN이 쪼개지지 않고 `;` 목록으로 렌더), 필수값 누락 시 렌더 실패.
+- [ ] `T-017` (`REQ-009`, `REQ-014`) 감사: 순수 `buildMachineEvent`+바깥 래퍼 미들웨어(`Authorization`을 실은 모든 요청 정확히 1줄, 조기 반환 포함), 검증 전 `actor=unknown`+fingerprint, 검증 후 actor, reason enum, 원문 verifier 오류·토큰 미기록.
+      검수: AC-010 조기 반환 표(selectAuth 거부·Origin gate·혼용 400·404·IP 429·JWKS 503 각 1줄), 센티널 토큰 문자열이 로그·응답에 0건.
+- [ ] `T-018` (`REQ-010`) 제한: 신규 유계 limiter(IP 실패 throttle ≤ `MACHINE_IP_LIMITER_MAX`, 검증된 client별 token bucket·동시성, 전역 인증 동시성) — 순서 ①–⑥(D9), `c.RealIP()` 재사용, 429/503+`Retry-After`.
+      **이슈 #270(limiter 상태 상한)의 수정 구현을 재사용**하며 #270 병합(또는 같은 구현을 공유 타입으로 먼저 낸 PR)에 의존한다. IP 실패 throttle은 D9 정의(N=10/W=60s, 실패=401류, 성공 불변, 원자적 reservation을 모든 종료 경로에서 정확히 한 번 해제·10s 자동 만료, 경계 포함형, 실패 0건+예약 가득이면 `Retry-After: 1`). 검수: AC-011 경계 표 전 행 — 실패 9회 후 10번째 통과(N−1)·10회 후 11번째 429(N)·429 반복이 카운터를 올리지 않음(N+1)·정확히 60.000s 429/`Retry-After: 1`·60.001s 통과, 동시 20건 중 정확히 10건 도달, 예약 해제 5경로(성공·JWKS 503·끊김·panic·403) 후 예약 0, 해제 누락 주입 10s 만료, 403·503·429 미계수, IPv6 /64, 수만 IP 후 항목 수 상한, unknown client 무상태, 예산 격리.
+- [ ] `T-019` (`REQ-001`, `REQ-008`, `REQ-016`) JWKS KeySet·전송(D8, D15): 커스텀 `oidc.KeySet`(조회 예산 게이트 `R`, 알려진 kid의 서명 실패는 응답 401이고 조회는 예산 안의 STALE 백그라운드 1건뿐, TTL/stale/backoff, 만료=`R`인 negative cache), 전용 `http.Client`(timeout 5s·리다이렉트 금지·1 MiB·키 20개·`use=sig`), 401(정상 조회 후 미지 kid) vs 503+`Retry-After`, 기동 시 discovery 실패는 기동 실패가 아니라 로그 ERROR 후 `D=none`(모든 bearer 503+`Retry-After`)이고 같은 backoff로 재시도·복구한다. 구현은 CHANGE.md “JWKS·discovery 상태 기계”의 변수·`R` 갱신 규칙·7행 표를 그대로 따른다(SSO 초기화 실패=기동 실패인 `server.go:79-86`은 불변).
+      검수: AC-008 — 상태 기계 7행과 시나리오 a–h를 fake clock 단위 테스트로 **정확한 조회 횟수·`Retry-After`까지**(a=10건 t=30…300, b=0, c=1 후 0, d=5건, e 경계 ±1s, f1 시작 t=0·30·90·210 후 재시작 없이 200·f2(`δ=5s`) 시작 t=0·35·100(테스트 모델: 시작/완료/`δ`), g t=29 401·0건/t=30 200·1건, h 503+`Retry-After`=30·R=60), FRESH→STALE→EXPIRED 경계 포함형, 새 키 거부 상한은 표에서 도출(별도 단언 아님), discovery 복구 e2e(Keycloak 중지 상태로 기동 → 쿠키 로그인 정상·bearer 503 → Keycloak 기동 후 재시작 없이 `R` 안에 200), AC-016 단위 — 무작위 kid 폭주(a)·알려진 kid 위조 서명 폭주(b/c/d); 조회 시작 상한은 닫힌 구간에서 1+⌈T/30s⌉, discovery+JWKS는 1회 refresh로 계수.
+- [ ] `T-040` (`REQ-005`, `REQ-015`) 민감 base 경계(D14): 머신 한정 `getEntry`/`listTree` BASE_DN(ParseDN) 가드, `MonitorStats`에 accesslog 포함 여부 인자(사람 세션 동작 불변), 감사 DTO가 `reqMod` 값을 내지 않음을 테스트로 고정, `entryRedactedAttrs` 불변.
+      검수: AC-015 — accesslog/config/Monitor/BASE_DN 밖 DN 및 변형 403(검색 미발행), `audit.read` 없는 monitor 로그 비움, 기존 사람 세션 테스트 무변경.
+- [ ] `T-041` (`REQ-017`) cursor 바인딩(D16): `cursorBinding`을 principal 종류별(`sid:`/`machine:`+iss 길이 접두+client)로 분기, 임시 `Session.ID` 미사용. 검수: AC-017 — client 간·사람↔머신 재생 400, 토큰 갱신 후 연속 조회 200, 사람 cursor 기존 테스트 무변경.
 
 ## Verify
 
-- [ ] `T-020` (`AC-002`–`AC-006`, `AC-009`–`AC-014`) 단위/정적: `go test ./...`(ui/backend) — claim 검증기(로컬 `httptest` JWKS, 생성 키로 서명·변조),
-      `selectAuth`, scope 해석, denylist 31개 전수, config 검증, 이벤트 필드, limiter, 시계 경계, 계약 테스트. 모킹 프레임워크 도입 금지.
-- [ ] `T-021` (`AC-001`–`AC-009`, `AC-011`) 라이브 e2e: Keycloak+ldapium 컨테이너, LDAP/SSO 두 모드. 정상 호출 + 음성(wrong aud, 만료, 변조, ID token, SSO client 토큰, scope 부족,
-      denylist, 쿠키+bearer 혼용, JWKS 중단, bind 실패, 과권한 bind의 `userPassword` 비노출, rate limit). macOS/Colima 파일 마운트 주의 사항 준수.
-- [ ] `T-022` (`AC-001`–`AC-009`) CI: [keycloak-federation-e2e.yml](../../../.github/workflows/keycloak-federation-e2e.yml) 패턴의 신규 워크플로(Keycloak 정확 태그 고정, `workflow_dispatch`, concurrency 규칙 동일).
-      release 필수 체크(Q8 결정) — path 필터 없음.
+- [ ] `T-020` (`AC-002`–`AC-006`, `AC-009`–`AC-014`) 단위/정적: `go test ./...`(ui/backend) — claim 검증기(로컬 `httptest` JWKS, 생성 키), `selectAuth`, scope 해석, 거부 37개 전수, config 검증, 이벤트 필드, limiter, 시계 경계, 계약 테스트. 모킹 프레임워크 도입 금지.
+- [ ] `T-021` (`AC-001`–`AC-011`, `AC-015`, `AC-017`) 라이브 e2e: Keycloak+ldapium 컨테이너, LDAP/SSO 두 모드. 정상 호출 + 음성(aud `account`-only, 만료, 변조, ID token, SSO client 토큰, **같은 client의 사람 토큰·exchange 토큰·lightweight 토큰**(T-028), scope 부족, 거부 37개, 쿠키+bearer 혼용, Origin, JWKS 중단, bind 실패),
+      non-admin 과권한 bind 비밀 **값** 부재(accesslog DN·monitor·groups·cursor 포함), cursor 격리, **전 컨테이너 로그 secret scan 0건(AC-010)**, 실제 동시 요청·연결 끊김, 위조 XFF.
+      T-004 미실행 항목: audience mapper를 SSO와 공유 scope에 둔 경우 SSO 사용자 토큰이 거부되는지. macOS/Colima 파일 마운트 주의 사항 준수.
+- [ ] `T-022` (`AC-001`–`AC-019`) CI: [keycloak-federation-e2e.yml](../../../.github/workflows/keycloak-federation-e2e.yml) 패턴의 신규 워크플로(Keycloak 정확 태그 고정, `workflow_dispatch`, concurrency 동일), path 필터 없음.
+      **`.github/workflows/release.yml`의 `release_critical` 배열에 신규 job의 정확한 이름 추가**(같은 PR에서 이름 확정), 태그 SHA에서 `success <job 이름>` 확인.
+      검수: 임의 SHA에서 워크플로 성공 후 `release.yml`의 해당 단계가 그 이름을 찾는지 확인, 이름 불일치 시 실패함을 확인.
 - [ ] `T-023` 실패·성공·환경·명령을 증거로 기록(`research/README.md` 규약, 실패 포함). 발견된 회귀 위험은 계약/단위 테스트로 승격.
+- [ ] `T-024` (`REQ-002`, `REQ-003`, `AC-003`) deny-by-default 전수 테스트: allowlist 없이 합성 등록한 보호 GET → 403·bind 카운터 0·핸들러 미호출, 등록된 보호 45개를 모든 scope 토큰으로 호출 → 허용 8만 스텁 핸들러 도달·거부 37은 bind 0.
+- [ ] `T-025` (`REQ-016`, `AC-008`, `AC-016`) JWKS 회전·폭주·discovery 복구 e2e: 계수 프록시 뒤 실제 Keycloak에서 키 회전(overlap), 무작위 kid·위조 서명 폭주 시 upstream 조회 상한, 크기 초과·리다이렉트·지연 응답, `http://` issuer 기동 실패와 예외 플래그 WARN.
+- [ ] `T-026` (`REQ-004`, `AC-018`) 읽기 전용 증명 — **새로 초기화한 컨테이너 세 구성**((a) `LDAP_ANONYMOUS_READ_BASE` 미설정 (b) 설정 (c) 운영자 추가 선행 allow가 있는 DB)에서, 적용 직후 `olcAccess`를 읽어 머신 규칙이 `{0}`–`{2}`이고 기존 규칙이 뒤로 밀렸음을 확인(순서가 다르면 실패)한 뒤: 머신 DN의 자기 비밀번호 변경(`ldappasswd`·`ldapmodify` `userPassword`/`shadowLastChange`)·자기 항목 수정·`ldapadd`/`ldapmodify`/`ldapdelete`/`modrdn` → 모두 50, `B` 밖 검색에서 항목·`entry`/`uid`/`objectClass` 미반환, `B` 안에서 비밀 속성 명시 요청에도 미반환, accesslog·config 읽기 거부, `M` bind 성공, 같은 LDIF 적용 전후 일반 사용자 자기 비밀번호 변경·관리자·익명 결과 불변. `docker exec -i` 규칙 준수.
+- [ ] `T-027` (`REQ-018`, `REQ-013`, `AC-019`) 긴급 차단·롤백 드릴: (a) Keycloak client 비활성화 후 구토큰이 통과함을 확인(문서화) (b) allowlist 제거 후 전 replica 교체 → 같은 토큰 401, 이전 pod 0개·진행 요청 종료 (c) 기능 off → bearer 무시·기존 쿠키 e2e 무변경.
+- [ ] `T-028` (`REQ-001`, `AC-002`) Keycloak client 설정 양·음성 라이브 점검(26.7.4 고정 이미지, [EVIDENCE §2.9](EVIDENCE.md) 재현): 양성 — 기준 SA 토큰 200, refresh 사용 SA 토큰(`sid` 있음) 200. 음성(각각 401, bind 0) — lightweight access token, `profile` 또는 `service_account` scope 제거 client, standard exchange로 만든 SA·사람 토큰, legacy `token-exchange` feature를 켠 서버에서 만든 exchange 토큰, 같은 client의 password grant 사람 토큰, `preferred_username`만 같은 토큰. 기본 서버에서 machine client의 exchange 요청이 거부됨을 확인. 운영 점검 스크립트(설정 요건 ①–⑤)가 있으면 함께.
 
 ## Synchronize durable truth
 
-- [ ] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`, Keycloak client 설정 가이드.
+- [ ] `T-030` `docs/api.md`(인증 절·머신 호출 예·오류 코드), `docs/auth-provider-policy.md`(머신 인바운드 인증 예외), `docs/audit-event-schema.md`, `ui/README.md`, `charts/ldapium/README.md`, `docs/air-gap.md`,
+      Keycloak client 설정 가이드(전용 service account client·standard flow/direct access grant 비활성화·audience mapper를 전용 scope에만·JWKS 키 회전 overlap·TTL), 긴급 차단 절차(D7), ingress XFF 정리 요건.
 - [ ] `T-031` ADR 확정·링크, `IMPLEMENTATION-STATUS.md` 갱신.
-- [ ] `T-032` 릴리스 노트, 롤백(`MACHINE_AUTH_ENABLED=false`), 호환성(기존 경로·OpenAPI additive) 기록.
+- [ ] `T-032` 릴리스 노트, 롤백·긴급 차단(`MACHINE_AUTH_ENABLED=false`/allowlist 제거 + 전 replica 교체), 호환성(기존 경로·OpenAPI additive) 기록.
 - [ ] `T-033` 포트폴리오/OpenForge 상태 영향 검토 및 검증 완료 후 게시.
 
 ## Completion review
 
-- [ ] 모든 `REQ-001`–`REQ-014`가 AC와 검증 결과에 매핑됨(CHANGE.md 추적 매트릭스 갱신).
+- [ ] 모든 `REQ-001`–`REQ-018`이 AC와 검증 결과에 매핑됨(CHANGE.md 추적 매트릭스 갱신).
 - [ ] 수용 이후 범위 변경은 패키지에 반영·재검토됨.
 - [ ] 기대 증거(단위·e2e 로그, 계약 테스트)가 첨부/링크됨.
-- [ ] 미완 작업(쓰기 범위, introspection, subtree allowlist, 옵션 2/3)은 소유자와 후속 이슈가 있음. 연관 이슈는 부분 PR이면 “Related to #N (not closing yet)”.
+- [ ] 미완 작업(쓰기 범위, introspection, subtree allowlist, 옵션 2/3, 기존 `loginLimiter` 상한)은 소유자와 후속 이슈가 있음. 연관 이슈는 부분 PR이면 “Related to #N (not closing yet)”.
 - [ ] PR이 실제 실행한 검사와 검증하지 못한 경로를 명시함.
