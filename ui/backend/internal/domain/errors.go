@@ -18,6 +18,14 @@ var (
 	ErrConflict = errors.New("operation conflicts with current directory state")
 )
 
+// ErrCurrentPasswordRejected: a Password Modify that carried an old password
+// came back "unwilling to perform" (D264-1). slapd sends that both when the old
+// password does not verify (ppolicy pwdSafeModify) and when current-password
+// verification is not enabled at all, so the text must not claim the password
+// is wrong (D264-2). The text is fixed on purpose: it is sent to the client.
+var ErrCurrentPasswordRejected = errors.New(
+	"the current password was not accepted (or current-password verification is not enabled on the server)")
+
 // Errors the keyset listing (ListUsersPage/ListGroupsPage) reports. They stay
 // distinct so the HTTP layer can give each its own status and machine code
 // instead of a generic 500.

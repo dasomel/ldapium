@@ -197,11 +197,10 @@ const en = {
   'changePassword.submitBusy': 'Changing…',
   'changePassword.successToast': 'Password changed. Use your new password next time you sign in.',
   'changePassword.genericError': 'Failed to change password.',
-  // The one case where the server's own diagnostic text is deliberately
-  // replaced rather than shown as-is: result code 53 with this specific
-  // message reads as "the server refused to check" when the actual cause
-  // is usually "your current password was wrong" — see
-  // ChangePasswordPage's describeSetPasswordError for why.
+  // The one case where the server's own text is deliberately replaced
+  // rather than shown as-is: the stable code `current_password_rejected`
+  // (LDAP result 53 on a password change that carried the current password;
+  // ambiguous cause) — see ChangePasswordPage's describeSetPasswordError.
   'changePassword.ambiguousCurrentPassword':
     "Your current password may be incorrect — double check it and try again. (If current-password verification isn't enabled on this server, this message can also appear even when it was correct; ask an administrator if it persists.)",
   'changePassword.requirementsHeading': 'Password requirements (from the directory server)',

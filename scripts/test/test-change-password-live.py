@@ -241,8 +241,14 @@ main().catch((err) => {{
   results = [json.loads(l.split(':', 1)[1]) for l in result.stdout.splitlines() if l.startswith('SCENARIO_RESULT: ')]
   check(len(results) == 3, 'three scenarios reported')
   r1, r2, r3 = results
-  check(r1['status'] == 500 and r1['code'] == 'internal' and r1['screenText'] == 'internal error',
-        'wrong current password: 500, code internal, screen "internal error"')
+  # #264 (D264-1/2): result 53 on the old-password path is 400 current_password_rejected;
+  # the screen shows the translated ambiguous-cause text, never the server's fixed sentence.
+  check(r1['status'] == 400 and r1['code'] == 'current_password_rejected'
+        and r1['screenText'].startswith('Your current password may be incorrect'),
+        'wrong current password: 400, code current_password_rejected, screen shows the ambiguous-cause message')
+  check(r1['body']['retryable'] is False and 'was not accepted' in r1['body']['error']
+        and 'Unwilling' not in r1['body']['error'],
+        'wrong current password: fixed text, no slapd diagnostic in the body')
   check(r2['status'] == 400 and r2['code'] == 'invalid_request' and 'strength checks' in r2['screenText'],
         'weak new password: 400, code invalid_request, policy text visible')
   check(r3['status'] == 400 and r3['code'] == 'invalid_request' and 'not being changed' in r3['screenText'],
@@ -267,7 +273,29 @@ main().catch((err) => {{
   lines = [l for l in (ui_logs.stdout + ui_logs.stderr).splitlines() if req_id in l]
   for line in lines:
     print('  LOG:', line)
-  check(any('Result Code 53' in l for l in lines), 'UI log for the 500 requestId has "Result Code 53"')
+  check(any('Result Code 53' in l for l in lines), 'UI log for the 400 requestId has "Result Code 53"')
+
+  # Negative control (D264-3): a genuine LDAP outage on the same endpoint is still the
+  # redacted 500 internal. Log in first (login needs LDAP), then stop slapd and repeat the
+  # wrong-current-password request.
+  jar = http.cookiejar.CookieJar()
+  opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+  def api_post(path, payload):
+    req = urllib.request.Request(base_url + path, data=json.dumps(payload).encode(),
+                                 headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+      with opener.open(req, timeout=30) as resp:
+        return resp.status, json.loads(resp.read() or b'null'), resp.headers.get('X-Request-Id')
+    except urllib.error.HTTPError as e:
+      return e.code, json.loads(e.read() or b'null'), e.headers.get('X-Request-Id')
+  st, _, _ = api_post('/api/login', {'identity': user_dn, 'password': user_password})
+  check(st == 200, 'negative control: login before the outage')
+  run_cmd(['docker', 'stop', '-t', '2', ldap_name])
+  st, body, rid = api_post('/api/users/password',
+                           {'dn': user_dn, 'oldPassword': 'Wrong-Current-Pass-999!', 'password': 'Valid-New-Pass-456!'})
+  check(st == 500 and body['code'] == 'internal' and body['error'] == 'internal error'
+        and body['requestId'] == rid and not dn_re.search(json.dumps(body)),
+        'LDAP outage: still 500 internal, redacted body (%s)' % json.dumps(body))
 
 finally:
   print('\nCleaning up containers...')

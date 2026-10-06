@@ -1,4 +1,4 @@
-# ADR: HTTP API 오류 봉투, `/metrics` 리스너, CORS 정책 (D218-1 ~ D218-14)
+# ADR: HTTP API 오류 봉투, `/metrics` 리스너, CORS 정책 (D218-1 ~ D218-14, D264-1 ~ D264-3)
 
 - Status: `Accepted` — [CHANGE.md](CHANGE.md)의 결정을 승격한 기록이다. CHANGE.md는 2026-10-06 유지보수자 지시로 수용되었고 구현은 #234, #240, #242, #246으로 `main`에 병합되었다.
 - Owner: 미지정(CHANGE.md와 같음)
@@ -28,6 +28,14 @@
 | D218-12 | CORS는 기본 꺼짐(헤더 없음)이다. `CORS_ALLOWED_ORIGINS`(정확한 `scheme://host[:port]`만)를 설정하면 목록의 Origin에 한해 `GET`/`HEAD` 읽기와 프리플라이트(`GET, HEAD, OPTIONS`)를 허용한다. 켜면 `Vary: Origin`이 모든 응답에 붙는다. 와일드카드·`null`은 기동 거부. 쓰기는 CORS로 열지 않으며 세션 쿠키는 `SameSite=Lax` 그대로다. | 교차 출처 쓰기가 필요하면 별도 변경 패키지로 쓰기 게이트를 확장. |
 | D218-13 | 롤아웃은 additive다. 제거된 키가 없고 `/api/v1`은 유지된다. `/metrics`와 CORS는 기본 꺼짐이다. 병합은 봉투 → 쓰기 Origin 게이트 → `/metrics` → CORS 순서로 독립 병합·되돌리기가 가능했다. | 단계별 revert. |
 | D218-14 | 후속 변경(#214-#217)의 규약: 새 오류 조건은 코드 한 줄을 표·골든 목록·OpenAPI `Error.code` enum에 같은 PR에서 추가한다. 새 생산자는 `apiErr`를 쓴다. 새 응답 헤더는 CORS 노출 목록과 OpenAPI에 반영한다. 5xx 문구는 고정 표에 추가한다. | — |
+
+## Decisions after acceptance: current password rejected (#264)
+
+| ID | 결정 | 탈출구 |
+|---|---|---|
+| D264-1 | `ldapclient`는 **`oldPassword`가 실린** Password Modify가 LDAP 결과 53(unwillingToPerform)을 돌려줄 때만 도메인 센티널 `ErrCurrentPasswordRejected`를 낸다(`mapSetPasswordErr`, 전역 `mapErr`는 그대로). HTTP는 **400**, 새 안정 코드 **`current_password_rejected`**, `retryable:false`, 고정 문구다. 401은 쓰지 않는다: UI가 401을 세션 상실로 보고 로그아웃시킨다. 코드는 표·골든 목록(35→36)·OpenAPI `Error.code`·docs/api.md에 같은 PR에서 추가한다(D218-14). | 센티널 분기를 제거하면 옛 동작(500 `internal`)으로 돌아간다. 코드는 append-only라 이름은 남는다. |
+| D264-2 | 원인은 설계상 모호하다. slapd는 `pwdSafeModify`가 현재 비밀번호를 거부할 때와 현재 비밀번호 검증이 켜져 있지 않을 때 모두 53을 낸다. 그래서 고정 문구는 비밀번호가 틀렸다고 단정하지 않는다: `the current password was not accepted (or current-password verification is not enabled on the server)`. 본문에 DN·slapd 진단은 없고(센티널 문구만, D218-15), 원문(`LDAP Result Code 53 ...`)은 `requestId`와 함께 로그에 남는다. UI는 메시지 텍스트가 아니라 `code`로 분기해 번역된 `changePassword.ambiguousCurrentPassword`를 보여 준다. | 문구는 센티널 한 곳. UI 분기는 `err.code` 한 줄. |
+| D264-3 | `oldPassword` 없는 요청(관리자 초기화)의 결과 53과, 분류되지 않은 그 밖의 모든 오류(LDAP 중단 포함)는 D218-8에 따라 가려진 500 `internal` 그대로다. #249의 "UI 분기 없음" 결정(EVIDENCE.md T-017)은 이 결정으로 대체된다: 이제 UI가 분기하는 근거는 `internal`이 아니라 전용 코드다. | — |
 
 ## Amendments after acceptance
 

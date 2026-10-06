@@ -52,26 +52,27 @@ function formatDuration(t: TFunction, seconds: number): string {
   return t('changePassword.unit.second.many', { n: seconds })
 }
 
-// Result code 53 ("Unwilling To Perform") with this specific diagnostic
-// text is ambiguous by design, not a bug: slapd sends it both when the
+// The server answers a current password it refuses to verify with 400 and
+// the stable code `current_password_rejected` (#264, D264-1). It is
+// ambiguous by design, not a bug: slapd sends LDAP result 53 both when the
 // current password you typed is wrong (pwdSafeModify is on and rejected
 // it) AND when current-password verification isn't enabled on the server
-// at all — same code, same text, opposite causes. We can't tell which
-// applies from here, so the message below points the user at their own
-// input without asserting it's wrong. This composed message is ours, so
-// it's translated; every other server-rejection message is shown exactly
-// as slapd sent it (see the `return msg` below) — never run through t(),
-// never reworded. Operators need to be able to search/match those
+// at all — same code, opposite causes. We can't tell which applies from
+// here, so the message below points the user at their own input without
+// asserting it's wrong. We branch on `code`, never on message text (5xx
+// and 4xx diagnostics are redacted server-side). This composed message is
+// ours, so it's translated; every other server-rejection message is shown
+// exactly as the server sent it (see the `return msg` below) — never run
+// through t(), never reworded. Operators need to be able to search/match those
 // against slapd's own docs and logs, and the wording changes across
 // server versions, so a translation dictionary for them would just go
 // stale.
 function describeSetPasswordError(t: TFunction, err: unknown): string {
   if (!(err instanceof ApiError)) return t('changePassword.genericError')
-  const msg = err.message
-  if (/code 53/i.test(msg) && /verify old password/i.test(msg)) {
+  if (err.code === 'current_password_rejected') {
     return t('changePassword.ambiguousCurrentPassword')
   }
-  return msg
+  return err.message
 }
 
 /** Self-service password change for the logged-in user. Uses the same

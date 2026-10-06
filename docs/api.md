@@ -134,6 +134,7 @@ done
 |---|---|---|
 | `invalid_request` | 400 | 본문 파싱 실패, 필수 값 누락, 입력 검증, 표에 없는 4xx |
 | `invalid_credentials` | 401 | 로그인/비밀번호 확인 실패 |
+| `current_password_rejected` | 400 | 본인 비밀번호 변경에서 현재 비밀번호를 디렉터리가 받아들이지 않음(`oldPassword`가 있는 Password Modify의 LDAP 결과 53). 원인이 모호합니다: 현재 비밀번호가 틀렸을 때와 서버에서 현재 비밀번호 검증이 켜져 있지 않을 때 slapd가 같은 결과를 냅니다. 그래서 문구는 고정이고 "틀렸다"고 단정하지 않으며(`retryable: false`), 401이 아니므로 클라이언트가 세션 만료로 오해하지 않습니다. `oldPassword` 없는 요청의 결과 53과 그 밖의 분류되지 않은 오류는 계속 500 `internal`입니다 |
 | `unauthenticated` | 401 | 세션 쿠키 없음 또는 서명 불일치 |
 | `session_expired` | 401 | 세션 만료 |
 | `forbidden` | 403 | 디렉터리 ACL 거부, Keycloak 경계 |

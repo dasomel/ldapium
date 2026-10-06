@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -296,9 +297,22 @@ func (c *client) SetPassword(ctx context.Context, dn, oldPassword, newPassword s
 	req := ldap.NewPasswordModifyRequest(dn, oldPassword, newPassword)
 	res, err := c.conn.PasswordModify(req)
 	if err != nil {
-		return "", mapErr("set password", err)
+		return "", mapSetPasswordErr(oldPassword, err)
 	}
 	return res.GeneratedPassword, nil
+}
+
+// mapSetPasswordErr is mapErr plus the one result that only means "current
+// password rejected" when the request carried an old password: unwillingToPerform
+// (53). Result 53 anywhere else (an admin reset, any other operation) stays
+// unmapped and ends as a redacted 500 (D264-3). The slapd diagnostic is kept
+// after the sentinel for the log; the HTTP layer withholds it from the body.
+func mapSetPasswordErr(oldPassword string, err error) error {
+	var le *ldap.Error
+	if oldPassword != "" && errors.As(err, &le) && le.ResultCode == ldap.LDAPResultUnwillingToPerform {
+		return fmt.Errorf("%w: %s", domain.ErrCurrentPasswordRejected, le)
+	}
+	return mapErr("set password", err)
 }
 
 // unlockModify builds the modify request Unlock sends, factored out so the

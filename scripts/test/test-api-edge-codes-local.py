@@ -5,8 +5,8 @@ Covers unlock idempotency, lock/unlock bind behaviour, group member 409/404,
 router 404/405 JSON, the /api/v1/meta allowlist and userPassword redaction.
 Also pins the error envelope (#218): every checked error carries exactly
 {error, message, code, requestId, retryable}, error == message, requestId ==
-X-Request-Id, no DN in the body, and a real 5xx (a wrong current password,
-LDAP result 53) is redacted with its cause only in the UI log. The password
+X-Request-Id, no DN in the body, and a wrong current password (LDAP result 53 on the
+old-password path, #264) is 400 current_password_rejected with its cause only in the UI log. The password
 policy refusals the change-password screen shows are checked end to end,
 including that ppm's user DN is stripped. The write Origin gate (#218, D218-16)
 is checked on users/groups/login/logout: foreign and null Origin are 403 and write nothing, no Origin header passes. With METRICS_ADDR=:9331 the UI exposes /metrics on that port only; the public port answers it with the 404 envelope
@@ -683,7 +683,7 @@ def run():
 
   # Password-policy refusals reach the change-password screen as the server
   # sends them: fixed policy text, never the user's DN (ppm puts it in every
-  # message). A wrong current password is LDAP 53, which is a redacted 500.
+  # message). A wrong current password is LDAP 53 on the old-password path: 400 current_password_rejected (#264).
   user_session = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
   expect(200, 'POST', '/api/login', {'identity': user_dn, 'password': user_password}, 'user login', who=user_session)
   change = {'dn': user_dn, 'oldPassword': user_password}
@@ -693,9 +693,9 @@ def run():
   text, headers = expect(400, 'POST', '/api/users/password', {**change, 'password': 'aaaaaaaaaaaaaaaa'}, 'ppm strength', who=user_session)
   body = envelope(text, headers, 'invalid_request', 'ppm strength 400', forbidden=(user_dn, 'dn=', 'edge-user'))
   check(body['error'] == 'invalid input: Password does not pass required number of strength checks (1 of 3)', 'ppm text: ' + body['error'])
-  text, headers = expect(500, 'POST', '/api/users/password', {**change, 'oldPassword': 'Wrong-' + user_password, 'password': 'New-' + user_password}, 'wrong current password', who=user_session)
-  body = envelope(text, headers, 'internal', 'LDAP 53 -> 500', forbidden=('LDAP Result', 'Unwilling', 'verify old password', user_dn))
-  check(body['error'] == 'internal error' and body['retryable'] is False, '500 body is not the fixed redacted text: ' + text[:200])
+  text, headers = expect(400, 'POST', '/api/users/password', {**change, 'oldPassword': 'Wrong-' + user_password, 'password': 'New-' + user_password}, 'wrong current password', who=user_session)
+  body = envelope(text, headers, 'current_password_rejected', 'LDAP 53 -> 400', forbidden=('LDAP Result', 'Unwilling', 'verify old password', user_dn))
+  check(body['error'].startswith('the current password was not accepted') and body['retryable'] is False, '400 body is not the fixed text: ' + text[:200])
   ui_log = subprocess.run(['docker', 'logs', ui], capture_output=True, text=True)
   ui_log = ui_log.stdout + ui_log.stderr
   check(body['requestId'] in ui_log and 'LDAP Result Code 53' in ui_log, 'UI log lacks the unredacted cause under requestId ' + body['requestId'])
