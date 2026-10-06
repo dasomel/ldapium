@@ -44,6 +44,15 @@ test('user list failure shows the validation text', async ({ page }) => {
   await expect(page.getByText('dn does not look like a distinguished name')).toBeVisible()
 })
 
+test('group list failure shows the validation text', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/groups', (r) =>
+    r.fulfill({ status: 400, json: envelope('dn does not look like a distinguished name', 'invalid_request') }),
+  )
+  await page.goto('/groups')
+  await expect(page.getByText('dn does not look like a distinguished name')).toBeVisible()
+})
+
 test('password-policy refusal is shown as the server sent it', async ({ page }) => {
   await mockSession(page)
   await page.route('**/api/password-policies', (r) => r.fulfill({ json: [] }))
