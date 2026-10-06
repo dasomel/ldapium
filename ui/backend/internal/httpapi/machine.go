@@ -56,6 +56,9 @@ type machineAuth struct {
 	ip        *machineIPThrottle
 	budget    *clientBudget
 	authSlots chan struct{}
+
+	// guardHook is nil in production; tests set it to panic inside the guard stage.
+	guardHook func()
 }
 
 // newMachineAuth builds the verifier and starts the JWKS source. A discovery
@@ -291,6 +294,9 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	method := c.Request().Method
 	if orig, _ := c.Get(origMethodKey).(string); orig != "" {
 		method = orig
+	}
+	if m.guardHook != nil {
+		m.guardHook() // tests only: a bug inside the guards, with every hold taken
 	}
 	op, ok := machineOpFor(method, c.Path())
 	if !ok {

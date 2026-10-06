@@ -76,6 +76,7 @@ ui_over = name_prefix + '-uiover'
 ui_off = name_prefix + '-uioff'
 ui_tls = name_prefix + '-uitls'
 ui_lim = name_prefix + '-uilim'
+ui_cap = name_prefix + '-uicap'
 
 base_dn = 'dc=example,dc=org'
 admin_dn = 'cn=admin,' + base_dn
@@ -228,6 +229,7 @@ class MockIdP:
 
   def mint(self, client, scopes, **override):
     now = int(time.time())
+    kid = override.pop('kid', 'mx-1')  # a JOSE header value, not a claim
     claims = {
         'iss': self.issuer, 'sub': 'sa-' + client, 'typ': 'Bearer', 'azp': client, 'client_id': client,
         'aud': ['ldapium-api', 'account'], 'iat': now, 'exp': now + 300, 'jti': secrets.token_hex(8),
@@ -235,7 +237,7 @@ class MockIdP:
         'clientHost': '10.0.0.1', 'clientAddress': '10.0.0.1',
     }
     claims.update(override)
-    hdr = b64u(json.dumps({'alg': 'RS256', 'typ': 'JWT', 'kid': 'mx-1'}).encode())
+    hdr = b64u(json.dumps({'alg': 'RS256', 'typ': 'JWT', 'kid': kid}).encode())
     body = b64u(json.dumps(claims).encode())
     sig = b64u(self.sign(f'{hdr}.{body}'.encode()))
     return f'{hdr}.{body}.{sig}'
@@ -992,7 +994,9 @@ member: {seed_user_dn}
                      machine_env(machine_dn, CLIENTS, {
                          'MACHINE_AUTH_FAILURE_LIMIT': '3', 'MACHINE_AUTH_FAILURE_WINDOW': f'{lim_window}s',
                          'MACHINE_RATE_LIMIT_RPS': '1', 'MACHINE_RATE_LIMIT_BURST': '2',
-                         'MACHINE_CLIENT_CONCURRENCY': '4', 'MACHINE_MAX_AUTH_CONCURRENCY': '16'}),
+                         'MACHINE_CLIENT_CONCURRENCY': '4', 'MACHINE_MAX_AUTH_CONCURRENCY': '16',
+                         # 1 s so an unknown kid really triggers a JWKS refresh when it is allowed to
+                         'MACHINE_JWKS_MIN_REFRESH': '1s'}),
                      {'SESSION_SECRET': session_secret, 'MACHINE_LDAP_BIND_PASSWORD': machine_password})
   limiter_tokens = []
 
@@ -1038,6 +1042,69 @@ member: {seed_user_dn}
   check(bad_sigs == [401, 401, 401] and st == 429, f'IP throttle: 3 bad signatures are 401, the 4th is 429 (got {bad_sigs} then {st})')
   time.sleep(lim_window + 1)
   check(lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] == 200, 'recovery after the window again')
+
+  # ---- ordering proof: the IP throttle runs BEFORE any signature or JWKS work ----
+  # A token whose kid the key set does not know forces a JWKS refresh whenever the
+  # refresh budget allows one (MIN_REFRESH is 1s in this container), and the mock
+  # issuer counts the fetches. So the proof is observable: from an unblocked
+  # source such a token DOES cause a fetch (control); from the blocked source,
+  # with the budget open again, neither it nor a large garbage JWS causes any.
+  # (A cached-key verification would not move the counter, which is why a valid
+  # token alone proves nothing about ordering.)
+  def unknown_kid_token(n):
+    t = mock_idp.mint('svc-reader', READER, kid=f'mx-unknown-{n}-{secrets.token_hex(3)}')
+    limiter_tokens.append(t)
+    return t
+
+  time.sleep(1.5)
+  h0 = mock_idp.jwks_hits
+  st, _, body = lim_api.machine(unknown_kid_token(0), '/api/users?limit=1')
+  check(st == 401 and mock_idp.jwks_hits == h0 + 1,
+        f'control: an unknown-kid token from an unblocked source is a 401 AND forces a JWKS refresh ({mock_idp.jwks_hits - h0} fetch)')
+  for _ in range(2):  # with the control's 401 that is 3 failures inside the window: blocked
+    raw_get({'Authorization': 'Bearer  two-spaces'})
+  time.sleep(1.5)  # the refresh budget is open again, so processed tokens WOULD fetch
+  h1 = mock_idp.jwks_hits
+  junk = '.'.join([b64u(json.dumps({'alg': 'RS256', 'typ': 'JWT', 'kid': 'mx-1'}).encode()), b64u(os.urandom(5000)), b64u(os.urandom(256))])
+  statuses = [lim_api.machine(unknown_kid_token(i), '/api/users?limit=1')[0] for i in (1, 2, 3)]
+  statuses.append(lim_api.machine(junk, '/api/users?limit=1')[0])
+  check(statuses == [429] * 4 and mock_idp.jwks_hits == h1,
+        f'blocked source: unknown-kid tokens and a ~7 KiB garbage JWS are 429 with ZERO upstream fetches (statuses {statuses}, fetches {mock_idp.jwks_hits - h1})')
+  time.sleep(lim_window + 1)
+  check(lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] == 200, 'recovery after the ordering proof')
+
+  # ---- holds are released on every exit path (real container, caps of 1) ----------
+  # Global authentication cap 1 and client concurrency 1: a slot or reservation that
+  # leaked even once would turn every later request into 503/429. Sequential
+  # requests of every kind, including client aborts mid-request, run first; then N
+  # normal requests must all succeed. Panic-release is NOT covered here (there is
+  # no test-only way to make a real handler panic in the shipped build); the unit
+  # tests inject panics at every stage.
+  cap_api = start_ui(ui_cap, f'ldap://{ldap_container}:389',
+                     machine_env(machine_dn, CLIENTS, {
+                         # 10 failures: the 8 deliberate 401s stay below it, but leaked IP
+                         # reservations (each held up to the 3s request timeout) would not
+                         'MACHINE_AUTH_FAILURE_LIMIT': '10', 'MACHINE_RATE_LIMIT_RPS': '10000',
+                         'MACHINE_RATE_LIMIT_BURST': '10000', 'MACHINE_CLIENT_CONCURRENCY': '1',
+                         'MACHINE_MAX_AUTH_CONCURRENCY': '1'}),
+                     {'SESSION_SECRET': session_secret, 'MACHINE_LDAP_BIND_PASSWORD': machine_password})
+  cap_host, cap_port = urllib.parse.urlparse(cap_api.base_url).netloc.split(':')
+
+  def abort_midrequest(token):
+    s = socket.create_connection((cap_host, int(cap_port)), timeout=5)
+    s.sendall(f'GET /api/users?limit=5 HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\r\n'.encode())
+    s.close()  # gone before (or while) the server answers
+    time.sleep(0.4)  # the aborted request finishes server side; a leak would outlive this
+
+  seq = []
+  for _ in range(8):
+    seq.append(cap_api.machine(lim_tok('svc-reader'), '/api/users?limit=2')[0])           # 200
+    seq.append(cap_api.machine(tamper(lim_tok('svc-reader')), '/api/users?limit=2')[0])   # 401
+    seq.append(cap_api.machine(lim_tok('svc-groups'), '/api/users?limit=2')[0])           # 403
+    abort_midrequest(lim_tok('svc-reader'))
+  check(seq == [200, 401, 403] * 8, f'caps of 1: 8 rounds of 200/401/403 plus a mid-request client abort are served as expected (statuses seen {sorted(set(seq))})')
+  after = [cap_api.machine(lim_tok('svc-reader'), '/api/users?limit=2')[0] for _ in range(12)]
+  check(after == [200] * 12, f'caps of 1: after all exit paths 12 sequential requests all succeed (a leaked slot or reservation would be 503/429): {after}')
   lim_lines = audit_lines(ui_lim)
   check(any('"reason":"rate"' in l and '"actor":"svc-reader"' in l for l in lim_lines) and
         any('"reason":"rate"' in l and '"actor":"unknown"' in l and '"token_fingerprint"' in l for l in lim_lines),
@@ -1069,7 +1136,7 @@ member: {seed_user_dn}
   check('"actor":"unknown"' in bad_line and '"token_fingerprint"' in bad_line, 'a bad signature is logged with actor unknown plus a token fingerprint')
   check(any('"actor":"svc-groups"' in l and '"reason":"scope"' in l for l in lines), 'a scope denial after verification names the verified client as actor')
   scan = ''
-  for c in (ui_main, ui_over, ui_off, ui_tls, ui_lim, ldap_container):
+  for c in (ui_main, ui_over, ui_off, ui_tls, ui_lim, ui_cap, ldap_container):
     out = run(['docker', 'logs', c])
     scan += out.stdout + out.stderr
   leaks = []
