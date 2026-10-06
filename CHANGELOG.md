@@ -20,6 +20,18 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Machine bearer authentication, unit 1 of the staged rollout (#214, change package
+  `machine-principal-auth`, **default off**): config parsing and startup validation of
+  the `MACHINE_*` environment, a Keycloak service-account token verifier, the JWKS key
+  source (refresh budget, single flight, bounded stale use, discovery retry), the pure
+  `selectAuth` precedence rules, and the static operation-to-scope allowlist with a
+  deny-by-default guard. Additive only: with `MACHINE_AUTH_ENABLED` unset no request,
+  response or route changes. OpenAPI gains `securitySchemes.machineBearer` plus
+  `security`/`x-machine-scope` on exactly the eight allowed GET operations, and three
+  new stable error codes `token_invalid`, `token_expired`, `scope_denied`.
+  **Enabling it does not expose any data yet:** the per-request least-privilege LDAP
+  bind identity is a later unit, so an authorized machine request currently ends in
+  a fixed `503`.
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause

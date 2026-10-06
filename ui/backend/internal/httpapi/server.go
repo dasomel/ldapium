@@ -44,6 +44,10 @@ type Server struct {
 	// (nil without UI_IDEMPOTENCY_KEY_FILE), which backup start needs.
 	idem     *idempotency.Store
 	idemKeys *idempotency.Keyring
+	// machine is the bearer-token path (nil unless MACHINE_AUTH_ENABLED; see
+	// machine.go). machineTest carries test-only collaborators.
+	machine     *machineAuth
+	machineTest *machineDeps
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
 	apiRoutes     []*echo.Route
@@ -53,6 +57,10 @@ type Server struct {
 // and the embedded SPA (with client-side-routing fallback to index.html)
 // for everything else.
 func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS) (*Server, error) {
+	return newServer(cfg, dialer, sessions, spa)
+}
+
+func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS, opts ...serverOption) (*Server, error) {
 	s := &Server{
 		echo:         echo.New(),
 		cfg:          cfg,
@@ -60,6 +68,9 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		sessions:     sessions,
 		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
 		metrics:      metrics.Nop{},
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	var err error
 	if s.idem, s.idemKeys, err = newIdempotency(cfg); err != nil {
@@ -119,6 +130,15 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		s.echo.Use(corsMiddleware(cfg.CORSAllowedOrigins))
 	}
 	s.echo.Use(s.originGate())
+	// Machine bearer authentication (default off). After the Origin gate, which
+	// stays outermost for state-changing requests; absent when the flag is unset,
+	// so no request or response changes.
+	if cfg.Machine.Enabled {
+		if s.machine, err = newMachineAuth(cfg, s.machineTest); err != nil {
+			return nil, err
+		}
+		s.echo.Use(s.machineMiddleware())
+	}
 
 	if cfg.BackupOperatorConfig != "" {
 		s.backups, err = backup.New(cfg.BackupPolicyPath, cfg.BackupOperatorConfig, cfg.BackupWorkerPath, cfg.BackupPython)
@@ -129,6 +149,14 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}
 	s.routes(spa)
 	return s, nil
+}
+
+// Close stops background work started by New (the machine key-source retry
+// timer). The process normally never calls it; tests do.
+func (s *Server) Close() {
+	if s.machine != nil {
+		s.machine.cancel()
+	}
 }
 
 // Handler returns the http.Handler to pass to http.Server, so main.go

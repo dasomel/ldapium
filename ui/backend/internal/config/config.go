@@ -174,6 +174,10 @@ type Config struct {
 	// the write Origin gate accepts only the request's own origin (D218-16). Empty (the default) means no CORS headers on
 	// any response. Values are validated and lower-cased at load time.
 	CORSAllowedOrigins []string
+
+	// Machine is the optional bearer authentication for service clients
+	// (MACHINE_AUTH_ENABLED, default false; see machine.go). Zero value when off.
+	Machine MachineConfig
 }
 
 // SSOConfig is the configuration required to use a confidential OIDC client
@@ -321,6 +325,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 	cfg.CORSAllowedOrigins, err = parseCORSOrigins(getenv("CORS_ALLOWED_ORIGINS"))
 	if err != nil {
+		return Config{}, err
+	}
+
+	if err := loadMachine(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
 
