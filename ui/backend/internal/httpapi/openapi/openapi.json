@@ -4,7 +4,7 @@
     "title": "ldapium management API",
     "version": "v1",
     "summary": "HTTP API behind the ldapium web console, usable by scripts and AI agents with a session cookie.",
-    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens, no CORS headers and no machine principal yet; see docs/api.md and docs/changes/api-integration/PLAN.md.\n\nTwo error body shapes exist and are both documented: `{\"error\": string}` (directory/auth handlers via respondErr; 500s add `requestId`) and `{\"message\": string}` (validation, session, admin-gate, profile, backup, Keycloak). Unknown /api paths and wrong methods return `{\"error\": ...}` with 404/405.\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups) or a quoted 64-hex fingerprint (Keycloak role operations). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
+    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens, no CORS headers and no machine principal yet; see docs/api.md and docs/changes/api-integration/PLAN.md.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups) or a quoted 64-hex fingerprint (Keycloak role operations). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
   },
   "servers": [
     {
@@ -182,58 +182,29 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "Invalid credentials",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Password login is disabled (SSO mode)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "429": {
-            "description": "Too many failed attempts from this IP",
-            "headers": {
-              "Retry-After": {
-                "description": "Seconds until another attempt is allowed",
-                "schema": {
-                  "type": "integer"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
-            "description": "Unexpected failure (redacted)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           }
         },
         "requestBody": {
@@ -299,7 +270,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -309,20 +280,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "500": {
-            "description": "Could not begin login",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           }
         }
       }
@@ -358,7 +322,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -368,7 +332,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -430,14 +394,7 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -467,14 +424,7 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -504,31 +454,17 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Identity may not read cn=Monitor",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -565,37 +501,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Identity may not read cn=accesslog",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -658,7 +580,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -668,37 +590,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -746,7 +654,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -756,37 +664,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -827,7 +721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -837,7 +731,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -847,37 +741,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -931,31 +811,17 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -988,31 +854,17 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1047,7 +899,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1057,37 +909,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1125,7 +963,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1135,37 +973,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1203,7 +1027,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1213,37 +1037,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1291,7 +1101,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1301,37 +1111,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL / ppolicy",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1371,7 +1167,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1381,37 +1177,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1459,7 +1241,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1469,37 +1251,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1550,31 +1318,17 @@
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1609,7 +1363,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1619,37 +1373,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1687,7 +1427,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1697,37 +1437,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1765,7 +1491,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1775,37 +1501,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1846,7 +1558,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1856,7 +1568,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1866,37 +1578,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1934,7 +1632,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1944,37 +1642,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session: cookie missing, signature invalid, or session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "description": "Unexpected failure; message redacted, correlate by requestId in server logs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Permission denied by directory ACL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2027,21 +1711,14 @@
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2051,7 +1728,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2097,21 +1774,14 @@
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2121,7 +1791,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2167,21 +1837,14 @@
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2191,7 +1854,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2238,7 +1901,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2248,7 +1911,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2258,7 +1921,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2268,57 +1931,36 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "500": {
-            "description": "Could not persist",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2405,27 +2047,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2481,7 +2116,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2491,7 +2126,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2501,7 +2136,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2511,57 +2146,36 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "500": {
-            "description": "Could not save",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2630,7 +2244,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2640,7 +2254,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2650,50 +2264,29 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "500": {
-            "description": "Could not delete",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Internal"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -2766,7 +2359,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2776,7 +2369,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2786,7 +2379,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2796,7 +2389,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2806,40 +2399,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "502": {
-            "description": "Keycloak operation failed; reload observed state before retrying",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadGateway"
           },
           "503": {
-            "description": "Keycloak admin connection is disabled",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ServiceUnavailable"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -2894,7 +2466,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2904,7 +2476,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2914,7 +2486,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2924,7 +2496,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2934,40 +2506,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "502": {
-            "description": "Keycloak operation failed; reload observed state before retrying",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadGateway"
           },
           "503": {
-            "description": "Keycloak admin connection is disabled",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ServiceUnavailable"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -3014,27 +2565,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3084,7 +2628,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3094,7 +2638,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3104,7 +2648,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3114,7 +2658,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3124,50 +2668,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "502": {
-            "description": "Keycloak operation failed; reload observed state before retrying",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadGateway"
           },
           "503": {
-            "description": "Keycloak admin connection is disabled",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ServiceUnavailable"
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -3231,7 +2747,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3241,7 +2757,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3251,7 +2767,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3261,7 +2777,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3271,7 +2787,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3281,7 +2797,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3291,50 +2807,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "502": {
-            "description": "Keycloak operation failed; reload observed state before retrying",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadGateway"
           },
           "503": {
-            "description": "Keycloak admin connection is disabled",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ServiceUnavailable"
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -3409,7 +2897,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3419,27 +2907,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured application profile administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3504,7 +2985,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3514,7 +2995,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3524,7 +3005,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3534,30 +3015,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "parameters": [
@@ -3639,21 +3106,14 @@
             }
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Session DN is not a configured backup administrator",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3663,7 +3123,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3710,7 +3170,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3720,7 +3180,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3730,7 +3190,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3740,7 +3200,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3750,7 +3210,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3760,37 +3220,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3867,7 +3313,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3877,7 +3323,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3887,7 +3333,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3897,7 +3343,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3907,7 +3353,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -3917,37 +3363,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4024,7 +3456,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4034,7 +3466,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4044,7 +3476,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4054,7 +3486,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4064,7 +3496,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4074,37 +3506,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4187,7 +3605,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4197,7 +3615,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4207,7 +3625,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4217,37 +3635,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "415": {
-            "description": "Content-Type is not application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "description": "Feature disabled on this server",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EchoErrorBody"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4291,46 +3695,173 @@
         "description": "Signed session cookie set by POST /api/login or the SSO callback."
       }
     },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed request (code `invalid_request`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No valid session (`unauthenticated` or `session_expired`), or wrong credentials (`invalid_credentials`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Not allowed (`forbidden`, `admin_required` or `origin_mismatch`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Nothing there (`not_found`), or the feature is switched off (`feature_disabled`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "Wrong method for the path (`method_not_allowed`); an `Allow` header lists the right ones.",
+        "headers": {
+          "Allow": {
+            "description": "Methods the path supports.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Conflicts with current state (`conflict`, `already_exists` or `backup_busy`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PreconditionFailed": {
+        "description": "`If-Match` no longer matches (`revision_conflict`): reload, then send a new request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "`Content-Type` is not application/json (`unsupported_media_type`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unprocessable": {
+        "description": "Well-formed but rejected (`validation_failed`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PreconditionRequired": {
+        "description": "`If-Match` is required (`if_match_required`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Too many failed login attempts from this IP (`login_rate_limited`).",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until another attempt is allowed.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Internal": {
+        "description": "Unexpected failure (`internal`). The text is fixed and redacted; correlate by `requestId` in the server log.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "BadGateway": {
+        "description": "The Keycloak upstream failed (`upstream_failed`). `retryable` is true only for GET/HEAD.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "A dependency is unavailable (`keycloak_disabled`: not retryable; `unavailable`: retryable, with Retry-After).",
+        "headers": {
+          "Retry-After": {
+            "description": "Integer seconds to wait; present when `retryable` is true.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
     "schemas": {
-      "ErrorBody": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string",
-            "description": "Present on 500 responses; matches the X-Request-Id header and the server log line."
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "description": "Error shape produced by directory/auth handlers through respondErr."
-      },
-      "EchoErrorBody": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "message"
-        ],
-        "description": "Error shape produced by validation, session, admin-gate, profile, backup and Keycloak handlers (Echo's default HTTPError)."
-      },
-      "ApiError": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/ErrorBody"
-          },
-          {
-            "$ref": "#/components/schemas/EchoErrorBody"
-          }
-        ],
-        "description": "Either error shape. Clients should read `error` first, then `message`. The same status code can use either shape depending on where it was raised."
-      },
       "Meta": {
         "type": "object",
         "properties": {
@@ -5877,6 +5408,71 @@
           "logs_available": {
             "type": "boolean"
           }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text.",
+        "required": [
+          "error",
+          "message",
+          "code",
+          "requestId",
+          "retryable"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable text. 4xx: the handler's curated text. 5xx: a fixed per-code text, never an internal detail."
+          },
+          "message": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Identical copy of `error`; use `error`."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "admin_required",
+              "already_exists",
+              "backup_busy",
+              "conflict",
+              "feature_disabled",
+              "forbidden",
+              "if_match_required",
+              "internal",
+              "invalid_credentials",
+              "invalid_request",
+              "keycloak_disabled",
+              "login_rate_limited",
+              "method_not_allowed",
+              "not_found",
+              "origin_mismatch",
+              "revision_conflict",
+              "session_expired",
+              "unauthenticated",
+              "unavailable",
+              "unsupported_media_type",
+              "upstream_failed",
+              "validation_failed"
+            ],
+            "description": "Stable machine-readable code. The set is append-only: new codes may appear, names never change. Treat an unknown value like the status code's class default."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Matches the X-Request-Id response header and the server log line holding the unredacted cause."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether sending the same request again, unchanged, may succeed. False for 412/428 (reload first) and 500 (partial effects possible)."
+          }
+        },
+        "example": {
+          "error": "profile changed; reload before saving",
+          "message": "profile changed; reload before saving",
+          "code": "revision_conflict",
+          "requestId": "5nQe3kXyZpLwTqA0vB9cJmRdUsHf2GoE",
+          "retryable": false
         }
       }
     }
