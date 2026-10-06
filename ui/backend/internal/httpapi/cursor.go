@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
@@ -17,7 +18,7 @@ import (
 
 // Opaque list cursors (docs/changes/api-cursor-pagination, D215-1).
 //
-// A cursor is `v1.<b64url(payload)>.<b64url(mac)>`. It carries no secret -
+// A cursor is `v2.<b64url(payload)>.<b64url(mac)>`. It carries no secret -
 // only a position the caller already received - so the HMAC is for integrity
 // and binding, not confidentiality: a tampered cursor becomes a 400 instead of
 // silently skipping entries, and a cursor only works for the resource, filter
@@ -26,7 +27,7 @@ import (
 // the same DN (a new Session.ID) invalidates older cursors.
 
 const (
-	cursorVersion = "v1"
+	cursorVersion = "v2"
 	// maxCursorLen caps what decodeCursor will look at and what encodeCursor
 	// will emit. The package text said 1024; DNs of a few hundred bytes would
 	// then fail to page, so the cap is 2048.
@@ -42,12 +43,15 @@ var errCursorInvalid = errors.New("invalid cursor")
 type cursorPayload struct {
 	V int    `json:"v"`
 	R string `json:"r"` // resource: "users" | "groups"
-	// K and D are raw bytes (base64 in JSON): an LDAP value is not
-	// guaranteed to be valid UTF-8, and a JSON string would not round-trip.
-	K []byte `json:"k"` // sort key of the last selected tuple
-	D []byte `json:"d"` // its lowercased DN
+	// K and D are plain JSON strings (one base64 layer, not two, so long DNs
+	// fit the cap). An LDAP value is not guaranteed to be valid UTF-8 and a
+	// JSON string would not round-trip it: if either is not, both are
+	// standard-base64 text and B is true.
+	K string `json:"k"` // sort key of the last selected tuple
+	D string `json:"d"` // its lowercased DN
 	Q string `json:"q"` // normalized filter text the cursor belongs to
 	S string `json:"s"` // session binding
+	B bool   `json:"b,omitempty"`
 }
 
 // cursorKey derives the cursor MAC key from the session secret.
@@ -73,7 +77,13 @@ func cursorMAC(key []byte, signed string) []byte {
 }
 
 func encodeCursor(key []byte, resource, q, binding string, pos domain.PagePosition) (string, error) {
-	raw, err := json.Marshal(cursorPayload{V: 1, R: resource, K: []byte(pos.Key), D: []byte(pos.DN), Q: q, S: binding})
+	p := cursorPayload{V: 2, R: resource, K: pos.Key, D: pos.DN, Q: q, S: binding}
+	if !utf8.ValidString(pos.Key) || !utf8.ValidString(pos.DN) {
+		p.B = true
+		p.K = base64.StdEncoding.EncodeToString([]byte(pos.Key))
+		p.D = base64.StdEncoding.EncodeToString([]byte(pos.DN))
+	}
+	raw, err := json.Marshal(p)
 	if err != nil {
 		return "", err
 	}
@@ -121,9 +131,21 @@ func decodeCursor(key []byte, token, resource, q, binding string) (domain.PagePo
 	if err := dec.Decode(&p); err != nil || dec.More() {
 		return domain.PagePosition{}, errCursorInvalid
 	}
-	if p.V != 1 || p.R != resource || p.Q != q ||
+	if p.V != 2 || p.R != resource || p.Q != q ||
 		subtle.ConstantTimeCompare([]byte(p.S), []byte(binding)) != 1 {
 		return domain.PagePosition{}, errCursorInvalid
 	}
-	return domain.PagePosition{Key: string(p.K), DN: string(p.D)}, nil
+	if !p.B {
+		if !utf8.ValidString(p.K) || !utf8.ValidString(p.D) {
+			return domain.PagePosition{}, errCursorInvalid
+		}
+		return domain.PagePosition{Key: p.K, DN: p.D}, nil
+	}
+	// The fallback is canonical only when a value really is not UTF-8.
+	k, kerr := base64.StdEncoding.Strict().DecodeString(p.K)
+	d, derr := base64.StdEncoding.Strict().DecodeString(p.D)
+	if kerr != nil || derr != nil || (utf8.Valid(k) && utf8.Valid(d)) {
+		return domain.PagePosition{}, errCursorInvalid
+	}
+	return domain.PagePosition{Key: string(k), DN: string(d)}, nil
 }

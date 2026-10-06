@@ -327,7 +327,7 @@ func TestKeysetCursorMisuseIs400AndNeverReachesTheDirectory(t *testing.T) {
 		{"other user's session", s.handleListUsers, &session.Session{ID: "sess-C", DN: "uid=bob", Bound: f}, "/api/users", "q=ab&cursor=" + good},
 		{"SESSION_SECRET rotated", otherSecret.handleListUsers, sessA, "/api/users", "q=ab&cursor=" + good},
 		{"over 2048 bytes", s.handleListUsers, sessA, "/api/users", "cursor=" + strings.Repeat("A", 3000)},
-		{"not base64", s.handleListUsers, sessA, "/api/users", "cursor=v1.@@@.@@@"},
+		{"not base64", s.handleListUsers, sessA, "/api/users", "cursor=v2.@@@.@@@"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

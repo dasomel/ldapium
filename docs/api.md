@@ -67,7 +67,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `q` | 부분 문자열 필터, 64자 이하·유효한 UTF-8·제어 문자 불가, 앞뒤 공백 제거. users는 `uid`·`cn`·`mail`·`displayName`, groups는 `cn`·`description`에 대소문자 무시로 매칭. `*()\` 등은 문자 그대로 매칭 |
 | `sort` | 기본 키만 허용(users `uid`, groups `cn`, 오름차순). 다른 값은 422 |
 
-응답: `{"users":[...], "truncated":false, "hasMore":true, "nextCursor":"v1...."}`. `truncated`는 커서 모드에서 항상 `false`, 이어짐은 `hasMore`입니다. `nextCursor`는 `hasMore`가 `true`일 때만 있습니다.
+응답: `{"users":[...], "truncated":false, "hasMore":true, "nextCursor":"v2...."}`. `truncated`는 커서 모드에서 항상 `false`, 이어짐은 `hasMore`입니다. `nextCursor`는 `hasMore`가 `true`일 때만 있습니다.
 
 ```bash
 cursor=""
@@ -99,6 +99,8 @@ done
 | 422 | `scan_limit_exceeded` | false | 후보가 요청당 100000건 초과 — `q`로 좁히기 |
 | 503 | `scan_timeout` | false | 요청 deadline 30초 초과 — `q`로 좁히거나 나중에 재시도 |
 | 503 | `unavailable` | true | 같은 세션의 다른 커서 요청이 끝나지 않음 (`Retry-After`) |
+
+커서 한 개는 2048바이트가 상한입니다. 정렬 키(`uid`/`cn`)와 소문자 DN, `q`를 합쳐 약 1.4KB가 넘는 위치에서는 다음 커서를 만들 수 없어 그 목록 요청이 500 `internal`로 끝납니다(상세는 서버 로그). 정상적인 디렉터리에서는 일어나지 않는 크기입니다. 이전 형식(`v1.`) 커서는 `cursor_invalid`입니다.
 
 ## 오류 형식
 
