@@ -87,7 +87,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_TLS_AUTHZ_DN` | if mutual auth enabled | `uid=$1,${LDAP_ROOT_DN}` | `olcAuthzRegexp` replacement DN. The default maps the matching certificate CN to a `uid` below the base DN; override it for your DIT. An explicitly empty value is rejected. |
 | `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on the first bootstrap of the node that creates the base DIT**. A failed seed rolls back the whole bootstrap and is retried on the next start; replicas skip seeding and receive the data by replication. Your extension point for OUs, groups, real users, ACLs, etc. |
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
-| `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in. A positive integer or `unlimited`: appends `olcLimits: users size.prtotal=<value>` to the `mdb` database so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT` (see [Paged-search total](#paged-search-total-ldap_paged_total_limit)). Unset renders nothing. `0`, leading zeros and non-digits are refused at startup. Reconciled on every start. |
+| `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in. A positive integer up to `2147483647`, or `unlimited`: appends `olcLimits: users size.prtotal=<value>` to the `mdb` database so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT` (see [Paged-search total](#paged-search-total-ldap_paged_total_limit)). Unset renders nothing. `0`, leading zeros, non-digits and anything above 2147483647 are refused at startup. Reconciled on every start. |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_HASH` | no | `{ARGON2}` | `olcPasswordHash` on the frontend database, and the scheme used to mint the bootstrap admin hash. Any `{SCHEME}`-shaped value slapd supports (e.g. `{SSHA}`). Applied at bootstrap only (see below). |
 | `LDAP_UNIQUE_ATTRIBUTES` | no | `uid,mail` | Comma-separated attributes the `unique` overlay enforces uniqueness on. **Empty string disables the overlay entirely** — it is not created at all, rather than created with nothing to check. See [Uniqueness enforcement](#uniqueness-enforcement). Applied at bootstrap only (see below). |
@@ -243,6 +243,20 @@ in `slapd.d/.paged-total-limit` (the spec text, next to `.bootstrapped`). A
 same-looking operator rule is never taken over, so with the variable unset an
 existing config is left exactly as it was, including an operator's own
 `users size.prtotal=500`.
+
+**Fail closed.** The marker is trusted only when it is exactly one line of the
+form `users size.prtotal=<positive integer or unlimited>`; otherwise ownership is
+unknown, a fixed line is logged, and every rule is kept. The rule this
+entrypoint owns is found among *all* `olcLimits` values (no index limit). The
+change is applied after a verified backup of the database's config file
+(non-empty and identical); if it fails the file is restored through a copy in the
+same directory and an atomic rename, and a restore that cannot be completed
+**aborts startup** rather than run slapd on a half-written config. After a
+successful restore startup continues with the previous limits only when they
+are no more permissive than the requested ones (raising the limit, or adding
+it, is such a case); if the request **tightens** (removes the lifted rule, or
+lowers the total) the container exits with a fixed message instead of running
+with the looser rule.
 
 **Reconciled, not bootstrap-only.** Like the hardening settings it is applied
 on every start, so it works on an existing volume; emptying the variable

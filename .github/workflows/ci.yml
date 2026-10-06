@@ -356,6 +356,14 @@ jobs:
             echo "::error::ldap.limits.pagedTotal=5000000 did not render as LDAP_PAGED_TOTAL_LIMIT=\"5000000\""
             exit 1
           fi
+          # Values the image refuses must fail the render, not turn into another number.
+          for bad in "--set ldap.limits.pagedTotal=1.5" "--set ldap.limits.pagedTotal=0" "--set ldap.limits.pagedTotal=2147483648" "--set-string ldap.limits.pagedTotal=abc" "--set-string ldap.limits.pagedTotal=2147483648"; do
+            # shellcheck disable=SC2086
+            if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret $bad >/dev/null 2>&1; then
+              echo "::error::chart accepted an invalid ldap.limits.pagedTotal ($bad)"
+              exit 1
+            fi
+          done
           unl=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set-string ldap.limits.pagedTotal=unlimited --show-only templates/statefulset.yaml)
           if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$unl" | grep -q 'value: "unlimited"'; then
             echo "::error::ldap.limits.pagedTotal=unlimited did not render as LDAP_PAGED_TOTAL_LIMIT=\"unlimited\""

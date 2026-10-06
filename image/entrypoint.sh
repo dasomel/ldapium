@@ -187,11 +187,20 @@ esac
 # leading zero, or `unlimited`; 0 is refused because its meaning varies
 # between slapd limit keywords. Never set size.pr here: a per-page cap makes
 # a client asking for a bigger page fail with adminLimitExceeded.
+# Upper bound 2147483647 (a signed 32-bit count, what slapd's limit parser can
+# hold); anything longer is refused before it is ever compared.
+paged_total_value_ok() {
+  case "$1" in
+    unlimited) return 0 ;;
+    ''|0*|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#1}" -le 10 ] || return 1
+  [ "$1" -le 2147483647 ]
+}
 LDAP_PAGED_TOTAL_LIMIT="${LDAP_PAGED_TOTAL_LIMIT:-}"
-case "$LDAP_PAGED_TOTAL_LIMIT" in
-  ''|unlimited) ;;
-  0*|*[!0-9]*) die "LDAP_PAGED_TOTAL_LIMIT must be a positive number or 'unlimited' (got: ${LDAP_PAGED_TOTAL_LIMIT})" ;;
-esac
+if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ] && ! paged_total_value_ok "$LDAP_PAGED_TOTAL_LIMIT"; then
+  die "LDAP_PAGED_TOTAL_LIMIT must be a positive number up to 2147483647, or 'unlimited' (got: ${LDAP_PAGED_TOTAL_LIMIT})"
+fi
 
 LDAP_TIME_LIMIT="${LDAP_TIME_LIMIT:-3600}"
 case "$LDAP_TIME_LIMIT" in
@@ -1310,49 +1319,72 @@ hd_clear() {
   #    left exactly as it was.
   pt_marker="${CONFIG_DIR}/.paged-total-limit"
   pt_ops=$(mktemp)
+  pt_list=$(mktemp)
+  pt_marker_action=''
+  pt_tightening=''
   pt_owned=''
-  if [ -s "$pt_marker" ]; then
-    # Unreadable or unusable marker: fail closed. Nothing is claimed as ours,
-    # so nothing is modified or removed; the limits stay as they are.
-    pt_owned=$(head -n 1 "$pt_marker" 2>/dev/null) || pt_owned=''
-    [ -n "$pt_owned" ] || log "paged-total marker is unreadable; leaving existing olcLimits rules untouched"
+  # The marker is trusted only when it is exactly ONE line of exactly the form
+  # this script writes. Anything else (extra lines, odd values, unreadable)
+  # means ownership is unknown: every rule is kept and nothing is deleted.
+  if [ -e "$pt_marker" ]; then
+    pt_m=$(head -n 2 "$pt_marker" 2>/dev/null) || pt_m=''
+    case "$pt_m" in
+      *"$nl"*) pt_m='' ;;
+    esac
+    case "$pt_m" in
+      "users size.prtotal="*)
+        if paged_total_value_ok "${pt_m#users size.prtotal=}"; then pt_owned=$pt_m; fi
+        ;;
+    esac
+    [ -n "$pt_owned" ] || log "paged-total marker is not in the expected form; ignoring it and leaving every olcLimits rule untouched"
   fi
   pt_want=''
   [ -z "$LDAP_PAGED_TOTAL_LIMIT" ] || pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
-  pt_specs=$(sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | sed -n 's/^olcLimits: {[0-9]*}//p')
+  # Every olcLimits value actually present, whatever its {N} (no fixed range).
+  sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" \
+    | sed -n 's/^olcLimits: {\([0-9][0-9]*\)}\(.*\)$/\1 \2/p' > "$pt_list"
   pt_owned_idx=''
-  if [ -n "$pt_owned" ]; then
-    # {N} of the value that is exactly ours (whole-line match, no prefix hits)
-    for pt_i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19; do
-      if sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | grep -qxF -- "olcLimits: {${pt_i}}${pt_owned}"; then
-        pt_owned_idx="{${pt_i}}"
-        break
-      fi
-    done
-  fi
-  pt_marker_action=''
+  pt_has_users=''
+  pt_has_users_prtotal=''
+  pt_has_star=''
+  while IFS=' ' read -r pt_idx pt_spec; do
+    if [ -n "$pt_owned" ] && [ "$pt_spec" = "$pt_owned" ]; then pt_owned_idx="{${pt_idx}}"; fi
+    case "$pt_spec" in
+      users|"users "*) pt_has_users=1 ;;
+      '*'|'* '*) pt_has_star=1 ;;
+    esac
+    case "$pt_spec" in
+      "users size.prtotal="*) pt_has_users_prtotal=1 ;;
+    esac
+  done < "$pt_list"
+  rm -f "$pt_list"
+  # Permissiveness for the tightening test: `unlimited` is the most permissive.
+  pt_rank() { if [ "$1" = unlimited ]; then echo 99999999999; else echo "$1"; fi; }
   if [ -z "$pt_want" ]; then
     if [ -n "$pt_owned_idx" ]; then
+      # exact owned form only: validated above, index read from the config
       printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$pt_ops"
+      pt_tightening=1
       log "removing the paged-total limit this entrypoint added earlier (${pt_owned})"
     fi
     [ -z "$pt_owned" ] || pt_marker_action='clear'
-    if [ -z "$pt_owned_idx" ] && printf '%s\n' "$pt_specs" | grep -qE '^users size\.prtotal='; then
+    if [ -z "$pt_owned_idx" ] && [ -n "$pt_has_users_prtotal" ]; then
       log "an olcLimits 'users size.prtotal=' rule exists that this entrypoint did not record as its own; leaving it untouched"
     fi
   elif [ -n "$pt_owned_idx" ] && [ "$pt_owned" = "$pt_want" ]; then
     : # already in place
-  elif [ -z "$pt_owned_idx" ] && printf '%s\n' "$pt_specs" | grep -qE '^users([ ]|$)'; then
+  elif [ -z "$pt_owned_idx" ] && [ -n "$pt_has_users" ]; then
     # slapd allows ONE rule per selector (a second `users` rule is a config
     # error that stops slapd), and the operator's rule is not ours to change.
     log "an operator-set olcLimits rule for 'users' exists (${pt_want} not added; edit that rule with ldapmodify to change the paged total)"
   else
     if [ -n "$pt_owned_idx" ]; then
       printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$pt_ops"
+      if [ "$(pt_rank "$LDAP_PAGED_TOTAL_LIMIT")" -lt "$(pt_rank "${pt_owned#users size.prtotal=}")" ]; then pt_tightening=1; fi
     fi
     printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$pt_ops"
     pt_marker_action='set'
-    if printf '%s\n' "$pt_specs" | grep -qE '^\*([ ]|$)'; then
+    if [ -n "$pt_has_star" ]; then
       log "an operator olcLimits rule for '*' precedes the paged-total rule; slapd applies the first match, so LDAP_PAGED_TOTAL_LIMIT will not take effect for the identities that rule covers"
     fi
   fi
@@ -1367,17 +1399,28 @@ rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 
 # Paged-total rule (LDAP_PAGED_TOTAL_LIMIT), applied on its own so that a
 # failure here can neither take the hardening settings down with it nor leave a
-# half-applied limit behind. FAIL CLOSED: the main database's config file is
-# copied first and put back if the modify fails, so the limits that were in
-# force before this start stay in force (nothing is widened, no operator rule
-# is dropped), the provenance marker is left as it was, and slapd still starts
-# with that previous configuration.
+# half-applied limit behind. FAIL CLOSED:
+#  - the main database's config file is backed up first and the backup is
+#    verified (non-empty, identical); without a verified backup nothing is
+#    modified;
+#  - if the modify fails, the file is put back ONLY when it differs from the
+#    backup, through a copy in the same directory and an atomic rename, and the
+#    result is verified; a restore that cannot be completed aborts startup
+#    (never run slapd on a half-written config);
+#  - once the previous configuration is back, startup continues only when the
+#    previous effective policy is no more permissive than the requested one.
+#    If the request TIGHTENS (removes the lifted rule or lowers the total),
+#    keeping the old, looser rule would be fail-open for the requested policy,
+#    so startup aborts with a fixed message instead.
+pt_fail=''
 if [ -s "$pt_ops" ]; then
   pt_db_file="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
   pt_backup=$(mktemp)
   pt_ldif=$(mktemp)
   { printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\n'; cat "$pt_ops"; } > "$pt_ldif"
-  if cp "$pt_db_file" "$pt_backup" 2>/dev/null && slapmodify -n 0 -F "$CONFIG_DIR" -l "$pt_ldif"; then
+  if ! cp -p "$pt_db_file" "$pt_backup" 2>/dev/null || [ ! -s "$pt_backup" ] || ! cmp -s "$pt_db_file" "$pt_backup"; then
+    pt_fail=1 # no verified backup: nothing was touched
+  elif slapmodify -n 0 -F "$CONFIG_DIR" -l "$pt_ldif"; then
     # Ownership marker, written only after cn=config took the change. If it
     # cannot be written the rule simply stays unowned (never removed later).
     case "$pt_marker_action" in
@@ -1385,14 +1428,29 @@ if [ -s "$pt_ops" ]; then
       clear) rm -f "$pt_marker" ;;
     esac
   else
-    cp "$pt_backup" "$pt_db_file" 2>/dev/null || :
-    log "paged-total reconcile failed; the previous olcLimits rules were kept"
+    pt_fail=1
+    if ! cmp -s "$pt_db_file" "$pt_backup"; then
+      pt_tmp="${pt_db_file}.restore.$$"
+      if cp -p "$pt_backup" "$pt_tmp" 2>/dev/null && cmp -s "$pt_tmp" "$pt_backup" \
+        && mv -f "$pt_tmp" "$pt_db_file" 2>/dev/null && cmp -s "$pt_db_file" "$pt_backup"; then
+        :
+      else
+        rm -f "$pt_tmp" 2>/dev/null || :
+        die "paged-total reconcile failed and the previous configuration could not be restored; refusing to start"
+      fi
+    fi
   fi
   rm -f "$pt_backup" "$pt_ldif"
 elif [ "$pt_marker_action" = "clear" ]; then
   rm -f "$pt_marker" # a marker for a rule that is no longer there
 fi
 rm -f "$pt_ops"
+if [ -n "$pt_fail" ]; then
+  if [ -n "$pt_tightening" ]; then
+    die "paged-total reconcile failed and the requested limit is stricter than the one in force; refusing to start"
+  fi
+  log "paged-total reconcile failed; the previous olcLimits rules were kept"
+fi
 
 # ---------------------------------------------------------------------------
 # 3c. Optional modules (D6..D9). Same offline mechanism as 3b, but overlays
