@@ -80,6 +80,10 @@ func respondCreateFailure(c echo.Context, ce *domain.CreateError, uid string) er
 	}
 
 	log.Printf("user_create_rolled_back request_id=%s uid_fp=%s cause=%s", logQuote(reqID), fp, logDetail(ce.Err))
+	// The compensating delete was verified: whatever the password-step cause
+	// was (a refusal, a lost response), nothing remains, so an Idempotency-Key
+	// may be retried (D216-20). Every other state returned above stays recorded.
+	markDefinitive(c)
 	if status, code, sentinel, ok := domainStatus(ce.Err); ok {
 		msg, _ := publicDomainMessage(sentinel, ce.Err)
 		return writeAPIError(c, status, code, "user not created: "+msg, ce.Err)

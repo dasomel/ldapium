@@ -198,8 +198,14 @@ func strictBody(method, contentType string, raw []byte) ([]byte, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errBodyNotNormalizable
 	}
+	// Numbers stay json.Number: their literal is what is fingerprinted, never a
+	// float64 (which would equate 9007199254740992 and 9007199254740993).
+	// Different spellings of one value (1.0, 1, 1e0) are conservatively
+	// different requests.
+	dec = json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	if err := dec.Decode(&v); err != nil {
 		return nil, errBodyNotNormalizable
 	}
 	return json.Marshal(v) // map keys are emitted sorted

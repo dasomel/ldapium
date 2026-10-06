@@ -418,6 +418,8 @@ LDAP 와이어 코드는 AGENTS.md 원칙에 따라 단위 테스트하지 않�
 | D216-22 | **키가 붙은 요청의 본문은 정규화할 수 없으면 핸들러 실행 전에 400 `invalid_request`로 거부한다(리뷰 반영 개정).** 거부 대상: 첫 JSON 값 뒤의 데이터(핸들러의 디코더는 첫 값만 읽는다), 잘못된 JSON, 같은 필드명이 두 번이거나 대소문자만 다른 중복(`encoding/json`이 대소문자를 접어 나중 값이 이긴다 — 별칭으로 지문은 같고 실효 비밀번호는 다른 경우를 막는다), 어느 깊이든 포함, DELETE의 본문(핸들러가 무시함), `application/json`·`application/merge-patch+json`이 아닌 Content-Type, 64KiB 초과. 통과한 본문은 키 정렬 정규형과 디코드 결과가 일대일이다. 거부된 요청은 키를 점유하지 않는다. 키 형식 검사는 스위치 확인보다 먼저다. | 지문과 실제 실행되는 본문이 달라질 수 없게 한다. 앞선 "핸들러가 400을 낼 것"이라는 가정은 틀렸다. |
 | D216-23 | 이 저장소의 차트에는 `values.schema.json`이 없다. 새 값 `ui.idempotency.enabled`는 `values.yaml` 주석·차트 README에 문서화하고 `verify-chart-schema.sh`(kubeconform) 프로필 `ui-idempotency`와 `scripts/test/test-chart-idempotency-render.sh`(CI 연결)로 검증한다. | 스키마 파일 신설은 범위 밖. |
 
+**두 번째 리뷰 반영(D216-19/20 보강):** 지문은 숫자를 `json.Number` 리터럴로 취급한다(float64 정밀도 손실로 `9007199254740992`와 `…993`이 같아지지 않음; `1.0`과 `1`은 보수적으로 다른 요청). 사용자 생성에서 보상 삭제가 검증된 `rolled_back`은 비밀번호 단계의 원인(53 거부, 응답 유실 등)과 무관하게 확정 실패라 키를 놓고, `partial`·`identity_changed`·`unknown`은 기록으로 남는다.
+
 **키 지속성(정확한 진술):** 백업 시작의 키만 영속 job 기록에 있어 백엔드 재시작 뒤에도 같은 job을 돌려준다. 사용자·그룹·엔트리 이동·비밀번호 라우트의 키는 프로세스 메모리에만 있어 재시작하면 잊힌다(재시도는 새 요청으로 실행되어 생성은 409, 삭제는 404가 된다). 라이브 시험이 두 경우를 각각 확인한다.
 
 Part B에서 **하지 않은 것**: 프런트(T-018: 키·`If-Match` 전송, 412 처리), ADR(T-031), 운영 가이드·릴리스 노트(T-032), #217 계약 테스트 표의 별도 문서화(T-016; `httpapi/backup_idempotency_test.go`가 같은 항목을 검증), 환경 변수로 저장소 상한 조정. 증거는 [EVIDENCE.md](EVIDENCE.md)의 "Part B".
