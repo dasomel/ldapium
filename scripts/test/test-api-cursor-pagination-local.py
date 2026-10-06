@@ -619,7 +619,7 @@ def scenario_slow(slow_ms_probe=150):
   t = time.perf_counter()
   status, body, headers, secs, text = api2.page('users', limit=200)
   took = time.perf_counter() - t
-  check(status == 503 and body.get('code') == 'scan_timeout' and body.get('retryable') is False, 'expected 503 scan_timeout, got %d %s' % (status, text[:300]))
+  check(status == 503 and body.get('code') == 'scan_timeout' and body.get('retryable') is True, 'expected 503 scan_timeout, got %d %s' % (status, text[:300]))
   check(25 < took < 45, 'timeout answered after %.1fs, expected about the 30s request deadline' % took)
   record('request deadline', '503 scan_timeout after %.1fs (30s deadline + at most one in-flight chunk), no users in the body' % took)
   st, _, _, secs2 = api2.call('GET', '/api/entry?dn=' + urllib.parse.quote(admin_dn))

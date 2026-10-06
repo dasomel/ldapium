@@ -19,6 +19,8 @@ on:
     paths:
       - "ui/backend/internal/ldapclient/**"
       - "ui/backend/internal/httpapi/**"
+      - "ui/backend/go.mod"
+      - "ui/backend/go.sum"
       - "image/entrypoint.sh"
       - "scripts/test/test-api-cursor-pagination-local.py"
       - ".github/workflows/api-cursor-e2e.yml"
@@ -69,10 +71,19 @@ jobs:
           set -euo pipefail
           docker run -d --name cursor-live -p 127.0.0.1:13890:389 \
             -e LDAP_ROOT_DN=dc=example,dc=org -e LDAP_ADMIN_PASSWORD=live-admin-pw "$LDAPIUM_IMAGE"
+          ready=0
           for _ in $(seq 1 60); do
-            docker exec cursor-live ldapwhoami -x -H ldap://127.0.0.1 -D cn=admin,dc=example,dc=org -w live-admin-pw >/dev/null 2>&1 && break
+            if docker exec cursor-live ldapwhoami -x -H ldap://127.0.0.1 -D cn=admin,dc=example,dc=org -w live-admin-pw >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 1
           done
+          if [ "$ready" != 1 ]; then
+            echo "slapd in cursor-live never became ready" >&2
+            docker logs cursor-live >&2 || true
+            exit 1
+          fi
           cd ui/backend
           LDAP_LIVE_URL=ldap://127.0.0.1:13890 LDAP_LIVE_ROOT=dc=example,dc=org LDAP_LIVE_ADMIN_PASSWORD=live-admin-pw \
             go test -tags live -race -count=1 -run Live ./internal/ldapclient/

@@ -119,6 +119,10 @@ const (
 	// retryAfterDefaultSeconds is the Retry-After of a retryable 429/503 whose
 	// producer did not compute one (the login limiter does; see handleLogin).
 	retryAfterDefaultSeconds = 5
+	// retryAfterScanTimeoutSeconds: the scan already used its whole 30 s
+	// request deadline, so an immediate retry of the same listing would only
+	// time out again.
+	retryAfterScanTimeoutSeconds = 30
 )
 
 // codeSpec is the status a code is emitted with and, for 5xx codes, the
@@ -221,7 +225,7 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeUnavailable, codeBackupBusy, codePersistenceUnavailable,
+	case codeLoginRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
 		codeIdempotencyKeyConflict, codeIdempotencyCapacity:
 		return true
 	case codeUpstreamFailed:
@@ -291,7 +295,11 @@ func buildEnvelope(c echo.Context, status int, code, msg string, cause error, st
 	retryable := retryableFor(code, req.Method)
 	if retryable && (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) {
 		if c.Response().Header().Get(echo.HeaderRetryAfter) == "" {
-			c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(retryAfterDefaultSeconds))
+			wait := retryAfterDefaultSeconds
+			if code == codeScanTimeout {
+				wait = retryAfterScanTimeoutSeconds
+			}
+			c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(wait))
 		}
 	}
 	return errorEnvelope{Error: msg, Message: msg, Code: code, RequestID: reqID, Retryable: retryable, State: state, DN: dn}

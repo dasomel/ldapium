@@ -122,6 +122,11 @@ jobs:
       - run: go vet ./...
         env:
           GOFLAGS: -mod=readonly
+      # Build-tagged files (page_live_test.go) are not compiled by the plain
+      # vet above and rot unnoticed otherwise.
+      - run: go vet -tags live ./...
+        env:
+          GOFLAGS: -mod=readonly
       - run: go test ./...
         env:
           GOFLAGS: -mod=readonly

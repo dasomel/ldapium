@@ -41,8 +41,6 @@ const (
 	msgInvalidCursor = "invalid cursor"
 	msgSizeLimit     = "directory size limit reached; narrow with q, use an identity exempt from the limit, or ask the operator to set LDAP_PAGED_TOTAL_LIMIT (ldap.limits.pagedTotal)"
 	msgScanLimit     = "too many candidate entries to scan; narrow the listing with q"
-	msgScanTimeout   = "the listing timed out; narrow it with q or try again later"
-	msgBusy          = "another listing is in progress on this session; retry shortly"
 )
 
 // pagedModeRequested is true when any keyset parameter is present, even with
@@ -192,10 +190,10 @@ func respondPageErr(c echo.Context, err error) error {
 	case errors.Is(err, domain.ErrScanLimitExceeded):
 		return writeAPIError(c, http.StatusUnprocessableEntity, codeScanLimitExceeded, msgScanLimit, nil)
 	case errors.Is(err, domain.ErrScanTimeout):
-		return writeAPIError(c, http.StatusServiceUnavailable, codeScanTimeout, msgScanTimeout, err)
+		return writeAPIError(c, http.StatusServiceUnavailable, codeScanTimeout, "", err)
 	case errors.Is(err, domain.ErrBusy):
 		c.Response().Header().Set(echo.HeaderRetryAfter, "2")
-		return writeAPIError(c, http.StatusServiceUnavailable, codeUnavailable, msgBusy, err)
+		return writeAPIError(c, http.StatusServiceUnavailable, codeUnavailable, "", err)
 	case errors.Is(err, context.Canceled):
 		// The client hung up; nobody is left to read a body.
 		return c.NoContent(499)

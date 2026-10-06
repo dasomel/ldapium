@@ -42,8 +42,8 @@ func TestCursorRoundTrip(t *testing.T) {
 	if got != testPos {
 		t.Errorf("position = %+v, want %+v", got, testPos)
 	}
-	if !strings.HasPrefix(token, "v1.") || strings.Count(token, ".") != 2 {
-		t.Errorf("token %q is not v1.<payload>.<mac>", token)
+	if !strings.HasPrefix(token, "v2.") || strings.Count(token, ".") != 2 {
+		t.Errorf("token %q is not v2.<payload>.<mac>", token)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestCursorRejectsMisuse(t *testing.T) {
 		{"new login of the same DN is a new Session.ID", key, token, "users", "ali", cursorBinding(key, testSession("sess-2"))},
 		{"session secret rotated", cursorKey([]byte("another-secret-another-secret-another-secret")), token, "users", "ali", binding},
 		{"empty", key, "", "users", "ali", binding},
-		{"not base64", key, "v1.!!!.???", "users", "ali", binding},
+		{"not base64", key, "v2.!!!.???", "users", "ali", binding},
 		{"junk", key, "garbage", "users", "ali", binding},
 		{"over the length cap", key, token + strings.Repeat("A", maxCursorLen), "users", "ali", binding},
 	}
@@ -154,19 +154,20 @@ func signed(key []byte, payload any) string {
 	raw, _ := json.Marshal(payload)
 	p := base64.RawURLEncoding.EncodeToString(raw)
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("v1." + p))
-	return "v1." + p + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	mac.Write([]byte("v2." + p))
+	return "v2." + p + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func TestCursorRejectsValidMACWithWrongContent(t *testing.T) {
 	key := cursorKey(cursorTestSecret)
 	binding := cursorBinding(key, testSession("sess-1"))
-	good := map[string]any{"v": 1, "r": "users", "k": []byte("a"), "d": []byte("b"), "q": "", "s": binding}
-	if _, err := decodeCursor(key, signed(key, good), "users", "", binding); err != nil {
+	good := map[string]any{"v": 2, "r": "users", "k": "a", "d": "b", "q": "", "s": binding}
+	canon := `{"v":2,"r":"users","k":"a","d":"b","q":"","s":"` + binding + `"}`
+	if _, err := decodeCursor(key, signedRaw(key, canon), "users", "", binding); err != nil {
 		t.Fatalf("control token rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"unknown version": func(m map[string]any) { m["v"] = 2 },
+		"unknown version": func(m map[string]any) { m["v"] = 3 },
 		"unknown field":   func(m map[string]any) { m["x"] = 1 },
 		"bad key type":    func(m map[string]any) { m["k"] = 5 },
 	} {
@@ -189,11 +190,11 @@ func TestCursorKeyIsSeparatedFromTheSessionSecret(t *testing.T) {
 	// A cursor MAC'd directly with the session secret (what a holder of a
 	// cookie-signing oracle could produce) must not verify.
 	binding := cursorBinding(key, testSession("s"))
-	raw, _ := json.Marshal(map[string]any{"v": 1, "r": "users", "k": []byte("a"), "d": []byte("b"), "q": "", "s": binding})
+	raw, _ := json.Marshal(map[string]any{"v": 2, "r": "users", "k": "a", "d": "b", "q": "", "s": binding})
 	p := base64.RawURLEncoding.EncodeToString(raw)
 	mac := hmac.New(sha256.New, cursorTestSecret)
-	mac.Write([]byte("v1." + p))
-	forged := "v1." + p + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	mac.Write([]byte("v2." + p))
+	forged := "v2." + p + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if _, err := decodeCursor(key, forged, "users", "", binding); !errors.Is(err, errCursorInvalid) {
 		t.Errorf("cursor MAC'd with the raw session secret was accepted: %v", err)
 	}
