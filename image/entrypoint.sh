@@ -186,7 +186,7 @@ esac
 #                    (the operator decides); a `users size.prtotal=<other>` rule
 #                    is the feature's own shape and is converged to the value.
 #   off              remove exactly `users size.prtotal=<any value>`; a
-#                    differently shaped `users` rule is left alone and logged.
+#                    differently shaped `users` rule aborts startup too.
 # Any failure to apply, verify or restore for a set/off request aborts startup:
 # nothing is served on a policy that was not proven. `users` = every
 # authenticated DN, so anonymous is unaffected. Raising the total lets any
@@ -1456,6 +1456,15 @@ paged_total_rules() {
       "olcLimits:: "*)
         if ! pt_val=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null) || [ -z "$pt_val" ]; then
           pt_rc=1 # undecodable: could be the very rule looked for
+          break
+        fi
+        # dash drops NUL bytes in $(...) while slapd reads the value as a C
+        # string cut at the first NUL: a value holding one is judged on other
+        # bytes than slapd applies, so it is unparseable.
+        pt_n_all=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null | wc -c)
+        pt_n_nonul=$(printf '%s' "${pt_line#olcLimits:: }" | base64 -d 2>/dev/null | tr -d '\000' | wc -c)
+        if [ "$pt_n_all" -ne "$pt_n_nonul" ]; then
+          pt_rc=1
           break
         fi
         ;;

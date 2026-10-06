@@ -511,6 +511,23 @@ start "$c" "$vol"
 expect_eq "unterminated quote: unset never reads the rules and starts" "$(olc_limits "$c")" '{0}users size.prtotal="unlimited'
 clear_limits
 
+# NUL inside a stored value: dash drops it while slapd reads the value as a C
+# string cut at the first NUL, so `{0}users size.prtotal=9<NUL>0` is applied by
+# slapd as 9 but reads as 90 once decoded in the shell. It is unparseable: set
+# AND off abort before any change; unset never reads the config.
+nul_b64='ezB9dXNlcnMgc2l6ZS5wcnRvdGFsPTkAMA=='
+printf 'add: olcLimits\nolcLimits:: %s\n' "$nul_b64" | limits_ldif
+expect_eq "NUL setup: the value is stored as written" "$(count_all "$c")" "1"
+expect_eq "NUL value: set=90 aborts (not judged 'reserved 90, converged')" \
+  "$(run_abort "$real_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=90)" "abort ok (exit 1)"
+expect_eq "NUL value: set aborts and the config is untouched" "$(count_all_offline)" "1"
+expect_eq "NUL value: off aborts" \
+  "$(run_abort "$real_image" "$abort_msg" -e LDAP_PAGED_TOTAL_LIMIT=off)" "abort ok (exit 1)"
+expect_eq "NUL value: off aborts and the config is untouched" "$(count_all_offline)" "1"
+start "$c" "$vol"
+expect_eq "NUL value: unset never reads it and starts" "$(count_all "$c")" "1"
+clear_limits
+
 # --- failed apply aborts, in both directions (unwritable config). ------------
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
 lock_cfg
