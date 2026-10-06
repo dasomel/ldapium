@@ -234,13 +234,13 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 
 ## CORS (기본 꺼짐)
 
-기본값에서는 어떤 응답에도 `Access-Control-*`·`Vary: Origin` 헤더가 붙지 않고, `OPTIONS`는 위 설명대로 204와 `Allow`만 반환합니다. 환경 변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분, 정확한 `scheme://host[:port]`만)를 설정하면 켜집니다. `*`, `null`, 경로·쿼리·프래그먼트·사용자 정보, 빈 항목은 기동을 거부합니다. 차트는 `ui.cors.allowedOrigins`입니다.
+기본값에서는 어떤 응답에도 `Access-Control-*`·`Vary: Origin` 헤더가 붙지 않고, `OPTIONS`는 위 설명대로 204와 `Allow`만 반환합니다. 환경 변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분, 정확한 `scheme://host[:port]`만; 브라우저가 생략하는 기본 포트 `:80`/`:443`은 정규화로 제거됨)를 설정하면 켜집니다. `*`, `null`, 경로·쿼리·프래그먼트·사용자 정보, 빈 항목, 빈·범위 밖(1–65535 아님) 포트는 기동을 거부합니다. 차트는 `ui.cors.allowedOrigins`입니다.
 
 - **읽기 전용입니다.** 목록에 있는 Origin에만 `Access-Control-Allow-Origin: <그 Origin>`·`Access-Control-Allow-Credentials: true`·`Access-Control-Expose-Headers: X-Request-Id, Retry-After, ETag`가 `GET`/`HEAD` 응답(오류 응답 포함)에 붙습니다. 일치하지 않는 Origin, `null`, 쓰기 메서드(POST/PUT/PATCH/DELETE) 응답에는 `Access-Control-*`가 붙지 않습니다.
 - `Vary: Origin`은 활성화되면 **모든** 응답(Origin이 없는 요청, 일치·불일치, `OPTIONS` 포함)에 붙습니다. 공유 캐시가 한 Origin의 응답을 다른 Origin에 재사용하지 않게 하기 위해서입니다.
 - 프리플라이트(`OPTIONS` + `Access-Control-Request-Method`)는 목록의 Origin이 `GET`·`HEAD`·`OPTIONS`를 요청할 때만 핸들러 앞에서 204로 허용합니다(`Allow-Methods: GET, HEAD, OPTIONS`, `Allow-Headers: Content-Type, Accept`, `Max-Age: 600`). 쓰기 메서드의 프리플라이트는 `Access-Control-*` 없이 일반 `OPTIONS`(204 + `Allow`)로만 답하므로 브라우저가 차단합니다.
 - 쿠키는 `SameSite=Lax` 그대로입니다. 다른 사이트(registrable domain이 다른 origin)의 fetch/XHR에는 세션 쿠키가 실리지 않으므로, 이 목록은 같은 사이트의 다른 origin(예: `console.example.com` → `ldapium.example.com`)에서 읽기를 허용하는 용도입니다. 머신 클라이언트는 `Origin`을 보내지 않아 CORS가 필요 없습니다.
-- 같은 목록은 위 **쓰기 Origin 게이트**가 추가로 허용하는 Origin이기도 합니다(사용자·그룹·엔트리 쓰기). 프로필·백업·Keycloak 쓰기는 목록과 무관하게 계속 `Origin`==서버 origin이어야 합니다. 교차 출처 쓰기 UI는 지원하지 않습니다.
+- 이 목록은 **쓰기에 아무 영향도 주지 않습니다.** 위 **쓰기 Origin 게이트**는 목록과 무관하게 서버 자신의 origin만 통과시키므로, 목록의 Origin이 보낸 쓰기(프리플라이트 없는 단순 POST, `/api/logout` 포함)도 403 `origin_mismatch`입니다. 교차 출처 쓰기 UI는 지원하지 않습니다.
 
 ## /metrics (프로세스 지표)
 
