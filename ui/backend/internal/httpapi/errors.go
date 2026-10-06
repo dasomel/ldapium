@@ -33,6 +33,12 @@ type errorEnvelope struct {
 	Code      string `json:"code"`
 	RequestID string `json:"requestId"`
 	Retryable bool   `json:"retryable"`
+
+	// State and DN exist only on partial_failure (#216, the documented
+	// exception to the five-key envelope): which state a failed user creation
+	// left behind, and the DN of the entry the caller must go and check.
+	State string `json:"state,omitempty"`
+	DN    string `json:"dn,omitempty"`
 }
 
 // Error codes (D218-3). Closed set: callers switch on these, so a name is a
@@ -63,6 +69,9 @@ const (
 	codeUpstreamFailed       = "upstream_failed"
 	codeKeycloakDisabled     = "keycloak_disabled"
 	codeUnavailable          = "unavailable"
+	// codePartialFailure: a user creation whose password step did not
+	// complete (#216). 500, never retryable; carries state and dn.
+	codePartialFailure = "partial_failure"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -72,6 +81,12 @@ const (
 	unavailableErrorMessage = "service temporarily unavailable"
 	keycloakDisabledMessage = "Keycloak admin connection is disabled"
 	keycloakUpstreamMessage = "Keycloak operation failed; reload observed state before retrying"
+	// partialFailureMessage is true for every state: it promises nothing about
+	// the password and does not say whether the entry still exists beyond
+	// naming it; the state key and docs/api.md carry the distinction.
+	partialFailureMessage = "user creation did not complete: the password step failed and the new entry was not removed as verified; " +
+		"check the entry named in dn (state says what was and was not done), then set its password with POST /api/users/password " +
+		"or remove it with DELETE /api/users?dn="
 
 	// retryAfterDefaultSeconds is the Retry-After of a retryable 429/503 whose
 	// producer did not compute one (the login limiter does; see handleLogin).
@@ -108,6 +123,7 @@ var codeTable = map[string]codeSpec{
 	codeUpstreamFailed:       {http.StatusBadGateway, keycloakUpstreamMessage},
 	codeKeycloakDisabled:     {http.StatusServiceUnavailable, keycloakDisabledMessage},
 	codeUnavailable:          {http.StatusServiceUnavailable, unavailableErrorMessage},
+	codePartialFailure:       {http.StatusInternalServerError, partialFailureMessage},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
@@ -194,6 +210,13 @@ func logDetail(err error) string {
 // writeAPIError is the single builder of the envelope; respondErr and
 // apiErrorHandler both end here.
 func writeAPIError(c echo.Context, status int, code, msg string, cause error) error {
+	return writeAPIErrorExt(c, status, code, msg, cause, "", "")
+}
+
+// writeAPIErrorExt is writeAPIError plus the two partial_failure-only keys.
+// Only codePartialFailure may carry state/dn; its 5xx text is the static one
+// like every other 5xx (D218-8).
+func writeAPIErrorExt(c echo.Context, status int, code, msg string, cause error, state, dn string) error {
 	if _, known := codeTable[code]; !known {
 		code = codeForStatus(status)
 	}
@@ -211,13 +234,16 @@ func writeAPIError(c echo.Context, status int, code, msg string, cause error) er
 			msg = internalErrorMessage
 		}
 	}
+	if code != codePartialFailure {
+		state, dn = "", ""
+	}
 	retryable := retryableFor(code, req.Method)
 	if retryable && (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) {
 		if c.Response().Header().Get(echo.HeaderRetryAfter) == "" {
 			c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(retryAfterDefaultSeconds))
 		}
 	}
-	return c.JSON(status, errorEnvelope{Error: msg, Message: msg, Code: code, RequestID: reqID, Retryable: retryable})
+	return c.JSON(status, errorEnvelope{Error: msg, Message: msg, Code: code, RequestID: reqID, Retryable: retryable, State: state, DN: dn})
 }
 
 // domainStatus maps a domain sentinel to its status and code; ok is false
@@ -236,6 +262,10 @@ func domainStatus(err error) (status int, code string, sentinel error, ok bool) 
 		return http.StatusForbidden, codeForbidden, domain.ErrPermissionDenied, true
 	case errors.Is(err, domain.ErrInvalidInput):
 		return http.StatusBadRequest, codeInvalidRequest, domain.ErrInvalidInput, true
+	case errors.Is(err, domain.ErrRevisionConflict):
+		// A conditional write whose If-Match no longer matches (#216). The
+		// sentinel text is fixed; no DN or filter ever reaches the body.
+		return http.StatusPreconditionFailed, codeRevisionConflict, domain.ErrRevisionConflict, true
 	}
 	return 0, "", nil, false
 }

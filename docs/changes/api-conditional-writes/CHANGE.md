@@ -384,7 +384,14 @@ LDAP 와이어 코드는 AGENTS.md 원칙에 따라 단위 테스트하지 않�
 
 남은 유지보수자 결정 사항은 없다. 그 외 열린 질문은 권고대로 해소했다
 
+**Part A 리뷰 반영 한계(2026-10-06)**
+
+- D216-1: `entryCSN` ETag는 **항목에 직접 쓰인 속성**의 검증자일 뿐 표현 전체의 검증자가 아니다. 사용자 `memberOf`와 refint의 그룹 `member` 정리는 CSN을 올리지 않는다(EVIDENCE.md 실측). 낡은 태그가 그런 변경 뒤에도 그룹 `PUT`/`DELETE`를 통과할 수 있고 `GET /api/entry`는 서로 다른 표현에 같은 ETag를 줄 수 있다. 결정: CSN 전용 ETag 유지, 한계를 docs/api.md·llms.txt·CHANGELOG·OpenAPI에 명시, 라이브 테스트가 현 거동을 고정한다(바뀌면 문서와 함께 의도적으로 갱신).
+- D216-5 보강: 신원 읽기는 `modifiersName == creatorsName == 바인드 DN`과 `modifyTimestamp == createTimestamp`도 요구하고(Add와 같은 잠금 안에서 읽음), 어긋나면 비밀번호 단계를 건너뛰고 삭제하지 않으며 `partial_failure`/`state: identity_changed`로 응답한다. 보상 삭제의 응답 유실은 `state: unknown`이다. **남는 경쟁:** 신원 확인과 Password Modify 사이는 닫을 수 없다(go-ldap v3.4.14 `PasswordModifyRequest`는 제어를 실을 수 없음, 소스 확인). 같은 바인드 DN의 다른 세션 수정은 `modifiersName`으로 구별되지 않는다. 신원 읽기·보상 삭제는 컨텍스트/타임아웃 없이 공유 연결을 점유한다(#215 D215-13의 컨텍스트 인식 검색 래퍼 계획 참조, 여기서 새 메커니즘을 만들지 않음).
+
 **검증하지 못한 사실(모두 구현 전 T-002에서 확인)**
+
+> 갱신(Part A 스파이크·구현, 2026-10-06): 1·2·5는 확인됨, 3은 부분 확인(실패/성공 바인드·lastbind·memberOf·refint), 7·8은 구현으로 확인, 6은 2노드 실측으로 D216-1a 서술과 일치. 4·9·10·11은 미확인. 결과와 명령은 [EVIDENCE.md](EVIDENCE.md).
 
 1. 이 이미지의 slapd가 assertion control(`1.3.6.1.1.12`)을 Modify/Delete/ModifyDN에서 지원하는지(rootDSE `supportedControl`, 실제 거동). 작성 시 Docker를 쓰지 않아 미확인.
 2. 비루트 일반 바인드(및 SSO 서비스 계정)가 `entryCSN`·`entryUUID`·`creatorsName`을 읽고 필터 평가에 쓸 수 있는지(못 읽으면 보상은 항상 `partial`로 수렴). 저장소에서 이 속성들에 대한 별도 ACL은 찾지 못했다(`01-cn-config.ldif:90`은 `userPassword,shadowLastChange`만 다룸).

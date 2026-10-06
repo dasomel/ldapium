@@ -87,7 +87,7 @@ func (f *fakeLoginClient) Tree(context.Context, string) ([]domain.TreeNode, erro
 func (f *fakeLoginClient) GetEntry(context.Context, string) (*domain.Entry, error) {
 	return nil, nil
 }
-func (f *fakeLoginClient) MoveEntry(context.Context, string, string) error {
+func (f *fakeLoginClient) MoveEntry(context.Context, string, string, string) error {
 	return nil
 }
 func (f *fakeLoginClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
@@ -108,25 +108,37 @@ func (f *fakeLoginClient) ListUsers(context.Context, string) ([]domain.User, boo
 func (f *fakeLoginClient) CreateUser(context.Context, string, domain.UserInput) (string, error) {
 	return "", nil
 }
-func (f *fakeLoginClient) UpdateUser(context.Context, string, domain.UserInput) error { return nil }
-func (f *fakeLoginClient) DeleteUser(context.Context, string) error                   { return nil }
+func (f *fakeLoginClient) UpdateUser(context.Context, string, domain.UserInput, string) error {
+	return nil
+}
+func (f *fakeLoginClient) DeleteUser(context.Context, string, string) error { return nil }
+func (f *fakeLoginClient) PatchUser(context.Context, string, domain.UserPatch, string) error {
+	return nil
+}
+func (f *fakeLoginClient) PatchGroup(context.Context, string, domain.GroupPatch, string) error {
+	return nil
+}
 func (f *fakeLoginClient) SetPassword(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (f *fakeLoginClient) Unlock(context.Context, string) error { return nil }
-func (f *fakeLoginClient) Lock(context.Context, string) error   { return nil }
+func (f *fakeLoginClient) Unlock(context.Context, string, string) error { return nil }
+func (f *fakeLoginClient) Lock(context.Context, string, string) error   { return nil }
 func (f *fakeLoginClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
 	return nil, false, nil
 }
 func (f *fakeLoginClient) CreateGroup(context.Context, string, domain.GroupInput) (string, error) {
 	return "", nil
 }
-func (f *fakeLoginClient) UpdateGroup(context.Context, string, domain.GroupInput) error {
+func (f *fakeLoginClient) UpdateGroup(context.Context, string, domain.GroupInput, string) error {
 	return nil
 }
-func (f *fakeLoginClient) DeleteGroup(context.Context, string) error          { return nil }
-func (f *fakeLoginClient) AddMember(context.Context, string, string) error    { return nil }
-func (f *fakeLoginClient) RemoveMember(context.Context, string, string) error { return nil }
+func (f *fakeLoginClient) DeleteGroup(context.Context, string, string) error { return nil }
+func (f *fakeLoginClient) AddMember(context.Context, string, string, string) error {
+	return nil
+}
+func (f *fakeLoginClient) RemoveMember(context.Context, string, string, string) error {
+	return nil
+}
 
 // fakeLoginDialer implements ldapclient.Dialer for handleLogin tests.
 // bindErr, when set, is returned from Bind instead of a client. calls

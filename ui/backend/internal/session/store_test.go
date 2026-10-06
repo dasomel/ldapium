@@ -23,7 +23,7 @@ func (f *fakeClient) ResolveUID(context.Context, string) (string, error)      { 
 func (f *fakeClient) ServerVersion(context.Context) (string, error)           { return "", nil }
 func (f *fakeClient) Tree(context.Context, string) ([]domain.TreeNode, error) { return nil, nil }
 func (f *fakeClient) GetEntry(context.Context, string) (*domain.Entry, error) { return nil, nil }
-func (f *fakeClient) MoveEntry(context.Context, string, string) error         { return nil }
+func (f *fakeClient) MoveEntry(context.Context, string, string, string) error { return nil }
 func (f *fakeClient) MonitorStats(context.Context) (*domain.MonitorStats, error) {
 	return nil, nil
 }
@@ -42,23 +42,35 @@ func (f *fakeClient) ListUsers(context.Context, string) ([]domain.User, bool, er
 func (f *fakeClient) CreateUser(context.Context, string, domain.UserInput) (string, error) {
 	return "", nil
 }
-func (f *fakeClient) UpdateUser(context.Context, string, domain.UserInput) error { return nil }
-func (f *fakeClient) DeleteUser(context.Context, string) error                   { return nil }
+func (f *fakeClient) UpdateUser(context.Context, string, domain.UserInput, string) error {
+	return nil
+}
+func (f *fakeClient) DeleteUser(context.Context, string, string) error { return nil }
+func (f *fakeClient) PatchUser(context.Context, string, domain.UserPatch, string) error {
+	return nil
+}
+func (f *fakeClient) PatchGroup(context.Context, string, domain.GroupPatch, string) error {
+	return nil
+}
 func (f *fakeClient) SetPassword(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (f *fakeClient) Unlock(context.Context, string) error { return nil }
-func (f *fakeClient) Lock(context.Context, string) error   { return nil }
+func (f *fakeClient) Unlock(context.Context, string, string) error { return nil }
+func (f *fakeClient) Lock(context.Context, string, string) error   { return nil }
 func (f *fakeClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
 	return nil, false, nil
 }
 func (f *fakeClient) CreateGroup(context.Context, string, domain.GroupInput) (string, error) {
 	return "", nil
 }
-func (f *fakeClient) UpdateGroup(context.Context, string, domain.GroupInput) error { return nil }
-func (f *fakeClient) DeleteGroup(context.Context, string) error                    { return nil }
-func (f *fakeClient) AddMember(context.Context, string, string) error              { return nil }
-func (f *fakeClient) RemoveMember(context.Context, string, string) error           { return nil }
+func (f *fakeClient) UpdateGroup(context.Context, string, domain.GroupInput, string) error {
+	return nil
+}
+func (f *fakeClient) DeleteGroup(context.Context, string, string) error       { return nil }
+func (f *fakeClient) AddMember(context.Context, string, string, string) error { return nil }
+func (f *fakeClient) RemoveMember(context.Context, string, string, string) error {
+	return nil
+}
 
 func TestStore_CreateAndGet(t *testing.T) {
 	s := NewStore(time.Minute)

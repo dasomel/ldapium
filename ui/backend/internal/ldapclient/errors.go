@@ -38,6 +38,14 @@ func mapErr(op string, err error) error {
 			return domain.ErrAlreadyExists
 		case ldap.LDAPResultInsufficientAccessRights:
 			return domain.ErrPermissionDenied
+		case ldap.LDAPResultAssertionFailed:
+			// Only a write carrying an assertion control (If-Match, or the
+			// create compensation) can produce this; the text is dropped so
+			// no filter or DN reaches the caller. unavailableCriticalExtension
+			// (12) deliberately stays unmapped: it falls through to the 500
+			// path with the original error logged, never to an
+			// unconditional write.
+			return domain.ErrRevisionConflict
 		case ldap.LDAPResultConstraintViolation, ldap.LDAPResultObjectClassViolation, ldap.LDAPResultInvalidAttributeSyntax:
 			return fmt.Errorf("%w: %s", domain.ErrInvalidInput, le.Err)
 		case ldap.LDAPResultNotAllowedOnNonLeaf:

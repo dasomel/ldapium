@@ -49,8 +49,8 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | Auth | `POST /api/login`, `POST /api/logout`, `GET /api/me`, `GET /api/sso/start`, `GET /api/sso/callback` |
 | Server | `GET /api/server-settings`, `GET /api/monitor`, `GET /api/audit/actions` |
 | Directory | `GET /api/tree`, `GET /api/entry`, `POST /api/entry/move`, `GET /api/password-policies` |
-| Users | `GET/POST/PUT/DELETE /api/users`, `POST /api/users/password`, `/lock`, `/unlock` |
-| Groups | `GET/POST/PUT/DELETE /api/groups`, `POST/DELETE /api/groups/members` |
+| Users | `GET/POST/PUT/PATCH/DELETE /api/users`, `POST /api/users/password`, `/lock`, `/unlock` |
+| Groups | `GET/POST/PUT/PATCH/DELETE /api/groups`, `POST/DELETE /api/groups/members` |
 | Application profiles (`x-admin`) | `GET /api/v1/application-profile-types`, `GET /api/v1/applications`, `GET/PUT /api/v1/applications/integration-methods[/{method}]`, `GET/PUT/DELETE /api/v1/applications/{id}/integration-profile`, `GET .../keycloak-roles`, `GET .../roles`, `GET .../integration-status`, `POST .../integration-verify`, `POST .../keycloak-role-operations`, `GET .../configuration-export`, `POST .../mapping-preview` |
 | Backups (`x-admin`) | `GET /api/v1/backups`, `PUT /api/v1/backups/policies`, `PUT /api/v1/backups/connections`, `DELETE /api/v1/backups/connections/{id}`, `POST /api/v1/backups/jobs/{kind}` |
 
@@ -98,6 +98,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `already_exists` | 409 | 이미 있음 |
 | `backup_busy` | 409 | 백업이 실행 중(`retryable: true`) |
 | `revision_conflict` | 412 | `If-Match` 불일치 |
+| `partial_failure` | 500 | 사용자 생성 후 비밀번호 단계가 끝나지 않음(`retryable: false`). 오류 본문의 유일한 예외로 `state`와 `dn` 키가 더 있음(아래 "사용자 생성 실패 처리") |
 | `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
 | `validation_failed` | 422 | 형식은 맞지만 검증 실패 |
 | `if_match_required` | 428 | `If-Match` 필요 |
@@ -134,6 +135,45 @@ curl -sS -b jar.txt -X PUT \
 - Keycloak 역할 작업은 정수 revision 대신 스냅샷의 따옴표 붙은 64자리 hex fingerprint(ETag)를 사용합니다.
 - 응답 본문의 `revision`, `status`는 서버가 관리하므로 요청에 넣으면 거부됩니다.
 
+### 사용자·그룹·엔트리 이동의 조건부 쓰기 (opt-in)
+
+사용자·그룹 목록 항목에는 `etag` 필드가, `GET /api/entry`에는 `ETag` 응답 헤더가 있습니다. 값은 항목의 `entryCSN`을 따옴표로 감싼 강한 ETag이며(예: `"20261006123456.123456Z#000000#001#000000"`), 정수 `revision`을 쓰는 프로필·백업과는 별개입니다. 읽을 수 없으면(ACL) 생략됩니다. 응답 본문의 `attributes`에는 들어가지 않습니다.
+
+```bash
+curl -si -b jar.txt "$BASE/api/entry?dn=uid=jdoe,ou=people,dc=example,dc=org" | grep -i '^etag'
+# ETag: "20261006123456.123456Z#000000#001#000000"
+
+curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
+  -H 'If-Match: "20261006123456.123456Z#000000#001#000000"' \
+  -d '{"dn":"uid=jdoe,ou=people,dc=example,dc=org","mail":"new@example.org"}' "$BASE/api/users"
+```
+
+- `If-Match`는 선택입니다. 헤더가 없거나 `*`이면 예전과 같이 무조건 적용됩니다. 적용 대상: `PUT`/`PATCH`/`DELETE`(사용자·그룹), `POST /api/users/lock`·`/unlock`, `POST`/`DELETE /api/groups/members`(그룹의 ETag), `POST /api/entry/move`.
+- 조건은 디렉터리가 쓰기 연산 안에서 직접 평가합니다(LDAP Assertion Control, RFC 4528, critical). 읽기-비교-쓰기 틈이 없어 같은 ETag로 동시에 쓰면 정확히 하나만 성공하고 나머지는 412입니다. 불일치는 412 `revision_conflict`이며 아무것도 쓰이지 않습니다.
+- 약한 태그(`W/`), 태그 목록, 따옴표 없는 값, 형식 오류, 반복된 `If-Match`는 400입니다. `POST /api/users/password`는 `If-Match`를 지원하지 않으며(RFC 3062 확장 연산에 조건을 실을 수 없음) 보내면 400입니다.
+- ETag는 디렉터리 내부 기록(비밀번호 정책의 실패한 바인드 기록, 선택적 lastbind)에도 바뀝니다. 이 경우 불필요한 412가 나올 수 있으며, 다시 읽고 재시도하면 됩니다. 그룹 구성원 변경은 구성원 사용자 항목의 ETag를 바꾸지 않습니다.
+- **ETag의 보장 범위(한계):** ETag는 항목의 `entryCSN`이며, **그 항목에 직접 쓰인 속성**의 변경만 반영합니다. 디렉터리가 CSN 없이 바꾸는 값은 반영하지 않습니다: 사용자의 `memberOf`(memberof 오버레이), 그리고 refint가 삭제된 사용자를 그룹 `member`에서 지우는 변경. 따라서 refint 정리 뒤에도 낡은 태그의 그룹 `PUT`/`DELETE`가 통과할 수 있고, `GET /api/entry`는 그 경우 서로 다른 표현에 같은 ETag를 돌려줍니다. 원자적인 부분(조건 평가와 쓰기가 한 연산)은 영향받지 않으며, 직접 쓴 속성에 대한 보장만 유효합니다. `memberOf`·구성원 목록은 필요할 때 다시 읽으세요.
+- **복제 한계:** 다중 provider 복제 환경에서는 조건이 쓰기를 받는 노드에서만 평가됩니다. 다른 노드에서 읽은 태그는 아직 반영되지 않아 정상 쓰기도 412가 될 수 있고, 같은 태그로 서로 다른 노드에 동시에 쓰면 둘 다 통과한 뒤 `entryCSN` 시각 기준 last-write-wins로 한쪽이 조용히 사라질 수 있습니다. 단일 쓰기 노드로 라우팅하세요.
+
+### PUT과 PATCH
+
+`PUT /api/users`는 본문에 없는 선택 필드(`givenName`, `mail`, `department`, `organization`, `organizationalUnit`)를 **삭제**합니다. `PUT /api/groups`는 생략한 `description`을 삭제합니다. 일부 필드만 바꾸려면 `PATCH`(JSON Merge Patch, `application/merge-patch+json` 또는 `application/json`)를 쓰세요. 키 없음 = 유지, 문자열 = 설정, `null` = 삭제입니다. 빈 문자열, `uid`, `password`, 알 수 없는 키, `cn`/`sn` 삭제, 바꿀 필드가 없는 본문은 400입니다.
+
+### 사용자 생성 실패 처리
+
+비밀번호가 있는 `POST /api/users`는 Add 후 비밀번호 설정 두 단계입니다. 비밀번호 단계 전에 새 항목이 이 요청이 만든 손대지 않은 항목임을 확인합니다(`entryUUID`·`entryCSN`·`creatorsName`·`modifiersName`·`createTimestamp`·`modifyTimestamp`, Add와 같은 세션 잠금 안에서 읽음). 비밀번호 단계가 실패하면 그 신원에 묶인 조건부 삭제로 항목을 지웁니다.
+
+| 결과 | 응답 | 의미 |
+|---|---|---|
+| 되돌림 | 평범한 오류 봉투(정책 거부는 400 `invalid_request`, 권한은 403 `forbidden`, 그 외 500 `internal`), 문구가 `user not created`로 시작(500은 고정 문구) | 항목이 남지 않음. 다시 시도해도 안전. 디렉터리 진단은 허용 목록(예: ppolicy/ppm 정책 문구, DN 제거)만 노출 |
+| 되돌릴 수 없음 | 500 `partial_failure` + `"state":"partial"`, `dn` | 검증된 삭제가 거부됨. 항목이 남아 있고 비밀번호가 적용됐는지는 알 수 없음. 항목을 조회한 뒤 `POST /api/users/password`로 설정하거나 `DELETE /api/users?dn=` |
+| 확인 불가 | 500 `partial_failure` + `"state":"unknown"`, `dn` | 보상 삭제를 보냈으나 응답을 받지 못해 항목이 남았는지 알 수 없음. 먼저 항목이 있는지 조회 |
+| 신원 변경 | 500 `partial_failure` + `"state":"identity_changed"`, `dn` | Add 직후 읽은 항목이 이 요청이 만든 손대지 않은 항목임을 증명하지 못함(다른 생성자·수정자, 생성 후 수정, 교체, 읽기 불가). **비밀번호를 설정하지 않았고 아무것도 삭제하지 않았습니다.** 그 항목을 신뢰하기 전에 확인 |
+
+`partial_failure`는 오류 봉투 다섯 키 외에 `state`와 `dn`을 싣는 유일한 응답입니다(`dn`은 201이 돌려줬을 값). 본문 문구는 고정이며 `state`가 구분합니다.
+
+**남는 경쟁(해결 불가):** 신원 확인과 비밀번호 설정(RFC 3062 확장 연산) 사이 수 밀리초는 닫을 수 없습니다. go-ldap v3.4.14의 `PasswordModifyRequest`는 제어를 실을 수 없어(`UserIdentity`/`OldPassword`/`NewPassword`만 있음) assertion을 붙일 수 없습니다. 그 사이 다른 관리자가 항목을 교체하면 그 항목에 비밀번호가 설정될 수 있습니다. 같은 바인드 DN의 다른 세션이 만든 수정은 `modifiersName`으로 구별되지 않습니다. 신원 읽기와 보상 삭제에는 컨텍스트·타임아웃이 없어 공유 연결을 그 시간만큼 점유하며(기존 공유 연결 한계, 컨텍스트 인식 검색 래퍼는 #215 D215-13 계획), 이 변경에서 새 메커니즘을 만들지 않았습니다.
+
 ## 제한
 
 | 항목 | 값 |
@@ -150,10 +190,11 @@ curl -sS -b jar.txt -X PUT \
 |---|---|
 | 200 / 201 / 202 / 204 | 성공 / 생성됨 / 비동기 시작됨(백업) / 본문 없음 |
 | 303 | SSO 콜백 결과 리다이렉트 (성공 시 `/`, 실패 시 `/login?sso_error=`) |
-| 400 / 415 / 422 | 잘못된 요청 / 잘못된 Content-Type / 검증 실패 |
+| 400 / 415 / 422 | 잘못된 요청(형식이 틀린 `If-Match` 포함) / 잘못된 Content-Type / 검증 실패 |
 | 401 / 403 | 세션 없음·만료 / 권한 없음(ACL, 관리자 DN, Origin) |
 | 404 / 405 | 대상 없음·기능 비활성·알 수 없는 경로 / 허용되지 않는 메서드 |
-| 409 / 412 / 428 | 충돌 / revision 불일치 / If-Match 필요 |
+| 409 / 412 / 428 | 충돌 / revision·ETag 불일치(`revision_conflict`) / If-Match 필요(프로필·백업) |
+| 500 | 예상치 못한 실패, 또는 `partial_failure`(사용자 생성 후 비밀번호 단계 미완료) |
 | 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성 |
 
 ## 안전 규칙

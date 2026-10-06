@@ -10,7 +10,9 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
-var groupAttrs = []string{"cn", "description", "member"}
+// entryCSN is operational (never returned by "*"), so it is requested by
+// name; it becomes the group's ETag.
+var groupAttrs = []string{"cn", "description", "member", "entryCSN"}
 
 // buildGroupDN keeps the group-controlled RDN value separate from the
 // configuration-controlled parent DN. Escaping the former prevents cn
@@ -44,6 +46,7 @@ func (c *client) ListGroups(ctx context.Context, base string) ([]domain.Group, b
 			CN:          e.GetAttributeValue("cn"),
 			Description: e.GetAttributeValue("description"),
 			Members:     e.GetAttributeValues("member"),
+			ETag:        domain.ETagFromCSN(e.GetAttributeValue("entryCSN")),
 		})
 	}
 	return groups, truncated, nil
@@ -87,7 +90,7 @@ func (c *client) CreateGroup(ctx context.Context, base string, in domain.GroupIn
 
 // UpdateGroup replaces cn/description on the group at dn. Membership is
 // managed separately via AddMember/RemoveMember.
-func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInput) error {
+func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInput, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -95,10 +98,15 @@ func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInpu
 		return fmt.Errorf("%w: cn is required", domain.ErrInvalidInput)
 	}
 
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	mod := ldap.NewModifyRequest(dn, nil)
+	mod := ldap.NewModifyRequest(dn, ctrls)
 	mod.Replace("cn", []string{in.CN})
 	replaceOrClear(mod, "description", in.Description)
 
@@ -108,29 +116,72 @@ func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInpu
 	return nil
 }
 
-// DeleteGroup removes the group entry at dn.
-func (c *client) DeleteGroup(ctx context.Context, dn string) error {
+// groupPatchModify builds the single Modify a PatchGroup sends.
+func groupPatchModify(dn string, p domain.GroupPatch, ctrls []ldap.Control) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, ctrls)
+	patchAttr(mod, "cn", p.CN)
+	patchAttr(mod, "description", p.Description)
+	return mod
+}
+
+// PatchGroup applies a merge patch to the group at dn in one Modify.
+func (c *client) PatchGroup(ctx context.Context, dn string, p domain.GroupPatch, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if p.Empty() {
+		return fmt.Errorf("%w: patch changes no field", domain.ErrInvalidInput)
+	}
+	if p.CN != nil && (p.CN.Clear || p.CN.Value == "") {
+		return fmt.Errorf("%w: cn cannot be removed", domain.ErrInvalidInput)
+	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.conn.Del(ldap.NewDelRequest(dn, nil)); err != nil {
+	if err := c.conn.Modify(groupPatchModify(dn, p, ctrls)); err != nil {
+		return mapErr("patch group", err)
+	}
+	return nil
+}
+
+// DeleteGroup removes the group entry at dn.
+func (c *client) DeleteGroup(ctx context.Context, dn, ifMatch string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.Del(ldap.NewDelRequest(dn, ctrls)); err != nil {
 		return mapErr("delete group", err)
 	}
 	return nil
 }
 
 // AddMember adds memberDN to groupDN's member attribute.
-func (c *client) AddMember(ctx context.Context, groupDN, memberDN string) error {
+func (c *client) AddMember(ctx context.Context, groupDN, memberDN, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	mod := ldap.NewModifyRequest(groupDN, nil)
+	mod := ldap.NewModifyRequest(groupDN, ctrls)
 	mod.Add("member", []string{memberDN})
 	if err := c.conn.Modify(mod); err != nil {
 		return mapMemberErr("add member", err)
@@ -141,14 +192,19 @@ func (c *client) AddMember(ctx context.Context, groupDN, memberDN string) error 
 // RemoveMember removes memberDN from groupDN's member attribute. The
 // server rejects removing the last remaining member, since groupOfNames
 // requires at least one; that surfaces as ErrInvalidInput.
-func (c *client) RemoveMember(ctx context.Context, groupDN, memberDN string) error {
+func (c *client) RemoveMember(ctx context.Context, groupDN, memberDN, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	mod := ldap.NewModifyRequest(groupDN, nil)
+	mod := ldap.NewModifyRequest(groupDN, ctrls)
 	mod.Delete("member", []string{memberDN})
 	if err := c.conn.Modify(mod); err != nil {
 		return mapMemberErr("remove member", err)

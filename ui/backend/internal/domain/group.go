@@ -6,6 +6,8 @@ type Group struct {
 	CN          string   `json:"cn"`
 	Description string   `json:"description,omitempty"`
 	Members     []string `json:"members"`
+	// ETag is the entry's revision; see User.ETag.
+	ETag string `json:"etag,omitempty"`
 }
 
 // GroupInput is the payload for creating or updating a group's own

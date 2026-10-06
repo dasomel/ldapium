@@ -99,7 +99,7 @@ func (leakyClient) SetPassword(context.Context, string, string, string) (string,
 func (leakyClient) CreateUser(context.Context, string, domain.UserInput) (string, error) {
 	return "", diagErr(domain.ErrConflict)
 }
-func (leakyClient) AddMember(context.Context, string, string) error {
+func (leakyClient) AddMember(context.Context, string, string, string) error {
 	return diagErr(domain.ErrConflict)
 }
 func (leakyClient) ListUsers(context.Context, string) ([]domain.User, bool, error) {
@@ -229,11 +229,11 @@ func TestEnvelopeContract_EveryRouteUnauthenticated401(t *testing.T) {
 func TestEnvelopeContract_EveryRouteWrongMethod405(t *testing.T) {
 	f := newContractFixture(t)
 	for _, r := range f.apiRoutes() {
-		// PATCH is registered nowhere. Signed in, because the group-level
+		// TRACE is registered nowhere. Signed in, because the group-level
 		// catch-alls of session-gated groups answer an anonymous request
 		// with 401 before the router can say 405 (unchanged behaviour).
-		rec := f.do(contractReq{method: http.MethodPatch, path: r.path, cookie: f.admin})
-		env := requireEnvelope(t, "PATCH "+r.path, rec)
+		rec := f.do(contractReq{method: http.MethodTrace, path: r.path, cookie: f.admin})
+		env := requireEnvelope(t, "TRACE "+r.path, rec)
 		// Pre-existing quirk, out of scope here: the profile and backup
 		// sub-groups carry their own middleware, whose group catch-all turns
 		// a wrong method into 404 instead of 405 (the group roots still say 405).
@@ -243,15 +243,15 @@ func TestEnvelopeContract_EveryRouteWrongMethod405(t *testing.T) {
 			ok404 := rec.Code == http.StatusNotFound && env.Code == codeNotFound
 			ok405 := rec.Code == http.StatusMethodNotAllowed && env.Code == codeMethodNotAllowed
 			if !ok404 && !ok405 {
-				t.Errorf("PATCH %s: status %d code %q, want a 404 or 405 envelope", r.path, rec.Code, env.Code)
+				t.Errorf("TRACE %s: status %d code %q, want a 404 or 405 envelope", r.path, rec.Code, env.Code)
 			}
 			continue
 		}
 		if rec.Code != http.StatusMethodNotAllowed || env.Code != codeMethodNotAllowed {
-			t.Errorf("PATCH %s: status %d code %q, want 405 method_not_allowed", r.path, rec.Code, env.Code)
+			t.Errorf("TRACE %s: status %d code %q, want 405 method_not_allowed", r.path, rec.Code, env.Code)
 		}
 		if rec.Header().Get("Allow") == "" {
-			t.Errorf("PATCH %s: 405 without Allow", r.path)
+			t.Errorf("TRACE %s: 405 without Allow", r.path)
 		}
 	}
 }

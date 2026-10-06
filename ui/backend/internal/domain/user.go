@@ -36,6 +36,11 @@ type User struct {
 	// policy sentinel value with no meaningful timestamp) — check Locked,
 	// not LockedAt, to tell whether the account is locked.
 	LockedAt *time.Time `json:"lockedAt,omitempty"`
+	// ETag is the entry's revision (its entryCSN as a quoted strong ETag),
+	// sent back as If-Match to make a write conditional. Omitted when the
+	// bound identity cannot read entryCSN. Distinct from the integer
+	// "revision" the profile/backup resources use.
+	ETag string `json:"etag,omitempty"`
 }
 
 // UserInput is the payload for creating or updating a user. Password is only

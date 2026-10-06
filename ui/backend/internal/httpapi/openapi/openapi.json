@@ -4,7 +4,7 @@
     "title": "ldapium management API",
     "version": "v1",
     "summary": "HTTP API behind the ldapium web console, usable by scripts and AI agents with a session cookie.",
-    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens, no CORS headers and no machine principal yet; see docs/api.md and docs/changes/api-integration/PLAN.md.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups) or a quoted 64-hex fingerprint (Keycloak role operations). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
+    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens, no CORS headers and no machine principal yet; see docs/api.md and docs/changes/api-integration/PLAN.md.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups), a quoted 64-hex fingerprint (Keycloak role operations), or, for users, groups and entry moves, the entry's quoted entryCSN (`etag` field / `ETag` header; opt-in, enforced atomically by the directory, covering attributes written directly to the entry). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
   },
   "servers": [
     {
@@ -629,7 +629,7 @@
       "get": {
         "operationId": "getEntry",
         "summary": "Read one entry",
-        "description": "All attributes of `dn`. `userPassword` is removed server-side (hard denylist), not left to directory ACLs.",
+        "description": "All attributes of `dn`. `userPassword` is removed server-side (hard denylist), not left to directory ACLs. The revision is returned only in the `ETag` header, never in the body. The ETag covers only attributes written directly to this entry: `memberOf` and the removal of a deleted member from a group's `member` (refint) do NOT change it, so the same ETag can be returned for a different representation; re-read those attributes when they matter.",
         "tags": [
           "Directory"
         ],
@@ -645,6 +645,14 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Entry"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag of the entry (its entryCSN, quoted). Omitted when the bound identity cannot read entryCSN. Send it back as `If-Match` on writes. It also changes on directory-side bookkeeping writes to the entry (failed/successful binds under the password policy, optional lastbind), which can cause a harmless 412 and a re-read.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -703,7 +711,7 @@
       "post": {
         "operationId": "moveEntry",
         "summary": "Move an entry",
-        "description": "Moves `dn` under `newParentDn`. 400 if the move would cross naming contexts; 409 if an entry with the same RDN already exists under `newParentDn`. OpenLDAP's mdb backend renames a non-leaf entry together with its subtree (verified live: 204), so children do not cause a 409 there. In SSO mode runs as the service account.",
+        "description": "Moves `dn` under `newParentDn`. 400 if the move would cross naming contexts; 409 if an entry with the same RDN already exists under `newParentDn`. OpenLDAP's mdb backend renames a non-leaf entry together with its subtree (verified live: 204), so children do not cause a 409 there. In SSO mode runs as the service account. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Directory"
         ],
@@ -717,7 +725,7 @@
             "description": "Moved"
           },
           "400": {
-            "description": "Invalid DN or cross-context move",
+            "description": "Invalid DN or cross-context move; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -761,6 +769,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -772,7 +783,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       }
     },
     "/api/password-policies": {
@@ -874,7 +899,7 @@
       "post": {
         "operationId": "createUser",
         "summary": "Create a user",
-        "description": "Creates under LDAP_USER_CREATE_BASE. `uid` is required. If `password` is omitted none is set.",
+        "description": "Creates under LDAP_USER_CREATE_BASE. `uid` is required. If `password` is omitted none is set. With a password this is two directory operations (Add, then Password Modify). Before the password step the new entry is verified as created by this request and untouched (entryUUID/entryCSN, creator and modifier are the bound DN, modify time equals create time); otherwise the password is NOT set and nothing is deleted (`partial_failure`, `state: identity_changed`). If the password step fails the entry is removed again with a delete bound to that identity and the response is the usual error envelope whose text starts \"user not created\" (nothing remains). If it cannot be removed the response is 500 `partial_failure` with the `dn` and `state` `partial` (delete refused, entry remains), `unknown` (delete outcome not observed) or `identity_changed`. Password status is never guaranteed on a `partial_failure`; inspect the entry, then set the password with POST /api/users/password or DELETE it. A few milliseconds before the Password Modify remain racy: that operation cannot carry a condition.",
         "tags": [
           "Users"
         ],
@@ -918,7 +943,27 @@
             "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
-            "$ref": "#/components/responses/Internal"
+            "description": "Unexpected failure (`internal`, fixed text), or `partial_failure`: the user creation did not complete and the new entry was not removed as verified (`state`, `dn`, `retryable: false`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "partial": {
+                    "value": {
+                      "error": "user creation did not complete: the password step failed and the new entry was not removed as verified; check the entry named in dn (state says what was and was not done), then set its password with POST /api/users/password or remove it with DELETE /api/users?dn=",
+                      "message": "user creation did not complete: the password step failed and the new entry was not removed as verified; check the entry named in dn (state says what was and was not done), then set its password with POST /api/users/password or remove it with DELETE /api/users?dn=",
+                      "code": "partial_failure",
+                      "state": "partial",
+                      "dn": "uid=jdoe,ou=people,dc=example,dc=org",
+                      "retryable": false,
+                      "requestId": "5nQe3kXyZpLwTqA0vB9cJmRdUsHf2GoE"
+                    }
+                  }
+                }
+              }
+            }
           },
           "403": {
             "description": "Permission denied by directory ACL",
@@ -945,7 +990,7 @@
       "put": {
         "operationId": "updateUser",
         "summary": "Update a user",
-        "description": "Updates attributes of `dn`; `uid` and `password` are ignored here (use /api/users/password).",
+        "description": "Replaces attributes of `dn`; `uid` and `password` are ignored here (use /api/users/password). WARNING: PUT erases every optional field it omits (`givenName`, `mail`, `department`, `organization`, `organizationalUnit`). Use PATCH to change only some fields. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Users"
         ],
@@ -959,7 +1004,7 @@
             "description": "Updated"
           },
           "400": {
-            "description": "Validation failed",
+            "description": "Validation failed; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -993,6 +1038,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -1004,12 +1052,26 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       },
       "delete": {
         "operationId": "deleteUser",
         "summary": "Delete a user (destructive)",
-        "description": "Deletes the entry at `dn`. Not reversible.",
+        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Users"
         ],
@@ -1023,7 +1085,7 @@
             "description": "Deleted"
           },
           "400": {
-            "description": "Invalid dn",
+            "description": "Invalid dn; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1057,6 +1119,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "parameters": [
@@ -1068,6 +1133,114 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchUser",
+        "summary": "Patch a user",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases every optional field (`givenName`, `mail`, `department`, `organization`, `organizationalUnit`) that it omits. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Patched"
+          },
+          "400": {
+            "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value; also a malformed or unsupported `If-Match`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "403": {
+            "description": "Permission denied by directory ACL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/merge-patch+json or application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatchRequest"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatchRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
           }
         ]
       }
@@ -1076,7 +1249,7 @@
       "post": {
         "operationId": "setPassword",
         "summary": "Set or reset a password",
-        "description": "RFC 3062 Password Modify. With `password` omitted the server generates one and returns it once in `generatedPassword` (treat as a secret; never log it). `oldPassword` is for self-service changes; a wrong one yields 401.",
+        "description": "RFC 3062 Password Modify. With `password` omitted the server generates one and returns it once in `generatedPassword` (treat as a secret; never log it). `oldPassword` is for self-service changes; a wrong one yields 401. `If-Match` is not supported here (the RFC 3062 Password Modify operation cannot carry the condition): sending it is 400.",
         "tags": [
           "Users"
         ],
@@ -1097,7 +1270,7 @@
             }
           },
           "400": {
-            "description": "Validation failed",
+            "description": "Validation failed; also any `If-Match` header",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,7 +1322,7 @@
       "post": {
         "operationId": "unlockUser",
         "summary": "Unlock a user",
-        "description": "Clears the ppolicy lockout (pwdAccountLockedTime). Idempotent: also 204 when the user is not locked; 404 only when the user does not exist.",
+        "description": "Clears the ppolicy lockout (pwdAccountLockedTime). Idempotent: also 204 when the user is not locked; 404 only when the user does not exist. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Users"
         ],
@@ -1163,7 +1336,7 @@
             "description": "Done"
           },
           "400": {
-            "description": "Invalid dn",
+            "description": "Invalid dn; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1197,6 +1370,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -1216,14 +1392,28 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       }
     },
     "/api/users/lock": {
       "post": {
         "operationId": "lockUser",
         "summary": "Lock a user",
-        "description": "Administratively disables the account.",
+        "description": "Administratively disables the account. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Users"
         ],
@@ -1237,7 +1427,7 @@
             "description": "Done"
           },
           "400": {
-            "description": "Invalid dn",
+            "description": "Invalid dn; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1271,6 +1461,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -1290,7 +1483,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       }
     },
     "/api/groups": {
@@ -1409,7 +1616,7 @@
       "put": {
         "operationId": "updateGroup",
         "summary": "Update a group",
-        "description": "Updates cn/description of `dn`.",
+        "description": "Replaces `cn` and `description` of `dn`. WARNING: an omitted `description` is erased; use PATCH to change only some fields. Conditional on the group's revision: send `If-Match` with the group's `etag`.",
         "tags": [
           "Groups"
         ],
@@ -1423,7 +1630,7 @@
             "description": "Updated"
           },
           "400": {
-            "description": "Validation failed",
+            "description": "Validation failed; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1457,6 +1664,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -1468,12 +1678,26 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       },
       "delete": {
         "operationId": "deleteGroup",
         "summary": "Delete a group (destructive)",
-        "description": "Deletes the entry at `dn`. Not reversible.",
+        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
         "tags": [
           "Groups"
         ],
@@ -1487,7 +1711,7 @@
             "description": "Deleted"
           },
           "400": {
-            "description": "Invalid dn",
+            "description": "Invalid dn; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1521,6 +1745,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "parameters": [
@@ -1532,6 +1759,114 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchGroup",
+        "summary": "Patch a group",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases `description` when it is omitted. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "tags": [
+          "Groups"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Patched"
+          },
+          "400": {
+            "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value; also a malformed or unsupported `If-Match`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Group not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "403": {
+            "description": "Permission denied by directory ACL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/merge-patch+json or application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatchRequest"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatchRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
           }
         ]
       }
@@ -1540,7 +1875,7 @@
       "post": {
         "operationId": "addGroupMember",
         "summary": "Add a group member",
-        "description": "Adds `memberDn` to `groupDn`.",
+        "description": "Adds `memberDn` to `groupDn`. Conditional on the GROUP's revision: send `If-Match` with the group's `etag`.",
         "tags": [
           "Groups"
         ],
@@ -1554,7 +1889,7 @@
             "description": "Added"
           },
           "400": {
-            "description": "Invalid DN",
+            "description": "Invalid DN; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1598,6 +1933,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "requestBody": {
@@ -1609,12 +1947,26 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
+            }
+          }
+        ]
       },
       "delete": {
         "operationId": "removeGroupMember",
         "summary": "Remove a group member",
-        "description": "Removes `memberDn` from `groupDn`; both are query parameters (no body).",
+        "description": "Removes `memberDn` from `groupDn`; both are query parameters (no body). Conditional on the GROUP's revision: send `If-Match` with the group's `etag`.",
         "tags": [
           "Groups"
         ],
@@ -1628,7 +1980,7 @@
             "description": "Removed"
           },
           "400": {
-            "description": "Invalid DN",
+            "description": "Invalid DN; also a malformed or unsupported `If-Match`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1662,6 +2014,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
           }
         },
         "parameters": [
@@ -1681,6 +2036,18 @@
             "description": "Member DN",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency condition. Send the `etag` field of the list item or the `ETag` header of `GET /api/entry` exactly as received (a quoted strong tag). The write is applied only if the entry still has that revision, evaluated by the directory inside the write itself (LDAP assertion control), so a concurrent change cannot slip in; otherwise 412 `revision_conflict` and nothing is written. `*` and an absent header mean unconditional (today's behaviour). A weak tag, a list of tags, an unquoted or malformed value, or a repeated header is 400. The tag covers only attributes written directly to the entry (see GET /api/entry). Node-local: against a multi-provider replicated directory the condition is evaluated on the node that receives the write only.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "\"20261006123456.123456Z#000000#001#000000\""
+              ]
             }
           }
         ]
@@ -4426,6 +4793,10 @@
           "lockedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "etag": {
+            "type": "string",
+            "description": "Strong ETag of the entry (entryCSN, quoted); send as `If-Match` to make a write conditional. Omitted when unreadable. Not the integer `revision` of profiles/backups."
           }
         },
         "required": [
@@ -4472,6 +4843,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "etag": {
+            "type": "string",
+            "description": "Strong ETag of the entry (entryCSN, quoted); send as `If-Match` to make a write conditional. Omitted when unreadable. Not the integer `revision` of profiles/backups."
           }
         },
         "required": [
@@ -5412,7 +5787,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text.",
+        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text. Exception: `partial_failure` (500, POST /api/users) additionally carries `state` and `dn`.",
         "required": [
           "error",
           "message",
@@ -5448,6 +5823,7 @@
               "method_not_allowed",
               "not_found",
               "origin_mismatch",
+              "partial_failure",
               "revision_conflict",
               "session_expired",
               "unauthenticated",
@@ -5465,6 +5841,19 @@
           "retryable": {
             "type": "boolean",
             "description": "Whether sending the same request again, unchanged, may succeed. False for 412/428 (reload first) and 500 (partial effects possible)."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "partial",
+              "unknown",
+              "identity_changed"
+            ],
+            "description": "Only with `code: partial_failure` (a user creation whose password step did not complete): `partial` the verified delete was refused and the entry remains; `unknown` the delete's outcome was not observed; `identity_changed` the new entry could not be verified as created by this request and untouched, the password was NOT set and nothing was deleted. This and `dn` are the documented exception to the five-key envelope."
+          },
+          "dn": {
+            "type": "string",
+            "description": "Only with `code: partial_failure`: the DN of the entry to check (the value a 201 would have returned). The one DN an error body carries."
           }
         },
         "example": {
@@ -5474,13 +5863,101 @@
           "requestId": "5nQe3kXyZpLwTqA0vB9cJmRdUsHf2GoE",
           "retryable": false
         }
+      },
+      "UserPatchRequest": {
+        "type": "object",
+        "description": "JSON Merge Patch (RFC 7396) for a user. A key that is absent keeps its current value; a non-empty string sets it; `null` removes it. An empty string is rejected (400) because set-to-empty versus remove is ambiguous. `uid` (immutable) and `password` (use POST /api/users/password) are rejected, as is any unknown key. `cn` and `sn` are required attributes and cannot be removed. At least one field besides `dn` is required.",
+        "properties": {
+          "dn": {
+            "type": "string",
+            "description": "Distinguished name of the user to patch."
+          },
+          "cn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "givenName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set, or null to remove."
+          },
+          "mail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set (must be a valid address), or null to remove."
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "departmentNumber. Set, or null to remove."
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "o. Set, or null to remove."
+          },
+          "organizationalUnit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "ou. Set, or null to remove."
+          }
+        },
+        "required": [
+          "dn"
+        ],
+        "additionalProperties": false
+      },
+      "GroupPatchRequest": {
+        "type": "object",
+        "description": "JSON Merge Patch (RFC 7396) for a group's own attributes; membership has its own endpoints. Absent keys are kept, a non-empty string sets, `null` removes `description`. `cn` cannot be removed. Unknown keys and empty strings are rejected (400). At least one field besides `dn` is required.",
+        "properties": {
+          "dn": {
+            "type": "string",
+            "description": "Distinguished name of the group to patch."
+          },
+          "cn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set, or null to remove."
+          }
+        },
+        "required": [
+          "dn"
+        ],
+        "additionalProperties": false
       }
     }
   },
   "x-ai-hints": {
     "llmsTxt": "/llms.txt",
     "authFlow": "POST /api/login with a cookie jar, then reuse the jar. Check GET /api/v1/meta first for authMode; in sso mode scripted login is not possible.",
-    "writeSafety": "Read before write: fetch the resource, take its ETag, send it as If-Match. Set Origin to the server's own origin on profile/backup writes.",
+    "writeSafety": "Read before write: fetch the resource, take its ETag (users/groups: the `etag` field or GET /api/entry's ETag header), send it as If-Match. Prefer PATCH over PUT for partial updates: PUT erases optional fields it omits. Set Origin to the server's own origin on profile/backup writes.",
     "neverDo": [
       "Do not log or persist generatedPassword",
       "Do not retry destructive operations blindly",

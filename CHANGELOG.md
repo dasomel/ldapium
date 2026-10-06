@@ -34,6 +34,29 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 - Rollback: additive for clients that read `error` or `message`; revert the
   commits to restore the old bodies. No configuration, chart or image change.
 
+- User and group writes can now be conditional (opt-in, issue #216 part A).
+  List items carry `etag` and `GET /api/entry` an `ETag` header (the entry's
+  `entryCSN`); `If-Match` on `PUT`/`PATCH`/`DELETE`, lock/unlock, group member
+  add/remove and entry move is enforced by slapd inside the write (RFC 4528
+  assertion control), a stale tag is 412 `revision_conflict` with nothing
+  written. Requests without the header behave as before. New
+  `PATCH /api/users` and `PATCH /api/groups` (JSON Merge Patch) keep fields
+  they do not mention; `PUT` is unchanged and still erases omitted optional
+  fields. A user creation whose password step fails now removes the entry
+  again when it provably is the request's own (the error says the user was
+  not created) and otherwise answers 500 `partial_failure` (the one envelope
+  that also carries `state` and `dn`) with the entry to check. The
+  `ETag` also changes on directory bookkeeping writes (password-policy
+  failure records), which can cause a harmless 412 and a re-read, and the
+  condition is node-local on multi-provider replication. The ETag only
+  reflects attributes written directly to the entry: `memberOf` and refint's
+  removal of a deleted member from a group do not change it. Before setting
+  the password the new entry is verified as created by this request and
+  untouched; otherwise the password is not set and nothing is deleted
+  (`state: identity_changed`), and a compensating delete whose outcome is
+  not observed is `state: unknown`. Idempotency keys
+  are not part of this change.
+
 ### CI
 
 - Heavy E2E jobs (anything that builds the OpenLDAP server image and/or
