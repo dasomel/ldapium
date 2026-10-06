@@ -55,7 +55,7 @@ func (c *client) MonitorStats(ctx context.Context, includeAccessLog bool) (*doma
 		monitorAttrs,
 		nil,
 	)
-	res, err := c.conn.Search(req)
+	res, err := c.search(req)
 	if err != nil {
 		// A bind with no rights at all on cn=Monitor — not even "disclose"
 		// — gets noSuchObject (32) here, not insufficientAccessRights (50):
@@ -86,7 +86,11 @@ func (c *client) MonitorStats(ctx context.Context, includeAccessLog bool) (*doma
 		[]string{"contextCSN"},
 		nil,
 	)
-	if csnRes, csnErr := c.conn.Search(csnReq); csnErr == nil && len(csnRes.Entries) > 0 {
+	csnRes, csnErr := c.search(csnReq)
+	if csnErr != nil && StrictSecondaryReads(ctx) && isInfraError(ctx, csnErr) {
+		return nil, mapErr("read monitor stats", csnErr)
+	}
+	if csnErr == nil && len(csnRes.Entries) > 0 {
 		for _, val := range csnRes.Entries[0].GetAttributeValues("contextCSN") {
 			stats.ReplicationCSNs = append(stats.ReplicationCSNs, parseContextCSN(val))
 		}
@@ -98,7 +102,11 @@ func (c *client) MonitorStats(ctx context.Context, includeAccessLog bool) (*doma
 	// Read recent logs from cn=accesslog (best-effort, up to 50 entries). When
 	// the caller is not entitled to them the search is never issued.
 	if includeAccessLog {
-		if recent, recentErr := c.recentLogsLocked(ctx, 50); recentErr == nil {
+		recent, recentErr := c.recentLogsLocked(ctx, 50)
+		if recentErr != nil && StrictSecondaryReads(ctx) && isInfraError(ctx, recentErr) {
+			return nil, recentErr
+		}
+		if recentErr == nil {
 			stats.RecentLogs = recent
 		}
 	}

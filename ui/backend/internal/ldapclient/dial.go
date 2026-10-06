@@ -58,15 +58,12 @@ func (d *dialer) Bind(ctx context.Context, identity, password string) (Client, e
 }
 
 func (d *dialer) bind(ctx context.Context, identity, password string) (Client, error) {
-	c, err := d.newConn(ctx)
+	// newConn arms the deadline watchdog (see there) before StartTLS, so the
+	// whole dial is bounded; the bind and later searches stay under it.
+	c, stopWatch, err := d.newConn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Only a context that carries a deadline gets a watchdog, so the interactive
-	// login path (no deadline) is untouched. At the deadline, or when the caller
-	// cancels, the connection is closed from the side, which also ends a search
-	// that is blocked on the wire (the machine path's request deadline, D4).
-	stopWatch := watchDeadline(ctx, c)
 	oc := &obsConn{Conn: c, obs: d.observer()}
 
 	dn := identity
@@ -95,7 +92,14 @@ func watchDeadline(ctx context.Context, c *ldap.Conn) func() {
 	if _, ok := ctx.Deadline(); !ok {
 		return func() {}
 	}
-	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		// ldap.Conn.Close first asks the (possibly stopped, e.g. mid StartTLS)
+		// reader goroutine to confirm and waits up to the connection timeout for
+		// it, which would double the time past the deadline. The deadline has
+		// already passed: do not wait for a confirmation.
+		c.SetTimeout(time.Millisecond)
+		_ = c.Close()
+	})
 	return func() { stop() }
 }
 
@@ -120,10 +124,11 @@ func (d *dialer) Ping(ctx context.Context) error {
 		return err
 	}
 	return observe(d.observer(), "ping", func() error {
-		c, err := d.newConn(ctx)
+		c, stop, err := d.newConn(ctx)
 		if err != nil {
 			return err
 		}
+		stop()
 		c.Close()
 		return nil
 	})
@@ -165,10 +170,17 @@ func resolveUID(c searcher, cfg config.Config, uid string) (string, error) {
 	}
 }
 
-func (d *dialer) newConn(ctx context.Context) (*ldap.Conn, error) {
+// newConn dials the directory. When ctx carries a deadline, that deadline bounds
+// every blocking phase: the TCP connect and the ldaps TLS handshake (net.Dialer
+// deadline), the StartTLS extended operation and its TLS handshake, and every
+// later operation. Per-operation timeouts cannot bound a TLS handshake, so a
+// watchdog that closes the connection at the deadline (or when the caller
+// cancels) is armed right after the connect and BEFORE StartTLS; the returned
+// stop func disarms it and is never nil. Without a deadline none of this runs
+// and the interactive login path behaves as before (no timeouts at all).
+func (d *dialer) newConn(ctx context.Context) (*ldap.Conn, func(), error) {
+	noop := func() {}
 	opts := []ldap.DialOpt{}
-	// A context deadline bounds the TCP dial and, below, every later operation
-	// on the connection (StartTLS included). Without one nothing changes.
 	deadline, hasDeadline := ctx.Deadline()
 	if hasDeadline {
 		opts = append(opts, ldap.DialWithDialer(&net.Dialer{Deadline: deadline}))
@@ -176,21 +188,22 @@ func (d *dialer) newConn(ctx context.Context) (*ldap.Conn, error) {
 
 	u, err := url.Parse(d.cfg.LDAPURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid LDAP URL: %w", err)
+		return nil, noop, fmt.Errorf("invalid LDAP URL: %w", err)
 	}
 
 	if u.Scheme == "ldaps" {
 		tlsCfg, err := d.tlsConfig(u.Hostname())
 		if err != nil {
-			return nil, err
+			return nil, noop, err
 		}
 		opts = append(opts, ldap.DialWithTLSConfig(tlsCfg))
 	}
 
 	c, err := ldap.DialURL(d.cfg.LDAPURL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("connect to LDAP server: %w", ctxOr(ctx, err))
+		return nil, noop, fmt.Errorf("connect to LDAP server: %w", ctxOr(ctx, err))
 	}
+	stop := watchDeadline(ctx, c)
 	if hasDeadline {
 		if remaining := time.Until(deadline); remaining > 0 {
 			c.SetTimeout(remaining)
@@ -200,16 +213,18 @@ func (d *dialer) newConn(ctx context.Context) (*ldap.Conn, error) {
 	if u.Scheme == "ldap" && d.cfg.StartTLS {
 		tlsCfg, err := d.tlsConfig(u.Hostname())
 		if err != nil {
+			stop()
 			c.Close()
-			return nil, err
+			return nil, noop, err
 		}
 		if err := c.StartTLS(tlsCfg); err != nil {
+			stop()
 			c.Close()
-			return nil, fmt.Errorf("StartTLS negotiation failed: %w", err)
+			return nil, noop, fmt.Errorf("StartTLS negotiation failed: %w", ctxOr(ctx, err))
 		}
 	}
 
-	return c, nil
+	return c, stop, nil
 }
 
 func (d *dialer) tlsConfig(serverName string) (*tls.Config, error) {

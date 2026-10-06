@@ -379,7 +379,10 @@ Every request that carries an `Authorization` header while the feature is on
 produces **exactly one** line, whatever happens to it: a malformed header, the
 Origin gate, a 404, a verification failure, a scope denial, a bind failure, a
 panic, or a normal response. The line is written by a wrapper outside all of
-those steps, so an early return cannot skip it.
+those steps, so an early return cannot skip it. The one exception: a request
+the Go HTTP server rejects before any handler runs (oversized headers 431, a
+malformed request line 400, a TLS failure) never reaches the application and
+has no line; it shows up only in the server or ingress logs (D25).
 
 ```json
 {"event":"machine_access","provider":"oidc","actor":"svc-reader","request_id":"...","operation":"listUsers","method":"GET","status":200,"result":"success","reason":"ok","subject_fingerprint":"826ee2c670ed","bind_dn":"uid=machine,ou=system,dc=example,dc=org"}

@@ -26,6 +26,10 @@ type client struct {
 	// context with a deadline (see watchDeadline); nil otherwise.
 	stopWatch func()
 
+	// searchOverride replaces the live connection for Tree/MonitorStats/
+	// RecentLogs in tests (see strict.go); nil in production.
+	searchOverride searchFunc
+
 	// Test seams, all zero in production: a fake search function instead of
 	// the live connection, shortened limits, and a hook that runs between the
 	// two phases of a page so a test can change the directory there.

@@ -80,6 +80,10 @@ func (x *machineExecutor) run(c echo.Context, p *machineauth.Principal, op machi
 	// search the handler makes (ldapclient closes the connection when it ends).
 	ctx, cancel := context.WithTimeout(c.Request().Context(), x.timeout)
 	defer cancel()
+	// Best-effort follow-up queries (listTree's child probes, getMonitor's
+	// secondary reads) must not turn a lost connection or an expired deadline
+	// into a 200 with missing fields (D23).
+	ctx = ldapclient.WithStrictSecondaryReads(ctx)
 
 	bound, err := x.dialer.Bind(ctx, x.bindDN, x.bindPassword)
 	if err != nil {

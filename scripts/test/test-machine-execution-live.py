@@ -74,6 +74,7 @@ ldap_container = name_prefix + '-ldap'
 ui_main = name_prefix + '-ui'
 ui_over = name_prefix + '-uiover'
 ui_off = name_prefix + '-uioff'
+ui_tls = name_prefix + '-uitls'
 
 base_dn = 'dc=example,dc=org'
 admin_dn = 'cn=admin,' + base_dn
@@ -390,6 +391,52 @@ class LDAPProxy:
 
 
 # ---- HTTP client --------------------------------------------------------------
+
+class StartTLSStaller:
+  """Answers the first LDAP message (the StartTLS extended request) with success
+  and then never speaks again, so the client's TLS handshake stalls. Counts
+  accepted and currently open connections."""
+
+  def __init__(self):
+    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    self.sock.bind(('0.0.0.0', 0))
+    self.port = self.sock.getsockname()[1]
+    self.sock.listen(8)
+    self.lock = threading.Lock()
+    self.accepted = 0
+    self.open = 0
+    threading.Thread(target=self._accept, daemon=True).start()
+
+  def _accept(self):
+    while True:
+      try:
+        c, _ = self.sock.accept()
+      except OSError:
+        return
+      with self.lock:
+        self.accepted += 1
+        self.open += 1
+      threading.Thread(target=self._serve, args=(c,), daemon=True).start()
+
+  def _serve(self, c):
+    try:
+      data = c.recv(4096)
+      if len(data) >= 5:
+        # LDAPMessage{id, ExtendedResponse{success}} for the request's message id
+        c.sendall(bytes([0x30, 0x0c, 0x02, 0x01, data[4], 0x78, 0x07, 0x0a, 0x01, 0x00, 0x04, 0x00, 0x04, 0x00]))
+      while c.recv(4096):
+        pass
+    except OSError:
+      pass
+    finally:
+      c.close()
+      with self.lock:
+        self.open -= 1
+
+  def close(self):
+    self.sock.close()
+
 
 class Api:
   def __init__(self, base_url):
@@ -850,6 +897,23 @@ member: {seed_user_dn}
     assert st == 200, f'after the timeouts: {st} {mask(body)}'
   print('PASS: after the timeouts 4 sequential requests succeed (MACHINE_MAX_CONCURRENCY=2: no slot leaked)', flush=True)
 
+  # (3b) a directory that accepts StartTLS and then stalls the TLS handshake: the
+  # request deadline covers the handshake too, the connection is closed, and the
+  # (single, MACHINE_MAX_CONCURRENCY=1) slot is free for the next request.
+  staller = StartTLSStaller()
+  proxies.append(staller)
+  tls_env = machine_env(machine_dn, CLIENTS)
+  tls_env.update({'LDAP_START_TLS': 'true', 'LDAP_TLS_INSECURE_SKIP_VERIFY': 'true', 'MACHINE_MAX_CONCURRENCY': '1'})
+  tls_api = start_ui(ui_tls, f'ldap://host.docker.internal:{staller.port}', tls_env,
+                     {'SESSION_SECRET': session_secret, 'MACHINE_LDAP_BIND_PASSWORD': machine_password})
+  for attempt in range(2):
+    t0 = time.monotonic()
+    st, _, body = tls_api.machine(tok('svc-reader'), '/api/users?limit=2', timeout=20)
+    elapsed = time.monotonic() - t0
+    check(st == 503 and elapsed < 4.5, f'stalled StartTLS handshake (attempt {attempt + 1}): 503 in {elapsed:.1f}s with a 3s deadline (the single slot was free again for attempt 2)')
+  wait_until(lambda: staller.open == 0, 'the UI to close the stalled StartTLS connection', 15)
+  check(staller.accepted == 2, 'the stalled StartTLS connections were closed by the UI (open 0, 2 accepted)')
+
   # (4) clients that give up mid-request: connections and slots come back. The
   # directory's own view (cn=Monitor, readable by the image's monitoring identity)
   # must return to its baseline, not only the proxy's.
@@ -933,7 +997,7 @@ member: {seed_user_dn}
   check('"actor":"unknown"' in bad_line and '"token_fingerprint"' in bad_line, 'a bad signature is logged with actor unknown plus a token fingerprint')
   check(any('"actor":"svc-groups"' in l and '"reason":"scope"' in l for l in lines), 'a scope denial after verification names the verified client as actor')
   scan = ''
-  for c in (ui_main, ui_over, ui_off, ldap_container):
+  for c in (ui_main, ui_over, ui_off, ui_tls, ldap_container):
     out = run(['docker', 'logs', c])
     scan += out.stdout + out.stderr
   leaks = []
