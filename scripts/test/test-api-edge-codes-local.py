@@ -8,14 +8,17 @@ Also pins the error envelope (#218): every checked error carries exactly
 X-Request-Id, no DN in the body, and a real 5xx (a wrong current password,
 LDAP result 53) is redacted with its cause only in the UI log. The password
 policy refusals the change-password screen shows are checked end to end,
-including that ppm's user DN is stripped. Image tags come from LDAPIUM_IMAGE /
+including that ppm's user DN is stripped. The conditional-write contract of #216 (ETag/If-Match on every protected route,
+PATCH, create compensation) runs as a non-root operator. Image tags come from LDAPIUM_IMAGE /
 LDAPIUM_UI_IMAGE (default ldapium:e2e, ldapium-ui:e2e); LDAPIUM_EDGE_PREFIX renames the throwaway docker objects.
 """
 import http.cookiejar
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -39,7 +42,7 @@ user_password = 'Edge-' + uuid.uuid4().hex[:12] + '!'
 
 
 def mask(text):
-  return str(text).replace(admin_password, '***').replace(user_password, '***')
+  return str(text).replace(admin_password, '***').replace(user_password, '***').replace(ops_password, '***')
 
 
 def command(args, **kw):
@@ -166,6 +169,259 @@ def bind_ok(dn):
                           input=user_password, capture_output=True, text=True)
   return result.returncode == 0
 
+# --- conditional writes (#216 part A): ETag / If-Match, PATCH, create compensation ---------------------------
+CSN_ETAG = re.compile(r'^"[0-9]{14}\.[0-9]{6}Z#[0-9A-F]{6}#[0-9A-F]{3}#[0-9A-F]{6}"$')
+ops_dn = 'uid=ops,ou=admins,' + root
+ops_password = 'Ops-' + uuid.uuid4().hex[:12] + '-Xq'
+
+
+def ldap_tool(tool, args, input=None, bind=None):
+  # An OpenLDAP client tool run inside the LDAP container; the bind password is
+  # expanded there from the container's own environment, never put in argv.
+  return subprocess.run(['docker', 'exec', '-i', ldap, 'sh', '-c',
+                         'tool=$1; bind=$2; shift 2; exec "$tool" -x -H ldap://127.0.0.1 -D "$bind" -w "$LDAP_ADMIN_PASSWORD" "$@"',
+                         'sh', tool, bind or admin_dn] + args, input=input, capture_output=True, text=True)
+
+
+def setup_ops():
+  # A NON-root operator with write access to the whole tree. Non-root matters
+  # twice: the conditional writes run under ordinary ACL evaluation (not the
+  # rootDN bypass), and ppolicy applies to its password operations (the image's
+  # pwdSafeModify refuses a non-root initial password, which is how the create
+  # compensation is forced below). `by * break` keeps everyone else on the image's own rules.
+  ldif = ('dn: ou=admins,%s\nobjectClass: organizationalUnit\nou: admins\n\n'
+          'dn: %s\nobjectClass: inetOrgPerson\nuid: ops\ncn: Ops\nsn: Ops\n') % (root, ops_dn)
+  result = ldap_tool('ldapadd', [], ldif)
+  check(result.returncode == 0, 'ops entry: ' + mask(result.stderr))
+  result = ldap_tool('ldappasswd', ['-T', '/dev/stdin', ops_dn], ops_password)
+  check(result.returncode == 0, 'ops password: ' + mask(result.stderr))
+  acl = ('dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\nadd: olcAccess\n'
+         'olcAccess: {0}to dn.subtree="%s" by dn.exact="%s" write by * break\n') % (root, ops_dn)
+  result = ldap_tool('ldapmodify', [], acl, bind='cn=admin,cn=config')
+  check(result.returncode == 0, 'ops ACL: ' + mask(result.stderr))
+
+
+def conditional_writes(url, login):
+  call = login(ops_dn, ops_password)
+
+  def expect(code, method, path, body=None, what='', headers=None):
+    status, text, hdrs = call(method, path, body, headers)
+    check(status == code, '%s: %s %s expected %d, got %d (%s)' % (what, method, path, code, status, mask(text)[:300]))
+    return text, hdrs
+
+  def entry(dn):
+    text, hdrs = expect(200, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': dn}), None, 'get entry')
+    return json.loads(text)['attributes'], hdrs.get('ETag')
+
+  def etag_of(dn):
+    return entry(dn)[1]
+
+  def listed(kind, dn):
+    text, _ = expect(200, 'GET', '/api/' + kind, None, 'list ' + kind)
+    items = json.loads(text)[kind]
+    return next(item for item in items if item['dn'] == dn)
+
+  def stale(method, path, body, what, before_dn):
+    # A stale tag must answer 412 revision_conflict, carry no DN/filter, and write nothing.
+    tag_before = etag_of(before_dn)
+    old = expect_tag['stale']
+    text, hdrs = expect(412, method, path, body, what + ' with a stale If-Match', {'If-Match': old})
+    parsed = envelope(text, hdrs, 'revision_conflict', what + ' 412', forbidden=('dc=example', 'entryCSN', 'assert', 'uid=', 'cn='))
+    check(parsed['retryable'] is False, what + ': 412 must not be retryable')
+    check(etag_of(before_dn) == tag_before, what + ': a refused write changed the entry (ETag moved)')
+
+  expect_tag = {}
+
+  def stale_tag(dn, bump_body, bump_path='/api/users'):
+    # Read a tag, then change the entry unconditionally so that tag is stale.
+    expect_tag['stale'] = etag_of(dn)
+    expect(204, 'PATCH', bump_path, bump_body(str(uuid.uuid4().hex[:8])), 'bump')
+
+  def user_bump(dn):
+    return lambda v: {'dn': dn, 'department': 'd-' + v}
+
+  def group_bump(dn):
+    return lambda v: {'dn': dn, 'description': 'g-' + v}
+
+  def mk_user(uid, **extra):
+    body = {'uid': uid, 'cn': 'CW ' + uid, 'sn': 'CW'}
+    body.update(extra)
+    text, _ = expect(201, 'POST', '/api/users', body, 'create ' + uid)
+    return json.loads(text)['dn']
+
+  def mk_group(cn):
+    text, _ = expect(201, 'POST', '/api/groups', {'cn': cn}, 'create ' + cn)
+    return json.loads(text)['dn']
+
+  # 1. etag exposure -----------------------------------------------------------------------------------
+  dn = mk_user('cw-a', mail='a@example.org', givenName='A', department='D1', organization='Org')
+  attrs, tag = entry(dn)
+  check(tag and CSN_ETAG.match(tag), 'GET /api/entry ETag is not a quoted entryCSN: %r' % tag)
+  check(not any(k.lower() in ('entrycsn', 'userpassword') for k in attrs), 'entry attributes expose a revision/password attribute: %s' % sorted(attrs))
+  check(listed('users', dn).get('etag') == tag, 'user list etag differs from the entry ETag')
+  gdn = mk_group('cw-g')
+  check(CSN_ETAG.match(listed('groups', gdn).get('etag', '')), 'group list item has no etag')
+  text, _ = expect(200, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': dn}), None, 'entry body')
+  check('entryCSN' not in text and 'etag' not in text.lower(), 'revision leaked into the entry JSON body')
+  # GET ignores If-Match entirely.
+  expect(200, 'GET', '/api/users', None, 'GET with a garbage If-Match', {'If-Match': 'garbage'})
+
+  # 2. stale If-Match: 412 and no write, every protected route ----------------------------------------------
+  stale_tag(dn, user_bump(dn))
+  stale('PUT', '/api/users', {'dn': dn, 'cn': 'ZZ stale', 'sn': 'ZZ'}, 'user PUT', dn)
+  check(entry(dn)[0]['cn'] == ['CW cw-a'], 'stale PUT changed cn')
+  stale_tag(dn, user_bump(dn))
+  stale('PATCH', '/api/users', {'dn': dn, 'mail': 'stale@example.org'}, 'user PATCH', dn)
+  check(entry(dn)[0]['mail'] == ['a@example.org'], 'stale PATCH changed mail')
+  stale_tag(dn, user_bump(dn))
+  stale('POST', '/api/users/lock', {'dn': dn}, 'user lock', dn)
+  check(listed('users', dn)['locked'] is False, 'stale lock locked the user')
+  expect(204, 'POST', '/api/users/lock', {'dn': dn}, 'lock')
+  stale_tag(dn, user_bump(dn))
+  stale('POST', '/api/users/unlock', {'dn': dn}, 'user unlock', dn)
+  check(listed('users', dn)['locked'] is True, 'stale unlock unlocked the user')
+  expect(204, 'POST', '/api/users/unlock', {'dn': dn}, 'unlock')
+  stale_tag(dn, user_bump(dn))
+  stale('DELETE', '/api/users?' + urllib.parse.urlencode({'dn': dn}), None, 'user DELETE', dn)
+
+  stale_tag(gdn, group_bump(gdn), '/api/groups')
+  stale('PUT', '/api/groups', {'dn': gdn, 'cn': 'cw-g', 'description': 'stale'}, 'group PUT', gdn)
+  stale_tag(gdn, group_bump(gdn), '/api/groups')
+  stale('PATCH', '/api/groups', {'dn': gdn, 'description': 'stale'}, 'group PATCH', gdn)
+  stale_tag(gdn, group_bump(gdn), '/api/groups')
+  member = {'groupDn': gdn, 'memberDn': dn}
+  stale('POST', '/api/groups/members', member, 'member add', gdn)
+  check(dn not in listed('groups', gdn)['members'], 'stale member add added the member')
+  expect(204, 'POST', '/api/groups/members', member, 'member add (unconditional)')
+  stale_tag(gdn, group_bump(gdn), '/api/groups')
+  mq = '/api/groups/members?' + urllib.parse.urlencode(member)
+  stale('DELETE', mq, None, 'member remove', gdn)
+  check(dn in listed('groups', gdn)['members'], 'stale member remove removed the member')
+  stale_tag(gdn, group_bump(gdn), '/api/groups')
+  stale('DELETE', '/api/groups?' + urllib.parse.urlencode({'dn': gdn}), None, 'group DELETE', gdn)
+
+  archive = 'ou=archive,' + root
+  result = ldap_tool('ldapadd', [], 'dn: %s\nobjectClass: organizationalUnit\nou: archive\n' % archive)
+  check(result.returncode == 0, 'archive ou: ' + mask(result.stderr))
+  stale_tag(dn, user_bump(dn))
+  stale('POST', '/api/entry/move', {'dn': dn, 'newParentDn': archive}, 'entry move', dn)
+
+  # 3. matching If-Match applies, and the ETag moves -------------------------------------------------------
+  def matching(method, path, body, what, target):
+    before = etag_of(target)
+    expect(204, method, path, body, what + ' with the current If-Match', {'If-Match': before})
+    after = etag_of(target)
+    check(after != before, what + ': ETag did not change after a conditional write')
+    return after
+
+  matching('PUT', '/api/users', {'dn': dn, 'cn': 'CW renamed', 'sn': 'CW', 'mail': 'a@example.org'}, 'user PUT', dn)
+  check(entry(dn)[0]['cn'] == ['CW renamed'], 'conditional PUT did not apply')
+  matching('PATCH', '/api/users', {'dn': dn, 'mail': 'b@example.org'}, 'user PATCH', dn)
+  matching('POST', '/api/users/lock', {'dn': dn}, 'user lock', dn)
+  matching('POST', '/api/users/unlock', {'dn': dn}, 'user unlock', dn)
+  matching('PUT', '/api/groups', {'dn': gdn, 'cn': 'cw-g', 'description': 'cond'}, 'group PUT', gdn)
+  matching('PATCH', '/api/groups', {'dn': gdn, 'description': 'cond2'}, 'group PATCH', gdn)
+  matching('DELETE', mq, None, 'member remove', gdn)
+  matching('POST', '/api/groups/members', member, 'member add', gdn)
+  before_move = etag_of(dn)
+  expect(204, 'POST', '/api/entry/move', {'dn': dn, 'newParentDn': archive}, 'entry move with the current If-Match', {'If-Match': before_move})
+  moved = 'uid=cw-a,' + archive
+  check(etag_of(moved), 'moved entry is not readable at its new DN')
+  expect(404, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': dn}), None, 'old DN is gone after the move')
+  expect(204, 'DELETE', '/api/users?' + urllib.parse.urlencode({'dn': moved}), None, 'conditional delete',
+         {'If-Match': etag_of(moved)})
+  expect(404, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': moved}), None, 'deleted entry is gone')
+  expect(204, 'DELETE', '/api/groups?' + urllib.parse.urlencode({'dn': gdn}), None, 'conditional group delete',
+         {'If-Match': etag_of(gdn)})
+
+  # 4. malformed / unsupported If-Match: 400, no write ------------------------------------------------------
+  dn = mk_user('cw-b', mail='b@example.org')
+  tag = etag_of(dn)
+  for bad in ('W/' + tag, tag + ', ' + tag, tag.strip('"'), '"not-a-csn"', '"%s)(objectClass=*"' % tag.strip('"')):
+    text, hdrs = expect(400, 'PUT', '/api/users', {'dn': dn, 'cn': 'bad', 'sn': 'bad'}, 'malformed If-Match %r' % bad, {'If-Match': bad})
+    envelope(text, hdrs, 'invalid_request', 'malformed If-Match 400')
+  expect(204, 'PUT', '/api/users', {'dn': dn, 'cn': 'CW cw-b', 'sn': 'CW', 'mail': 'b@example.org'}, 'If-Match * is unconditional', {'If-Match': '*'})
+  text, hdrs = expect(400, 'POST', '/api/users/password', {'dn': dn, 'password': 'Never-Echoed-1'}, 'password If-Match', {'If-Match': tag})
+  envelope(text, hdrs, 'invalid_request', 'password If-Match 400', forbidden=('Never-Echoed',))
+  check(entry(dn)[0]['cn'] == ['CW cw-b'], 'a rejected If-Match changed the entry')
+
+  # 5. exactly one of two concurrent conditional writers wins ----------------------------------------------
+  call2 = login(ops_dn, ops_password)
+  for round_no in range(15):
+    tag = etag_of(dn)
+    results = []
+
+    def writer(client, cn):
+      body = {'dn': dn, 'cn': cn, 'sn': 'CW', 'mail': 'b@example.org'}
+      status, text, _ = client('PUT', '/api/users', body, {'If-Match': tag})
+      results.append((status, cn, text))
+
+    threads = [threading.Thread(target=writer, args=(call, 'CW round%d-A' % round_no)),
+               threading.Thread(target=writer, args=(call2, 'CW round%d-B' % round_no))]
+    for t in threads:
+      t.start()
+    for t in threads:
+      t.join()
+    codes = sorted(status for status, _, _ in results)
+    check(codes == [204, 412], 'round %d: concurrent same-ETag writers got %s, want exactly one 204 and one 412' % (round_no, codes))
+    winner = next(cn for status, cn, _ in results if status == 204)
+    check(entry(dn)[0]['cn'] == [winner], 'round %d: surviving cn is not the 204 winner' % round_no)
+
+  # 6. PATCH keeps what it does not mention; PUT still erases ----------------------------------------------
+  dn = mk_user('cw-c', mail='c@example.org', givenName='C', department='D2', organization='Org2')
+  expect(204, 'PATCH', '/api/users', {'dn': dn, 'mail': 'c2@example.org'}, 'patch mail only')
+  attrs, _ = entry(dn)
+  check(attrs.get('mail') == ['c2@example.org'] and attrs.get('givenName') == ['C'] and attrs.get('departmentNumber') == ['D2']
+        and attrs.get('o') == ['Org2'], 'PATCH of mail disturbed other attributes: %s' % attrs)
+  expect(204, 'PATCH', '/api/users', {'dn': dn, 'givenName': None}, 'patch null removes')
+  attrs, _ = entry(dn)
+  check('givenName' not in attrs and attrs.get('mail') == ['c2@example.org'], 'null did not remove exactly givenName: %s' % attrs)
+  for body in ({'dn': dn, 'givenName': ''}, {'dn': dn, 'uid': 'y'}, {'dn': dn}, {'dn': dn, 'password': 'Nope-Nope-1'}, {'dn': dn, 'cn': None}):
+    expect(400, 'PATCH', '/api/users', body, 'invalid patch %s' % sorted(k for k in body if k != 'dn'))
+  status, _, _ = call('PATCH', '/api/users', {'dn': dn, 'mail': 'x@example.org'}, {'Content-Type': 'text/plain'})
+  check(status == 415, 'PATCH with text/plain expected 415, got %d' % status)
+  expect(204, 'PUT', '/api/users', {'dn': dn, 'cn': 'CW cw-c', 'sn': 'CW'}, 'PUT baseline')
+  attrs, _ = entry(dn)
+  check('mail' not in attrs and 'departmentNumber' not in attrs and 'o' not in attrs, 'PUT no longer erases omitted fields: %s' % attrs)
+
+  # 7. create compensation: a failed password step leaves no orphan -------------------------------------
+  # As a non-root bind, the image's pwdSafeModify refuses an initial password, so the
+  # password step fails after the Add succeeded (the rootDN bypasses ppolicy and cannot be made to fail this way).
+  status, text, hdrs = call('POST', '/api/users', {'uid': 'cw-new', 'cn': 'CW New', 'sn': 'CW', 'password': 'Forced-Fail-Pw-1x'}, None)
+  check(status == 403, 'forced password failure: %d %s' % (status, mask(text)[:300]))
+  parsed = envelope(text, hdrs, 'forbidden', 'rolled-back create', forbidden=('Forced-Fail', 'cw-new', 'dc=example'))
+  check(parsed['error'].startswith('user not created'), 'rolled-back text does not say the user was not created: ' + parsed['error'])
+  expect(404, 'GET', '/api/entry?' + urllib.parse.urlencode({'dn': 'uid=cw-new,ou=people,' + root}), None, 'no orphan after rollback')
+  expect(201, 'POST', '/api/users', {'uid': 'cw-new', 'cn': 'CW New', 'sn': 'CW'}, 'same uid can be created afterwards')
+
+  # 8. delete + re-create of the same DN: the old identity assertion fails with 122 ---------------------
+  def identity(target):
+    result = ldap_tool('ldapsearch', ['-LLL', '-b', target, '-s', 'base', 'entryUUID', 'entryCSN'])
+    check(result.returncode == 0, 'identity read: ' + mask(result.stderr))
+    fields = dict(line.split(': ', 1) for line in result.stdout.splitlines() if ': ' in line)
+    return fields['entryUUID'], fields['entryCSN']
+
+  for i in range(10):
+    uid = 'cw-race%d' % i
+    target = mk_user(uid)
+    uuid0, csn0 = identity(target)
+    expect(204, 'DELETE', '/api/users?' + urllib.parse.urlencode({'dn': target}), None, 'delete before re-create')
+    mk_user(uid)
+    result = ldap_tool('ldapdelete', ['-e', '!assert=(&(entryUUID=%s)(entryCSN=%s))' % (uuid0, csn0), target])
+    check(result.returncode == 122, 'old-identity assertion delete rc=%d (want 122): %s' % (result.returncode, mask(result.stderr)))
+    check(etag_of(target), 'the re-created entry did not survive the stale-identity delete')
+    uuid1, csn1 = identity(target)
+    check(uuid1 != uuid0, 're-created entry kept the old entryUUID')
+
+  # 9. slapd honours criticality: an unknown critical control is refused, not ignored ------------------
+  dn = mk_user('cw-d')
+  before = etag_of(dn)
+  mod = 'dn: %s\nchangetype: modify\nreplace: description\ndescription: critical\n' % dn
+  result = ldap_tool('ldapmodify', ['-e', '!1.2.3.4.5.6.7.8'], mod)
+  check(result.returncode == 12, 'unknown critical control rc=%d (want 12 unavailableCriticalExtension)' % result.returncode)
+  check(etag_of(dn) == before, 'a refused critical-control write changed the entry')
+  print('ok: conditional writes (ETag/If-Match on every protected route, stale 412 with no write, concurrent writers 1x204+1x412 x15, PATCH merge, create rollback, identity-bound delete 122)')
+
 
 ENVELOPE_KEYS = {'error', 'message', 'code', 'requestId', 'retryable'}
 
@@ -191,6 +447,7 @@ def run():
   check_secret_not_in_process_env()
   scaffold()
   url = start_ui()
+
   opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
   def call(method, path, body=None, headers=None, who=None):
@@ -201,6 +458,17 @@ def run():
         return response.status, response.read().decode(), response.headers
     except urllib.error.HTTPError as error:
       return error.code, error.read().decode(), error.headers
+
+  def login_as(identity, password):
+    # A separate session (own cookie jar) for the conditional-write section.
+    jar = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def session_call(method, path, body=None, headers=None):
+      return call(method, path, body, headers, jar)
+
+    status, text, _ = session_call('POST', '/api/login', {'identity': identity, 'password': password})
+    check(status == 200, 'login as %s failed: %d %s' % (identity, status, mask(text)[:200]))
+    return session_call
 
   def expect(code, method, path, body=None, what='', headers=None, who=None):
     status, text, headers = call(method, path, body, headers, who)
@@ -288,7 +556,10 @@ def run():
   check('userpassword' not in text.lower(), '/api/entry leaked userPassword')
   check(user_password not in text, '/api/entry leaked the user password')
 
-  print('PASS: unlock idempotent (204/404), lock->bind fails->unlock->bind works, group member 204/409/404, error envelope on 400/401/403/404/405/409/412/422/428/500 (error==message, requestId==X-Request-Id, no DN), password-policy text without DN, meta allowlist, no userPassword in /api/entry')
+  setup_ops()
+  conditional_writes(url, login_as)
+
+  print('PASS: unlock idempotent (204/404), lock->bind fails->unlock->bind works, group member 204/409/404, error envelope on 400/401/403/404/405/409/412/422/428/500 (error==message, requestId==X-Request-Id, no DN), password-policy text without DN, meta allowlist, no userPassword in /api/entry, conditional writes (If-Match/ETag/PATCH/create rollback)')
 
 
 try:
