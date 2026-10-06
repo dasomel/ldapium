@@ -3,6 +3,8 @@
 package ldapclient
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"testing"
 
@@ -20,18 +22,38 @@ func TestLiveAssertionDelete(t *testing.T) {
 	env := getLiveEnv(t)
 	conn := env.conn(t, env.adminDN, env.adminPW)
 
-	dn := "uid=test-assert-del,ou=people," + env.root
+	// Self-contained: other workflows running `-tags live` have a slapd with
+	// only the base DN, so own a unique parent instead of assuming ou=people.
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	parentDN := "ou=assert-" + hex.EncodeToString(suffix[:]) + "," + env.root
+	parent := ldap.NewAddRequest(parentDN, nil)
+	parent.Attribute("objectClass", []string{"top", "organizationalUnit"})
+	parent.Attribute("ou", []string{"assert-" + hex.EncodeToString(suffix[:])})
+	if err := conn.Add(parent); err != nil {
+		t.Fatalf("add parent %s: %v", parentDN, err)
+	}
+	dn := "uid=test-assert-del," + parentDN
+	// Registered before the child's cleanup so (LIFO) the child goes first.
+	t.Cleanup(func() {
+		if err := conn.Del(ldap.NewDelRequest(parentDN, nil)); err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+			t.Errorf("cleanup parent %s: %v", parentDN, err)
+		}
+	})
 	add := ldap.NewAddRequest(dn, nil)
 	add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
 	add.Attribute("uid", []string{"test-assert-del"})
 	add.Attribute("cn", []string{"Test Assert Del"})
 	add.Attribute("sn", []string{"Assert"})
-	_ = conn.Del(ldap.NewDelRequest(dn, nil))
 	if err := conn.Add(add); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = conn.Del(ldap.NewDelRequest(dn, nil))
+		if err := conn.Del(ldap.NewDelRequest(dn, nil)); err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+			t.Errorf("cleanup entry %s: %v", dn, err)
+		}
 	})
 
 	search := ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 0, false, "(objectClass=*)", identityAttrs, nil)
