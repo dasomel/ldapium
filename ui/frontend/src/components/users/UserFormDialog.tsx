@@ -34,8 +34,13 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
   const isEdit = Boolean(user)
 
   useEffect(() => {
+    if (open) setError(null)
+  }, [open])
+
+  // Separate from the effect above: a conflict re-seeds the open form from
+  // the re-read entry and must not wipe the notice that explains it.
+  useEffect(() => {
     if (!open) return
-    setError(null)
     setForm(
       user
         ? {
@@ -171,7 +176,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
               </div>
             )}
             {error && (
-              <div className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+              <div role="alert" className="rounded-console border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
                 {error}
               </div>
             )}

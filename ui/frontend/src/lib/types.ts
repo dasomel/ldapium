@@ -30,6 +30,9 @@ export interface ServerSettings {
   tlsVerified: boolean
   sessionTtlSeconds: number
   cookieSecure: boolean
+  /** True when the core user/group writes honour Idempotency-Key. Absent on
+   * servers that predate it: treat absent as false. */
+  idempotencyEnabled?: boolean
 }
 
 export interface OSSVersion {
@@ -117,6 +120,10 @@ export interface Entry {
 
 export interface User {
   dn: string
+  /** Strong ETag of the entry (its entryCSN), sent back as If-Match on edit
+   * and delete. Absent on servers that predate it or when the directory ACL
+   * hides entryCSN: then the write goes out unconditional, as before. */
+  etag?: string
   uid: string
   cn: string
   sn: string
@@ -156,6 +163,9 @@ export interface UserFormInput {
 
 export interface Group {
   dn: string
+  /** See User.etag. Group member changes bump it, so bulk member saves
+   * deliberately send no If-Match (they race each other). */
+  etag?: string
   cn: string
   description?: string
   members: string[]

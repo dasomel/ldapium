@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronsLeft, ChevronsRight, CircleAlert, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
 import { useLanguage } from '@/context/LanguageContext'
@@ -22,6 +23,7 @@ const PAGE_WINDOW_SIZE = 10
 export function UsersPage() {
   const { notify } = useToast()
   const { language, t } = useLanguage()
+  const write = useWriteAttempt()
   const [users, setUsers] = useState<User[] | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -51,6 +53,15 @@ export function UsersPage() {
 
   useEffect(load, [])
 
+  // Re-read after a conflict or a lost response. Unlike load() it keeps the
+  // current page, so the operator stays where they were.
+  async function reread() {
+    const { items, truncated } = await api.listUsers()
+    setUsers(items)
+    setTruncated(truncated)
+    return items
+  }
+
   const filtered = useMemo(() => {
     if (!users) return []
     const q = query.trim().toLowerCase()
@@ -77,10 +88,32 @@ export function UsersPage() {
 
   async function handleCreateOrUpdate(input: UserFormInput) {
     if (editing) {
-      await api.updateUser({ ...input, dn: editing.dn })
-      notify('success', t('users.updatedToast', { name: input.uid || editing.uid }))
+      const target = editing
+      await write(
+        {
+          fingerprint: ['update', target.dn, input],
+          etag: target.etag,
+          discarded: describeChanges([
+            ['cn', target.cn, input.cn],
+            ['sn', target.sn, input.sn],
+            ['mail', target.mail, input.mail],
+            [t('userForm.givenNameLabel'), target.givenName, input.givenName],
+            [t('userForm.organizationalUnitLabel'), target.organizationalUnit, input.organizationalUnit],
+            [t('userForm.departmentLabel'), target.department, input.department],
+            [t('userForm.organizationLabel'), target.organization, input.organization],
+          ]),
+          // Re-seed the open form from the re-read entry: it carries the new
+          // etag, and the notice tells the operator the values are current.
+          onStale: async () => {
+            const fresh = (await reread()).find((u) => u.dn === target.dn)
+            if (fresh) setEditing(fresh)
+          },
+        },
+        (w) => api.updateUser({ ...input, dn: target.dn }, w),
+      )
+      notify('success', t('users.updatedToast', { name: input.uid || target.uid }))
     } else {
-      await api.createUser(input)
+      await write({ fingerprint: ['create', input] }, (w) => api.createUser(input, w))
       notify('success', t('users.createdToast', { uid: input.uid }))
     }
     load()
@@ -89,13 +122,28 @@ export function UsersPage() {
   async function handleSetPassword(dn: string, password: string) {
     const res = await api.setPassword(dn, password || undefined)
     notify('success', t('users.passwordUpdatedToast'))
+    // A password change moves the entry's etag; re-read so the next edit or
+    // delete does not hit a needless 412.
+    reread().catch(() => undefined)
     return res.generatedPassword
   }
 
   async function handleDelete() {
     if (!deleting) return
-    await api.deleteUser(deleting.dn)
-    notify('success', t('users.deletedToast', { uid: deleting.uid }))
+    const target = deleting
+    try {
+      await write({ fingerprint: ['delete', target.dn], etag: target.etag, onStale: reread }, (w) =>
+        api.deleteUser(target.dn, w),
+      )
+    } catch (err) {
+      // ConfirmDialog shows no error text, so report it here. The dialog
+      // closes; submitting again is the same attempt (same key) when the
+      // outcome is still open.
+      if (!(err instanceof ApiError)) throw err
+      notify('error', err.message)
+      return
+    }
+    notify('success', t('users.deletedToast', { uid: target.uid }))
     setDeleting(null)
     load()
   }

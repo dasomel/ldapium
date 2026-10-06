@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pencil, Plus, Search, Trash2, Users2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { Group, GroupFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
 import { useT } from '@/context/LanguageContext'
@@ -45,6 +46,7 @@ function TruncatedText({ text, className = '' }: { text: string; className?: str
 export function GroupsPage() {
   const { notify } = useToast()
   const t = useT()
+  const write = useWriteAttempt()
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -72,6 +74,14 @@ export function GroupsPage() {
 
   useEffect(load, [])
 
+  // Re-read after a conflict or a lost response (see UsersPage.reread).
+  async function reread() {
+    const { items, truncated } = await api.listGroups()
+    setGroups(items)
+    setTruncated(truncated)
+    return items
+  }
+
   const filtered = useMemo(() => {
     if (!groups) return []
     const q = query.trim().toLowerCase()
@@ -85,10 +95,25 @@ export function GroupsPage() {
 
   async function handleCreateOrUpdate(input: GroupFormInput) {
     if (editing) {
-      await api.updateGroup({ ...input, dn: editing.dn })
+      const target = editing
+      await write(
+        {
+          fingerprint: ['update', target.dn, input],
+          etag: target.etag,
+          discarded: describeChanges([
+            ['cn', target.cn, input.cn],
+            [t('common.description'), target.description, input.description],
+          ]),
+          onStale: async () => {
+            const fresh = (await reread()).find((g) => g.dn === target.dn)
+            if (fresh) setEditing(fresh)
+          },
+        },
+        (w) => api.updateGroup({ ...input, dn: target.dn }, w),
+      )
       notify('success', t('groups.updatedToast', { cn: input.cn }))
     } else {
-      await api.createGroup(input)
+      await write({ fingerprint: ['create', input] }, (w) => api.createGroup(input, w))
       notify('success', t('groups.createdToast', { cn: input.cn }))
     }
     load()
@@ -96,8 +121,18 @@ export function GroupsPage() {
 
   async function handleDelete() {
     if (!deleting) return
-    await api.deleteGroup(deleting.dn)
-    notify('success', t('groups.deletedToast', { cn: deleting.cn }))
+    const target = deleting
+    try {
+      await write({ fingerprint: ['delete', target.dn], etag: target.etag, onStale: reread }, (w) =>
+        api.deleteGroup(target.dn, w),
+      )
+    } catch (err) {
+      // ConfirmDialog shows no error text; see UsersPage.handleDelete.
+      if (!(err instanceof ApiError)) throw err
+      notify('error', err.message)
+      return
+    }
+    notify('success', t('groups.deletedToast', { cn: target.cn }))
     setDeleting(null)
     load()
   }
@@ -105,6 +140,9 @@ export function GroupsPage() {
   async function handleSaveMembers(groupDn: string, members: string[]) {
     const group = groups?.find((candidate) => candidate.dn === groupDn)
     if (!group) return
+    // No If-Match and no key here: these are many parallel single-member
+    // writes, and each one moves the group's etag, so a tag would make them
+    // conflict with each other.
     const previous = new Set(group.members)
     const next = new Set(members)
 
