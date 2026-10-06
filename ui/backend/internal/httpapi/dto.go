@@ -47,6 +47,8 @@ type serverSettingsResponse struct {
 	TLSVerified         bool         `json:"tlsVerified"`
 	SessionTTLSeconds   int64        `json:"sessionTtlSeconds"`
 	CookieSecure        bool         `json:"cookieSecure"`
+	// IdempotencyEnabled: the core writes honour Idempotency-Key (#216, D216-9a).
+	IdempotencyEnabled bool `json:"idempotencyEnabled"`
 }
 
 type ossVersion struct {

@@ -547,6 +547,17 @@ ui:
 
   replicaCount: 1
 
+  # Idempotency-Key for the core user/group writes (#216). Records live in the
+  # UI process's memory and a restart forgets them, so this only holds with one
+  # replica: enabling it renders strategy Recreate, and UI_IDEMPOTENCY_ENABLED is
+  # true only when replicaCount is 1 (with 2 or more it stays false and NOTES.txt
+  # warns). Off by default; a keyed write on a server that has it off is refused
+  # (422 idempotency_unsupported), never silently unprotected. Backup start keys
+  # do not need this switch: they are kept in the durable job record and use a
+  # persisted fingerprint key, rendered automatically when backups are enabled.
+  idempotency:
+    enabled: false
+
   # Opt-in backup-runtime image, private writable PVC and operator Secret.
   backups:
     enabled: false

@@ -186,7 +186,14 @@ const (
 var (
 	jobFingerprintRe = regexp.MustCompile(`^[a-f0-9]{1,64}$`)
 	jobRequestIDRe   = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	jobKeyIDRe       = regexp.MustCompile(`^[a-f0-9]{8}$`)
 )
+
+// validJobIdempotency: lowercase SHA-256 / HMAC hex digests and an 8-hex key_id.
+// Anything else is a corrupt or tampered file.
+func validJobIdempotency(i *JobIdempotency) bool {
+	return sha256HexRe.MatchString(i.KeyHash) && sha256HexRe.MatchString(i.Fingerprint) && jobKeyIDRe.MatchString(i.KeyID)
+}
 
 func inSet(v string, set ...string) bool {
 	for _, s := range set {
@@ -233,6 +240,8 @@ func validateJob(j *Job) error {
 		return errors.New("invalid orphan reason")
 	case len(j.Destinations) > maxJobDests:
 		return errors.New("too many destinations")
+	case j.Idempotency != nil && !validJobIdempotency(j.Idempotency):
+		return errors.New("invalid idempotency record")
 	}
 	if j.Error != nil {
 		if _, ok := errorCatalog[j.Error.Code]; !ok || len(j.Error.Message) > maxTextLen {

@@ -84,6 +84,13 @@ const (
 	// codePartialFailure: a user creation whose password step did not
 	// complete (#216). 500, never retryable; carries state and dn.
 	codePartialFailure = "partial_failure"
+	// Idempotency-Key (#216, part B). The family is closed at these five
+	// names (D218-3, D218-14).
+	codeIdempotencyKeyConflict    = "idempotency_key_conflict"
+	codeIdempotencyKeyReused      = "idempotency_key_reused"
+	codeIdempotencyOutcomeUnknown = "idempotency_outcome_unknown"
+	codeIdempotencyCapacity       = "idempotency_capacity"
+	codeIdempotencyUnsupported    = "idempotency_unsupported"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -100,6 +107,8 @@ const (
 	partialFailureMessage = "user creation did not complete: the password step failed and the new entry was not removed as verified; " +
 		"check the entry named in dn (state says what was and was not done), then set its password with POST /api/users/password " +
 		"or remove it with DELETE /api/users?dn="
+
+	idempotencyCapacityMessage = "idempotency record capacity reached; retry later"
 
 	// retryAfterDefaultSeconds is the Retry-After of a retryable 429/503 whose
 	// producer did not compute one (the login limiter does; see handleLogin).
@@ -140,6 +149,12 @@ var codeTable = map[string]codeSpec{
 	codeJobNotCancellable:      {http.StatusConflict, ""},
 	codePersistenceUnavailable: {http.StatusServiceUnavailable, persistenceUnavailableMessage},
 	codePartialFailure:         {http.StatusInternalServerError, partialFailureMessage},
+
+	codeIdempotencyKeyConflict:    {http.StatusConflict, ""},
+	codeIdempotencyKeyReused:      {http.StatusUnprocessableEntity, ""},
+	codeIdempotencyOutcomeUnknown: {http.StatusConflict, ""},
+	codeIdempotencyCapacity:       {http.StatusServiceUnavailable, idempotencyCapacityMessage},
+	codeIdempotencyUnsupported:    {http.StatusUnprocessableEntity, ""},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
@@ -196,7 +211,8 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeUnavailable, codeBackupBusy, codePersistenceUnavailable:
+	case codeLoginRateLimited, codeUnavailable, codeBackupBusy, codePersistenceUnavailable,
+		codeIdempotencyKeyConflict, codeIdempotencyCapacity:
 		return true
 	case codeUpstreamFailed:
 		return method == http.MethodGet || method == http.MethodHead
@@ -261,6 +277,7 @@ func buildEnvelope(c echo.Context, status int, code, msg string, cause error, st
 	if code != codePartialFailure {
 		state, dn = "", ""
 	}
+	c.Set(envelopeCodeKey, code)
 	retryable := retryableFor(code, req.Method)
 	if retryable && (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) {
 		if c.Response().Header().Get(echo.HeaderRetryAfter) == "" {
@@ -321,6 +338,11 @@ func respondErr(c echo.Context, err error) error {
 			log.Printf("error detail withheld from response [%s] %s %s: %s", logQuote(c.Response().Header().Get(echo.HeaderXRequestID)), logQuote(c.Request().Method), c.Path(), logDetail(err))
 		}
 		return writeAPIError(c, status, code, msg, err)
+	}
+	if isOutcomeUnknown(err) {
+		markOutcomeUnknown(c)
+	} else {
+		markDefinitive(c)
 	}
 	return writeAPIError(c, http.StatusInternalServerError, codeInternal, "", err)
 }

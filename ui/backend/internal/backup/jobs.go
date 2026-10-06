@@ -9,6 +9,8 @@ import (
 	"io"
 	"regexp"
 	"time"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/idempotency"
 )
 
 // Job status enum per D217-2. Queued is deliberately omitted:ldapium enforces
@@ -228,7 +230,42 @@ type Job struct {
 	Local             *JobLocal        `json:"local,omitempty"`
 	Destinations      []JobDestination `json:"destinations,omitempty"`
 	Artifact          *JobArtifact     `json:"artifact,omitempty"`
+	// Idempotency is the durable Idempotency-Key record (#216, D216-12). It is
+	// persisted in the job file but never returned by the API (present drops it).
+	Idempotency *JobIdempotency `json:"idempotency,omitempty"`
 }
+
+// JobIdempotency lets a retry with the same Idempotency-Key find the job it
+// started, also after a restart. KeyHash is SHA-256(requester DN || 0x00 ||
+// key), so a record neither holds the key nor a DN; Fingerprint is the keyed
+// HMAC of the request and KeyID names the key that made it (D216-9b). The
+// fingerprint key itself is never stored.
+type JobIdempotency struct {
+	KeyHash     string `json:"key_hash"`
+	Fingerprint string `json:"fingerprint"`
+	KeyID       string `json:"key_id"`
+}
+
+// RequestIdempotency carries a start request's key. Verify compares a stored
+// fingerprint (made under keyID) with this request's; the manager calls it under
+// its lock, so the lookup and the job creation are one atomic step.
+type RequestIdempotency struct {
+	KeyHash     string
+	Fingerprint string // hex, made with the current key
+	KeyID       string
+	Verify      func(keyID string, storedFingerprint []byte) idempotency.Verdict
+}
+
+// IdempotentJobError is returned by StartJob when the key already started a job.
+// Job is a presentation copy with the job's current state. Verdict says whether
+// the new request is the same one (replay it), a different one (key reused) or
+// cannot be compared because the fingerprint key is gone.
+type IdempotentJobError struct {
+	Job     *Job
+	Verdict idempotency.Verdict
+}
+
+func (e *IdempotentJobError) Error() string { return "idempotency key already used by a job" }
 
 // MarshalJSON omits unset times (omitempty does not apply to time.Time), for
 // both the API and the job file.
@@ -332,4 +369,6 @@ type RunRequest struct {
 	RequesterType    string
 	ActorFingerprint string
 	RequestID        string
+	// Idempotency is set for a keyed manual start (#216); nil otherwise.
+	Idempotency *RequestIdempotency
 }

@@ -57,7 +57,7 @@ metadata:
     {{- include "ldapium.ui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ui.replicaCount }}
-  {{- if or .Values.ui.applicationProfiles.enabled .Values.ui.backups.enabled }}
+  {{- if or .Values.ui.applicationProfiles.enabled .Values.ui.backups.enabled .Values.ui.idempotency.enabled }}
   strategy:
     type: Recreate
   {{- end }}
@@ -249,7 +249,13 @@ spec:
             {{- end }}
             - name: LDAP_TLS_INSECURE_SKIP_VERIFY
               value: {{ .Values.ui.ldap.tlsInsecureSkipVerify | quote }}
+            {{- /* D216-9a: the in-memory Idempotency-Key store is only correct with exactly one UI process, so the switch is on only for one replica (with Recreate above). */}}
+            - name: UI_IDEMPOTENCY_ENABLED
+              value: {{ and .Values.ui.idempotency.enabled (eq (int .Values.ui.replicaCount) 1) | quote }}
             {{- if .Values.ui.backups.enabled }}
+            {{- /* D216-9b: persisted fingerprint key, a private directory in the backup PVC so it lives as long as the job records that reference its key_id. */}}
+            - name: UI_IDEMPOTENCY_KEY_FILE
+              value: /var/lib/ldapium-backups/.idempotency/key
             - name: BACKUP_OPERATOR_CONFIG
               value: /etc/ldapium-backup/operator.json
             - name: BACKUP_POLICY_PATH

@@ -728,7 +728,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Moved"
+            "description": "Moved",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid DN or cross-context move; also a malformed or unsupported `If-Match`",
@@ -751,7 +756,7 @@
             }
           },
           "409": {
-            "description": "An entry with the same RDN already exists under the new parent",
+            "description": "An entry with the same RDN already exists under the new parent. Also: `idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
             "content": {
               "application/json": {
                 "schema": {
@@ -778,6 +783,34 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -802,6 +835,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -923,6 +959,11 @@
                   "$ref": "#/components/schemas/Created"
                 }
               }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
             }
           },
           "400": {
@@ -936,7 +977,7 @@
             }
           },
           "409": {
-            "description": "uid already exists",
+            "description": "uid already exists. Also: `idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
             "content": {
               "application/json": {
                 "schema": {
@@ -980,6 +1021,34 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -991,7 +1060,12 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ]
       },
       "put": {
         "operationId": "updateUser",
@@ -1007,7 +1081,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Updated"
+            "description": "Updated",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Validation failed; also a malformed or unsupported `If-Match`",
@@ -1047,6 +1126,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1071,6 +1188,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       },
@@ -1088,7 +1208,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Deleted"
+            "description": "Deleted",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid dn; also a malformed or unsupported `If-Match`",
@@ -1128,6 +1253,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -1151,6 +1314,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       },
@@ -1168,7 +1334,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Patched"
+            "description": "Patched",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value; also a malformed or unsupported `If-Match`",
@@ -1218,6 +1389,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1247,6 +1456,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -1272,6 +1484,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/SetPasswordResponse"
                 }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
               }
             }
           },
@@ -1310,6 +1527,44 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1321,7 +1576,12 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ]
       }
     },
     "/api/users/unlock": {
@@ -1339,7 +1599,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Done"
+            "description": "Done",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid dn; also a malformed or unsupported `If-Match`",
@@ -1379,6 +1644,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1411,6 +1714,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -1430,7 +1736,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Done"
+            "description": "Done",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid dn; also a malformed or unsupported `If-Match`",
@@ -1470,6 +1781,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1502,6 +1851,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -1569,6 +1921,11 @@
                   "$ref": "#/components/schemas/Created"
                 }
               }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
             }
           },
           "400": {
@@ -1582,7 +1939,7 @@
             }
           },
           "409": {
-            "description": "Group already exists",
+            "description": "Group already exists. Also: `idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1606,6 +1963,34 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1617,7 +2002,12 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ]
       },
       "put": {
         "operationId": "updateGroup",
@@ -1633,7 +2023,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Updated"
+            "description": "Updated",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Validation failed; also a malformed or unsupported `If-Match`",
@@ -1673,6 +2068,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1697,6 +2130,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       },
@@ -1714,7 +2150,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Deleted"
+            "description": "Deleted",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid dn; also a malformed or unsupported `If-Match`",
@@ -1754,6 +2195,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -1777,6 +2256,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       },
@@ -1794,7 +2276,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Patched"
+            "description": "Patched",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value; also a malformed or unsupported `If-Match`",
@@ -1844,6 +2331,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1873,6 +2398,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -1892,7 +2420,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Added"
+            "description": "Added",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid DN; also a malformed or unsupported `If-Match`",
@@ -1915,7 +2448,7 @@
             }
           },
           "409": {
-            "description": "Already a member",
+            "description": "Already a member. Also: `idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1942,6 +2475,34 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1966,6 +2527,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       },
@@ -1983,7 +2547,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Removed"
+            "description": "Removed",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
+              }
+            }
           },
           "400": {
             "description": "Invalid DN; also a malformed or unsupported `If-Match`",
@@ -2023,6 +2592,44 @@
           },
           "412": {
             "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "409": {
+            "description": "`idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -2055,6 +2662,9 @@
                 "\"20261006123456.123456Z#000000#001#000000\""
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ]
       }
@@ -3956,6 +4566,9 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/IdempotentReplayed"
               }
             },
             "content": {
@@ -4001,7 +4614,7 @@
             }
           },
           "409": {
-            "description": "`backup_busy`: a job is already running (or the worker lock is held). `active_job_id` and `active_kind` name it when known.",
+            "description": "`backup_busy`: a job is already running (or the worker lock is held). `active_job_id` and `active_kind` name it when known. Also: `idempotency_key_conflict` (the same request is still in flight; retryable) or `idempotency_outcome_unknown` (the result could not be determined: read the resource before retrying; the same key replays this answer).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4011,7 +4624,7 @@
             }
           },
           "422": {
-            "description": "Unknown kind, or log sources not registered",
+            "description": "Unknown kind, or log sources not registered. Also: `idempotency_key_reused` (the key belongs to a different request) or `idempotency_unsupported` (the server does not enable Idempotency-Key).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4047,7 +4660,7 @@
             }
           },
           "503": {
-            "description": "`persistence_unavailable`: the start record could not be written, so no worker was started. Retryable (Retry-After).",
+            "description": "`persistence_unavailable`: the start record could not be written, so no worker was started. Retryable (Retry-After). Also: `idempotency_capacity`: the idempotency store is full and takes no new keys; retry later (`Retry-After`). Existing keys still replay.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4079,6 +4692,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "x-admin": true,
@@ -4736,6 +5352,10 @@
           },
           "cookieSecure": {
             "type": "boolean"
+          },
+          "idempotencyEnabled": {
+            "type": "boolean",
+            "description": "The core user/group writes honour `Idempotency-Key` (server switch UI_IDEMPOTENCY_ENABLED). Clients send the header only when this is true."
           }
         },
         "required": [
@@ -6140,6 +6760,11 @@
               "conflict",
               "feature_disabled",
               "forbidden",
+              "idempotency_capacity",
+              "idempotency_key_conflict",
+              "idempotency_key_reused",
+              "idempotency_outcome_unknown",
+              "idempotency_unsupported",
               "if_match_required",
               "internal",
               "invalid_credentials",
@@ -6501,6 +7126,33 @@
               }
             }
           }
+        }
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "Optional retry-safety key (16-128 characters from `[A-Za-z0-9._~:-]`, bare or double-quoted; one header only, otherwise 400). The first request with a key executes; a retry of the same request (same method, route, query and body) replays the first status, body and `Location` with `Idempotent-Replayed: true` and writes nothing again. The key is scoped to the authenticated identity and to the request: a different request under the same key is 422 `idempotency_key_reused`, a request still in flight is 409 `idempotency_key_conflict` (retryable). Only 2xx results, `partial_failure` and `idempotency_outcome_unknown` are stored (24h by default); other failures are not, so the key may be reused. A replay is answered before `If-Match` is evaluated. Where the server does not enable it (`GET /api/server-settings` `idempotencyEnabled`), a key is refused with 422 `idempotency_unsupported`, never silently ignored. Records are kept in process memory (a restart forgets them); a full store refuses new keys with 503 `idempotency_capacity` and `Retry-After`. On `POST /api/users/password` a key is accepted only with an explicit `password` (a generated password would have to be stored). On `POST /api/v1/backups/jobs/{id}` the key is kept in the durable job record instead (same job and 202 on a retry, also after a restart) and needs `UI_IDEMPOTENCY_KEY_FILE`. With a key the request body must be exactly one JSON value (no trailing data, no duplicate or case-colliding field names; none at all on DELETE) of at most 64 KiB, sent as application/json; anything else is 400 `invalid_request` (also for an oversized body: 400, not 413) and does not take the key.",
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "examples": [
+            "123e4567-e89b-12d3-a456-426614174000"
+          ]
+        }
+      }
+    },
+    "headers": {
+      "IdempotentReplayed": {
+        "description": "`true` on a response replayed from an Idempotency-Key record; absent on the original response.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true"
+          ]
         }
       }
     }

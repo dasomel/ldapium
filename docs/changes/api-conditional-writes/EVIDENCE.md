@@ -236,3 +236,55 @@ dropped by last-write-wins after the heal. Route writes to a single node to keep
   non-root bind (`pwdSafeModify` refuses an initial password), see above.
 - go-ldap encodes criticality TRUE as `0x01` (BER allows any non-zero); slapd honours it (unknown critical
   control gives 12).
+
+## Part B: Idempotency-Key, live run through the real stack
+
+Images built from this tree: `l7-ldap:1` (`docker build -t l7-ldap:1 -f image/Dockerfile ./image`) and `l7-ui:1`
+(`docker build -t l7-ui:1 --target backup-runtime -f ui/Dockerfile ui`); docker context `colima`, named volumes,
+objects prefixed `l7-` and removed afterwards.
+
+```
+python3 scripts/test/test-api-idempotency-local.py
+PASS: server-settings reports idempotencyEnabled=true
+PASS: create replay: same 201 body, Idempotent-Replayed only on the replay
+PASS: create replay wrote nothing a second time (1 entry, entryCSN unchanged)
+PASS: without a key the same create is today's 409 already_exists
+PASS: same key, different body: 422 idempotency_key_reused
+PASS: the rejected reuse wrote nothing
+PASS: lock applied / another administrator unlocked
+PASS: retrying the lock with the same key is replayed and does NOT re-lock
+PASS: delete replay: 204 replayed, entry gone
+PASS: without a key the delete retry is today's 404
+PASS: concurrent same-key creates: one execution (1 original, 9 conflict/replay), 1 entry
+PASS: password with a key: replay body is {} (no secret)
+PASS: generated password + key is refused (422 validation_failed)
+PASS: backup start with a key: 202
+PASS: backup start replay while the job exists: same job id and Location
+PASS: same backup key for another kind: 422 idempotency_key_reused
+PASS: one backup job record for three start requests
+PASS: key file is 0600 in a 0700 directory (700 ldapium / 600 ldapium)
+PASS: job file holds key hash/fingerprint/key_id only (no key, no DN)
+PASS: UI log does not contain a key/password (8 checks)
+PASS: after a restart the in-memory core record is gone ... 409 already_exists (documented limit)
+PASS: after a restart the same backup key returns the same job id (status succeeded)
+PASS: still exactly one job record after the restart
+PASS: switch off: keyed write is 422 idempotency_unsupported and writes nothing
+PASS: switch off: server-settings reports false / the same write without a key is unchanged (201)
+PASS: idempotency live run
+```
+
+Non-vacuity (code deliberately broken, tests fail, code restored): the store ignoring existing records
+(`Begin` never finds a record) fails 8 `internal/idempotency` tests and `TestIdempotency_ReplayDoesNotWriteTwice`
+(`replay: 204 replayed=""`); the fingerprint comparison forced to "same" fails `TestSameKeyDifferentRequestIsReused`,
+`TestKeyringRotationVerifiesPreviousKeyID`, `TestIdempotency_DifferentRequestSameKeyIs422AndDoesNotWrite`
+(`status 204`) and `TestBackupStartKeyScopeAndConflicts` (`other kind: 202`).
+
+Not verified: browser UI (no frontend change); a real LDAP connection drop in the middle of a write
+(`outcome_unknown` is proven with an injected go-ldap `ErrorNetwork` and a panic, not on a live socket);
+a multi-replica deployment; helm install against a cluster (only `helm template` and `--dry-run=client`).
+
+Review follow-up (Codex high): the lost-response classifier, strict keyed bodies and the oversized
+`partial_failure` record are covered by `idempotency_review_test.go` with the real go-ldap error shape (a `net.Pipe`
+peer that reads the request and closes). Key persistence, stated exactly: only backup-start keys live in the durable job
+record and survive a backend restart; the keys of every other route are process memory and are forgotten on restart
+(the live script checks both: the core retry after a restart meets 409 already_exists, the backup retry returns the same job).

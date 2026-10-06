@@ -404,3 +404,22 @@ LDAP 와이어 코드는 AGENTS.md 원칙에 따라 단위 테스트하지 않�
 9. 쓰기 연산 중 연결 유실이 go-ldap에서 항상 `ErrorNetwork`(200)로 나타나는지, 그리고 LDAP 호출에 연산 타임아웃이 없을 때(`dial.go`에 없음) 멈춘 호출의 거동.
 10. 차트: `ui.replicaCount`·`strategy` 조합 렌더(`ui-deployment.yaml:4,12,59-63`는 읽어 확인했으나 `helm template`로 실행하지 않음), 백업 PVC 경로에 키 파일을 두는 방식(`ui.backups` 볼륨 마운트 경로 미확인).
 11. `config/secrets.go`의 `loadOrGenerateSecret`을 지문 키 파일(두 키·회전)에 재사용할 수 있는지(현재 단일 값 형식).
+
+**Part B 구현 결정(2026-10-06, 문서가 열어 둔 선택을 가장 보수적으로 읽어 기록)**
+
+| ID | 결정 | 이유 |
+|---|---|---|
+| D216-16 | 백업 시작의 키는 메모리 스위치(D216-9a)가 아니라 **`ui.backups.enabled`(이 라우트가 존재함) + 영속 지문 키(`UI_IDEMPOTENCY_KEY_FILE`)**가 있을 때만 받는다. 키 파일이 없으면 422 `idempotency_unsupported`(조용히 무시하지 않음). 백업이 켜지면 차트가 키 파일을 백업 PVC의 `.idempotency/key`로 지정한다. (D216-12 ⑨가 #217 T-031에 맡긴 확정.) | 재시작 뒤에도 같은 요청을 알아보려면 영속 키가 필수다. 키 없이 받으면 재시작 뒤 지문을 검증할 수 없다. |
+| D216-17 | 영속 job 기록의 키 필드는 `idempotency{key_hash, fingerprint, key_id}`뿐이며 `key_hash = SHA-256(요청자 DN ‖ 0x00 ‖ 키)`(메모리 저장소와 같은 값). 키·DN·본문은 없다. 이 필드는 job 파일에만 있고 API 응답(목록·단건·시작)에서는 제거된다. 로드 시 소문자 hex 64/64/8 형식이 아니면 기록 파일을 격리한다(신뢰 경계). | 파일이 변조돼도 경로·임의 문자열이 되지 않게 하고, 해시·지문을 API로 노출하지 않는다(추측·오라클 방지). |
+| D216-18 | 키 파일 형식: 한 줄(`current`) 또는 두 줄(`current`, `previous`), 각 32자 이상. 생성·읽기는 `loadOrGenerateSecret`(0700 디렉터리, 0600 일반 파일, 소유자 확인, 재생성 없음)를 그대로 재사용하고, 위반·형식 오류는 기동 거부이며 오류 문구에 키가 없다. 자동 생성은 한 줄이다(회전은 운영자가 두 줄로 편집). 사용 키 = `HMAC(마스터, "ldapium/idempotency/v1")`, `key_id` = 사용 키 SHA-256의 앞 8 hex(D216-9b 그대로). | 새 비밀 저장 규칙을 만들지 않는다. |
+| D216-19 | 저장하는 응답: 2xx(상태·`Location`·본문), `partial_failure`, `idempotency_outcome_unknown`만, 본문 ≤4KiB. 비밀번호 라우트의 2xx 본문은 **캡처가 아니라 `{}`로 고정 저장**한다. 4KiB를 넘는 결과는 원 응답은 그대로 전달하되 기록은 `outcome_unknown`으로 둔다(거짓 재생 금지). 재생되는 오류 봉투는 이 요청의 `requestId`로 바꾼다. `partial_failure`의 `dn`은 원 응답과 같은 값이다(요청자가 이미 받은 값). | 자격 증명을 나르는 라우트의 응답 본문을 저장하지 않는다. |
+| D216-20 | `outcome_unknown` 판정은 **보수적(리뷰 반영 개정)**: 쓰기가 전송될 수 있었던 뒤에는 서버가 돌려준 결과 코드를 가진 타입 있는 `*ldap.Error`(예: 32/50/53/68/12)만 "적용되지 않음"의 증거다. 그 밖의 모든 오류는 불확정이다 — go-ldap이 응답 유실을 `unable to read LDAP response packet: EOF` 같은 **일반 오류 문자열**로 돌려주는 경우, `io.EOF`/`ErrUnexpectedEOF`, 연결 재설정, 컨텍스트 취소·기한, go-ldap 클라이언트 코드 200-206, 핸들러 패닉, 그리고 분류되지 않은 모든 5xx. 전송 전 연결 실패도 같은 범주다(실행 안 됐을 수 있어도 두 번째 실행을 허용하지 않는다). 키를 놓는(저장하지 않는) 것은 쓰기에 도달하기 전에 거부된 요청(검증·인증·키 충돌·If-Match 412)과 디렉터리의 확정 4xx/5xx 응답뿐이다. 4KiB를 넘어 저장할 수 없는 `partial_failure`도 `outcome_unknown`으로 기록한다(고정 코드만 저장, 본문은 저장하지 않음). 클라이언트에는 핸들러의 일반 500 대신 409 `idempotency_outcome_unknown`을 준다. | 시간이 아니라 결과 관측으로만 키를 놓는다(REQ-009). 실제 go-ldap `Conn.Modify`를 닫힌 소켓에 대고 만든 오류 모양으로 시험한다(`TestIdempotency_RealGoLDAPLostResponseIsOutcomeUnknown`). |
+| D216-21 | 백업 시작에서는 job 기록 생성과 키 조회가 한 임계 구역이다. 같은 키 + 같은 요청이 **실행 중**이어도 409 `idempotency_key_conflict`가 아니라 같은 job의 202 재생이다(job이 이미 존재하므로 충돌 상태가 없다). 키 조회는 `backup_busy` 판정보다 먼저다. 보관은 job 보관 정책(200건·90일)을 따르므로 가지치기된 job의 키는 새 요청이 된다. | D216-12 ①⑦. |
+| D216-22 | **키가 붙은 요청의 본문은 정규화할 수 없으면 핸들러 실행 전에 400 `invalid_request`로 거부한다(리뷰 반영 개정).** 거부 대상: 첫 JSON 값 뒤의 데이터(핸들러의 디코더는 첫 값만 읽는다), 잘못된 JSON, 같은 필드명이 두 번이거나 대소문자만 다른 중복(`encoding/json`이 대소문자를 접어 나중 값이 이긴다 — 별칭으로 지문은 같고 실효 비밀번호는 다른 경우를 막는다), 어느 깊이든 포함, DELETE의 본문(핸들러가 무시함), `application/json`·`application/merge-patch+json`이 아닌 Content-Type, 64KiB 초과. 통과한 본문은 키 정렬 정규형과 디코드 결과가 일대일이다. 거부된 요청은 키를 점유하지 않는다. 키 형식 검사는 스위치 확인보다 먼저다. | 지문과 실제 실행되는 본문이 달라질 수 없게 한다. 앞선 "핸들러가 400을 낼 것"이라는 가정은 틀렸다. |
+| D216-23 | 이 저장소의 차트에는 `values.schema.json`이 없다. 새 값 `ui.idempotency.enabled`는 `values.yaml` 주석·차트 README에 문서화하고 `verify-chart-schema.sh`(kubeconform) 프로필 `ui-idempotency`와 `scripts/test/test-chart-idempotency-render.sh`(CI 연결)로 검증한다. | 스키마 파일 신설은 범위 밖. |
+
+**두 번째 리뷰 반영(D216-19/20 보강):** 지문은 숫자를 `json.Number` 리터럴로 취급한다(float64 정밀도 손실로 `9007199254740992`와 `…993`이 같아지지 않음; `1.0`과 `1`은 보수적으로 다른 요청). 사용자 생성에서 보상 삭제가 검증된 `rolled_back`은 비밀번호 단계의 원인(53 거부, 응답 유실 등)과 무관하게 확정 실패라 키를 놓고, `partial`·`identity_changed`·`unknown`은 기록으로 남는다.
+
+**키 지속성(정확한 진술):** 백업 시작의 키만 영속 job 기록에 있어 백엔드 재시작 뒤에도 같은 job을 돌려준다. 사용자·그룹·엔트리 이동·비밀번호 라우트의 키는 프로세스 메모리에만 있어 재시작하면 잊힌다(재시도는 새 요청으로 실행되어 생성은 409, 삭제는 404가 된다). 라이브 시험이 두 경우를 각각 확인한다.
+
+Part B에서 **하지 않은 것**: 프런트(T-018: 키·`If-Match` 전송, 412 처리), ADR(T-031), 운영 가이드·릴리스 노트(T-032), #217 계약 테스트 표의 별도 문서화(T-016; `httpapi/backup_idempotency_test.go`가 같은 항목을 검증), 환경 변수로 저장소 상한 조정. 증거는 [EVIDENCE.md](EVIDENCE.md)의 "Part B".

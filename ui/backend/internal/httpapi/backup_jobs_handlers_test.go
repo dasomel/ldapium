@@ -28,17 +28,25 @@ type jobsHarness struct {
 	e    *echo.Echo
 	m    *backup.Manager
 	dir  string
+	tt   *testing.T
 	call func(method, path, dn, origin, content string) *httptest.ResponseRecorder
+	// callWith is call plus extra request headers.
+	callWith func(method, path, dn, origin, content string, hdr map[string]string) *httptest.ResponseRecorder
 }
 
 func newJobsHarness(t *testing.T, workerSource string) *jobsHarness {
+	return newJobsHarnessIn(t, t.TempDir(), workerSource, nil)
+}
+
+// newJobsHarnessIn builds the harness over dir (a second call with the same dir
+// is a restart of the controller) and lets a test adjust the Server (keys).
+func newJobsHarnessIn(t *testing.T, dir, workerSource string, adjust func(*Server)) *jobsHarness {
 	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not found in PATH")
 	}
 	python, _ = filepath.Abs(python)
-	dir := t.TempDir()
 	op := filepath.Join(dir, "operator.json")
 	cfg := fmt.Sprintf(`{"root":%q,"instance_id":"inst-1","destinations":[{"id":"local","name":"Local","type":"local"}],"log_paths":["/registered/log"]}`, filepath.Join(dir, "root"))
 	if err := os.WriteFile(op, []byte(cfg), 0600); err != nil {
@@ -52,7 +60,10 @@ func newJobsHarness(t *testing.T, workerSource string) *jobsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{backups: m, cfg: config.Config{BackupAdminDNs: []string{"cn=admin"}}}
+	s := &Server{backups: m, cfg: config.Config{BackupAdminDNs: []string{"cn=admin", "cn=admin2"}}}
+	if adjust != nil {
+		adjust(s)
+	}
 	e := echo.New()
 	e.HTTPErrorHandler = apiErrorHandler(e.DefaultHTTPErrorHandler)
 	api := e.Group("/api", func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -63,12 +74,18 @@ func newJobsHarness(t *testing.T, workerSource string) *jobsHarness {
 		}
 	})
 	s.backupRoutes(api)
-	h := &jobsHarness{e: e, m: m, dir: dir}
+	h := &jobsHarness{e: e, m: m, dir: dir, tt: t}
 	h.call = func(method, path, dn, origin, content string) *httptest.ResponseRecorder {
+		return h.callWith(method, path, dn, origin, content, nil)
+	}
+	h.callWith = func(method, path, dn, origin, content string, hdr map[string]string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(content))
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("X-Test-DN", dn)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
 		w := httptest.NewRecorder()
 		e.ServeHTTP(w, r)
 		return w
