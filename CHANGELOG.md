@@ -192,8 +192,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   an existing entry without the rule, stored `olcAuthzRegexp`/`olcAuthIDRewrite`,
   `olcAuthzPolicy` other than `none`, `olcTLSVerifyClient` other than `never`
   (so `prepare` and `LDAP_TLS_MUTUAL_AUTH` do not combine), any entry with
-  `authzTo`/`authzFrom`, a stored `olcRootDN` equal to the reserved DN, a root DN
-  with quotes/backslashes/non-ASCII, and a serverID-1 start on a fresh volume.
+  `authzTo`/`authzFrom`, a stored `olcRootDN` (any database) or replication bind
+  DN equal to the reserved DN, a root DN with quotes/backslashes/non-ASCII, and a
+  serverID-1 start on a fresh volume. DNs are compared as slapd normalizes them
+  (`slapdn -N`: case, spaces, hex escapes, quoting, multivalued RDN order), and a
+  DN that cannot be parsed is refused. The identity's `olcLimits` rule is always
+  placed FIRST (limits are first-match) and any other stored rule for the identity
+  is replaced, so an earlier `size=1` rule cannot cap it.
   `admin` stays byte-identical; `dedicated` still refuses to start. Rollback: an
   older image or `admin` leaves the rule in place, which is harmless while no
   entry exists at the reserved DN.

@@ -111,14 +111,20 @@ case "$LDAP_REPLICATION_IDENTITY" in
     # REQ-014: the reserved DN must not be a rootDN (rootDN bypasses ACLs).
     # LDAP_ADMIN_DN is compared here; `prepare` also compares every stored
     # olcRootDN in section 3a2 (the config read happens there).
-    ldap_dn_norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[[:space:]]*,[[:space:]]*/,/g' -e 's/[[:space:]]*=[[:space:]]*/=/g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
-    [ "$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}")" != "$(ldap_dn_norm "$LDAP_ADMIN_DN")" ] ||
-      die "LDAP_ADMIN_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN> (a rootDN bypasses ACLs)"
-    ldap_repl_pw="${LDAP_REPLICATION_PASSWORD:-}"
-    if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
-      [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
-      ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
-    fi
+    # DN equivalence is slapd's, not a string compare: `slapdn -N` prints the
+    # DN as slapd normalizes it (case, insignificant spaces, \2c vs \, vs "a,b",
+    # multivalued RDN order), so two spellings of one DN compare equal. It needs
+    # a schema, and the volumes may be empty here, so it runs on a throwaway
+    # config that only includes the stock schemas. A DN that cannot be parsed
+    # fails (callers refuse with a fixed message).
+    ldap_dn_norm() {
+      _dnc=$(mktemp) || return 1
+      printf 'include /etc/openldap/schema/core.schema\ninclude /etc/openldap/schema/cosine.schema\ninclude /etc/openldap/schema/inetorgperson.schema\n' > "$_dnc"
+      _dnr=0
+      slapdn -f "$_dnc" -N "$1" 2>/dev/null || _dnr=$?
+      rm -f "$_dnc"
+      return "$_dnr"
+    }
     if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
       # The root DN is written into an ACL value and an LDIF line below: keep it
       # to printable ASCII without quote or backslash so the rule cannot be
@@ -128,6 +134,25 @@ case "$LDAP_REPLICATION_IDENTITY" in
       case "$LDAP_ROOT_DN" in
         *\"*|*\\*) die "LDAP_REPLICATION_IDENTITY=prepare requires LDAP_ROOT_DN without double quotes or backslashes" ;;
       esac
+    fi
+    ri_id_norm=$(ldap_dn_norm "cn=replicator,${LDAP_ROOT_DN}") ||
+      die "cannot normalize the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>; refusing"
+    ri_admin_norm=$(ldap_dn_norm "$LDAP_ADMIN_DN") ||
+      die "cannot normalize LDAP_ADMIN_DN; refusing"
+    [ "$ri_id_norm" != "$ri_admin_norm" ] ||
+      die "LDAP_ADMIN_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN> (a rootDN bypasses ACLs)"
+    if [ -n "${LDAP_REPLICATION_BIND_DN:-}" ]; then
+      ri_bind_norm=$(ldap_dn_norm "$LDAP_REPLICATION_BIND_DN") ||
+        die "cannot normalize LDAP_REPLICATION_BIND_DN; refusing"
+      [ "$ri_id_norm" != "$ri_bind_norm" ] ||
+        die "LDAP_REPLICATION_BIND_DN must not equal the reserved replication identity DN cn=replicator,<LDAP_ROOT_DN>"
+    fi
+    ldap_repl_pw="${LDAP_REPLICATION_PASSWORD:-}"
+    if [ -n "${LDAP_REPLICATION_PASSWORD_FILE:-}" ]; then
+      [ -r "$LDAP_REPLICATION_PASSWORD_FILE" ] || die "LDAP_REPLICATION_PASSWORD_FILE is set but not readable: ${LDAP_REPLICATION_PASSWORD_FILE}"
+      ldap_repl_pw=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
+    fi
+    if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
       # D61: mTLS client authentication (olcAuthzRegexp) can map a certificate
       # subject onto the identity DN, so it cannot coexist with the identity.
       case "${LDAP_TLS_MUTUAL_AUTH:-false}" in
@@ -1337,17 +1362,24 @@ if [ "$LDAP_REPLICATION_IDENTITY" = "prepare" ]; then
     ri_have_lim=0
     ri_stored0=$(printf '%s\n' "$ri_mdb" | sed -n 's/^olcAccess: {0}/{0}/p')
     [ "$(ri_lc "$ri_stored0")" != "$(ri_lc "$ri_acl")" ] || ri_have_acl=1
-    ri_lim_stored=$(printf '%s\n' "$ri_mdb" | grep -iF "olcLimits: " | grep -iF "$ri_sel" || true)
-    [ -z "$ri_lim_stored" ] || ri_have_lim=1
+    # olcLimits: the first rule whose selector matches wins, so the identity's
+    # rule must be the FIRST stored value; the stored values are read in order.
+    ri_limits=$(printf '%s\n' "$ri_mdb" | sed -n 's/^olcLimits: //p')
+    ri_first_lim=$(printf '%s\n' "$ri_limits" | sed -n '1p')
+    [ "$(ri_lc "$ri_first_lim")" != "$(ri_lc "$ri_lim")" ] || ri_have_lim=1
   }
   ri_scan
 
-  # REQ-014 (stored part): the identity DN must not be any rootDN.
-  ri_want_dn=$(ldap_dn_norm "$ri_dn")
-  ri_roots=$(printf '%s\n' "$ri_cfg" | sed -n 's/^olcRootDN: //p')
+  # REQ-014 (stored part): the identity DN must not be any rootDN (all databases:
+  # main, config, accesslog, monitor) nor the stored syncrepl bind DN. Compared
+  # as slapd-normalized DNs; an unparseable stored DN refuses.
+  ri_want_dn=$(ldap_dn_norm "$ri_dn") || die "cannot normalize the reserved replication identity DN ${ri_dn}; refusing"
+  ri_roots=$(printf '%s\n' "$ri_cfg" | sed -n -e 's/^olcRootDN: //p' -e 's/^olcSyncrepl: .*binddn="\([^"]*\)".*$/\1/p')
   while IFS= read -r ri_root; do
-    [ "$(ldap_dn_norm "$ri_root")" != "$ri_want_dn" ] ||
-      die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN (a rootDN bypasses ACLs); refusing replication identity prepare"
+    [ -n "$ri_root" ] || continue
+    ri_root_norm=$(ldap_dn_norm "$ri_root") || die "cannot normalize a stored rootDN/bind DN; refusing replication identity prepare"
+    [ "$ri_root_norm" != "$ri_want_dn" ] ||
+      die "the reserved replication identity DN ${ri_dn} is a stored olcRootDN or replication bind DN (a rootDN bypasses ACLs); refusing replication identity prepare"
   done <<EOF
 $ri_roots
 EOF
@@ -1399,6 +1431,14 @@ EOF
         printf 'add: olcAccess\nolcAccess: %s\n-\n' "$ri_acl"
       fi
       if [ "$ri_have_lim" -eq 0 ]; then
+        # Drop every other stored rule for the identity (wrong values, wrong
+        # position), then put ours at the front: first match wins.
+        ri_old=$(printf '%s\n' "$ri_limits" | grep -iF "$ri_sel" || true)
+        if [ -n "$ri_old" ]; then
+          printf 'delete: olcLimits\n'
+          printf '%s\n' "$ri_old" | while IFS= read -r ri_old_line; do printf 'olcLimits: %s\n' "$ri_old_line"; done
+          printf -- '-\n'
+        fi
         printf 'add: olcLimits\nolcLimits: %s\n-\n' "$ri_lim"
       fi
     } > "$ri_ldif"

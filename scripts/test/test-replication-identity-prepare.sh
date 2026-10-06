@@ -58,8 +58,10 @@ check() { # label expected actual
 
 # Every container and volume is registered BEFORE it is created, so the trap
 # removes it even when the run is interrupted mid-way.
-reg_containers=("$n1" "$n2" "$ab" "$rv")
-reg_vols=("${n1}-cfg" "${n1}-data" "${n2}-cfg" "${n2}-data" "${ab}-cfg" "${ab}-data" "${rv}-cfg" "${rv}-data" "$certs")
+lv="ldapium-ridprep-lv-${suffix}"
+xv="ldapium-ridprep-xv-${suffix}"
+reg_containers=("$n1" "$n2" "$ab" "$rv" "$lv" "$xv")
+reg_vols=("${n1}-cfg" "${n1}-data" "${n2}-cfg" "${n2}-data" "${ab}-cfg" "${ab}-data" "${rv}-cfg" "${rv}-data" "${lv}-cfg" "${lv}-data" "${xv}-cfg" "${xv}-data" "$certs")
 
 # shellcheck disable=SC2317,SC2329 # invoked via the trap below
 cleanup() {
@@ -451,6 +453,23 @@ replace: olcRootDN
 olcRootDN: ${admin}
 EOF
 
+# Stored rootDN spelled differently from the reserved DN (Part 5, existing volume).
+for variant in 'cn=replic\61tor,dc=example,dc=org' 'cn="replicator",dc=example,dc=org' 'CN=Replicator , DC=EXAMPLE , DC=ORG' 'cn=replicator,dc=example,dc=o\72g'; do
+  mod_cfg <<EOF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+replace: olcRootDN
+olcRootDN: ${variant}
+EOF
+  refuse_case "stored rootDN '${variant}' equals the reserved DN" "is a stored olcRootDN or replication bind DN"
+done
+mod_cfg <<EOF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+replace: olcRootDN
+olcRootDN: ${admin}
+EOF
+
 mod_cfg <<EOF
 dn: olcDatabase={1}mdb,cn=config
 changetype: modify
@@ -513,6 +532,152 @@ fresh_refuse() { # label fragment env...
 fresh_refuse "prepare refuses to bootstrap serverID 1" "refuses to bootstrap serverID 1" -e LDAP_ROOT_DN="$base" -e LDAP_SERVER_ID=1
 fresh_refuse "prepare + LDAP_TLS_MUTUAL_AUTH is refused" "cannot be combined with LDAP_TLS_MUTUAL_AUTH" -e LDAP_ROOT_DN="$base" -e LDAP_SERVER_ID=2 -e LDAP_TLS_MUTUAL_AUTH=true
 fresh_refuse "prepare + quoted LDAP_ROOT_DN is refused" "without double quotes or backslashes" -e 'LDAP_ROOT_DN=dc=a"b,dc=org' -e LDAP_SERVER_ID=2
+
+# --- Part 5: DN equivalence is slapd's (slapdn -N), not a string compare -------
+# Each of these spells the reserved DN (or the root DN) differently from the
+# other side; the old string compare accepted the internal-space, hex-escape,
+# quoted and multivalued-RDN-order forms, which let a rootDN alias the identity.
+eqmsg="must not equal the reserved replication identity DN"
+# LDAP_ADMIN_DN has to sit under LDAP_ROOT_DN (string check) and start with cn=,
+# so the env-level variants differ from the reserved DN in value case, escapes,
+# quotes and the space after a comma.
+fresh_refuse "DN equivalence: value case" "$eqmsg" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_ADMIN_DN=cn=Replicator,dc=example,dc=org' -e LDAP_SERVER_ID=2
+fresh_refuse "DN equivalence: space after a comma" "$eqmsg" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_ADMIN_DN=cn=replicator, dc=example,dc=org' -e LDAP_SERVER_ID=2
+fresh_refuse "DN equivalence: hex-pair escape (replic\\61tor)" "$eqmsg" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_ADMIN_DN=cn=replic\61tor,dc=example,dc=org' -e LDAP_SERVER_ID=2
+fresh_refuse "DN equivalence: quoted value" "$eqmsg" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_ADMIN_DN=cn="replicator",dc=example,dc=org' -e LDAP_SERVER_ID=2
+fresh_refuse "DN equivalence: LDAP_REPLICATION_BIND_DN" "LDAP_REPLICATION_BIND_DN must not equal" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_REPLICATION_BIND_DN=CN=replicator,dc=example,DC=org' -e LDAP_SERVER_ID=2
+fresh_refuse "unparseable LDAP_ADMIN_DN is refused" "cannot normalize LDAP_ADMIN_DN" \
+  -e LDAP_ROOT_DN="$base" -e 'LDAP_ADMIN_DN=cn=\zz,dc=example,dc=org' -e LDAP_SERVER_ID=2
+# slapd's own normalization of the forms a string compare cannot see.
+dn_norm() { docker run --rm -v "${certs}:/certs:ro" --entrypoint slapdn "$image" -f /certs/s.conf -N "$1" 2>&1; }
+docker run --rm --user 0 -v "${certs}:/certs" --entrypoint sh "$image" -c \
+  "printf 'include /etc/openldap/schema/core.schema\ninclude /etc/openldap/schema/cosine.schema\n' > /certs/s.conf"
+check "slapdn: hex escape, \\, and quoted comma are one DN" "cn=a\\2Cb,dc=x" "$(dn_norm 'cn=a\2cb,dc=x')"
+check "slapdn: backslash-comma form" "cn=a\\2Cb,dc=x" "$(dn_norm 'cn=a\,b,dc=x')"
+check "slapdn: quoted form" "cn=a\\2Cb,dc=x" "$(dn_norm 'cn="a,b",dc=x')"
+check "slapdn: internal spaces (dc=exa mple = dc=exa  mple; the image cannot bootstrap such a suffix, so no live volume)" "$(dn_norm 'dc=exa mple')" "$(dn_norm 'dc=exa  mple')"
+check "slapdn: multivalued RDN order" "$(dn_norm 'cn=a+uid=b,dc=x')" "$(dn_norm 'uid=b+cn=a,dc=x')"
+
+# Stored rootDN equal to the reserved DN under another spelling: the repro that
+# let the identity bind in plaintext. alias_case <label> <root DN> <stored rootDN>:
+# bootstrap in admin mode, store the aliased rootDN offline, prove in admin mode
+# that it binds in plaintext and can ADD (what the TLS-only read-only identity
+# must never be able to do), then start with prepare, which must refuse.
+alias_case() {
+  local label="$1" root="$2" alias="$3" xw=0 xout
+  local envs=(-v "${xv}-cfg:/etc/openldap/slapd.d" -v "${xv}-data:/var/lib/openldap/data" -e "LDAP_ROOT_DN=${root}" -e LDAP_ADMIN_PASSWORD="$pw"
+    -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 -e "LDAP_REPLICATION_PEERS=ldap://${xv}:389,ldap://${xv}-peer:389")
+  docker volume rm -f "${xv}-cfg" "${xv}-data" >/dev/null
+  docker volume create "${xv}-cfg" >/dev/null
+  docker volume create "${xv}-data" >/dev/null
+  docker run -d --name "$xv" "${envs[@]}" "$image" >/dev/null
+  if ! wait_ready "$xv"; then bad "${label}: admin-mode volume never ready"; docker logs "$xv" 2>&1 | tail -n 5 >&2; docker rm -f "$xv" >/dev/null; return; fi
+  docker rm -f "$xv" >/dev/null
+  docker run --rm -i -v "${xv}-cfg:/etc/openldap/slapd.d" -v "${xv}-data:/var/lib/openldap/data" --entrypoint slapmodify "$image" -n 0 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+replace: olcRootDN
+olcRootDN: ${alias}
+EOF
+  docker run -d --name "$xv" "${envs[@]}" "$image" >/dev/null
+  if ! wait_ready "$xv"; then bad "${label}: aliased admin-mode volume never ready"; docker logs "$xv" 2>&1 | tail -n 5 >&2; docker rm -f "$xv" >/dev/null; return; fi
+  check "${label}: (admin mode) the aliased rootDN binds in plaintext" "0" \
+    "$(rc=0; docker exec "$xv" ldapwhoami -x -H ldap://localhost -D "cn=replicator,${root}" -w "$pw" >/dev/null 2>&1 || rc=$?; echo "$rc")"
+  check "${label}: (admin mode) the aliased rootDN can add entries in plaintext" "0" \
+    "$(rc=0; docker exec -i "$xv" ldapadd -x -H ldap://localhost -D "cn=replicator,${root}" -w "$pw" >/dev/null 2>&1 <<EOF || rc=$?
+dn: cn=evil,${root}
+objectClass: organizationalRole
+cn: evil
+EOF
+echo "$rc")"
+  docker rm -f "$xv" >/dev/null
+  docker run -d --name "$xv" "${envs[@]}" -e LDAP_REPLICATION_IDENTITY=prepare "$image" >/dev/null
+  while [ "$(docker inspect -f '{{.State.Running}}' "$xv" 2>/dev/null || echo gone)" = "true" ] && [ "$xw" -lt "$timeout_s" ]; do sleep 1; xw=$((xw + 1)); done
+  xout="$(docker logs "$xv" 2>&1)"
+  check "${label}: prepare refuses to start" "1" "$(docker inspect -f '{{.State.ExitCode}}' "$xv")"
+  if [[ "$xout" == *"is a stored olcRootDN or replication bind DN"* ]]; then ok "${label}: fixed refusal message"; else bad "${label}: message missing; got $(printf '%s' "$xout" | tail -n 2)"; fi
+  check "${label}: no identity rule stored" "0" \
+    "$(docker run --rm -v "${xv}-cfg:/etc/openldap/slapd.d" -v "${xv}-data:/var/lib/openldap/data" --entrypoint slapcat "$image" -n 0 -F /etc/openldap/slapd.d -o ldif-wrap=no | grep -c 'ssf=128' || true)"
+  docker rm -f "$xv" >/dev/null
+}
+alias_case "alias, hex-escaped and cased RDN" 'dc=example,dc=org' 'CN=Replic\61tor,DC=Example,DC=Org'
+
+# --- Part 6: olcLimits are first-match, so the identity rule must be first ----
+offv() { docker run --rm -i -v "${lv}-cfg:/etc/openldap/slapd.d" -v "${lv}-data:/var/lib/openldap/data" --entrypoint "$1" "$image" "${@:2}"; }
+lv_start() {
+  docker run -d --name "$lv" -v "${lv}-cfg:/etc/openldap/slapd.d" -v "${lv}-data:/var/lib/openldap/data" \
+    -v "${certs}:/certs:ro" -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem \
+    -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 \
+    -e "LDAP_REPLICATION_PEERS=ldap://${lv}:389,ldap://${lv}-peer:389" "$@" "$image" >/dev/null
+  wait_ready "$lv"
+}
+lv_limits() { docker exec "$lv" slapcat -n 0 -o ldif-wrap=no | sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' | grep '^olcLimits: ' || true; }
+lv_search() { # bind-dn password -> "rc count" of a subtree search over TLS
+  local rc=0 out
+  out="$(docker exec -e LDAPTLS_CACERT=/certs/c.pem -e LDAPTLS_REQCERT=never "$lv" ldapsearch -x -LLL -H ldaps://localhost -D "$1" -w "$2" -b "$base" '(objectClass=*)' dn 2>/dev/null)" || rc=$?
+  printf '%s %s' "$rc" "$(printf '%s\n' "$out" | grep -c '^dn:' || true)"
+}
+lv_start; docker rm -f "$lv" >/dev/null
+# A global size=1 time=1 rule is already stored ahead of everything.
+offv slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcLimits
+olcLimits: {0}* size=1 time=1
+EOF
+lv_start -e LDAP_REPLICATION_IDENTITY=prepare || { bad "limits: prepare with a pre-existing global rule never ready"; docker logs "$lv" 2>&1 | tail -n 8 >&2; }
+check "limits: ours is the FIRST stored rule, ahead of the global size=1 rule" "olcLimits: {0}${want_lim}" "$(lv_limits | sed -n '1p')"
+check "limits: the global rule is kept behind it" "olcLimits: {1}* size=1 time=1" "$(lv_limits | sed -n '2p')"
+docker rm -f "$lv" >/dev/null
+for u in u1 u2 u3 u4; do
+  offv slapmodify -n 1 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: uid=${u},${base}
+changetype: add
+objectClass: inetOrgPerson
+uid: ${u}
+cn: ${u}
+sn: ${u}
+userPassword: ${alicepw}
+EOF
+done
+offv slapmodify -n 1 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: ${iddn}
+changetype: add
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: replicator
+userPassword: ${idpw}
+EOF
+lv_start -e LDAP_REPLICATION_IDENTITY=prepare || bad "limits: restart with entry + rule never ready"
+id_res="$(lv_search "$iddn" "$idpw")"
+check "limits: identity gets every entry (rc 0, >1 entries) despite the global size=1 rule" "0 true" "${id_res%% *} $([ "${id_res##* }" -gt 5 ] && echo true || echo false)"
+check "limits: an ordinary user still hits the size limit (rc 4)" "4" "$(lv_search "uid=u1,${base}" "$alicepw" | cut -d' ' -f1)"
+docker rm -f "$lv" >/dev/null
+# A pre-existing identity rule with wrong values, behind a global rule: replaced.
+offv slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null <<EOF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+replace: olcLimits
+olcLimits: {0}* size=1 time=1
+olcLimits: {1}dn.exact="${iddn}" size=1 time=1
+EOF
+lv_start -e LDAP_REPLICATION_IDENTITY=prepare || { bad "limits: wrong identity rule never ready"; docker logs "$lv" 2>&1 | tail -n 8 >&2; }
+check "limits: wrong identity rule replaced, ours first" "olcLimits: {0}${want_lim}" "$(lv_limits | sed -n '1p')"
+check "limits: exactly one rule for the identity remains" "1" "$(lv_limits | grep -c "dn.exact=\"${iddn}\"" || true)"
+id_res="$(lv_search "$iddn" "$idpw")"
+check "limits: identity unlimited again after the replacement" "0 true" "${id_res%% *} $([ "${id_res##* }" -gt 5 ] && echo true || echo false)"
+# Correct rule already first: restart is a no-op and the limits do not change.
+lim_before="$(lv_limits)"
+docker restart "$lv" >/dev/null
+wait_ready "$lv" || bad "limits: restart never ready"
+check "limits: correct rule first, restart leaves olcLimits unchanged" "$lim_before" "$(lv_limits)"
+if [[ "$(docker logs "$lv" 2>&1)" == *"already installed — nothing to do"* ]]; then ok "limits: restart logged as a no-op"; else bad "limits: restart not a no-op"; fi
+docker rm -fv "$lv" >/dev/null
 
 if [ "$fail" -eq 0 ]; then
   echo "replication-identity prepare test passed"
