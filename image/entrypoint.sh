@@ -1517,11 +1517,19 @@ fi
 #          the config with the stored values already cut out, and nothing in the real
 #          volume is touched until none of them applies;
 #        - the repair itself is the last step before the ACL install and is crash-safe:
-#          the new file is written next to the original (mode 600), checked, a backup is
-#          taken, both are flushed, and only then does an atomic rename replace the
-#          original; a failure at any step removes the temporary files and leaves the
-#          original as it was, and a failed verification puts the backup back. The
-#          backup (olcDatabase={1}mdb.ldif.bak-<UTC time>) is kept, the newest only.
+#          the new file is written next to the original (mode 600), checked, a rollback
+#          copy and a REDACTED backup are taken, everything is flushed, and only then does
+#          an atomic rename replace the original; a failure at any step removes the
+#          temporary files and leaves the original as it was, and a failed verification
+#          puts the rollback copy back.
+#        - secrets: the stored olcSyncrepl being cut out usually holds the previous (admin)
+#          password in clear text. The rollback copy exists only until the repaired config
+#          is verified (then it is deleted; a crash leaves it, and the next start deletes
+#          it once the live config loads). The backup that is kept (the newest only,
+#          olcDatabase={1}mdb.ldif.bak-<UTC time>) has every credentials= value and
+#          olcRootPW replaced by REDACTED, so it documents the structure, never a secret
+#          (restoring it needs the environment to supply the credentials). Mode 600 is not
+#          a protection here: slapd runs as the same uid.
 # ---------------------------------------------------------------------------
 ri_rdir="$CONFIG_DIR"
 ri_pending=""
@@ -1541,14 +1549,44 @@ ri_cut_syncrepl() {
   [ "$(wc -l < "$2")" -lt "$(wc -l < "$1")" ] || return 1
   return 0
 }
+# ri_redact <source> <destination>: <source> unwrapped (LDIF continuation lines joined, so a
+# value split across lines cannot hide), every credentials= value and olcRootPW replaced by
+# REDACTED, led by a marker line.
+ri_redact() {
+  awk 'function flush() {
+      if (!have) return
+      gsub(/credentials="[^"]*"/, "credentials=\"REDACTED\"", buf)
+      gsub(/credentials=[^" ][^ ]*/, "credentials=\"REDACTED\"", buf)
+      sub(/^olcRootPW::? .*/, "olcRootPW: REDACTED", buf)
+      print buf
+    }
+    BEGIN { have = 0; print "# ldapium repair backup: credentials redacted" }
+    /^ / { buf = buf substr($0, 2); next }
+    { flush(); buf = $0; have = 1 }
+    END { flush() }' "$1" > "$2" || return 1
+  [ -s "$2" ] || return 1
+  if grep -o 'credentials=[^ ]*' "$2" | grep -q -v -x 'credentials="REDACTED"'; then return 1; fi
+  return 0
+}
 if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ] && [ -f "$MARKER" ]; then
+  # Leftovers of a crashed earlier repair (they can hold the previous password): the
+  # throwaway config copies in /tmp are always removed, the rest only below, once the
+  # live config is known to load.
+  rm -rf /tmp/ldapium-repair.*
+  if slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
+    rm -f "${ri_cf}.repair-tmp" "${ri_cf}.repair-orig"
+    for ri_oldbak in "${ri_cf}".bak-*; do
+      [ -e "$ri_oldbak" ] || continue
+      if ! head -n 1 "$ri_oldbak" | grep -q '^# ldapium repair backup: credentials redacted'; then rm -f "$ri_oldbak"; fi
+    done
+  fi
   if ! slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
     [ -f "$ri_cf" ] || die "replication identity dedicated: cn=config is unreadable and the main database config is missing; refusing to start"
     grep -q '^olcSyncrepl:' "$ri_cf" ||
       die "replication identity dedicated: cn=config is unreadable and the cause is not a stored olcSyncrepl; refusing to start"
     log "replication identity dedicated: stored olcSyncrepl makes cn=config unreadable; the checks run on a repaired copy first, the volume is only changed once none of them refuses"
     ri_cfail="replication identity dedicated: cannot evaluate the repaired configuration; nothing was modified; refusing to start"
-    ri_tmpd=$(mktemp -d) || die "$ri_cfail"
+    ri_tmpd=$(mktemp -d /tmp/ldapium-repair.XXXXXX) || die "$ri_cfail"
     trap 'rm -rf "$ri_tmpd"' EXIT
     cp -a "$CONFIG_DIR/." "$ri_tmpd/" || die "$ri_cfail"
     ri_cut_syncrepl "$ri_cf" "${ri_tmpd}/cn=config/olcDatabase={1}mdb.ldif" || die "$ri_cfail"
@@ -1561,20 +1599,26 @@ fi
 ri_apply_repair() {
   ri_nofix() { die "replication identity dedicated: $1; the stored configuration was not modified; refusing to start"; }
   ri_new="${ri_cf}.repair-tmp"
+  ri_full="${ri_cf}.repair-orig"
   ri_bak="${ri_cf}.bak-$(date -u +%Y%m%dT%H%M%SZ)"
-  rm -f "$ri_new"
+  rm -f "$ri_new" "$ri_full"
   (umask 077; ri_cut_syncrepl "$ri_cf" "$ri_new") || { rm -f "$ri_new"; ri_nofix "cannot prepare the repaired main database config"; }
-  cp -p "$ri_cf" "$ri_bak" || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot back up the main database config"; }
-  sync || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot flush the repaired config to disk"; }
-  mv "$ri_new" "$ri_cf" || { rm -f "$ri_new" "$ri_bak"; ri_nofix "cannot replace the main database config"; }
+  (umask 077; cp -p "$ri_cf" "$ri_full") || { rm -f "$ri_new" "$ri_full"; ri_nofix "cannot back up the main database config"; }
+  (umask 077; ri_redact "$ri_cf" "$ri_bak") || { rm -f "$ri_new" "$ri_full" "$ri_bak"; ri_nofix "cannot back up the main database config"; }
+  sync || { rm -f "$ri_new" "$ri_full" "$ri_bak"; ri_nofix "cannot flush the repaired config to disk"; }
+  mv "$ri_new" "$ri_cf" || { rm -f "$ri_new" "$ri_full" "$ri_bak"; ri_nofix "cannot replace the main database config"; }
   if ! sync || ! slapcat -n 0 -F "$CONFIG_DIR" >/dev/null 2>&1; then
-    mv "$ri_bak" "$ri_cf" || die "replication identity dedicated: the repaired config failed verification and the previous file could NOT be restored; it is kept as ${ri_bak}; refusing to start"
+    mv "$ri_full" "$ri_cf" || die "replication identity dedicated: the repaired config failed verification and the previous file could NOT be restored; it is kept as ${ri_full}; refusing to start"
+    rm -f "$ri_bak"
     die "replication identity dedicated: the repaired config failed verification; the previous main database config was restored; refusing to start"
   fi
+  # verified: the rollback copy (it holds the previous clear-text credentials) must not survive
+  rm -f "$ri_full"
+  [ ! -e "$ri_full" ] || die "replication identity dedicated: cannot remove the temporary rollback copy ${ri_full} (it holds the previous credentials); refusing to start"
   for ri_oldbak in "${ri_cf}".bak-*; do
     if [ "$ri_oldbak" != "$ri_bak" ]; then rm -f "$ri_oldbak"; fi
   done
-  log "replication identity dedicated: removed the unloadable stored olcSyncrepl/olcMultiProvider values (backup kept as ${ri_bak}); they are re-rendered from the environment below"
+  log "replication identity dedicated: removed the unloadable stored olcSyncrepl/olcMultiProvider values (redacted backup kept as ${ri_bak}, no credentials in it); they are re-rendered from the environment below"
 }
 
 # ---------------------------------------------------------------------------
