@@ -22,8 +22,9 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 - The login limiter's per-source state is now bounded (#270): hard cap
   `UI_LOGIN_LIMITER_MAX_ENTRIES` (default 10000), IPv6 clients grouped per /64, an
-  amortized expiry sweep, and eviction that never drops a currently blocked source
-  (if every slot is blocked, new sources get the blocked-source `429`). Thresholds,
+  amortized expiry sweep, and eviction of expired sources only
+  (an in-window source is never evicted; if every slot holds one, new sources get
+  the blocked-source `429` until a slot expires). Thresholds,
   window, `Retry-After` and response bodies are unchanged for normal traffic.
 - Machine bearer authentication, unit 1 of the staged rollout (#214, change package
   `machine-principal-auth`, **default off**): config parsing and startup validation of

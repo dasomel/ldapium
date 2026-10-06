@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"container/list"
 	"net/netip"
 	"sync"
 	"time"
@@ -14,8 +13,8 @@ import (
 const defaultLoginLimiterMaxEntries = 10000
 
 // minForcedSweepGap rate-limits the full sweep that runs when the table is
-// full of blocked entries, so a flood of new sources costs O(n) per second,
-// not O(n) per request.
+// full, so a flood of new sources costs O(n) per second, not O(n) per
+// request.
 const minForcedSweepGap = time.Second
 
 // loginLimiter throttles repeated failed password logins per client source.
@@ -32,28 +31,27 @@ const minForcedSweepGap = time.Second
 //
 // D270-1 (state bound): at most maxEntries sources are tracked. Only
 // recordFailure creates an entry, so only real failed binds consume slots.
-// When the table is full a new source evicts the least recently failed
-// entry that is NOT currently blocked (expired entries sit at the front of
-// that order, so they go first). An entry that has reached the limit within
-// its window is never evicted, so a flood of unique sources cannot reset a
-// blocked source's counter.
+// An entry is evictable ONLY once all its failures have aged out of the
+// window (expired); an in-window entry — blocked or merely under the limit —
+// is never evicted, so no flood of unique sources can reset or shrink any
+// source's counter.
 //
-// D270-2 (fail closed): if every slot is held by a blocked entry, a NEW
-// source is refused with the response a blocked source gets (allow returns
-// false, Retry-After = window, an upper bound). Cost: an attacker who can
-// make maxEntries distinct sources each fail `limit` times inside one window
-// can lock out new sources until entries age out; that is >= 100k failed
-// binds at the defaults. Fail-open was rejected because the same flood would
-// then bypass the throttle entirely.
+// D270-2 (fail closed): when the table is full of in-window entries (after a
+// sweep that reclaimed every expired one), a NEW source is refused with the
+// response a blocked source gets (allow returns false, Retry-After = window,
+// an upper bound); sources already tracked are unaffected. Cost: an attacker
+// who makes maxEntries distinct sources each fail once inside one window
+// (10000 failed binds per minute at the defaults) locks new sources out until
+// entries age out. Rejected alternatives: evicting the oldest in-window entry
+// (the same flood would reset blocked or victim counters) and failing open
+// (the flood bypasses the throttle). ppolicy lockout is per account and does
+// not replace this per-source throttle across many accounts.
 //
-// D270-3 (guarantee for non-blocked sources): a source under the limit keeps
-// its counter until maxEntries other distinct sources record a failure after
-// it (LRU by last failure) — not forever. Flooding that far costs the
-// attacker maxEntries failed binds and only buys back that one source's
-// remaining budget; ppolicy still holds per account. Eviction order is by
-// last classification, so an entry that dropped from blocked back under the
-// limit re-enters at the back: exact for floods, and the periodic sweep
-// removes anything expired within one window.
+// D270-3 (exact guarantee): while a source has a failure inside the window
+// its entry is never evicted and no other source can reset or reduce its
+// counter. Expired entries are reclaimed by a full sweep once per window and,
+// when the table is full, at most once per minForcedSweepGap, so a new source
+// can be refused for up to that gap after slots have actually expired.
 //
 // D270-4 (grouping): IPv6 sources are keyed by their /64 (see limiterKey),
 // IPv4-mapped IPv6 by the IPv4 address, so one /64 cannot occupy the table.
@@ -67,8 +65,6 @@ type loginLimiter struct {
 	window     time.Duration
 	maxEntries int
 	failures   map[string]*limiterEntry
-	// lru holds the non-blocked entries, least recently failed first.
-	lru *list.List
 	// nextSweep / lastForcedSweep drive the amortized expiry sweep.
 	nextSweep       time.Time
 	lastForcedSweep time.Time
@@ -79,8 +75,6 @@ type loginLimiter struct {
 type limiterEntry struct {
 	key   string
 	fails []time.Time
-	// elem is the entry's position in lru, nil while blocked.
-	elem *list.Element
 }
 
 // newLoginLimiter builds a limiter with the default state cap. limit <= 0
@@ -101,7 +95,6 @@ func newBoundedLoginLimiter(limit int, window time.Duration, maxEntries int) *lo
 		window:     window,
 		maxEntries: maxEntries,
 		failures:   make(map[string]*limiterEntry),
-		lru:        list.New(),
 		now:        time.Now,
 	}
 }
@@ -147,8 +140,8 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	l.maybeSweep(now)
 	e := l.failures[key]
 	if e == nil {
-		// D270-2: unknown source and no slot can ever be freed for it.
-		if len(l.failures) >= l.maxEntries && l.lru.Len() == 0 && !l.forcedSweep(now) {
+		// D270-2: unknown source and no expired slot can be reclaimed.
+		if !l.reclaim(now) {
 			return false, l.window
 		}
 		return true, 0
@@ -184,34 +177,27 @@ func (l *loginLimiter) recordFailure(ip string) {
 	}
 	if e == nil || l.failures[key] != e {
 		// New source (or one whose entry just expired away): needs a slot.
-		if !l.makeRoom(now) {
-			return // D270-2: all slots blocked; allow() already refuses new sources.
+		if !l.reclaim(now) {
+			return // D270-2: table full of in-window entries; allow() already refuses new sources.
 		}
 		e = &limiterEntry{key: key}
 		l.failures[key] = e
 	}
 	e.fails = append(e.fails, now)
-	if len(e.fails) >= l.limit {
-		l.unlink(e)
-	} else if e.elem == nil {
-		e.elem = l.lru.PushBack(e)
-	} else {
-		l.lru.MoveToBack(e.elem)
-	}
 }
 
-// makeRoom frees one slot for a new source if the table is full: expired /
-// least recently failed non-blocked entry first, then a rate-limited full
-// sweep. It reports whether a slot is available. Callers must hold l.mu.
-func (l *loginLimiter) makeRoom(now time.Time) bool {
+// reclaim reports whether a slot is available for a new source. If the table
+// is full it runs a rate-limited full sweep to free expired entries and then
+// re-evaluates the free-slot count. Callers must hold l.mu.
+func (l *loginLimiter) reclaim(now time.Time) bool {
 	if len(l.failures) < l.maxEntries {
 		return true
 	}
-	if front := l.lru.Front(); front != nil {
-		l.remove(front.Value.(*limiterEntry))
-		return true
+	if l.lastForcedSweep.IsZero() || now.Sub(l.lastForcedSweep) >= minForcedSweepGap {
+		l.lastForcedSweep = now
+		l.sweep(now)
 	}
-	return l.forcedSweep(now)
+	return len(l.failures) < l.maxEntries
 }
 
 // maybeSweep runs the amortized full sweep, at most once per window.
@@ -223,18 +209,7 @@ func (l *loginLimiter) maybeSweep(now time.Time) {
 	l.nextSweep = now.Add(l.window)
 }
 
-// forcedSweep sweeps when the table is full of blocked entries, at most once
-// per minForcedSweepGap, and reports whether a slot is now free.
-func (l *loginLimiter) forcedSweep(now time.Time) bool {
-	if l.lastForcedSweep.IsZero() || now.Sub(l.lastForcedSweep) >= minForcedSweepGap {
-		l.lastForcedSweep = now
-		l.sweep(now)
-	}
-	return len(l.failures) < l.maxEntries
-}
-
-// sweep prunes every entry and re-files it as blocked / non-blocked.
-// Callers must hold l.mu.
+// sweep prunes every entry, deleting expired ones. Callers must hold l.mu.
 func (l *loginLimiter) sweep(now time.Time) {
 	for _, e := range l.failures {
 		l.prune(e, now)
@@ -252,9 +227,8 @@ func ceilSeconds(d time.Duration) int {
 	return seconds
 }
 
-// prune drops failures older than the window, deletes the entry if none
-// remain, and otherwise re-files it as blocked (at/over the limit, never
-// evicted) or non-blocked (evictable). Callers must hold l.mu.
+// prune drops failures older than the window and deletes the entry if none
+// remain. Callers must hold l.mu.
 func (l *loginLimiter) prune(e *limiterEntry, now time.Time) {
 	cutoff := now.Add(-l.window)
 	i := 0
@@ -262,28 +236,9 @@ func (l *loginLimiter) prune(e *limiterEntry, now time.Time) {
 		i++
 	}
 	if i == len(e.fails) {
-		l.remove(e)
+		delete(l.failures, e.key)
 		e.fails = nil
 		return
 	}
 	e.fails = e.fails[i:]
-	if len(e.fails) >= l.limit {
-		l.unlink(e)
-	} else if e.elem == nil {
-		e.elem = l.lru.PushBack(e)
-	}
-}
-
-// unlink takes e out of the evictable list (it is blocked).
-func (l *loginLimiter) unlink(e *limiterEntry) {
-	if e.elem != nil {
-		l.lru.Remove(e.elem)
-		e.elem = nil
-	}
-}
-
-// remove deletes e from the table and the evictable list.
-func (l *loginLimiter) remove(e *limiterEntry) {
-	l.unlink(e)
-	delete(l.failures, e.key)
 }

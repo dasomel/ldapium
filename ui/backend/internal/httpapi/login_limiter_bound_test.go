@@ -20,6 +20,12 @@ func uniqueIP(i int) string {
 	return fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff)
 }
 
+func failN(l *loginLimiter, ip string, n int) {
+	for i := 0; i < n; i++ {
+		l.recordFailure(ip)
+	}
+}
+
 func TestLoginLimiterBound_GrowthIsCappedUnderUniqueIPFlood(t *testing.T) {
 	l, _ := boundedTestLimiter(3, time.Minute, 5)
 	for i := 0; i < 1000; i++ {
@@ -28,9 +34,6 @@ func TestLoginLimiterBound_GrowthIsCappedUnderUniqueIPFlood(t *testing.T) {
 			t.Fatalf("after %d sources the table holds %d entries, cap is 5", i+1, len(l.failures))
 		}
 	}
-	if l.lru.Len() != len(l.failures) {
-		t.Errorf("lru has %d entries, table %d: all non-blocked entries must be evictable", l.lru.Len(), len(l.failures))
-	}
 }
 
 func TestLoginLimiterBound_SweepEvictsExpiredEntries(t *testing.T) {
@@ -38,10 +41,7 @@ func TestLoginLimiterBound_SweepEvictsExpiredEntries(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		l.recordFailure(uniqueIP(i))
 	}
-	// Block one so the sweep must also handle blocked-then-expired entries.
-	for i := 0; i < 3; i++ {
-		l.recordFailure("192.0.2.1")
-	}
+	failN(l, "192.0.2.1", 3)
 	advance(2 * time.Minute)
 	// An unrelated, never-before-seen source triggers the amortized sweep.
 	if allowed, _ := l.allow("198.51.100.9"); !allowed {
@@ -54,8 +54,7 @@ func TestLoginLimiterBound_SweepEvictsExpiredEntries(t *testing.T) {
 
 func TestLoginLimiterBound_FloodCannotResetBlockedIP(t *testing.T) {
 	l, _ := boundedTestLimiter(2, time.Minute, 3)
-	l.recordFailure("192.0.2.1")
-	l.recordFailure("192.0.2.1")
+	failN(l, "192.0.2.1", 2)
 	if allowed, _ := l.allow("192.0.2.1"); allowed {
 		t.Fatal("setup: source must be blocked")
 	}
@@ -75,32 +74,83 @@ func TestLoginLimiterBound_FloodCannotResetBlockedIP(t *testing.T) {
 	}
 }
 
-func TestLoginLimiterBound_UnderThresholdCounterSurvivesChurnUntilCapOthers(t *testing.T) {
-	// Guarantee (D270-3): an under-limit source keeps its counter until cap
-	// other distinct sources have failed after it.
+// D270-3: a single fresh-address failure must not evict an in-window victim
+// when the table is otherwise full of blocked entries.
+func TestLoginLimiterBound_FreshSourceCannotEvictUnderThresholdVictim(t *testing.T) {
 	l, _ := boundedTestLimiter(3, time.Minute, 4)
-	l.recordFailure("192.0.2.1")
-	l.recordFailure("192.0.2.1")
-	for i := 0; i < 3; i++ { // table full: A + 3 others, nothing evicted yet
-		l.recordFailure(uniqueIP(i))
+	for i := 0; i < 3; i++ {
+		failN(l, uniqueIP(i), 3) // three blocked sources
 	}
-	if e := l.failures["192.0.2.1"]; e == nil || len(e.fails) != 2 {
-		t.Fatalf("counter lost before cap other sources churned: %+v", e)
+	failN(l, "192.0.2.1", 2) // victim at 2/3
+	if allowed, retryAfter := l.allow("192.0.2.200"); allowed || retryAfter != time.Minute {
+		t.Fatalf("fresh source = (%v, %v), want refused with Retry-After = window", allowed, retryAfter)
 	}
-	l.recordFailure("192.0.2.1") // third failure: blocked, leaves the evictable list
+	l.recordFailure("192.0.2.200")
+	e := l.failures["192.0.2.1"]
+	if e == nil || len(e.fails) != 2 {
+		t.Fatalf("victim's counter changed by a fresh source: %+v", e)
+	}
+	if _, ok := l.failures["192.0.2.200"]; ok {
+		t.Error("fresh source must not take a slot from an in-window entry")
+	}
+	// The victim itself is still tracked and can still use its budget.
+	if allowed, _ := l.allow("192.0.2.1"); !allowed {
+		t.Error("tracked under-limit source must stay allowed")
+	}
+	l.recordFailure("192.0.2.1")
 	if allowed, _ := l.allow("192.0.2.1"); allowed {
-		t.Fatal("third failure must block")
+		t.Error("victim must block on its third failure")
 	}
-	// A fresh under-limit source B is evicted once the table cycles past it.
-	l.recordFailure("192.0.2.77")
-	for i := 100; i < 104; i++ {
-		l.recordFailure(uniqueIP(i))
+}
+
+// A table full of under-threshold (non-blocked) in-window entries is also
+// full: no in-window entry is evictable.
+func TestLoginLimiterBound_NoInWindowEntryIsEvictable(t *testing.T) {
+	l, _ := boundedTestLimiter(3, time.Minute, 2)
+	l.recordFailure("192.0.2.1")
+	l.recordFailure("192.0.2.2")
+	if allowed, _ := l.allow("192.0.2.3"); allowed {
+		t.Error("full table of in-window entries must refuse a new source")
 	}
-	if _, ok := l.failures["192.0.2.77"]; ok {
-		t.Error("expected the least recently failed non-blocked source to be evicted after cap newer sources")
+	l.recordFailure("192.0.2.3")
+	if len(l.failures) != 2 || l.failures["192.0.2.1"] == nil || l.failures["192.0.2.2"] == nil {
+		t.Errorf("in-window entries were displaced: %v", l.failures)
 	}
-	if _, ok := l.failures["192.0.2.1"]; !ok {
-		t.Error("blocked source must never be evicted")
+}
+
+// Bug 2 regression: after the forced sweep frees expired slots the new source
+// is admitted in the same call, not on the next request.
+func TestLoginLimiterBound_ForcedSweepAdmitsNewSourceSameCall(t *testing.T) {
+	l, advance := boundedTestLimiter(1, time.Minute, 2)
+	failN(l, "192.0.2.1", 1)
+	failN(l, "192.0.2.2", 1)
+	l.nextSweep = l.now().Add(24 * time.Hour) // isolate the forced path
+	if allowed, _ := l.allow("192.0.2.3"); allowed {
+		t.Fatal("setup: full table must refuse")
+	}
+	advance(time.Minute + 2*time.Second) // expired, and past minForcedSweepGap
+	if allowed, _ := l.allow("192.0.2.3"); !allowed {
+		t.Fatal("expired slots were reclaimable but the new source was refused")
+	}
+	l.recordFailure("192.0.2.3")
+	if l.failures["192.0.2.3"] == nil || len(l.failures) != 1 {
+		t.Errorf("new source not recorded after reclaim: %v", l.failures)
+	}
+}
+
+func TestLoginLimiterBound_ForcedSweepIsRateLimited(t *testing.T) {
+	l, advance := boundedTestLimiter(1, time.Minute, 1)
+	failN(l, "192.0.2.1", 1)
+	l.nextSweep = l.now().Add(24 * time.Hour)
+	advance(time.Minute + 2*time.Second)
+	// Slot expired, but a sweep just ran: refused up to minForcedSweepGap (D270-3).
+	l.lastForcedSweep = l.now().Add(-time.Millisecond)
+	if allowed, _ := l.allow("192.0.2.2"); allowed {
+		t.Error("sweep within minForcedSweepGap must not repeat")
+	}
+	advance(minForcedSweepGap)
+	if allowed, _ := l.allow("192.0.2.2"); !allowed {
+		t.Error("new source must be admitted once the gap has passed")
 	}
 }
 
@@ -117,7 +167,6 @@ func TestLoginLimiterBound_IPv6GroupedBySlash64(t *testing.T) {
 	if len(l.failures) != 1 {
 		t.Errorf("one /64 occupies %d entries, want 1", len(l.failures))
 	}
-	// IPv4-mapped IPv6 shares the IPv4 source's budget.
 	l.recordFailure("10.0.0.1")
 	l.recordFailure("::ffff:10.0.0.1")
 	if allowed, _ := l.allow("10.0.0.1"); allowed {
@@ -125,46 +174,50 @@ func TestLoginLimiterBound_IPv6GroupedBySlash64(t *testing.T) {
 	}
 }
 
-func TestLoginLimiterBound_CapOne(t *testing.T) {
-	l, advance := boundedTestLimiter(2, time.Minute, 1)
-	l.recordFailure("192.0.2.1")
-	l.recordFailure("192.0.2.2") // evicts the non-blocked A
+func TestLoginLimiterBound_IPv6FloodWithinOneSlash64TakesOneSlot(t *testing.T) {
+	l, _ := boundedTestLimiter(3, time.Minute, 2)
+	for i := 0; i < 200; i++ {
+		l.recordFailure(fmt.Sprintf("2001:db8:0:1::%x", i+1))
+	}
 	if len(l.failures) != 1 {
-		t.Fatalf("len = %d, want 1", len(l.failures))
+		t.Fatalf("one /64 occupies %d slots, want 1", len(l.failures))
 	}
-	if _, ok := l.failures["192.0.2.2"]; !ok {
-		t.Fatal("new source should have replaced the non-blocked one")
-	}
-	l.recordFailure("192.0.2.2") // blocked now
-	if allowed, _ := l.allow("192.0.2.2"); allowed {
-		t.Fatal("setup: B must be blocked")
-	}
-	// D270-2: table full of blocked entries -> new source fails closed.
-	allowed, retryAfter := l.allow("192.0.2.3")
-	if allowed || retryAfter != time.Minute {
-		t.Errorf("new source = (%v, %v), want fail closed with Retry-After = window", allowed, retryAfter)
-	}
-	l.recordFailure("192.0.2.3")
-	if _, ok := l.failures["192.0.2.3"]; ok || len(l.failures) != 1 {
-		t.Error("recordFailure must not displace a blocked entry")
-	}
-	// After the window the blocked entry expires and the new source is admitted.
-	advance(time.Minute + time.Second)
-	if allowed, _ := l.allow("192.0.2.3"); !allowed {
-		t.Error("new source must be admitted once blocked entries expired")
-	}
-	l.recordFailure("192.0.2.3")
-	if _, ok := l.failures["192.0.2.3"]; !ok || len(l.failures) != 1 {
-		t.Error("expired blocked entry should have made room")
+	if allowed, _ := l.allow("192.0.2.1"); !allowed {
+		t.Error("a /64 flood must not exhaust the table")
 	}
 }
 
-func TestLoginLimiterBound_TinyCapFailsClosedWhenAllBlocked(t *testing.T) {
-	l, _ := boundedTestLimiter(1, time.Minute, 2)
+func TestLoginLimiterBound_CapOne(t *testing.T) {
+	l, advance := boundedTestLimiter(2, time.Minute, 1)
 	l.recordFailure("192.0.2.1")
+	l.recordFailure("192.0.2.2") // no slot: A is in-window
+	if _, ok := l.failures["192.0.2.2"]; ok || len(l.failures) != 1 {
+		t.Fatal("in-window entry must not be displaced")
+	}
+	if allowed, retryAfter := l.allow("192.0.2.2"); allowed || retryAfter != time.Minute {
+		t.Errorf("new source = (%v, %v), want fail closed with Retry-After = window", allowed, retryAfter)
+	}
+	l.recordFailure("192.0.2.1") // tracked source still counts
+	if allowed, _ := l.allow("192.0.2.1"); allowed {
+		t.Fatal("A must be blocked at its limit")
+	}
+	advance(time.Minute + time.Second)
+	if allowed, _ := l.allow("192.0.2.2"); !allowed {
+		t.Error("new source must be admitted once the entry expired")
+	}
 	l.recordFailure("192.0.2.2")
-	if allowed, _ := l.allow("192.0.2.3"); allowed {
-		t.Error("all slots blocked: new source must be refused")
+	if _, ok := l.failures["192.0.2.2"]; !ok || len(l.failures) != 1 {
+		t.Error("expired entry should have made room")
+	}
+}
+
+func TestLoginLimiterBound_CapTwoMixedSlots(t *testing.T) {
+	l, _ := boundedTestLimiter(2, time.Minute, 2)
+	failN(l, "192.0.2.1", 2) // blocked
+	failN(l, "192.0.2.2", 1) // victim
+	l.recordFailure("192.0.2.9")
+	if e := l.failures["192.0.2.2"]; e == nil || len(e.fails) != 1 {
+		t.Fatalf("victim displaced by a fresh source: %+v", e)
 	}
 	if allowed, _ := l.allow("192.0.2.1"); allowed {
 		t.Error("blocked source must stay blocked")
@@ -194,9 +247,6 @@ func TestLoginLimiterBound_ConcurrentUse(t *testing.T) {
 	for k, e := range l.failures {
 		if e.key != k {
 			t.Errorf("entry key %q filed under %q", e.key, k)
-		}
-		if blocked := len(e.fails) >= 3; blocked != (e.elem == nil) {
-			t.Errorf("entry %q: blocked=%v but elem=%v", k, blocked, e.elem)
 		}
 	}
 }
