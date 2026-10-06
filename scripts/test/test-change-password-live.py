@@ -10,6 +10,7 @@ import http.cookiejar
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -47,8 +48,10 @@ def check(condition, message):
 
 def cleanup():
   # Only objects this run created: a name collision never removes someone else's container.
+  # Names are registered before `docker run`, so a container created but never started
+  # (exit 125, state `created`) is still removed; absent objects are tolerated.
   for c in containers:
-    subprocess.run(['docker', 'rm', '-f', c], capture_output=True)
+    subprocess.run(['docker', 'rm', '-fv', c], capture_output=True)
   for v in created_volumes:
     subprocess.run(['docker', 'volume', 'rm', v], capture_output=True)
   if network_created:
@@ -59,10 +62,11 @@ try:
   run_cmd(['docker', 'network', 'create', network])
   network_created = True
   for v in volumes:
-    run_cmd(['docker', 'volume', 'create', v])
     created_volumes.append(v)
+    run_cmd(['docker', 'volume', 'create', v])
 
   print('Starting LDAP container (%s)...' % ldap_image)
+  containers.append(ldap_name)
   run_cmd(['docker', 'run', '-d', '--name', ldap_name, '--network', network,
            '--network-alias', 'ldap-host',
            '-e', 'LDAP_ROOT_DN=' + root,
@@ -72,7 +76,6 @@ try:
            '-v', volumes[1] + ':/var/lib/openldap/data',
            ldap_image],
           env={**os.environ, 'LDAP_ADMIN_PASSWORD': admin_password})
-  containers.append(ldap_name)
 
   # The admin password reaches the tools via a 0600 file inside the disposable container
   # (written from its own environment), so it never rides in a tool's argv.
@@ -105,6 +108,7 @@ try:
     raise RuntimeError(f"Scaffold failed: {res.stderr}")
 
   print('Starting UI container (%s)...' % ui_image)
+  containers.append(ui_name)
   run_cmd(['docker', 'run', '-d', '--name', ui_name, '--network', network,
            '-p', '127.0.0.1::8080',
            '--tmpfs', '/tmp:rw,mode=1777',
@@ -114,7 +118,6 @@ try:
            '-e', 'LDAP_GROUP_CREATE_BASE=ou=groups,' + root,
            '-e', 'COOKIE_SECURE=false',
            ui_image])
-  containers.append(ui_name)
 
   ui_port = run_cmd(['docker', 'port', ui_name, '8080/tcp']).splitlines()[0].rsplit(':', 1)[1]
   base_url = f"http://127.0.0.1:{ui_port}"
@@ -182,7 +185,8 @@ async function main() {{
     console.log(`HTTP Status: ${{status}}`);
     console.log(`API Response Body: ${{bodyText}}`);
     console.log(`Exact Screen Text: "${{screenText}}"`);
-    return {{ name, status, bodyJson, screenText }};
+    const headerRequestId = response.headers()['x-request-id'] || null;
+    return {{ name, status, bodyJson, headerRequestId, screenText }};
   }}
 
   // Scenario 1: Wrong current password
@@ -210,7 +214,7 @@ async function main() {{
   );
 
   for (const r of [r1, r2, r3]) {{
-    console.log('SCENARIO_RESULT: ' + JSON.stringify({{ name: r.name, status: r.status, code: r.bodyJson && r.bodyJson.code, requestId: r.bodyJson && r.bodyJson.requestId, screenText: r.screenText }}));
+    console.log('SCENARIO_RESULT: ' + JSON.stringify({{ name: r.name, status: r.status, code: r.bodyJson && r.bodyJson.code, requestId: r.bodyJson && r.bodyJson.requestId, body: r.bodyJson, headerRequestId: r.headerRequestId, screenText: r.screenText }}));
   }}
   await browser.close();
   console.log('\\nAll browser scenarios complete.');
@@ -243,6 +247,18 @@ main().catch((err) => {{
         'weak new password: 400, code invalid_request, policy text visible')
   check(r3['status'] == 400 and r3['code'] == 'invalid_request' and 'not being changed' in r3['screenText'],
         'unchanged password: 400, code invalid_request, policy text visible')
+
+  dn_re = re.compile(r'\b(uid|cn|ou)=[^,\s]+,|dc=', re.I)
+  for r, label in ((r1, 'wrong current password'), (r2, 'weak new password'), (r3, 'unchanged password')):
+    body = r['body'] or {}
+    for key in ('error', 'message', 'code', 'requestId', 'retryable'):
+      check(key in body, '%s: envelope has key %s' % (label, key))
+    check(body['error'] == body['message'], '%s: error == message' % label)
+    check(bool(r['headerRequestId']) and body['requestId'] == r['headerRequestId'],
+          '%s: requestId equals X-Request-Id header' % label)
+    check(not dn_re.search(str(body['error'])) and not dn_re.search(str(body['message'])),
+          '%s: no DN in error/message' % label)
+    check(body['retryable'] is False, '%s: retryable is false' % label)
 
   req_id = r1['requestId']
   check(bool(req_id), 'scenario 1 carries a requestId')

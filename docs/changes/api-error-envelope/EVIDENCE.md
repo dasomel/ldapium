@@ -69,6 +69,19 @@ The script now asserts every outcome below (status, `code`, screen text, and `LD
 - **UX Cost:**
   Users who submit an incorrect current password receive `"internal error"` instead of the ambiguous-current-password explanation. Operators must use the `requestId` in the UI logs to correlate with `LDAP Result Code 53: unwilling to verify old password`.
 
+### Round-2 re-run (2026-10-06): cleanup order and full-envelope assertions
+
+Same images (`ldapium:lane-249b`, `ldapium-ui:lane-249b`, reused, nothing rebuilt):
+`LDAPIUM_IMAGE=ldapium:lane-249b LDAPIUM_UI_IMAGE=ldapium-ui:lane-249b LDAPIUM_CP_PREFIX=ldapium-cp-249c- python3 scripts/test/test-change-password-live.py` -> exit 0, 34 `ok:` lines. Containers and volumes are registered for cleanup before `docker run`/`volume create` and removed with `docker rm -fv`. For each of the three responses the script now also asserts keys `error`, `message`, `code`, `requestId`, `retryable`, `error == message`, `requestId == X-Request-Id` header, no DN-looking text, `retryable == false`, e.g.:
+```
+ok: wrong current password: requestId equals X-Request-Id header
+ok: weak new password: no DN in error/message
+ok: unchanged password: retryable is false
+```
+Negative check (prefix `ldapium-cp-249d-`): temporarily expecting `retryable is True` -> `AssertionError: wrong current password: retryable is false`, exit 1; reverted, rerun exit 0. No `ldapium-cp-249*` containers, volumes or networks remained.
+
+T-041 stays unticked: proven are the edge-codes live script, the mock-route specs and this live script; the live-credential Playwright specs (`E2E_ADMIN_*` stack) and their CI run are still open.
+
 ## Live API Edge-Codes Script Execution (T-041, AC-007..AC-009, AC-018)
 
 Executed `scripts/test/test-api-edge-codes-local.py` against `ldapium:lane-249` and `ldapium-ui:lane-249`:
