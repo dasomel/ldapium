@@ -323,6 +323,38 @@ expect_eq "25 operator rules: off removes ours only" "$(count_limits "$c")" "25"
 expect_eq "25 operator rules: ... and no 'users' rule is left" "$(olc_limits "$c" | grep -c '^{[0-9]*}users')" "0"
 clear_limits
 
+# --- converged means LAST: an operator rule behind ours would never be reached. -
+# {0}users size.prtotal=unlimited, then an operator DN rule at {1}. First match
+# wins, so with the variable already equal to ours the rules must be re-ordered.
+add_limit '{0}users size.prtotal=unlimited'
+add_limit "{1}${op_dn_rule}"
+expect_eq "order setup: ours first, the operator's DN rule behind it (as written by ldapsearch)" \
+  "$(olc_limits "$c" | tr '\n' '|')" "{0}users size.prtotal=unlimited|{1}${op_dn_rule}|"
+expect_eq "order setup: ... so the DN's cap is ignored today" "$(paged "$c" "$user_dn" "$user_pw")" "${total} 0"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "order: the rule is re-appended behind the operator's rule (real ldapsearch order)" \
+  "$(olc_limits "$c" | tr '\n' '|')" "{0}${op_dn_rule}|{1}users size.prtotal=unlimited|"
+expect_eq "order: the capped DN is capped again (behavioural paged search)" "$(paged "$c" "$user_dn" "$user_pw")" "100 4"
+expect_eq "order: every other identity keeps the lifted total" "$(paged "$c" "$other_dn" "$user_pw")" "${total} 0"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "order: a converged config is left alone on the next start" \
+  "$(olc_limits "$c" | tr '\n' '|')" "{0}${op_dn_rule}|{1}users size.prtotal=unlimited|"
+clear_limits
+
+# --- every value form slapd accepts is the setting's own shape. ---------------
+add_limit '{0}users size.prtotal=-1'
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+expect_eq "prtotal=-1: off removes it" "$(olc_limits "$c")" ""
+expect_eq "prtotal=-1: ... and the default cap is back" "$(paged "$c" "$other_dn" "$user_pw")" "${size_limit} 4"
+add_limit '{0}users size.prtotal=-1'
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
+expect_eq "prtotal=-1: a set request converges it instead of aborting" "$(olc_limits "$c")" "{0}users size.prtotal=900"
+clear_limits
+add_limit '{0}users size.prtotal=disabled'
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=off
+expect_eq "prtotal=disabled: off removes it" "$(olc_limits "$c")" ""
+clear_limits
+
 # --- failed apply aborts, in both directions (unwritable config). ------------
 start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=900
 lock_cfg

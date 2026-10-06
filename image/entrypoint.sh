@@ -1337,6 +1337,21 @@ paged_total_rules() {
   sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$1" | sed -n 's/^olcLimits: {\([0-9][0-9]*\)}\(.*\)$/\1 \2/p'
 }
 paged_total_fail() { die "paged-total reconcile failed; refusing to start"; }
+# The setting's own shape: `users size.prtotal=<value>` and nothing else, with
+# every value form slapd accepts for prtotal (an integer, -1, unlimited,
+# disabled, hard).
+paged_total_shaped() {
+  case "$1" in
+    "users size.prtotal="*)
+      case "${1#users size.prtotal=}" in
+        unlimited|disabled|hard|-1) return 0 ;;
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      return 0
+      ;;
+  esac
+  return 1
+}
 if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
   pt_db_file="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
   pt_dump=$(mktemp)
@@ -1346,21 +1361,15 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
   paged_total_rules "$pt_dump" > "$pt_list"
   pt_users_idx=''
   pt_users_spec=''
+  pt_last_idx=''
   while IFS=' ' read -r pt_idx pt_spec; do
+    pt_last_idx="{${pt_idx}}"
     case "$pt_spec" in
       users|"users "*) pt_users_idx="{${pt_idx}}"; pt_users_spec=$pt_spec ;;
     esac
   done < "$pt_list"
-  # the feature's own shape: `users size.prtotal=<word>` and nothing else
   pt_users_shaped=''
-  case "$pt_users_spec" in
-    "users size.prtotal="*)
-      case "${pt_users_spec#users size.prtotal=}" in
-        ''|*[!A-Za-z0-9]*) ;;
-        *) pt_users_shaped=1 ;;
-      esac
-      ;;
-  esac
+  if paged_total_shaped "$pt_users_spec"; then pt_users_shaped=1; fi
   if [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
     if [ -n "$pt_users_shaped" ]; then
       printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_users_idx" "$pt_users_spec" > "$pt_ops"
@@ -1372,9 +1381,11 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
     pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
     if [ -z "$pt_users_spec" ]; then
       printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" > "$pt_ops"
-    elif [ "$pt_users_spec" = "$pt_want" ]; then
-      : # already converged
+    elif [ "$pt_users_spec" = "$pt_want" ] && [ "$pt_users_idx" = "$pt_last_idx" ]; then
+      : # converged: the one owned rule, and it is the LAST value (first match wins)
     elif [ -n "$pt_users_shaped" ]; then
+      # another value, or the right value in the wrong place (an operator rule
+      # behind it would never be reached): delete and re-append
       printf 'delete: olcLimits\nolcLimits: %s%s\n-\nadd: olcLimits\nolcLimits: %s\n-\n' "$pt_users_idx" "$pt_users_spec" "$pt_want" > "$pt_ops"
     else
       die "LDAP_PAGED_TOTAL_LIMIT is set but an olcLimits rule for the selector 'users' already exists in another shape; that selector is reserved for this setting while it is enabled. Remove that rule or unset the variable; refusing to start"
@@ -1394,14 +1405,20 @@ if [ -n "$LDAP_PAGED_TOTAL_LIMIT" ]; then
       paged_total_rules "$pt_dump" > "$pt_list"
       pt_n=0
       pt_now=''
+      pt_now_idx=''
+      pt_left=0
+      pt_last_now=''
       while IFS=' ' read -r pt_idx pt_spec; do
+        pt_last_now="{${pt_idx}}"
         case "$pt_spec" in
-          users|"users "*) pt_n=$((pt_n + 1)); pt_now=$pt_spec ;;
+          users|"users "*) pt_n=$((pt_n + 1)); pt_now=$pt_spec; pt_now_idx="{${pt_idx}}" ;;
         esac
+        if paged_total_shaped "$pt_spec"; then pt_left=$((pt_left + 1)); fi
       done < "$pt_list"
       if [ "$LDAP_PAGED_TOTAL_LIMIT" = off ]; then
-        if [ "$pt_n" -eq 0 ] || [ "$pt_now" != "$pt_users_spec" ]; then pt_ok=1; fi
-      elif [ "$pt_n" -eq 1 ] && [ "$pt_now" = "$pt_want" ]; then
+        # no `users size.prtotal=` rule may remain, whatever its value form
+        if [ "$pt_left" -eq 0 ]; then pt_ok=1; fi
+      elif [ "$pt_n" -eq 1 ] && [ "$pt_now" = "$pt_want" ] && [ "$pt_now_idx" = "$pt_last_now" ]; then
         pt_ok=1
       fi
     fi
