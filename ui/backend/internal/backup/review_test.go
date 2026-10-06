@@ -203,6 +203,14 @@ func TestCancelRightAfterTheReapSendsNoSignal(t *testing.T) {
 // The worker exits while a grandchild keeps the inherited stdout open: the reap
 // must be noticed at once (Wait must not wait for that pipe), so a cancel that
 // follows the reap cannot signal the group as if the leader were alive.
+//
+// The cancel is issued by the afterReap seam, which runs after the reaper marked
+// the group exited. Cancelling from a poller that watches the kernel reap instead
+// (kill(pid, 0) == ESRCH) races the reaper's markExited: under load the poller
+// wins, signal() still sees a live group, and that is the microsecond window
+// D217-19 accepts, not a regression. The seam fixes the order, so any signal that
+// goes out here really is one after the flag, and the watchdog below is what
+// fails the test if Wait blocks on the inherited pipe (the seam is never reached).
 func TestWorkerExitWithOpenInheritedPipeIsNoticedAtTheReap(t *testing.T) {
 	dir := t.TempDir()
 	pidfile, script := filepath.Join(dir, "pid"), filepath.Join(dir, "worker.py")
@@ -214,13 +222,16 @@ func TestWorkerExitWithOpenInheritedPipeIsNoticedAtTheReap(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := &Manager{python: pythonForTest(t), worker: script, operator: "/unused", killGrace: time.Second, signalGroup: log.send}
+	reaped, stop := make(chan struct{}), make(chan struct{})
+	defer close(stop)
+	m.afterReap = func() { close(reaped); cancel(); time.Sleep(100 * time.Millisecond) }
 	go func() {
-		for {
-			if pid := log.leader(); pid != 0 && leaderGone(pid) {
-				cancel()
-				return
-			}
-			time.Sleep(time.Millisecond)
+		select {
+		case <-reaped:
+		case <-stop:
+		case <-time.After(10 * time.Second):
+			t.Error("the reap was not noticed while a grandchild held the inherited pipe open")
+			cancel() // unblock execWorker: the group is signalled and Wait returns
 		}
 	}()
 	if _, err := m.execWorker(ctx, "logs", jobA, nil); err != nil {
