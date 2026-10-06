@@ -341,6 +341,39 @@ jobs:
             echo "::error::a numeric chart value rendered in exponent form (add | int64)"
             exit 1
           fi
+          # LDAP_PAGED_TOTAL_LIMIT (#215) is opt-in: unset renders no env at
+          # all (an existing install is unchanged); a value is passed through
+          # verbatim, a bare number >= 1e6 without exponent form, "unlimited"
+          # as the keyword. Captured into variables so grep -q cannot SIGPIPE
+          # the writer under pipefail.
+          none=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --show-only templates/statefulset.yaml)
+          if grep -q LDAP_PAGED_TOTAL_LIMIT <<<"$none"; then
+            echo "::error::LDAP_PAGED_TOTAL_LIMIT rendered although ldap.limits.pagedTotal is unset"
+            exit 1
+          fi
+          big=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set ldap.limits.pagedTotal=5000000 --show-only templates/statefulset.yaml)
+          if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$big" | grep -q 'value: "5000000"'; then
+            echo "::error::ldap.limits.pagedTotal=5000000 did not render as LDAP_PAGED_TOTAL_LIMIT=\"5000000\""
+            exit 1
+          fi
+          # Values the image refuses must fail the render, not turn into another number.
+          for bad in "--set ldap.limits.pagedTotal=1.5" "--set ldap.limits.pagedTotal=0" "--set ldap.limits.pagedTotal=2147483648" "--set-string ldap.limits.pagedTotal=abc" "--set-string ldap.limits.pagedTotal=2147483648"; do
+            # shellcheck disable=SC2086
+            if helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret $bad >/dev/null 2>&1; then
+              echo "::error::chart accepted an invalid ldap.limits.pagedTotal ($bad)"
+              exit 1
+            fi
+          done
+          offv=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set-string ldap.limits.pagedTotal=off --show-only templates/statefulset.yaml)
+          if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$offv" | grep -q 'value: "off"'; then
+            echo "::error::ldap.limits.pagedTotal=off did not render as LDAP_PAGED_TOTAL_LIMIT=\"off\""
+            exit 1
+          fi
+          unl=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set-string ldap.limits.pagedTotal=unlimited --show-only templates/statefulset.yaml)
+          if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$unl" | grep -q 'value: "unlimited"'; then
+            echo "::error::ldap.limits.pagedTotal=unlimited did not render as LDAP_PAGED_TOTAL_LIMIT=\"unlimited\""
+            exit 1
+          fi
 
   chart-schema:
     name: Chart manifests pass kubeconform

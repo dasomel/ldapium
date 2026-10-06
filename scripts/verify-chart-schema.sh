@@ -45,6 +45,7 @@ validate() {
 }
 
 validate defaults
+validate paged-total --set-string ldap.limits.pagedTotal=unlimited
 validate replicated --set replicaCount=3
 validate tls --set tls.enabled=true --set-string tls.existingSecret=schema-validation-tls
 validate ui --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET"
