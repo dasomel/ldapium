@@ -78,7 +78,7 @@ Boundaries:
 - `If-Match` is evaluated on the receiving node only; against multi-provider replication it is optimistic protection, not consensus.
 - Core-write idempotency records live in process memory and are lost on restart, so the chart enables them for a single UI replica only. Backup-start keys are the exception: they are stored in the durable job record.
 - The web UI does not send `If-Match` or `Idempotency-Key` and still pages Users and Groups on the client (#216 REQ-013 and #215 AC-010 are open).
-- Remote backup destinations (S3/FTP/SFTP), the SIGKILL-after-grace path, and the job deadline path are verified live against disposable containers (#255; `scripts/test/test-backup-jobs-remotes-live.py`).
+- Live against disposable containers (#255; `scripts/test/test-backup-jobs-remotes-live.py`): the success path to S3/FTP/SFTP, SIGKILL after the grace period, and the deadline path (stand-in worker). Remote failure injection and the real worker's deadline cleanup are unit-test only.
 - Live evidence for these features is in the packages' `EVIDENCE*.md` files (local Docker runs); the CI workflows named there were not re-run for this section.
 
 ## Operations / resilience

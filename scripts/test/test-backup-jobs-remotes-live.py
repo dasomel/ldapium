@@ -24,11 +24,12 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:lane-255')
-ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:lane-255')
-minio_image = os.environ.get('MINIO_IMAGE', 'alpine/minio:latest-release')
-ftp_image = os.environ.get('FTP_IMAGE', 'delfer/alpine-ftp-server:latest')
-sftp_image = os.environ.get('SFTP_IMAGE', 'atmoz/sftp:alpine')
+ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
+ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:e2e')
+# Remote images are pinned by digest (recorded in docs/changes/backup-job-ids/EVIDENCE.md).
+minio_image = os.environ.get('MINIO_IMAGE', 'alpine/minio@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4')
+ftp_image = os.environ.get('FTP_IMAGE', 'delfer/alpine-ftp-server@sha256:60bb774d8408d9d4d5c74d05d1c086a34ce192c6c1a142ffac268cac0dbc6fac')
+sftp_image = os.environ.get('SFTP_IMAGE', 'atmoz/sftp@sha256:6d41b9200f8115ce925bbd295376cb3c6b72634a267f41946e5aee4efe482186')
 
 prefix = os.environ.get('LDAPIUM_TEST_PREFIX', 'ldapium-jobs-remotes-255-') + uuid.uuid4().hex[:6]
 network = prefix + '-net'
@@ -38,12 +39,13 @@ minio = prefix + '-minio'
 ftp = prefix + '-ftp'
 sftp = prefix + '-sftp'
 
-volumes = {k: prefix + '-' + k for k in ('config', 'data', 'etc', 'state', 'log', 'minio', 'ftp', 'sftp')}
+volumes = {k: prefix + '-' + k for k in ('config', 'data', 'etc', 'state', 'log', 'minio', 'ftp', 'sftp', 'sftpconf')}
 base_dn = 'dc=example,dc=org'
 admin_dn = 'cn=admin,' + base_dn
 ldap_password = secrets.token_urlsafe(32)
 remote_password = secrets.token_urlsafe(16)
 session_secret = secrets.token_hex(32)
+secret_values = [ldap_password, remote_password, session_secret]
 
 operator = {
   'instance_id': 'jobs-live-remotes-255',
@@ -67,6 +69,7 @@ operator = {
 
 WORKER_WRAPPER = """#!/usr/bin/env python3
 import os
+import shutil
 import signal
 import sys
 import time
@@ -83,7 +86,15 @@ if os.path.exists(FLAG_IGNORE):
         time.sleep(1)
 
 if os.path.exists(FLAG_DEADLINE):
-    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+    # Stand-in for the real worker's staging dir and SIGTERM cleanup (D217-6).
+    staging = '/var/lib/ldapium-backups/logs/.pending-deadline-test'
+    os.makedirs(staging, exist_ok=True)
+
+    def on_term(signum, frame):
+        shutil.rmtree(staging, ignore_errors=True)
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, on_term)
     with open('/var/lib/ldapium-backups/worker.started', 'w') as f:
         f.write(str(os.getpid()))
     time.sleep(90)
@@ -94,8 +105,19 @@ os.execv('/usr/bin/python3', ['/usr/bin/python3', real_worker] + sys.argv[1:])
 """
 
 
+def mask(text):
+  text = str(text)
+  for secret in secret_values:
+    text = text.replace(secret, '***')
+  return text
+
+
 def sh(args, **kw):
-  return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout.strip()
+  # check=True would embed the whole argv in the traceback; re-raise with masked stderr only.
+  try:
+    return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout.strip()
+  except subprocess.CalledProcessError as error:
+    raise RuntimeError('%s failed (exit %d): %s' % (' '.join(args[:3]), error.returncode, mask(error.stderr).strip())) from None
 
 
 def prepare(script, stdin=''):
@@ -112,7 +134,31 @@ def in_ui(script):
 
 
 def in_container(cid, script):
-  return subprocess.run(['docker', 'exec', cid, 'sh', '-c', script], capture_output=True, text=True).stdout.strip()
+  # Fails on a non-zero exit: `test -f` prints nothing either way, so output alone proves nothing.
+  result = subprocess.run(['docker', 'exec', cid, 'sh', '-c', script], capture_output=True, text=True)
+  if result.returncode != 0:
+    raise RuntimeError('in_container(%s) exit %d: %s' % (cid, result.returncode, mask(result.stderr).strip()))
+  return result.stdout.strip()
+
+
+def remote_artifact(cid, path):
+  # Returns the artifact's size in bytes; raises if the file is missing or empty.
+  return int(in_container(cid, f'test -s {path} && wc -c < {path}'))
+
+
+def raises(fn):
+  try:
+    fn()
+  except RuntimeError:
+    return True
+  return False
+
+
+def write_env(directory, name, lines):
+  path = Path(directory) / name
+  path.write_text('\n'.join(lines) + '\n')
+  path.chmod(0o600)
+  return str(path)
 
 
 def pids(match):
@@ -182,7 +228,8 @@ try:
     sh(['docker', 'volume', 'create', vol])
 
   # Obscure remote password with rclone from the UI image
-  obscured = sh(['docker', 'run', '--rm', '--entrypoint', 'rclone', ui_image, 'obscure', remote_password])
+  obscured = sh(['docker', 'run', '--rm', '-i', '--entrypoint', 'rclone', ui_image, 'obscure', '-'], input=remote_password)
+  secret_values.append(obscured)
 
   # Prepare configuration files in /etc/ldapium-backup
   prepare('umask 077; cat > /etc/ldapium-backup/ldap-password', ldap_password)
@@ -238,14 +285,14 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   )
 
   # 2. Start MinIO container
-  sh([
-    'docker', 'run', '-d', '--name', minio, '--network', network, '--network-alias', minio,
-    '--user', '0',
-    '-e', 'MINIO_ROOT_USER=admin',
-    '-e', f'MINIO_ROOT_PASSWORD={remote_password}',
-    '-v', volumes['minio'] + ':/data',
-    minio_image, 'server', '/data',
-  ])
+  with tempfile.TemporaryDirectory(prefix='ldapium-minio-env-') as tmp:
+    sh([
+      'docker', 'run', '-d', '--name', minio, '--network', network, '--network-alias', minio,
+      '--user', '0',
+      '--env-file', write_env(tmp, 'minio.env', ['MINIO_ROOT_USER=admin', f'MINIO_ROOT_PASSWORD={remote_password}']),
+      '-v', volumes['minio'] + ':/data',
+      minio_image, 'server', '/data',
+    ])
   wait(
     lambda: subprocess.run(['docker', 'exec', minio, 'mkdir', '-p', '/data/bucket'], capture_output=True).returncode == 0,
     'MinIO bucket creation',
@@ -253,19 +300,24 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   )
 
   # 3. Start FTP container
-  sh([
-    'docker', 'run', '-d', '--name', ftp, '--network', network, '--network-alias', ftp,
-    '-e', f'USERS=backup|{remote_password}',
-    '-v', volumes['ftp'] + ':/ftp',
-    ftp_image,
-  ])
+  with tempfile.TemporaryDirectory(prefix='ldapium-ftp-env-') as tmp:
+    sh([
+      'docker', 'run', '-d', '--name', ftp, '--network', network, '--network-alias', ftp,
+      '--env-file', write_env(tmp, 'ftp.env', [f'USERS=backup|{remote_password}']),
+      '-v', volumes['ftp'] + ':/ftp',
+      ftp_image,
+    ])
   wait(lambda: 'running' in sh(['docker', 'inspect', ftp, '--format', '{{.State.Status}}']), 'FTP readiness', 30)
 
   # 4. Start SFTP container
+  # The user definition (with the password) goes through a root-owned volume file, not argv.
+  sh(['docker', 'run', '--rm', '-i', '--user', '0', '--entrypoint', 'sh', '-v', volumes['sftpconf'] + ':/c', ui_image, '-c',
+      'umask 077; cat > /c/users.conf'], input=f'backup:{remote_password}:::backups\n')
   sh([
     'docker', 'run', '-d', '--name', sftp, '--network', network, '--network-alias', sftp,
     '-v', volumes['sftp'] + ':/home/backup',
-    sftp_image, f'backup:{remote_password}:::backups',
+    '-v', volumes['sftpconf'] + ':/etc/sftp',
+    sftp_image,
   ])
   wait(lambda: subprocess.run(['docker', 'exec', sftp, 'test', '-f', '/etc/ssh/ssh_host_ed25519_key.pub'], capture_output=True).returncode == 0, 'SFTP ed25519 host key generation', 30)
   wait(lambda: subprocess.run(['docker', 'exec', sftp, 'test', '-f', '/etc/ssh/ssh_host_rsa_key.pub'], capture_output=True).returncode == 0, 'SFTP RSA host key generation', 30)
@@ -318,6 +370,13 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   # =========================================================================
   print('--- Phase 1: Remote destinations (S3, FTP, SFTP) ---')
 
+  # Negative self-test: the artifact check must FAIL for a missing path and a missing container,
+  # otherwise the remote checks below would be vacuous.
+  missing = f'/nonexistent-{uuid.uuid4().hex}/complete.json'
+  for cid in (minio, ftp, sftp):
+    check(raises(lambda cid=cid: remote_artifact(cid, missing)), f'negative self-test: artifact check fails for a missing path on {cid}')
+  check(raises(lambda: remote_artifact(prefix + '-no-such-container', missing)), 'negative self-test: artifact check fails for a missing container')
+
   # 1a. S3 destination
   api.set_destinations('logs', ['local', 's3-dest'])
   status, _, body = api.call('POST', '/api/v1/backups/jobs/logs')
@@ -330,8 +389,8 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   check(s3_result_mode == '600', f'S3 job left .results/{s3_job_id}.json with mode 600')
   s3_run_id = s3_done['artifact']['run_id']
   check(
-    in_container(minio, f'test -f /data/bucket/backups/jobs-live-remotes-255/logs/{s3_run_id}/complete.json') == '',
-    f'S3 MinIO storage contains verified complete.json (run {s3_run_id})',
+    remote_artifact(minio, f'/data/bucket/backups/jobs-live-remotes-255/logs/{s3_run_id}/complete.json/xl.meta') > 0,
+    f'S3 MinIO storage contains non-empty complete.json (xl.meta) (run {s3_run_id})',
   )
 
   # 1b. FTP destination
@@ -346,7 +405,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   check(ftp_result_mode == '600', f'FTP job left .results/{ftp_job_id}.json with mode 600')
   ftp_run_id = ftp_done['artifact']['run_id']
   check(
-    in_container(ftp, f'test -f /ftp/backup/backups/jobs-live-remotes-255/logs/{ftp_run_id}/complete.json') == '',
+    remote_artifact(ftp, f'/ftp/backup/backups/jobs-live-remotes-255/logs/{ftp_run_id}/complete.json') > 0,
     f'FTP server storage contains verified complete.json (run {ftp_run_id})',
   )
 
@@ -362,7 +421,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   check(sftp_result_mode == '600', f'SFTP job left .results/{sftp_job_id}.json with mode 600')
   sftp_run_id = sftp_done['artifact']['run_id']
   check(
-    in_container(sftp, f'test -f /home/backup/backups/jobs-live-remotes-255/logs/{sftp_run_id}/complete.json') == '',
+    remote_artifact(sftp, f'/home/backup/backups/jobs-live-remotes-255/logs/{sftp_run_id}/complete.json') > 0,
     f'SFTP server storage contains verified complete.json (run {sftp_run_id})',
   )
 
@@ -402,6 +461,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   check(sigkill_done['staging_cleanup'] == 'pending', f'SIGKILLed worker left staging_cleanup=pending: {sigkill_done["staging_cleanup"]}')
   check(in_ui(f'kill -0 {worker_pid} 2>/dev/null || echo dead') == 'dead', f'worker process {worker_pid} was killed by SIGKILL')
 
+  check(in_ui('ls -d /var/lib/ldapium-backups/logs/.pending-* 2>/dev/null | wc -l') == '1', 'SIGKILL leftover staging directory still exists and is reported pending')
   # Removing the leftover staging directory causes subsequent reads to report staging_cleanup=done (computed)
   in_ui('rm -rf /var/lib/ldapium-backups/logs/.pending-sigkill-test /etc/ldapium-backup/ignore-sigterm /var/lib/ldapium-backups/worker.started')
   refreshed = api.job(sigkill_job_id)
@@ -423,6 +483,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   wait(lambda: in_ui('test -f /var/lib/ldapium-backups/worker.started && echo ok') == 'ok', 'slow worker to start', 30)
   slow_pid = in_ui('cat /var/lib/ldapium-backups/worker.started').strip()
   check(in_ui(f'kill -0 {slow_pid} 2>/dev/null && echo alive') == 'alive', f'slow worker process active with pid {slow_pid}')
+  check(in_ui('test -d /var/lib/ldapium-backups/logs/.pending-deadline-test && echo ok') == 'ok', 'deadline worker created a staging directory while running')
 
   deadline_done = wait(lambda: (lambda j: j if j['status'] != 'running' else None)(api.job(deadline_job_id)), 'deadline termination (1m timeout)', 90)
   total_time = time.time() - t_start
@@ -431,6 +492,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
   check(deadline_done.get('error', {}).get('code') == 'deadline_exceeded', f'error.code is deadline_exceeded: {deadline_done.get("error")}')
   check(deadline_done.get('error', {}).get('message') == 'backup job deadline exceeded', f'error.message matches catalog: {deadline_done.get("error")}')
   check(deadline_done['staging_cleanup'] == 'done', 'staging_cleanup is done on deadline SIGTERM exit')
+  check(in_ui('ls -A /var/lib/ldapium-backups/logs | grep -c "^[.]pending-" || true') == '0', 'deadline worker staging directory was removed by its SIGTERM handler')
   check(in_ui(f'kill -0 {slow_pid} 2>/dev/null || echo dead') == 'dead', f'slow worker process {slow_pid} terminated upon deadline')
 
   _, _, view = api.call('GET', '/api/v1/backups')
@@ -450,7 +512,7 @@ known_hosts_file = /etc/ldapium-backup/known_hosts
 
 except Exception:
   logs = subprocess.run(['docker', 'logs', '--tail', '80', ui], capture_output=True, text=True)
-  print('=== UI LOGS ===\n' + logs.stdout + logs.stderr)
+  print('=== UI LOGS ===\n' + mask(logs.stdout + logs.stderr))
   raise
 finally:
   for c in (ui, ldap, minio, ftp, sftp):
