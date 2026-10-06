@@ -99,6 +99,11 @@ bind하면 `M`이 잠기고 모든 머신 요청이 503이 된다(13절).
 
 ## 5. ACL 적용
 
+> **경고: `LDAP_REPLICATION_IDENTITY=prepare`를 쓰는 노드에는 이 절을 적용하지 않는다.** prepare는 복제 신원의 규칙이
+> `olcAccess`의 `{0}`에 있어야 하고, 이 절은 머신 규칙을 `{0}`–`{2}`에 넣어 그 규칙을 `{3}`으로 밀어 낸다. 그러면 다음
+> 재시작에서 prepare가 "is not the first olcAccess rule"로 기동을 거부한다(12절). 둘을 함께 쓰는 순서는 아직 구현되지
+> 않았으므로 지원하지 않는다.
+
 `M` 규칙 3개를 기존 모든 allow 규칙보다 **앞**(`{0}`–`{2}`)에 넣는다. `{n}`을 명시한 삽입은 기존 규칙을 뒤로 민다.
 slapd는 위에서부터 첫 일치 규칙을 쓰고 `by * break`는 `M`이 아닌 신원을 다음 규칙으로 넘긴다.
 
@@ -262,9 +267,11 @@ olcAccess: {0}to *
 $EXEC ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -b cn=schema,cn=config -o ldif-wrap=no olcAttributeTypes | grep -o -E "NAME ('[^']*'|\( [^)]*\))" | sed -E "s/NAME //; s/[()']//g" | tr ' ' '\n' | grep -i -v -E '^(olc|olm)' | grep -i -E 'pass|pwd|secret|credential|private|key|pkcs|cert|hash|token|otp|krb' | sort -u
 ```
 
-출력에서 비밀인 것을 골라 규칙 `{0}`의 목록에 더한다(예: 이미지에 추가 스키마를 넣었다면). 이 단위의 시험은 `userPassword`,
-`shadowLastChange`, `pwdHistory`가 실제로 막히는지를 라이브로 증명한다. 나머지 속성은 스키마에 존재해 규칙이 오류 없이
-적용되는 것까지만 확인했다(해당 값을 가진 항목으로 읽기를 시험하지는 않았다).
+출력에서 비밀인 것을 골라 규칙 `{0}`의 목록에 더한다(예: 이미지에 추가 스키마를 넣었다면). 이 목록의 **여덟 속성 모두**를 증명 스크립트가
+`uid=secrets` 항목에 알아볼 수 있는 값으로 심고(`userPassword`, `shadowLastChange`, `userPKCS12`, `oathSecret`, `oathEncKey`,
+`oathTokenPIN`은 `extensibleObject`로, `pKCS8PrivateKey`는 유효한 PKCS#8 DER로, `pwdHistory`는 운영 속성이라 그 항목의 비밀번호를
+두 번 바꿔 생성), 관리자는 값을 읽고 `M`은 명시 목록·`*`·`+`·필터 어느 방식으로도 속성도 값도 받지 못함을 속성마다 검사한다.
+속성마다 그 속성 하나만 규칙에서 뺀 변이가 해당 검사를 실패시킨다.
 
 ## 10. 비밀번호 회전
 
@@ -326,10 +333,16 @@ printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {2}\nolcAccess
 - `cn=config`는 설정 볼륨(`/etc/openldap/slapd.d`, 차트는 `config` PVC)에 있고 첫 기동에서만 템플릿으로 만들어진다
   (`.bootstrapped` 표식). 재시작·업그레이드는 규칙을 유지하지만 **설정 볼륨을 새로 만들면 규칙이 사라지고** 이미지 기본
   규칙만 렌더링된다. 재초기화 후에는 `M` 항목(데이터 볼륨)이 있어도 규칙이 없다.
-- **`LDAP_REPLICATION_IDENTITY=prepare`와 함께 쓰지 않는다**(결정 필요). prepare는 복제 신원의 규칙을 `olcAccess`의
-  `{0}`에서 찾고(`entrypoint.sh` 1377행 부근), 다른 위치에 있으면 "is not the first olcAccess rule"로 기동을 거부한다
-  (1439행 부근). 이 가이드는 `M` 규칙을 `{0}`–`{2}`에 두므로 prepare 규칙이 `{3}`으로 밀려 다음 시작에서 컨테이너가
-  뜨지 않을 수 있다. 코드를 읽은 결과이며 실행해 확인하지 않았다. 두 변경의 순서 규칙은 후속 결정이 필요하다.
+- **`LDAP_REPLICATION_IDENTITY=prepare`와 함께 쓰지 않는다**(지원하는 유일한 진술: 합성 순서가 구현되기 전까지 함께 쓰지 않는다).
+  > **경고:** 이 가이드의 5절을 prepare 노드에 적용하면 prepare 규칙이 `{3}`으로 밀려 **다음 재시작에서 컨테이너가 뜨지 않는다**.
+  prepare를 쓰는 노드에서는 `MACHINE_AUTH_ENABLED`를 켜지 않는다. `LDAP_REPLICATION_IDENTITY=dedicated`는 이 브랜치의 기반에서
+  아직 구현되지 않았다(시작 거부).
+
+  **실제로 확인된 공존 순서(별도 Codex 라이브 확인, 이 PR의 시험 아님):** 복제 신원 규칙이 `{0}`, 머신 규칙이 `{1}`–`{3}`이면
+  둘이 공존한다(두 규칙 묶음이 모두 다른 DN에 대해 `by * break`로 끝난다). 반대로 복제 규칙을 `{3}`으로 옮기면 prepare가
+  재시작을 거부한다. 이를 지원하려면 코드가 바뀌어야 한다: (1) 이 가이드의 5절 LDIF를 `{1}`–`{3}`으로 삽입하는 변형과, 머신
+  증명의 `{0}`–`{2}` 정확 인덱스 단언·롤백(인덱스 `{3}`,`{2}`,`{1}` 삭제와 가드)의 조정, (2) prepare의 "규칙은 `{0}`" 검사가
+  그대로 맞도록 하는 설치 순서 규칙, (3) 두 설치 순서와 재시작 시험. 추적: CHANGE.md D30, TASKS T-034.
 
 ## 13. 알려진 제한
 

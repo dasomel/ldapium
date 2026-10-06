@@ -36,7 +36,11 @@ applies a broken variant of the documented LDIF when LDAPIUM_ACL_MUTATE is set:
   LDAPIUM_ACL_MUTATE=reorder    machine rules after the image's `by self write` rule
   LDAPIUM_ACL_MUTATE=widen      the allowed subtree widened to the whole base
   LDAPIUM_ACL_MUTATE=nosecret   the secret-attribute deny rule dropped
-Each makes this script exit non-zero (scripts print every failed check).
+  LDAPIUM_ACL_MUTATE=drop:<attr>  ONE attribute removed from the deny rule, for each
+                                of the eight secret attributes (userPassword, ...)
+Each makes this script exit non-zero and print the failed checks by name; the CI
+driver scripts/test/test-machine-acl-mutations.sh asserts the expected names.
+LDAPIUM_ACL_CONFIGS=a limits the run to one configuration (mutation runs use it).
 
 Run (the image defaults to the name the other live scripts use):
   python3 scripts/test/test-machine-acl-readonly-live.py
@@ -62,7 +66,8 @@ guide_path = repo_root / 'docs/machine-ldap-account.md'
 ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
 prefix = os.environ.get('LDAPIUM_TEST_PREFIX', 'ldapium-macl-')
 mutation = os.environ.get('LDAPIUM_ACL_MUTATE', '')
-assert mutation in ('', 'reorder', 'widen', 'nosecret'), 'LDAPIUM_ACL_MUTATE must be reorder, widen or nosecret'
+only_configs = os.environ.get('LDAPIUM_ACL_CONFIGS', 'a,b,c').split(',')
+assert set(only_configs) <= {'a', 'b', 'c'} and only_configs, 'LDAPIUM_ACL_CONFIGS is a comma list of a, b, c'
 run_id = uuid.uuid4().hex[:6]
 name_prefix = prefix + run_id
 
@@ -77,6 +82,11 @@ ldap_uri = 'ldap://127.0.0.1'
 admin_password = secrets.token_urlsafe(24)
 machine_password = secrets.token_urlsafe(32)
 human_password = 'Human-' + secrets.token_urlsafe(18)
+
+SECRET_ATTRS = ('userPassword', 'shadowLastChange', 'pwdHistory', 'pKCS8PrivateKey', 'userPKCS12',
+                'oathSecret', 'oathEncKey', 'oathTokenPIN')
+assert mutation in ('', 'reorder', 'widen', 'nosecret') or (mutation.startswith('drop:') and mutation[5:] in SECRET_ATTRS), \
+    'LDAPIUM_ACL_MUTATE must be reorder, widen, nosecret or drop:<secret attribute>'
 
 containers = []
 tmp_dirs = []
@@ -247,8 +257,15 @@ def dn_set(out):
 
 
 def has_attr(out, *names):
-  wanted = tuple(n.lower() + ':' for n in names)
-  return any(l.lower().startswith(wanted) for l in out.splitlines())
+  """True when the LDIF output carries any of the attributes (options such as ;binary count)."""
+  pat = re.compile(r'^(' + '|'.join(re.escape(n) for n in names) + r')(;[^:]*)?::?( |$)', re.I)
+  return any(pat.match(l) for l in out.splitlines())
+
+
+def attr_values(out, name):
+  """Raw values (plain or base64 text) the output shows for one attribute."""
+  pat = re.compile(r'^' + re.escape(name) + r'(;[^:]*)?::? ?(.*)$', re.I)
+  return [m.group(2) for m in (pat.match(l) for l in out.splitlines()) if m]
 
 
 def mod_ldif(dn, op, attr, value=None):
@@ -292,6 +309,14 @@ def mutate(text):
     return re.sub(r'olcAccess: \{(\d)\}', lambda m: f'olcAccess: {{{int(m.group(1)) + 1}}}', text)
   if mutation == 'widen':
     return text.replace('to dn.subtree="@ALLOWED_DN@"', f'to dn.subtree="{base_dn}"')
+  if mutation.startswith('drop:'):
+    attr = mutation[len('drop:'):]
+    def drop(m):
+      names = [n for n in m.group(2).split(',') if n != attr]
+      return m.group(1) + ','.join(names)
+    out, n = re.subn(r'(olcAccess: \{0\}to attrs=)([^\n]*)', drop, text, count=1)
+    assert n == 1 and attr in SECRET_ATTRS
+    return out
   if mutation == 'nosecret':
     lines = text.splitlines(keepends=True)
     out, skip = [], False
@@ -338,6 +363,45 @@ def proc_env(node):
 
 
 # ---- seed data ---------------------------------------------------------------------
+
+SECRETS_DN = 'uid=secrets,' + allowed_dn
+
+
+def seed_secrets(node):
+  """One entry in B that holds a recognizable value for EVERY attribute the deny rule protects.
+  The key and OTP attributes are not part of any structural class here, so the entry carries
+  extensibleObject (the image's slapd accepts them that way); pKCS8PrivateKey needs a valid
+  PKCS#8 DER (an Ed25519 key header plus 32 random bytes); pwdHistory is operational and is
+  produced by two password changes of the entry itself (the policy keeps 5)."""
+  b64 = lambda raw: base64.b64encode(raw).decode()
+  marker = secrets.token_hex(6)
+  der = bytes.fromhex('302e020100300506032b657004220420') + os.urandom(32)
+  pw = 'Secrets-' + secrets.token_urlsafe(12)
+  ldif = f"""dn: {SECRETS_DN}
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+objectClass: extensibleObject
+uid: secrets
+cn: secrets
+sn: secrets
+shadowLastChange: 19777
+userPassword: {pw}
+userPKCS12:: {b64(('SEED-userPKCS12-' + marker).encode())}
+pKCS8PrivateKey;binary:: {b64(der)}
+oathSecret: SEED-oathSecret-{marker}
+oathEncKey: SEED-oathEncKey-{marker}
+oathTokenPIN: SEED-oathTokenPIN-{marker}
+"""
+  res = node.admin('ldapadd', [], ldif)
+  require(res.returncode == 0, 'seed the secrets entry: ' + mask(res.stderr))
+  node.put('/tmp/.pw-secrets', pw)
+  for i in range(2):
+    new_pw = f'{pw}-{i}'
+    res = node.change_own_password(SECRETS_DN, lambda t, a, i_=None: node.tool(t, a, SECRETS_DN, '/tmp/.pw-secrets', input_data=i_), pw, new_pw)
+    require(res.returncode == 0, 'seed pwdHistory: ' + mask(res.stderr))
+    node.put('/tmp/.pw-secrets', new_pw)
+    pw = new_pw
+
 
 def seed(node):
   pw_b64 = base64.b64encode(machine_password.encode()).decode()
@@ -396,6 +460,7 @@ userPassword: Initial-{secrets.token_urlsafe(12)}
 """
   res = node.admin('ldapadd', [], ldif)
   require(res.returncode == 0, 'seed ldapadd: ' + mask(res.stderr))
+  seed_secrets(node)
   # M gets shadowAccount so a shadowLastChange write is an ACL decision, not a schema error.
   res = node.admin('ldapmodify', [], f'dn: {machine_dn}\nchangetype: modify\nadd: objectClass\nobjectClass: shadowAccount\n-\n'
                    'add: shadowLastChange\nshadowLastChange: 19000\n')
@@ -414,7 +479,7 @@ userPassword: Initial-{secrets.token_urlsafe(12)}
 
 
 B_DNS = sorted(d.lower() for d in [allowed_dn, f'uid=u01,{allowed_dn}', f'uid=u02,{allowed_dn}',
-                                   f'uid=u03,{allowed_dn}', f'uid=human,{allowed_dn}'])
+                                   f'uid=u03,{allowed_dn}', f'uid=human,{allowed_dn}', SECRETS_DN])
 
 
 # ---- unchanged-for-others probes -------------------------------------------------------
@@ -451,10 +516,6 @@ def probes(node):
 
 # ---- the machine DN's reach -----------------------------------------------------------------
 
-SECRET_ATTRS = ('userPassword', 'shadowLastChange', 'pwdHistory', 'pKCS8PrivateKey', 'userPKCS12',
-                'oathSecret', 'oathEncKey', 'oathTokenPIN')
-
-
 def machine_reads(node, cfg):
   res = node.machine('ldapwhoami', [])
   check(res.returncode == 0 and machine_dn.lower() in res.stdout.lower(), f'[{cfg}] M binds ({machine_dn})')
@@ -466,20 +527,33 @@ def machine_reads(node, cfg):
   res = node.machine('ldapsearch', q + ['-b', allowed_dn, '-s', 'sub', '(&(objectClass=inetOrgPerson)(uid=human))', 'uid'])
   check(dn_set(res.stdout) == [f'uid=human,{allowed_dn}'.lower()], f'[{cfg}] M searches inside B by filter')
 
-  # Secrets: control first (an admin does see them), then M with every way to ask.
-  ctl = node.admin('ldapsearch', q + ['-b', f'uid=u01,{allowed_dn}', '-s', 'base', 'userPassword', 'shadowLastChange'])
-  check(has_attr(ctl.stdout, 'userPassword') and has_attr(ctl.stdout, 'shadowLastChange'),
-        f'[{cfg}] control: the entries do hold userPassword and shadowLastChange')
-  hist = node.admin('ldapsearch', q + ['-b', allowed_dn, '-s', 'sub', '(pwdHistory=*)', 'pwdHistory'])
-  hist_exists = has_attr(hist.stdout, 'pwdHistory')
-  print(f'INFO: [{cfg}] pwdHistory present in the directory for the admin: {hist_exists}', flush=True)
+  # Secrets: for EVERY protected attribute the admin control must read a seeded value from
+  # uid=secrets, and the machine DN must get neither the attribute nor any of its values with
+  # an explicit list, with * and with +, nor can it match on it.
+  ctl = node.admin('ldapsearch', q + ['-b', SECRETS_DN, '-s', 'base', '*', '+'] + list(SECRET_ATTRS))
+  asks = {
+      'explicit': node.machine('ldapsearch', q + ['-b', SECRETS_DN, '-s', 'base', '(objectClass=*)'] + list(SECRET_ATTRS)),
+      '*': node.machine('ldapsearch', q + ['-b', SECRETS_DN, '-s', 'base', '(objectClass=*)', '*']),
+      '+': node.machine('ldapsearch', q + ['-b', SECRETS_DN, '-s', 'base', '(objectClass=*)', '+']),
+  }
+  # the machine can read the entry itself (so an empty answer is the ACL, not a missing entry)
+  seen = node.machine('ldapsearch', q + ['-b', SECRETS_DN, '-s', 'base', 'uid', 'objectClass'])
+  check(dn_set(seen.stdout) == [SECRETS_DN.lower()] and has_attr(seen.stdout, 'uid'),
+        f'[{cfg}] control: M reads the secrets entry itself (uid, objectClass) but not what follows')
+  for attr in SECRET_ATTRS:
+    values = [v for v in attr_values(ctl.stdout, attr) if v]
+    check(bool(values), f'[{cfg}] secret {attr}: admin control reads the seeded value')
+    for label, res in asks.items():
+      leaked = has_attr(res.stdout, attr) or any(len(v) >= 8 and v in res.stdout for v in values)
+      how = 'explicit request' if label == 'explicit' else f'request for {label}'
+      check(res.returncode == 0 and not leaked,
+            f'[{cfg}] secret {attr}: M {how} returns neither the attribute nor its value (rc {res.returncode})')
+    res = node.machine('ldapsearch', q + ['-b', allowed_dn, '-s', 'sub', f'({attr}=*)', 'dn'])
+    check(not dn_set(res.stdout), f'[{cfg}] secret {attr}: M filter ({attr}=*) matches nothing (undefined without search access)')
   for label, attrs in (('explicit secret attributes', list(SECRET_ATTRS)), ('*', ['*']), ('+', ['+']), ('* and +', ['*', '+'])):
     res = node.machine('ldapsearch', q + ['-b', allowed_dn, '-s', 'sub', '(objectClass=*)'] + attrs)
     check(res.returncode == 0 and not has_attr(res.stdout, *SECRET_ATTRS),
-          f'[{cfg}] M asks for {label} inside B: no secret attribute returned (rc {res.returncode})')
-  for filt in ('(userPassword=*)', '(shadowLastChange=*)', '(pwdHistory=*)'):
-    res = node.machine('ldapsearch', q + ['-b', allowed_dn, '-s', 'sub', filt, 'dn'])
-    check(not dn_set(res.stdout), f'[{cfg}] M filter {filt} matches nothing (undefined without search access)')
+          f'[{cfg}] M asks for {label} across B: no secret attribute returned (rc {res.returncode})')
   res = node.machine('ldapsearch', q + ['-b', f'uid=u01,{allowed_dn}', '-s', 'base', 'userPassword'])
   check(not has_attr(res.stdout, 'userPassword'), f'[{cfg}] M base read of one entry with userPassword requested: none returned')
 
@@ -672,8 +746,9 @@ def main():
 
   outcomes = {}
   for node, cfg, operator_rule in ((Node('a', ''), 'a', False), (Node('b', allowed_dn), 'b', False), (Node('c', ''), 'c', True)):
-    outcomes[cfg] = run_config(node, cfg, operator_rule)
-  for name in outcomes['a']:
+    if cfg in only_configs:
+      outcomes[cfg] = run_config(node, cfg, operator_rule)
+  for name in (outcomes['a'] if len(outcomes) == 3 else []):
     same = outcomes['a'][name] == outcomes['b'][name] == outcomes['c'][name]
     check(same, f'outside-B answer identical in (a), (b) and (c): {name}')
 
@@ -682,7 +757,7 @@ if __name__ == '__main__':
   code = 0
   try:
     main()
-  except AssertionError as e:
+  except Exception as e:
     print('ERROR: ' + mask(e), flush=True)
     for c in containers:
       res = run(['docker', 'logs', '--tail', '40', c])

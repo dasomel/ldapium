@@ -167,19 +167,21 @@ jq '[.paths|to_entries[]|.key as $p|.value|to_entries[]|select(.key|test("^(get|
 스크립트: `scripts/test/test-machine-acl-readonly-live.py`. 관리 명령은 운영 가이드의 것과 문자 그대로 같다(스크립트가 가이드 본문에서
 적용·조회·롤백 명령과 LDIF 블록이 동일함을 검사한다).
 
-### 4.1 결과 (실제 실행)
+### 4.1 결과 (실제 실행; 수정 라운드 후 이미지 `ldapium:a3b`/`ldapium-ui:a3b`)
 
 | 실행 | 결과 |
 |---|---|
-| 정상 | `RESULT: 238 checks passed, 0 failed, mutation=none, 18s`, 종료 0 |
-| 변이 `reorder`(머신 규칙을 이미지의 `by self write` 규칙 뒤에 삽입) | `193 passed, 45 failed`, 종료 1 |
-| 변이 `widen`(허용 subtree를 루트 전체로 확대) | `202 passed, 36 failed`, 종료 1 |
-| 변이 `nosecret`(비밀 속성 deny 규칙 삭제) | `196 passed, 42 failed`, 종료 1 |
+| 정상 | `RESULT: 349 checks passed, 0 failed, mutation=none, 20s`, 종료 0 (첫 라운드 238, 여덟 비밀 속성 증명 추가로 349) |
+| 변이 11종: `scripts/test/test-machine-acl-mutations.sh` (구성 a만) | 전부 `detected`, 종료 0: `reorder` 16, `widen` 12, `nosecret` 35, `drop:<속성>` 8종(`userPassword` 8, 나머지 7)개 실패 검사 + 예상한 이름의 검사 포함 |
+| 인프라 오류 대조: 같은 드라이버를 존재하지 않는 이미지로 실행 | 11종 전부 `NOT DETECTED (the run ended in an error, not in a failed check)`, 종료 1 (스크립트는 `ERROR: docker run: Unable to find image…`와 `RESULT: 6 checks passed, 0 failed`를 출력) |
 | `test-machine-execution-live.py`(같은 LDIF, 새 비밀 속성 목록, 실제 UI 요청) | `69 PASS`, 종료 0 (단위 2의 `olcAccess` 기대 문자열을 새 목록에 맞게 한 줄 수정) |
 
-변이가 실패시키는 검사의 예: `reorder`는 읽기 순서 확인과 함께 **자기 비밀번호 변경이 성공(rc 0)**해 `M`의 비밀번호가 바뀌어 이후 bind가 49가 되는 것을
-잡는다. `widen`은 `B` 밖 항목(루트·`ou=system`·`ou=other`·그룹)이 반환되는 것, `nosecret`은 `B` 안에서 `userPassword`/`shadowLastChange`/`pwdHistory`가
-반환되고 롤백 가드가 거부하는 것을 잡는다. 변이마다 `{0}`–`{2}` 읽기 확인이 먼저 실패한다.
+**비밀 속성별 증명(수정 라운드):** 규칙 `{0}`이 보호하는 8속성 전부를 `uid=secrets,ou=people`에 알아볼 수 있는 값으로 심었다 — `userPassword`·`shadowLastChange`·
+`userPKCS12`·`oathSecret`·`oathEncKey`·`oathTokenPIN`은 `extensibleObject`로(이 이미지의 slapd가 받는다), `pKCS8PrivateKey;binary`는 유효한 PKCS#8 DER(Ed25519 헤더+난수 32바이트),
+`pwdHistory`는 운영 속성이라 그 항목의 비밀번호를 두 번 바꿔 생성. 속성마다 (1) 관리자 대조가 값을 읽음, (2) `M`이 명시 목록·`*`·`+`로 속성도 값도 받지 못함, (3) `(attr=*)` 필터가 아무것도
+찾지 못함, 그리고 `M`이 같은 항목을 읽을 수 있음(빈 응답이 ACL 때문임)을 확인했다. 시드하지 못한 속성은 없다. 변이 `drop:<속성>`은 그 속성 하나만 규칙에서 빼며 해당 속성의 (2)·(3)이 실패한다.
+
+변이가 실패시키는 검사의 예: `reorder`는 읽기 순서 확인과 함께 **자기 비밀번호 변경이 성공(rc 0)**한다. `widen`은 `B` 밖 항목이 반환되는 것, `nosecret`은 모든 비밀 속성이 반환되는 것을 잡는다.
 
 ### 4.2 세 구성 각각에서 확인한 것 (a: `LDAP_ANONYMOUS_READ_BASE` 미설정, b: `ou=people,<root>`, c: 운영자 선행 allow `{0}to attrs=description by users write`)
 
@@ -213,7 +215,6 @@ jq '[.paths|to_entries[]|.key as $p|.value|to_entries[]|select(.key|test("^(get|
 
 ### 4.5 실행하지 않음
 
-- 다중 노드·복제 라이브(복제 사실은 `entrypoint.sh` 코드 읽기), `LDAP_REPLICATION_IDENTITY=prepare`와의 상호작용(코드 읽기만, CHANGE.md D30), Kubernetes/차트 환경.
+- 다중 노드·복제 라이브(복제 사실은 `entrypoint.sh` 코드 읽기), `LDAP_REPLICATION_IDENTITY=prepare`와의 상호작용(코드 읽기만, CHANGE.md D30; 공존 순서 `{0}` 복제 + `{1}`–`{3}` 머신은 별도 Codex 라이브 확인이며 이 PR의 시험이 아님, T-034), Kubernetes/차트 환경.
 - 좁힌 `B`(예 `ou=people`)로 UI 머신 호출 전체를 돌리는 시험(slapd 수준만 증명; 기본 `B`는 단위 2 라이브 시험이 UI 요청까지 확인).
-- `oathSecret`·`oathEncKey`·`oathTokenPIN`·`pKCS8PrivateKey`·`userPKCS12` 값을 가진 항목으로의 읽기 시험(규칙이 오류 없이 적용되는 것까지만).
 - CI에서의 실행(워크플로 연결은 이 PR, 첫 실행 결과는 PR 체크).
