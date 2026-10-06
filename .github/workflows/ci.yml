@@ -416,6 +416,7 @@ jobs:
             proxy.golang.org:443
             sum.golang.org:443
             golang.org:443
+            google.golang.org:443
             go.dev:443
             nodejs.org:443
 
