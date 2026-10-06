@@ -4,7 +4,7 @@
     "title": "ldapium management API",
     "version": "v1",
     "summary": "HTTP API behind the ldapium web console, usable by scripts and AI agents with a session cookie.",
-    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens and no machine principal yet; see docs/api.md and docs/changes/api-integration/PLAN.md. CORS is off by default (no `Access-Control-*` headers); with `CORS_ALLOWED_ORIGINS` set, only the listed exact origins may read GET/HEAD responses cross-origin with credentials, and writes are never CORS-enabled.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups), a quoted 64-hex fingerprint (Keycloak role operations), or, for users, groups and entry moves, the entry's quoted entryCSN (`etag` field / `ETag` header; opt-in, enforced atomically by the directory, covering attributes written directly to the entry). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`. Every other state-changing `/api` request (POST/PUT/PATCH/DELETE) that carries an `Origin` header must be same-origin as well, else 403 `origin_mismatch`; requests without an `Origin` header are unaffected.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
+    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens. A read-only machine principal (a Keycloak service-account bearer token, `machineBearer`) exists but is off by default (MACHINE_AUTH_ENABLED) and reaches only the eight GET operations that list it; see docs/api.md and docs/changes/machine-principal-auth/CHANGE.md. CORS is off by default (no `Access-Control-*` headers); with `CORS_ALLOWED_ORIGINS` set, only the listed exact origins may read GET/HEAD responses cross-origin with credentials, and writes are never CORS-enabled.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups), a quoted 64-hex fingerprint (Keycloak role operations), or, for users, groups and entry moves, the entry's quoted entryCSN (`etag` field / `ETag` header; opt-in, enforced atomically by the directory, covering attributes written directly to the entry). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`. Every other state-changing `/api` request (POST/PUT/PATCH/DELETE) that carries an `Origin` header must be same-origin as well, else 403 `origin_mismatch`; requests without an `Origin` header are unaffected.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
   },
   "servers": [
     {
@@ -416,8 +416,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "server.settings.read"
+            ]
           }
         ],
+        "x-machine-scope": "server.settings.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -446,8 +452,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "server.monitor.read"
+            ]
           }
         ],
+        "x-machine-scope": "server.monitor.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -489,8 +501,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "audit.read"
+            ]
           }
         ],
+        "x-machine-scope": "audit.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -565,8 +583,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.tree.read"
+            ]
           }
         ],
+        "x-machine-scope": "directory.tree.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -642,8 +666,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.entry.read"
+            ]
           }
         ],
+        "x-machine-scope": "directory.entry.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -853,8 +883,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.policies.read"
+            ]
           }
         ],
+        "x-machine-scope": "directory.policies.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -907,8 +943,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.users.read"
+            ]
           }
         ],
+        "x-machine-scope": "directory.users.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -1945,8 +1987,14 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.read"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.read",
         "responses": {
           "200": {
             "description": "Success",
@@ -5153,6 +5201,12 @@
         "in": "cookie",
         "name": "ldapium_session",
         "description": "Signed session cookie set by POST /api/login or the SSO callback."
+      },
+      "machineBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Keycloak service-account access token (client_credentials), accepted only when the server runs with MACHINE_AUTH_ENABLED=true (default off) and only on the read-only GET operations that list this scheme. The scope named in `security` / `x-machine-scope` must be granted by both the token and the server's per-client ceiling. Never send a bearer token together with the session cookie (400). Every other operation answers a bearer token with 403 `scope_denied`. See docs/api.md."
       }
     },
     "responses": {
@@ -6951,8 +7005,11 @@
               "revision_conflict",
               "scan_limit_exceeded",
               "scan_timeout",
+              "scope_denied",
               "session_expired",
               "size_limit_exceeded",
+              "token_expired",
+              "token_invalid",
               "unauthenticated",
               "unavailable",
               "unsupported_media_type",

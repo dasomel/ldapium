@@ -14,7 +14,7 @@ ldapium 웹 콘솔이 사용하는 `/api` JSON API를 스크립트와 AI 에이�
 |---|---|
 | Base | 콘솔과 같은 origin, 경로 `/api` |
 | 형식 | 요청/응답 모두 JSON (`Content-Type: application/json`) |
-| 인증 | 쿠키 `ldapium_session` (HttpOnly, SameSite=Lax) |
+| 인증 | 쿠키 `ldapium_session` (HttpOnly, SameSite=Lax). 선택(기본 꺼짐): 읽기 전용 GET 8개에 한한 머신 bearer — [머신 bearer 인증](#머신-bearer-인증-기본-꺼짐) |
 | 권한 | LDAP 모드: 로그인한 DN의 ACL. SSO 모드: 서비스 계정의 ACL |
 
 OpenAPI 문서의 표식: `security: []` = 공개, `x-admin: true` (+ `x-required-role`) = 관리자 DN 필요, 그 외 = 세션 필요.
@@ -135,6 +135,9 @@ done
 | `invalid_request` | 400 | 본문 파싱 실패, 필수 값 누락, 입력 검증, 표에 없는 4xx |
 | `invalid_credentials` | 401 | 로그인/비밀번호 확인 실패 |
 | `current_password_rejected` | 400 | 본인 비밀번호 변경에서 현재 비밀번호를 디렉터리가 받아들이지 않음(`oldPassword`가 있는 Password Modify의 LDAP 결과 53). 원인이 모호합니다: 현재 비밀번호가 틀렸을 때와 서버에서 현재 비밀번호 검증이 켜져 있지 않을 때 slapd가 같은 결과를 냅니다. 현재 비밀번호가 맞아도 호출자가 대상의 `userPassword`를 읽을 수 없거나 대상에 `userPassword`가 없을 때도 같은 결과가 납니다. 그래서 문구는 고정이고 "틀렸다"고 단정하지 않습니다(`retryable: false`). 400인 이유는 다른 입력·정책 거절과의 일관성입니다. `oldPassword`가 있고 slapd 진단이 `unwilling to verify old password`일 때만 이 코드가 되며, 다른 이유의 결과 53(예: 읽기 전용 DB의 `operation restricted`), `oldPassword` 없는 요청의 결과 53, 그 밖의 분류되지 않은 오류는 계속 500 `internal`입니다(slapd가 문구를 바꾸면 500으로 퇴행하며 잘못된 400은 되지 않음) |
+| `token_invalid` | 401 | 머신 bearer 토큰 검증 실패(서명·`alg`·`typ`·`iss`·`aud`·`azp`/`client_id`·서비스 계정 규칙·`scope`·시간 규칙 중 하나라도), 또는 형식이 틀리거나 중복된 `Authorization`. 본문은 사유를 말하지 않는 고정 문구이고 쿠키로 폴백하지 않습니다(머신 인증을 켠 서버에서만, [머신 bearer 인증](#머신-bearer-인증-기본-꺼짐)) |
+| `token_expired` | 401 | 다른 모든 검증을 통과했지만 `exp`(+skew)가 지난 토큰. 새 토큰을 받으세요 |
+| `scope_denied` | 403 | 토큰은 유효하지만 허용 목록에 없는 오퍼레이션(쓰기·비밀번호·백업·프로파일·`entry/move`·`getMe` 포함 모든 비-GET과 허용되지 않은 GET)이거나, 토큰 scope와 서버의 client 상한의 교집합에 필요한 scope가 없음. bind·핸들러 실행 전에 거부됩니다 |
 | `unauthenticated` | 401 | 세션 쿠키 없음 또는 서명 불일치 |
 | `session_expired` | 401 | 세션 만료 |
 | `forbidden` | 403 | 디렉터리 ACL 거부, Keycloak 경계 |
@@ -303,7 +306,19 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 - **공개 포트의 `/metrics`**는 항상 `application/json` 404 오류 봉투(`code: not_found`)입니다. SPA의 `index.html`이 아닙니다.
 - 라벨은 닫힌 집합입니다: `route`는 등록된 라우트 패턴 또는 `unmatched`, `method`는 GET/POST/PUT/PATCH/DELETE 또는 `other`, `code`는 위 오류 코드 표, 로그인 실패 `reason`은 `invalid_credentials`·`rate_limited`·`malformed`·`upstream`. 사용자·uid·DN·IP·요청 경로 원문·쿼리·오류 문자열은 라벨에도 값에도 들어가지 않습니다.
 
+## 머신 bearer 인증 (기본 꺼짐)
+
+> **이 빌드에서는 코어만 들어 있습니다.** `MACHINE_AUTH_ENABLED=true`로 켜도 인증된 머신 요청은 아직 디렉터리에 도달하지 않고 503으로 끝납니다. 머신 전용 LDAP bind 신원(요청별 bind)은 후속 단위(T-013)이고, 감사 로그·제한(limiter)·Helm·`getMonitor`/`getEntry` 경계 가드도 그렇습니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
+
+켜지 않으면(`MACHINE_AUTH_ENABLED` 미설정) `Authorization` 헤더는 완전히 무시되고 기존 동작·응답은 달라지지 않습니다. 켜면 Keycloak 서비스 계정 access token(`client_credentials`)을 `Authorization: Bearer <jwt>`로 보낼 수 있습니다.
+
+- **허용 오퍼레이션 8개(모두 GET):** `listUsers`(`directory.users.read`), `listGroups`(`directory.groups.read`), `listTree`(`directory.tree.read`), `getEntry`(`directory.entry.read`), `listPasswordPolicies`(`directory.policies.read`), `getMonitor`(`server.monitor.read`), 그리고 opt-in `listAuditActions`(`audit.read`)·`getServerSettings`(`server.settings.read`). OpenAPI에서 이 8개만 `security`에 `machineBearer`와 `x-machine-scope`를 가집니다. 나머지 보호 오퍼레이션 37개(쓰기·비밀번호·백업·프로파일·`entry/move`·`getMe`)는 어떤 scope로도 403 `scope_denied`입니다.
+- **유효 권한 = 토큰 scope ∩ 서버의 client 상한**(`MACHINE_ALLOWED_CLIENTS`=`clientId=scope,scope;…`).
+- **쿠키와 bearer는 섞지 않습니다.** 유효 형식의 `Authorization`과 `ldapium_session` 쿠키가 함께 오면 400, 형식이 틀리거나 `Authorization` 줄이 둘 이상이면 쿠키 유무와 무관하게 401 `token_invalid`(쿠키 폴백 없음), 로그인·로그아웃·SSO 4개 경로에 `Authorization`이 있으면 400입니다. bearer 요청은 `Set-Cookie`를 받지 않고 CORS는 확장되지 않습니다(프리플라이트의 `authorization`은 허용 헤더가 아님). 상태 변경 요청의 `Origin` 게이트는 그대로 가장 바깥입니다.
+- **검증 실패는 401**(`token_invalid`, 순수 만료만 `token_expired`), **서명 키 조회 장애는 503 + `Retry-After`**, 정상 조회 뒤의 알 수 없는 `kid`는 401입니다. 토큰 정책(`aud` 정확 멤버십, `azp`==`client_id`, 서비스 계정 판별, 수명 상한·skew, `alg` allowlist)과 JWKS 상태 기계는 CHANGE.md가 정본입니다.
+- **시작 조건(`MACHINE_AUTH_ENABLED=true`):** issuer는 https만(로컬 테스트용 `MACHINE_OIDC_INSECURE_HTTP=true` 예외, 기동 시 WARN), audience·허용 client·머신 bind DN·`MACHINE_LDAP_ROOT_DNS`(`;` 구분, 리터럴 `;`는 `\3B`) 필수, bind DN이 관리자·서비스 계정·rootdn과 ParseDN 동등이면 기동 실패, `UI_TRUSTED_PROXIES`가 `private`(기본)이면 기동 실패, `MACHINE_CLOCK_SKEW` 0–60s, `MACHINE_TOKEN_MAX_TTL` (0, 1h].
+
 ## 아직 지원하지 않는 것
 
-머신 토큰/서비스 주체는 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
+머신 bearer는 위 절의 코어만 있고(기본 꺼짐, 켜도 실행 신원이 없어 503) 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.

@@ -126,6 +126,12 @@ type Config struct {
 	// over.
 	LoginFailureWindow time.Duration
 
+	// LoginLimiterMaxEntries (UI_LOGIN_LIMITER_MAX_ENTRIES, default 10000)
+	// is the hard cap on client sources the login limiter tracks (#270).
+	// IPv6 sources count per /64. See login_limiter.go D270-1..D270-4 for
+	// the eviction and fail-closed policy.
+	LoginLimiterMaxEntries int
+
 	// IdempotencyEnabled (UI_IDEMPOTENCY_ENABLED, default false) lets the
 	// core user/group writes honour an Idempotency-Key from the in-memory
 	// store (#216, D216-9a). Off, a keyed write is refused with 422
@@ -174,6 +180,10 @@ type Config struct {
 	// the write Origin gate accepts only the request's own origin (D218-16). Empty (the default) means no CORS headers on
 	// any response. Values are validated and lower-cased at load time.
 	CORSAllowedOrigins []string
+
+	// Machine is the optional bearer authentication for service clients
+	// (MACHINE_AUTH_ENABLED, default false; see machine.go). Zero value when off.
+	Machine MachineConfig
 }
 
 // SSOConfig is the configuration required to use a confidential OIDC client
@@ -305,6 +315,15 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("UI_LOGIN_FAILURE_WINDOW must be positive, got %v", cfg.LoginFailureWindow)
 	}
 
+	maxRaw := orDefault(getenv("UI_LOGIN_LIMITER_MAX_ENTRIES"), "10000")
+	cfg.LoginLimiterMaxEntries, err = strconv.Atoi(strings.TrimSpace(maxRaw))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid UI_LOGIN_LIMITER_MAX_ENTRIES %q: %w", maxRaw, err)
+	}
+	if cfg.LoginLimiterMaxEntries < 1 {
+		return Config{}, fmt.Errorf("UI_LOGIN_LIMITER_MAX_ENTRIES must be at least 1, got %d", cfg.LoginLimiterMaxEntries)
+	}
+
 	cfg.TrustedProxies, err = validateTrustedProxies(getenv("UI_TRUSTED_PROXIES"))
 	if err != nil {
 		return Config{}, err
@@ -321,6 +340,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 	cfg.CORSAllowedOrigins, err = parseCORSOrigins(getenv("CORS_ALLOWED_ORIGINS"))
 	if err != nil {
+		return Config{}, err
+	}
+
+	if err := loadMachine(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
 
