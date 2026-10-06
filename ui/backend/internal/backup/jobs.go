@@ -240,6 +240,10 @@ func (j Job) MarshalJSON() ([]byte, error) {
 		}
 		return &t
 	}
+	if j.Error != nil {
+		// Whatever text the record carries, only the catalog text is serialized.
+		j.Error = &JobError{Code: j.Error.Code, Message: ErrorMessage(j.Error.Code)}
+	}
 	return json.Marshal(struct {
 		plain
 		StartedAt         *time.Time `json:"started_at,omitempty"`

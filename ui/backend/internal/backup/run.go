@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -51,10 +52,60 @@ func (m *Manager) timeoutFor(kind string) time.Duration {
 	return DefaultJobTimeout
 }
 
+// procGroup guards signalling of the worker's process group. Once cmd.Wait has
+// reaped the leader its pid (= pgid) can be reused, so ctx-driven signals are
+// only sent while the leader is provably unreaped: the waiter marks the group
+// exited, under the same mutex signal() takes, immediately after Wait returns.
+type procGroup struct {
+	mu     sync.Mutex
+	pgid   int
+	exited bool
+	send   func(pgid int, sig syscall.Signal) error
+}
+
+func (g *procGroup) markExited() {
+	g.mu.Lock()
+	g.exited = true
+	g.mu.Unlock()
+}
+
+// signal reports whether the signal was sent; it never is after the reap.
+func (g *procGroup) signal(sig syscall.Signal) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.exited {
+		return false
+	}
+	_ = g.send(g.pgid, sig)
+	return true
+}
+
+// sweep ends members the worker left behind after it exited (a child that
+// outlives its parent). A surviving member keeps the pgid allocated, so it is
+// probed first (signal 0): an empty group is left alone. Members get SIGTERM,
+// then SIGKILL after the grace period.
+func (g *procGroup) sweep(grace time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.send(g.pgid, 0) != nil {
+		return
+	}
+	_ = g.send(g.pgid, syscall.SIGTERM)
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		if g.send(g.pgid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = g.send(g.pgid, syscall.SIGKILL)
+}
+
 // execWorker runs the worker in its own process group. When ctx ends (cancel,
 // deadline, shutdown) the group gets SIGTERM, then SIGKILL after the grace
 // period (D217-6); the worker's SIGTERM handler removes its staging directory.
-// It is the default Manager.runWorker.
+// When the worker exits, any process it left in the group is swept before the
+// job settles. It is the default Manager.runWorker.
 func (m *Manager) execWorker(ctx context.Context, kind, jobID string, stdin []byte) ([]byte, error) {
 	cmd := exec.Command(m.python, m.worker, "--config", m.operator, "--kind", kind, "--job-id", jobID)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -66,28 +117,38 @@ func (m *Manager) execWorker(ctx context.Context, kind, jobID string, stdin []by
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	pgid := cmd.Process.Pid
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return out.buf.Bytes(), err
-	case <-ctx.Done():
+	send := m.signalGroup
+	if send == nil {
+		send = func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) }
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	g := &procGroup{pgid: cmd.Process.Pid, send: send}
 	grace := m.killGrace
 	if grace <= 0 {
 		grace = defaultKillGrace
 	}
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		g.markExited()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		g.sweep(grace)
+		return out.buf.Bytes(), err
+	case <-ctx.Done():
+	}
+	g.signal(syscall.SIGTERM)
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
 	case err := <-done:
-		_ = syscall.Kill(-pgid, syscall.SIGKILL) // stragglers of the group
+		g.sweep(grace)
 		return out.buf.Bytes(), err
 	case <-timer.C:
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		g.signal(syscall.SIGKILL)
 		err := <-done
+		g.sweep(grace)
 		return out.buf.Bytes(), fmt.Errorf("%w: %v", errWorkerKilled, err)
 	}
 }
@@ -176,6 +237,16 @@ func (m *Manager) execute(ctx context.Context, kind string, p Policy, connection
 			if man := findMatchingManifest(m.root, kind, jobID, m.instanceID); man != nil && man.RunID == result.RunID {
 				job.Artifact.Files = convertManifestFiles(man.Files)
 			}
+		}
+	}
+
+	if result == nil {
+		// No stdout and no result file (SIGKILLed mid-transfer): a manifest that
+		// carries this job's ID in an owned run directory proves the local copy was
+		// committed (verified before the rename), so record exactly that.
+		if man := findMatchingManifest(m.root, kind, jobID, m.instanceID); man != nil {
+			job.Local = &JobLocal{Verified: true}
+			job.Artifact = &JobArtifact{RunID: man.RunID, Files: convertManifestFiles(man.Files)}
 		}
 	}
 

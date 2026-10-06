@@ -83,7 +83,10 @@ func foldJobIntoState(st State, j *Job) State {
 // job's own start time there.
 func (m *Manager) restoreStatesLocked() {
 	for _, kind := range []string{"data", "logs"} {
-		var latest, latestOK *Job
+		// latest drives status and attempt; every other field comes from the latest
+		// job that actually provides it (a later failure must not erase the earlier
+		// success's run ID, local success or success time).
+		var latest, latestOK, latestLocal, latestArtifact *Job
 		for _, j := range m.jobs {
 			if j.Kind != kind || j.Status == JobStatusRunning {
 				continue
@@ -92,6 +95,12 @@ func (m *Manager) restoreStatesLocked() {
 			if j.Status == JobStatusSucceeded {
 				latestOK = j
 			}
+			if j.Local != nil && j.Local.Verified {
+				latestLocal = j
+			}
+			if j.Artifact != nil && j.Artifact.RunID != "" {
+				latestArtifact = j
+			}
 		}
 		if latest == nil {
 			continue
@@ -99,6 +108,9 @@ func (m *Manager) restoreStatesLocked() {
 		st := m.states[kind]
 		if startedOf(latest).After(st.LastAttempt) {
 			st = foldJobIntoState(st, latest)
+			if latestArtifact != nil {
+				st.RunID = latestArtifact.Artifact.RunID
+			}
 			if p := m.policyFor(kind); p.Enabled && !latest.FinishedAt.IsZero() {
 				st.NextRun = latest.FinishedAt.Add(time.Duration(p.IntervalMinutes) * time.Minute)
 				if latest.Error != nil && latest.Error.Code == ErrCodeWorkerBusy {
@@ -108,6 +120,12 @@ func (m *Manager) restoreStatesLocked() {
 		}
 		if latestOK != nil && latestOK.FinishedAt.After(st.LastSuccess) {
 			st.LastSuccess = latestOK.FinishedAt
+		}
+		if latestLocal != nil && latestLocal.FinishedAt.After(st.LastLocalSuccess) {
+			st.LastLocalSuccess = latestLocal.FinishedAt
+		}
+		if latestArtifact != nil && st.RunID == "" {
+			st.RunID = latestArtifact.Artifact.RunID
 		}
 		m.states[kind] = st
 	}

@@ -273,7 +273,8 @@ func TestLoadJobFileValidatesEveryRecord(t *testing.T) {
 		"unknown requester":   validJobJSON(t, func(j *Job) { j.RequestedBy.Type = "root" }),
 		"DN as fingerprint":   validJobJSON(t, func(j *Job) { j.RequestedBy.Fingerprint = "cn=admin,dc=example,dc=org" }),
 		"huge request id":     validJobJSON(t, func(j *Job) { j.RequestID = strings.Repeat("a", 1<<20) }),
-		"huge error message":  validJobJSON(t, func(j *Job) { j.Error.Message = strings.Repeat("m", 1<<20) }),
+		// MarshalJSON writes catalog text only, so a hostile file is built by hand.
+		"huge error message":  bytes.Replace(valid, []byte(ErrorMessage(ErrCodeWorkerFailed)), []byte(strings.Repeat("m", 1<<20)), 1),
 		"unknown error code":  validJobJSON(t, func(j *Job) { j.Error.Code = "boom" }),
 		"bad destination":     validJobJSON(t, func(j *Job) { j.Destinations[0].Status = "maybe" }),
 		"artifact path name":  validJobJSON(t, func(j *Job) { j.Artifact.Files[0].Name = "../../etc/passwd" }),

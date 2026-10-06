@@ -301,5 +301,11 @@ func loadJobFile(path string) ([]*Job, error) {
 	if file.Jobs == nil {
 		file.Jobs = []*Job{}
 	}
+	// Stored error text is never trusted: it is re-derived from the code catalog.
+	for _, j := range file.Jobs {
+		if j.Error != nil {
+			j.Error.Message = ErrorMessage(j.Error.Code)
+		}
+	}
 	return file.Jobs, nil
 }

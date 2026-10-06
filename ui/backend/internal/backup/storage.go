@@ -72,6 +72,12 @@ type ownedManifest struct {
 	SHA256     map[string]string `json:"sha256,omitempty"`
 }
 
+// realDir reports whether path is itself a directory and not a symlink to one.
+func realDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
+}
+
 // readOwnedManifest applies the D36 ownership rule to <base>/<runDir>: the
 // directory is a real (non-symlink) directory named like a run, complete.json
 // is a bounded regular non-symlink file, and its owner/instance/kind match and
@@ -82,8 +88,13 @@ func readOwnedManifest(base, runDir, kind, instanceID string) (*ownedManifest, s
 	if !runName.MatchString(runDir) {
 		return nil, "", false
 	}
+	// Every component below the owned root must be a real directory: a symlinked
+	// <root>/<kind> would otherwise let outside manifests and files be accepted.
+	if !realDir(base) {
+		return nil, "", false
+	}
 	dir := filepath.Join(base, runDir)
-	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+	if !realDir(dir) {
 		return nil, "", false
 	}
 	b, err := readRegularFile(filepath.Join(dir, "complete.json"), maxManifestBytes)

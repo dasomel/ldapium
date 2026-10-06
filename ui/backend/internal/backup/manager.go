@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -53,6 +54,8 @@ type Manager struct {
 	// removed once the pruned job file is durably written.
 	jobTimeouts map[string]time.Duration
 	killGrace   time.Duration
+	// signalGroup sends a signal to a worker process group (default kill(-pgid)); tests inject a counter.
+	signalGroup func(pgid int, sig syscall.Signal) error
 
 	orphanDelay          time.Duration
 	pendingResultDeletes []string
