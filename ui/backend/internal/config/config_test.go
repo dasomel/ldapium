@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -308,5 +309,34 @@ func TestLoad_SSORejectsCallbackPath(t *testing.T) {
 	}))
 	if err == nil {
 		t.Fatal("expected callback origin with a path to fail")
+	}
+}
+
+func TestLoad_BackupJobTimeouts(t *testing.T) {
+	base := map[string]string{"LDAP_URL": "ldap://ldap.example.com:389", "LDAP_BASE_DN": "dc=example,dc=com", "SESSION_SECRET": strings.Repeat("s", 32)}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	cfg, err := Load(env(with(nil)))
+	if err != nil || cfg.BackupJobTimeoutData != 2*time.Hour || cfg.BackupJobTimeoutLogs != 2*time.Hour {
+		t.Fatalf("defaults must equal the pre-#217 two hours: %v %v %v", cfg.BackupJobTimeoutData, cfg.BackupJobTimeoutLogs, err)
+	}
+	cfg, err = Load(env(with(map[string]string{"BACKUP_JOB_TIMEOUT_DATA": "90m", "BACKUP_JOB_TIMEOUT_LOGS": "1m"})))
+	if err != nil || cfg.BackupJobTimeoutData != 90*time.Minute || cfg.BackupJobTimeoutLogs != time.Minute {
+		t.Fatalf("overrides: %v %v %v", cfg.BackupJobTimeoutData, cfg.BackupJobTimeoutLogs, err)
+	}
+	for _, name := range []string{"BACKUP_JOB_TIMEOUT_DATA", "BACKUP_JOB_TIMEOUT_LOGS"} {
+		for _, bad := range []string{"59s", "24h1s", "25h", "0", "-5m", "soon", "2"} {
+			if _, err := Load(env(with(map[string]string{name: bad}))); err == nil {
+				t.Fatalf("%s=%q must fail startup", name, bad)
+			}
+		}
 	}
 }

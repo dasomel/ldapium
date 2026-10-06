@@ -18,7 +18,7 @@ from pathlib import Path
 
 repo=Path(__file__).resolve().parents[2]
 ldap_image=os.environ.get('LDAPIUM_IMAGE','ldapium:e2e');ui_image=os.environ.get('LDAPIUM_UI_IMAGE','ldapium-ui:backup')
-name='ldapium-backup-ui-'+uuid.uuid4().hex[:8]
+name=os.environ.get('LDAPIUM_TEST_PREFIX','ldapium-backup-ui-')+uuid.uuid4().hex[:8]
 network=name+'-network';ldap=name+'-ldap';ui=name+'-ui'
 volumes={'config':name+'-config','data':name+'-data','etc':name+'-etc','state':name+'-state','log':name+'-log'}
 base_dn='dc=example,dc=org';admin_dn='cn=admin,'+base_dn;password=secrets.token_urlsafe(32)
@@ -60,7 +60,7 @@ try:
       urllib.request.urlopen(url+'/api/auth/config',timeout=1).close();break
     except Exception: time.sleep(1)
   else: raise RuntimeError('backup UI failed readiness')
-  subprocess.run(['npx','playwright','test','e2e/backups.spec.ts'],cwd=repo/'ui/frontend',check=True,
+  subprocess.run(['npx','playwright','test','e2e/backups.spec.ts','e2e/backup-jobs.spec.ts'],cwd=repo/'ui/frontend',check=True,
     env=dict(os.environ,E2E_BASE_URL=url,E2E_ADMIN_DN=admin_dn,E2E_ADMIN_PASSWORD=password))
   runs=command(['docker','exec',ui,'ls','/var/lib/ldapium-backups/logs']).split()
   assert runs,'log backup left no run directory in the backup root'

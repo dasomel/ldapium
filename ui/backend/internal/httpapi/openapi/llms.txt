@@ -38,7 +38,7 @@ In the OpenAPI document, `security: []` means public, operations with `x-admin: 
 - Those same write endpoints also require an `Origin` header equal to the server's own origin and `Content-Type: application/json` (403 / 415 otherwise).
 - GET /api/users and /api/groups return at most 5000 entries; `truncated: true` means more exist and there is no cursor yet.
 - GET /api/audit/actions pages with `limit` (1-200, default 50) and `before` (use `nextBefore` while `hasMore` is true).
-- Backup runs are asynchronous without job IDs: POST /api/v1/backups/jobs/{kind} returns 202; poll GET /api/v1/backups.
+- Backup runs are asynchronous: POST /api/v1/backups/jobs/{kind} returns 202 with `job_id` and a Location header; poll GET /api/v1/backups/jobs/{id} (also GET /api/v1/backups/jobs for the list) and cancel with POST /api/v1/backups/jobs/{id}/cancel. One job runs at a time: a second start is 409 backup_busy with active_job_id/active_kind (it names the running job, it does not prove the job is yours). GET /api/v1/backups still shows states[kind] and running.
 
 ## Safety
 

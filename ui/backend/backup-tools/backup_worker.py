@@ -11,12 +11,17 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import uuid
 
 RUN = re.compile(r'^\d{8}T\d{6}Z-[a-f0-9]{12}$')
+JOB = re.compile(r'^job-\d{8}T\d{6}Z-[a-f0-9]{12}$')
+# Exit code of a worker that lost the lock race; the controller maps it to worker_busy.
+EXIT_BUSY = 75
 
 
 def command(argv):
@@ -154,14 +159,55 @@ def prune_remote(common, base, cfg, kind, policy, now):
       command(common + ['purge', base + '/' + name])
 
 
-def run(cfg, kind, policy):
+def run(cfg, kind, policy, job_id=None):
   root = Path(cfg['root']); root.mkdir(parents=True, exist_ok=True, mode=0o700)
   with (root / '.worker.lock').open('a') as lock:
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    return locked_run(cfg, kind, policy)
+    try:
+      fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+      raise SystemExit(EXIT_BUSY)
+    return locked_run(cfg, kind, policy, job_id)
 
 
-def locked_run(cfg, kind, policy):
+def write_result(cfg, job_id, result):
+  """Atomically leave <root>/.results/<job_id>.json (0600): the evidence a restarted
+  controller settles an orphaned job from. Failing to write it never fails the backup."""
+  if not job_id:
+    return
+  try:
+    directory = Path(cfg['root']) / '.results'
+    directory.mkdir(exist_ok=True, mode=0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix='.result-', dir=directory)
+    with os.fdopen(descriptor, 'w') as stream:
+      json.dump(result, stream)
+      stream.flush()
+      os.fsync(stream.fileno())
+    os.replace(temporary, directory / (job_id + '.json'))
+  except OSError:
+    pass
+
+
+def result_for(cfg, kind, policy, job_id, run_id, final_exists, outcomes, verified, failed):
+  """Result document shared by stdout and the result file; enumerated values only."""
+  types = {t['id']: t['type'] for t in cfg['destinations']}
+  destinations = []
+  for identifier in policy['destinations']:
+    if identifier in outcomes:
+      status, code = outcomes[identifier]
+    elif types.get(identifier) == 'local' and final_exists:
+      status, code = 'succeeded', ''
+    elif types.get(identifier) == 'local':
+      status, code = 'failed', ''
+    else:
+      status, code = 'skipped', 'previous_destination_failed' if failed else ''
+    destinations.append({'id': identifier, 'status': status, **({'error_code': code} if code else {})})
+  result = {'run_id': run_id if final_exists else '', 'kind': kind, 'verified': verified, 'local_verified': final_exists, 'destinations': destinations}
+  if job_id:
+    result['job_id'] = job_id
+  return result
+
+
+def locked_run(cfg, kind, policy, job_id=None):
   os.umask(0o077)
   if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', cfg['instance_id']):
     raise ValueError('stable instance id required')
@@ -177,6 +223,9 @@ def locked_run(cfg, kind, policy):
   run_id = now.strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:12]
   staging = Path(tempfile.mkdtemp(prefix='.pending-', dir=root))
   (staging / '.owner.json').write_text(json.dumps({'instance_id': cfg['instance_id'], 'kind': kind}))
+  final = None
+  outcomes = {}   # destination id -> (status, error_code) for every attempted remote
+  failed = False
   try:
     if kind == 'data':
       ldap = cfg['ldap']
@@ -220,6 +269,8 @@ def locked_run(cfg, kind, policy):
       raise ValueError('invalid kind')
     manifest = {'owner': 'ldapium-backup-v1', 'kind': kind, 'run_id': run_id,
       'created_at': now.isoformat(), 'instance_id': cfg['instance_id'], 'sha256': {p.name: digest(p) for p in staging.iterdir() if p.name != '.owner.json'}}
+    if job_id:
+      manifest['job_id'] = job_id
     (staging / 'complete.json').write_text(json.dumps(manifest))
     verify(staging)
     final = root / run_id
@@ -230,36 +281,62 @@ def locked_run(cfg, kind, policy):
       target = next(t for t in cfg['destinations'] if t['id'] == identifier)
       if target['type'] == 'local':
         continue
-      base = validate_remote(target, cfg) + '/' + cfg['instance_id'] + '/' + kind
-      destination = base + '/' + run_id
-      common = [cfg.get('rclone', 'rclone'), '--config', cfg['rclone_config'], '--retries', '2', '--low-level-retries', '2', '--timeout', '1m', '--contimeout', '10s']
+      if failed:
+        # The first failing remote stops the run; later remotes are reported, not tried.
+        outcomes[identifier] = ('skipped', 'previous_destination_failed')
+        continue
+      step = 'config'
+      outcomes[identifier] = ('unknown', '')   # what a SIGTERM mid-upload leaves behind
       try:
-        cleanup_remote(common, base, cfg, kind, now)
-      except subprocess.CalledProcessError:
-        pass  # A new destination namespace may not exist yet.
-      command(common + ['copyto', str(final / 'complete.json'), destination + '/pending.json'])
-      # Commit marker uploaded last; partial remote uploads never have complete.json.
-      command(common + ['copy', str(final), destination, '--exclude', 'complete.json'])
-      command(common + ['check', str(final), destination, '--exclude', 'complete.json', '--one-way', '--download'])
-      command(common + ['copyto', str(final / 'complete.json'), destination + '/complete.json'])
-      if json.loads(command(common + ['cat', destination + '/complete.json']).stdout) != manifest:
-        raise ValueError('remote completion marker mismatch')
-      command(common + ['deletefile', destination + '/pending.json'])
-      prune_remote(common, base, cfg, kind, policy, now)
-    return {'run_id': run_id, 'kind': kind, 'verified': True, 'local_verified': True, 'destinations': policy['destinations']}
-  except Exception as error:
-    if 'final' in locals() and final.exists():
-      error.backup_result = {'run_id': run_id, 'kind': kind, 'verified': False, 'local_verified': True}
+        base = validate_remote(target, cfg) + '/' + cfg['instance_id'] + '/' + kind
+        destination = base + '/' + run_id
+        common = [cfg.get('rclone', 'rclone'), '--config', cfg['rclone_config'], '--retries', '2', '--low-level-retries', '2', '--timeout', '1m', '--contimeout', '10s']
+        step = 'transfer'
+        try:
+          cleanup_remote(common, base, cfg, kind, now)
+        except subprocess.CalledProcessError:
+          pass  # A new destination namespace may not exist yet.
+        command(common + ['copyto', str(final / 'complete.json'), destination + '/pending.json'])
+        # Commit marker uploaded last; partial remote uploads never have complete.json.
+        command(common + ['copy', str(final), destination, '--exclude', 'complete.json'])
+        step = 'verify'
+        command(common + ['check', str(final), destination, '--exclude', 'complete.json', '--one-way', '--download'])
+        step = 'transfer'
+        command(common + ['copyto', str(final / 'complete.json'), destination + '/complete.json'])
+        step = 'verify'
+        if json.loads(command(common + ['cat', destination + '/complete.json']).stdout) != manifest:
+          raise ValueError('remote completion marker mismatch')
+        step = 'transfer'
+        command(common + ['deletefile', destination + '/pending.json'])
+        prune_remote(common, base, cfg, kind, policy, now)
+        outcomes[identifier] = ('succeeded', '')
+      except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
+        code = 'config_invalid' if step == 'config' else 'verify_failed' if step == 'verify' else 'transfer_failed'
+        outcomes[identifier] = ('failed', code)
+        failed = True
+        failure = error
+    if failed:
+      raise failure
+    result = result_for(cfg, kind, policy, job_id, run_id, True, outcomes, True, False)
+    write_result(cfg, job_id, result)
+    return result
+  except BaseException as error:
+    # Also reached on SIGTERM (SystemExit): the result file is how a cancelled or
+    # orphaned run's outcome is learned, and `finally` still removes the staging dir.
+    result = result_for(cfg, kind, policy, job_id, run_id, final is not None and final.exists(), outcomes, False, failed)
+    write_result(cfg, job_id, result)
+    if isinstance(error, Exception):
+      error.backup_result = result
     raise
   finally:
     if staging.exists():
       shutil.rmtree(staging)
 
 
-def managed_run(cfg, kind, policy):
+def managed_run(cfg, kind, policy, job_id=None):
   connections = policy.get('connections', [])
   if not connections:
-    return run(cfg, kind, policy)
+    return run(cfg, kind, policy, job_id)
   root = Path(cfg['root'])
   root.mkdir(parents=True, exist_ok=True, mode=0o700)
   # D37: write-only credentials arrive over the private worker pipe. Transient
@@ -295,17 +372,20 @@ def managed_run(cfg, kind, policy):
     with config.open('w') as stream: parser.write(stream)
     config.chmod(0o600)
     merged['rclone_config'] = str(config)
-    return run(merged, kind, policy)
+    return run(merged, kind, policy, job_id)
 
 
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--config', required=True)
   parser.add_argument('--kind', choices=['data', 'logs'], required=True)
+  parser.add_argument('--job-id', type=lambda value: value if JOB.fullmatch(value) else parser.error('invalid job id'))
   args = parser.parse_args()
+  # SIGTERM (cancel, deadline) must run `finally` so the staging directory is removed.
+  signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
   cfg = json.loads(Path(args.config).read_text())
-  policy = json.load(__import__('sys').stdin)
-  print(json.dumps(managed_run(cfg, args.kind, policy)))
+  policy = json.load(sys.stdin)
+  print(json.dumps(managed_run(cfg, args.kind, policy, args.job_id)))
 
 
 if __name__ == '__main__':

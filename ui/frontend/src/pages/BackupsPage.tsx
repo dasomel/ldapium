@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BackupConnections } from '@/components/backups/BackupConnections'
 import { Archive, Play, Save } from 'lucide-react'
-import { backups, type BackupPolicies, type BackupPolicy, type BackupView } from '@/lib/backups'
+import { backups, type BackupJob, type BackupPolicies, type BackupPolicy, type BackupView } from '@/lib/backups'
 import { useLanguage } from '@/context/LanguageContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,13 +12,14 @@ export function BackupsPage() {
   const { language } = useLanguage()
   const text = (ko: string, en: string) => language === 'ko' ? ko : en
   const [view, setView] = useState<BackupView | null>(null)
+  const [jobs, setJobs] = useState<BackupJob[]>([])
   const [draft, setDraft] = useState<BackupPolicies | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const dirty = !!draft && !!view && JSON.stringify(draft) !== JSON.stringify(view.policies)
   async function load(reset = false) {
-    try { const result = await backups.get(); setView(result); setDraft(previous => reset || !previous ? result.policies : previous); setError('') }
+    try { const result = await backups.get(); setView(result); setDraft(previous => reset || !previous ? result.policies : previous); setError(''); setJobs(await backups.jobs()) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Backup request failed') }
   }
   useEffect(() => { void load(); const timer = setInterval(() => { void load() }, 5000); return () => clearInterval(timer) }, [])
@@ -39,9 +40,17 @@ export function BackupsPage() {
     catch (cause) { setError((cause as Error).message) }
     finally { setBusy(false) }
   }
+  async function cancel(id: string) {
+    setBusy(true); setError(''); setMessage('')
+    try { await backups.cancel(id); await load(); setMessage(text('취소를 요청했습니다.', 'Cancel requested.')) }
+    catch (cause) { setError((cause as Error).message) }
+    finally { setBusy(false) }
+  }
   function bytes(value?: number) { if (value === undefined) return '—'; if (value < 1024) return `${value} B`; const units = ['KiB', 'MiB', 'GiB', 'TiB']; let scaled = value / 1024; let unit = 0; while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit++ } return `${scaled.toFixed(1)} ${units[unit]}` }
   function date(value?: string) { return !value || value.startsWith('0001-') ? '—' : new Date(value).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US') }
-  const statusNames: Record<string, string> = { running: text('실행 중', 'Running'), succeeded: text('검증 완료', 'Verified'), failed: text('실패 — 연결·원본·운영자 설정 확인', 'Failed — check sources, connection and operator configuration'), interrupted: text('중단됨', 'Interrupted') }
+  const statusNames: Record<string, string> = { running: text('실행 중', 'Running'), succeeded: text('검증 완료', 'Verified'), failed: text('실패 — 연결·원본·운영자 설정 확인', 'Failed — check sources, connection and operator configuration'), interrupted: text('중단됨', 'Interrupted'), cancelled: text('취소됨', 'Cancelled') }
+  const jobStatusNames: Record<string, string> = { running: text('실행 중', 'Running'), succeeded: text('성공', 'Succeeded'), failed: text('실패', 'Failed'), cancelled: text('취소됨', 'Cancelled'), abandoned: text('중단됨(재시작)', 'Abandoned (restart)') }
+  const destinationNames: Record<string, string> = { succeeded: text('성공', 'succeeded'), failed: text('실패', 'failed'), skipped: text('건너뜀', 'skipped'), unknown: text('알 수 없음', 'unknown') }
   return <div className="max-w-6xl space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-semibold">{text('백업 관리', 'Backup management')}</h1>
@@ -89,6 +98,25 @@ export function BackupsPage() {
           </Card>
         })}
       </div>
+      <Card>
+        <CardHeader><CardTitle>{text('백업 작업', 'Backup jobs')}</CardTitle></CardHeader>
+        <CardContent>
+          {jobs.length === 0 ? <p className="text-sm text-muted-foreground">{text('실행 기록 없음', 'No jobs yet')}</p> :
+            <ul className="space-y-3" aria-label={text('백업 작업 목록', 'Backup job list')}>
+              {jobs.map(job => <li key={job.job_id} className="space-y-1 rounded-console border border-border p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0"><strong>{job.kind === 'data' ? text('데이터', 'Data') : text('로그', 'Logs')}</strong> · <span data-testid="job-status">{jobStatusNames[job.status] ?? job.status}</span>
+                    {job.orphan_suspected && <span className="ml-2 text-xs text-accent">{text('재시작 전 워커가 아직 실행 중일 수 있음', 'a worker from before the restart may still be running')}</span>}</div>
+                  <Button variant="outline" size="sm" disabled={job.status !== 'running' || job.orphan_suspected || busy || !!job.cancel_requested_at} onClick={() => void cancel(job.job_id)}>{text('취소', 'Cancel')}</Button>
+                </div>
+                <div className="break-all text-xs text-muted-foreground">{job.job_id} · {date(job.started_at ?? job.created_at)}{job.finished_at ? ` → ${date(job.finished_at)}` : ''}</div>
+                {job.destinations && job.destinations.length > 0 && <div className="text-xs">{job.destinations.map(d => `${d.id}: ${destinationNames[d.status] ?? d.status}`).join(' · ')}</div>}
+                {job.artifact && <div className="break-all text-xs text-muted-foreground">{job.artifact.run_id}{job.artifact.files && job.artifact.files.length > 0 ? ` · ${bytes(job.artifact.files.reduce((total, file) => total + file.bytes, 0))}` : ''}</div>}
+                {job.staging_cleanup === 'pending' && <div className="text-xs text-accent">{text('임시 폴더는 다음 실행에서 정리됩니다.', 'Staging files are removed by the next run.')}</div>}
+              </li>)}
+            </ul>}
+        </CardContent>
+      </Card>
       <BackupConnections view={view} locked={dirty || busy} onSaved={result => { setView(result); setDraft(result.policies) }} />
     </>}
   </div>

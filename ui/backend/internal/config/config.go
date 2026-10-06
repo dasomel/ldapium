@@ -21,6 +21,9 @@ type Config struct {
 	BackupWorkerPath     string
 	BackupPython         string
 	BackupAdminDNs       []string
+	// BackupJobTimeoutData/Logs bound one backup run per kind (D217-10).
+	BackupJobTimeoutData time.Duration
+	BackupJobTimeoutLogs time.Duration
 	Keycloak             KeycloakConfig
 	AppProfilesPath      string
 	AppProfilesAdminDNs  []string
@@ -207,6 +210,12 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("BACKUP_OPERATOR_CONFIG requires policy path, worker path and admin DNs")
 	}
 	var err error
+	if cfg.BackupJobTimeoutData, err = backupJobTimeout(getenv, "BACKUP_JOB_TIMEOUT_DATA"); err != nil {
+		return Config{}, err
+	}
+	if cfg.BackupJobTimeoutLogs, err = backupJobTimeout(getenv, "BACKUP_JOB_TIMEOUT_LOGS"); err != nil {
+		return Config{}, err
+	}
 	cfg.Keycloak, err = loadKeycloak(getenv)
 	if err != nil {
 		return Config{}, err
@@ -464,4 +473,24 @@ func normalizeOrigin(raw string) (string, error) {
 	// Lowercased so the stored allow-list compares equal to the browser's
 	// Origin header regardless of how the operator typed it.
 	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host), nil
+}
+
+// Bounds of the per-kind backup run limit (D217-10). The default equals the
+// pre-#217 hard-coded two hours.
+const (
+	minBackupJobTimeout     = time.Minute
+	maxBackupJobTimeout     = 24 * time.Hour
+	defaultBackupJobTimeout = 2 * time.Hour
+)
+
+func backupJobTimeout(getenv func(string) string, name string) (time.Duration, error) {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return defaultBackupJobTimeout, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < minBackupJobTimeout || d > maxBackupJobTimeout {
+		return 0, fmt.Errorf("%s must be a duration between %s and %s", name, minBackupJobTimeout, maxBackupJobTimeout)
+	}
+	return d, nil
 }

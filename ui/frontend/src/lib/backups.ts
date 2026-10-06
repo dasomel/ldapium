@@ -4,6 +4,11 @@ export type BackupPolicies = { revision: number; data: BackupPolicy; logs: Backu
 export type BackupView = { connections: BackupConnection[]; storage: Record<string, { bytes: number; copies: number; latest_bytes: number }>; policies: BackupPolicies; destinations: { id: string; name: string; type: string }[];
   states: Record<string, { status: string; local_verified: boolean; last_local_success: string; last_attempt: string; last_success: string; next_run: string; run_id: string; policy_revision: number }>;
   running: boolean; logs_available: boolean }
+export type BackupJob = { job_id: string; kind: 'data' | 'logs'; trigger: string; status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'abandoned'
+  created_at: string; started_at?: string; finished_at?: string; cancel_requested_at?: string; orphan_suspected?: boolean; staging_cleanup?: string
+  error?: { code: string; message: string }; local?: { verified: boolean }
+  destinations?: { id: string; status: 'succeeded' | 'failed' | 'skipped' | 'unknown'; error_code?: string }[]
+  artifact?: { run_id: string; files?: { name: string; bytes: number; sha256: string }[] } }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1/backups${path}`, { credentials: 'same-origin', ...init })
   const body = await response.json()
@@ -15,5 +20,7 @@ export const backups = {
   deleteConnection: (id: string, revision: number) => request<BackupView>(`/connections/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'If-Match': `"${revision}"` } }),
   get: () => request<BackupView>(''),
   save: (p: BackupPolicies) => request<BackupPolicies>('/policies', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': `"${p.revision}"` }, body: JSON.stringify({ data: p.data, logs: p.logs }) }),
-  run: (kind: 'data' | 'logs') => request(`/jobs/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
+  run: (kind: 'data' | 'logs') => request<{ job_id: string; kind: string; status: string }>(`/jobs/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
+  jobs: () => request<{ jobs: BackupJob[] }>('/jobs?limit=20').then(result => result.jobs),
+  cancel: (id: string) => request<BackupJob>(`/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
 }

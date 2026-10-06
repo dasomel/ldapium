@@ -9,7 +9,7 @@ name: UI fixture E2E (docker)
 #                 grafana-permissions.spec.ts (1) via
 #                 scripts/test/test-app-keycloak-local.py (pinned Keycloak with
 #                 a generated realm, plus a pinned Grafana for the OIDC login).
-#   backups       backups.spec.ts (2) via scripts/test/test-backup-ui-local.py
+#   backups       backups.spec.ts (2) + backup-jobs.spec.ts (2) via scripts/test/test-backup-ui-local.py
 #                 (the `backup-runtime` UI image target with python/ldap tools/
 #                 rclone, operator.json in a volume the non-root UI user can
 #                 read, writable policy dir, local destination).

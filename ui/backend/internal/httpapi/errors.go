@@ -39,6 +39,12 @@ type errorEnvelope struct {
 	// left behind, and the DN of the entry the caller must go and check.
 	State string `json:"state,omitempty"`
 	DN    string `json:"dn,omitempty"`
+
+	// ActiveJobID and ActiveKind exist only on backup_busy (#217, D217-8):
+	// the job that holds the single run slot, so a caller who lost the 202
+	// can look it up. Naming it proves nothing about who started it.
+	ActiveJobID string `json:"active_job_id,omitempty"`
+	ActiveKind  string `json:"active_kind,omitempty"`
 }
 
 // Error codes (D218-3). Closed set: callers switch on these, so a name is a
@@ -69,6 +75,12 @@ const (
 	codeUpstreamFailed       = "upstream_failed"
 	codeKeycloakDisabled     = "keycloak_disabled"
 	codeUnavailable          = "unavailable"
+	// Backup jobs (#217): an unknown or malformed job ID, a cancel of a job
+	// that is no longer running, and a start/cancel record that could not be
+	// written (the worker was not started / no signal was sent).
+	codeJobNotFound            = "job_not_found"
+	codeJobNotCancellable      = "job_not_cancellable"
+	codePersistenceUnavailable = "persistence_unavailable"
 	// codePartialFailure: a user creation whose password step did not
 	// complete (#216). 500, never retryable; carries state and dn.
 	codePartialFailure = "partial_failure"
@@ -77,10 +89,11 @@ const (
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
 // kept so the UI shows what it always showed.
 const (
-	internalErrorMessage    = "internal error"
-	unavailableErrorMessage = "service temporarily unavailable"
-	keycloakDisabledMessage = "Keycloak admin connection is disabled"
-	keycloakUpstreamMessage = "Keycloak operation failed; reload observed state before retrying"
+	internalErrorMessage          = "internal error"
+	unavailableErrorMessage       = "service temporarily unavailable"
+	persistenceUnavailableMessage = "backup state could not be saved; retry"
+	keycloakDisabledMessage       = "Keycloak admin connection is disabled"
+	keycloakUpstreamMessage       = "Keycloak operation failed; reload observed state before retrying"
 	// partialFailureMessage is true for every state: it promises nothing about
 	// the password and does not say whether the entry still exists beyond
 	// naming it; the state key and docs/api.md carry the distinction.
@@ -101,29 +114,32 @@ type codeSpec struct {
 }
 
 var codeTable = map[string]codeSpec{
-	codeInvalidRequest:       {http.StatusBadRequest, ""},
-	codeInvalidCredentials:   {http.StatusUnauthorized, ""},
-	codeUnauthenticated:      {http.StatusUnauthorized, ""},
-	codeSessionExpired:       {http.StatusUnauthorized, ""},
-	codeForbidden:            {http.StatusForbidden, ""},
-	codeAdminRequired:        {http.StatusForbidden, ""},
-	codeOriginMismatch:       {http.StatusForbidden, ""},
-	codeNotFound:             {http.StatusNotFound, ""},
-	codeFeatureDisabled:      {http.StatusNotFound, ""},
-	codeMethodNotAllowed:     {http.StatusMethodNotAllowed, ""},
-	codeConflict:             {http.StatusConflict, ""},
-	codeAlreadyExists:        {http.StatusConflict, ""},
-	codeBackupBusy:           {http.StatusConflict, ""},
-	codeRevisionConflict:     {http.StatusPreconditionFailed, ""},
-	codeUnsupportedMediaType: {http.StatusUnsupportedMediaType, ""},
-	codeValidationFailed:     {http.StatusUnprocessableEntity, ""},
-	codeIfMatchRequired:      {http.StatusPreconditionRequired, ""},
-	codeLoginRateLimited:     {http.StatusTooManyRequests, ""},
-	codeInternal:             {http.StatusInternalServerError, internalErrorMessage},
-	codeUpstreamFailed:       {http.StatusBadGateway, keycloakUpstreamMessage},
-	codeKeycloakDisabled:     {http.StatusServiceUnavailable, keycloakDisabledMessage},
-	codeUnavailable:          {http.StatusServiceUnavailable, unavailableErrorMessage},
-	codePartialFailure:       {http.StatusInternalServerError, partialFailureMessage},
+	codeInvalidRequest:         {http.StatusBadRequest, ""},
+	codeInvalidCredentials:     {http.StatusUnauthorized, ""},
+	codeUnauthenticated:        {http.StatusUnauthorized, ""},
+	codeSessionExpired:         {http.StatusUnauthorized, ""},
+	codeForbidden:              {http.StatusForbidden, ""},
+	codeAdminRequired:          {http.StatusForbidden, ""},
+	codeOriginMismatch:         {http.StatusForbidden, ""},
+	codeNotFound:               {http.StatusNotFound, ""},
+	codeFeatureDisabled:        {http.StatusNotFound, ""},
+	codeMethodNotAllowed:       {http.StatusMethodNotAllowed, ""},
+	codeConflict:               {http.StatusConflict, ""},
+	codeAlreadyExists:          {http.StatusConflict, ""},
+	codeBackupBusy:             {http.StatusConflict, ""},
+	codeRevisionConflict:       {http.StatusPreconditionFailed, ""},
+	codeUnsupportedMediaType:   {http.StatusUnsupportedMediaType, ""},
+	codeValidationFailed:       {http.StatusUnprocessableEntity, ""},
+	codeIfMatchRequired:        {http.StatusPreconditionRequired, ""},
+	codeLoginRateLimited:       {http.StatusTooManyRequests, ""},
+	codeInternal:               {http.StatusInternalServerError, internalErrorMessage},
+	codeUpstreamFailed:         {http.StatusBadGateway, keycloakUpstreamMessage},
+	codeKeycloakDisabled:       {http.StatusServiceUnavailable, keycloakDisabledMessage},
+	codeUnavailable:            {http.StatusServiceUnavailable, unavailableErrorMessage},
+	codeJobNotFound:            {http.StatusNotFound, ""},
+	codeJobNotCancellable:      {http.StatusConflict, ""},
+	codePersistenceUnavailable: {http.StatusServiceUnavailable, persistenceUnavailableMessage},
+	codePartialFailure:         {http.StatusInternalServerError, partialFailureMessage},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
@@ -180,7 +196,7 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeUnavailable, codeBackupBusy:
+	case codeLoginRateLimited, codeUnavailable, codeBackupBusy, codePersistenceUnavailable:
 		return true
 	case codeUpstreamFailed:
 		return method == http.MethodGet || method == http.MethodHead
@@ -217,6 +233,13 @@ func writeAPIError(c echo.Context, status int, code, msg string, cause error) er
 // Only codePartialFailure may carry state/dn; its 5xx text is the static one
 // like every other 5xx (D218-8).
 func writeAPIErrorExt(c echo.Context, status int, code, msg string, cause error, state, dn string) error {
+	return c.JSON(status, buildEnvelope(c, status, code, msg, cause, state, dn))
+}
+
+// buildEnvelope applies every envelope rule (code fallback, static 5xx text,
+// Retry-After, request ID) and returns the body without sending it, so a
+// producer with an extra documented key (backup_busy) can add it first.
+func buildEnvelope(c echo.Context, status int, code, msg string, cause error, state, dn string) errorEnvelope {
 	if _, known := codeTable[code]; !known {
 		code = codeForStatus(status)
 	}
@@ -243,7 +266,14 @@ func writeAPIErrorExt(c echo.Context, status int, code, msg string, cause error,
 			c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(retryAfterDefaultSeconds))
 		}
 	}
-	return c.JSON(status, errorEnvelope{Error: msg, Message: msg, Code: code, RequestID: reqID, Retryable: retryable, State: state, DN: dn})
+	return errorEnvelope{Error: msg, Message: msg, Code: code, RequestID: reqID, Retryable: retryable, State: state, DN: dn}
+}
+
+// writeBackupBusy is the 409 backup_busy envelope plus the active job.
+func writeBackupBusy(c echo.Context, activeJobID, activeKind string) error {
+	env := buildEnvelope(c, http.StatusConflict, codeBackupBusy, "backup already running", nil, "", "")
+	env.ActiveJobID, env.ActiveKind = activeJobID, activeKind
+	return c.JSON(http.StatusConflict, env)
 }
 
 // domainStatus maps a domain sentinel to its status and code; ok is false

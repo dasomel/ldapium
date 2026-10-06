@@ -542,6 +542,12 @@ ui:
     existingClaim: ""
     existingSecret: ""
     adminDNs: []
+    # Maximum run time of one backup job per kind (Go duration, 1m-24h; a run
+    # over the limit is stopped and recorded as failed/deadline_exceeded).
+    # 2h is what the controller always enforced before it became configurable.
+    jobTimeout:
+      data: 2h
+      logs: 2h
     # Optional read-only LOG-ONLY claim; never mount the live LDAP MDB here.
     logExistingClaim: ""
 

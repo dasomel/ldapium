@@ -183,7 +183,7 @@ func (m *Manager) SaveConnection(c Connection, expected uint64) error {
 	}
 	p := m.policies
 	p.Revision++
-	if err := write(m.path, disk{p, m.states, next}); err != nil {
+	if err := m.writer(m.path, disk{p, m.states, next}); err != nil {
 		return fmt.Errorf("connection persistence unavailable")
 	}
 	m.connections = next
@@ -220,7 +220,7 @@ func (m *Manager) DeleteConnection(id string, expected uint64) error {
 	}
 	p := m.policies
 	p.Revision++
-	if err := write(m.path, disk{p, m.states, next}); err != nil {
+	if err := m.writer(m.path, disk{p, m.states, next}); err != nil {
 		return fmt.Errorf("connection persistence unavailable")
 	}
 	m.connections = next

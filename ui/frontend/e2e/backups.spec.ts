@@ -34,6 +34,7 @@ test('saves separate backup policies and executes a real verified log backup', {
     return current.states.logs?.status === 'succeeded' && current.states.logs.run_id !== previousRun
   }, { timeout: 60000 }).toBe(true)
   await expect(logs.getByText('Verified', { exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole('list', { name: 'Backup job list' }).getByTestId('job-status').first()).toHaveText('Succeeded', { timeout: 10000 })
   await page.setViewportSize({ width: 390, height: 700 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

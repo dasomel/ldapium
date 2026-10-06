@@ -1244,6 +1244,7 @@ ui:
     existingSecret: ldapium-backup-operator
     adminDNs: ["cn=admin,dc=example,dc=org"]
     logExistingClaim: "" # optional log-only PVC, never live LDAP MDB
+    jobTimeout: { data: 2h, logs: 2h } # per-run limit, Go duration 1m-24h (default 2h)
 ```
 
 Enabling requires one UI replica and selects Recreate strategy. PVC must be writable

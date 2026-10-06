@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -32,9 +33,42 @@ type Manager struct {
 	states                         map[string]State
 	running                        bool
 	started                        bool
+
+	// Seams (D217-17): production defaults, replaced only by tests.
+	writer    func(path string, data any) error
+	lockProbe LockProbe
+	clock     func() time.Time
+	after     func(time.Duration) <-chan time.Time
+	runWorker func(ctx context.Context, kind, jobID string, stdin []byte) ([]byte, error)
+
+	jobsPath      string
+	jobs          []*Job
+	jobDirty      bool
+	activeJobID   string
+	activeJobKind string
+	idGen         *JobIDGenerator
+	cancelFunc    context.CancelFunc
+
+	// orphanDelay is the current poll backoff while an orphan worker holds the
+	// lock; pendingResultDeletes are pruned jobs whose result files may only be
+	// removed once the pruned job file is durably written.
+	jobTimeouts map[string]time.Duration
+	killGrace   time.Duration
+	// signalGroup sends a signal to a worker process group (default kill(-pgid)); tests inject a counter.
+	signalGroup func(pgid int, sig syscall.Signal) error
+	afterReap   func()
+
+	orphanDelay          time.Duration
+	pendingResultDeletes []string
 }
 
 func New(path, operator, worker, python string) (*Manager, error) {
+	return newManager(path, operator, worker, python, nil)
+}
+
+// newManager is New with a hook that runs before startup reconciliation, so
+// tests can inject the lock probe, clock and worker launcher it depends on.
+func newManager(path, operator, worker, python string, configure func(*Manager)) (*Manager, error) {
 	for _, p := range []string{path, operator, worker, python} {
 		if !filepath.IsAbs(p) {
 			return nil, fmt.Errorf("backup paths must be absolute")
@@ -74,7 +108,35 @@ func New(path, operator, worker, python string) (*Manager, error) {
 	if !local {
 		return nil, fmt.Errorf("local destination required")
 	}
-	m := &Manager{root: cfg.Root, instanceID: cfg.InstanceID, path: path, operator: operator, worker: worker, python: python, policies: defaultPolicies(), destinations: cfg.Destinations, logsAvailable: len(cfg.LogPaths) > 0, states: map[string]State{}}
+	m := &Manager{
+		root:          cfg.Root,
+		instanceID:    cfg.InstanceID,
+		path:          path,
+		operator:      operator,
+		worker:        worker,
+		python:        python,
+		policies:      defaultPolicies(),
+		destinations:  cfg.Destinations,
+		logsAvailable: len(cfg.LogPaths) > 0,
+		states:        map[string]State{},
+		writer:        write,
+		jobsPath:      filepath.Join(filepath.Dir(path), "backup-jobs.json"),
+		jobs:          []*Job{},
+		after:         time.After,
+	}
+	m.runWorker = m.execWorker
+	m.lockProbe = DefaultLockProbe(cfg.Root)
+	m.idGen = NewJobIDGenerator(nil, nil, func(id string) bool {
+		for _, j := range m.jobs {
+			if j.JobID == id {
+				return true
+			}
+		}
+		return false
+	})
+	if configure != nil {
+		configure(m)
+	}
 	if b, err = os.ReadFile(path); err == nil {
 		var saved disk
 		if err = json.Unmarshal(b, &saved); err != nil {
@@ -105,12 +167,15 @@ func New(path, operator, worker, python string) (*Manager, error) {
 	if m.states == nil {
 		m.states = map[string]State{}
 	}
-	for kind, state := range m.states {
-		if state.Status == "running" {
-			state.Status = "interrupted"
-			m.states[kind] = state
-		}
+
+	// Load durable jobs store per D217-3, then converge states, orphans and
+	// retention on it (D217-7/14/16).
+	loadedJobs, err := loadJobFile(m.jobsPath)
+	if err != nil {
+		return nil, err
 	}
+	m.jobs = loadedJobs
+	m.startupLocked(m.now())
 	return m, nil
 }
 func clonePolicy(p Policy) Policy { p.Destinations = append([]string{}, p.Destinations...); return p }
@@ -190,7 +255,7 @@ func (m *Manager) Save(p Policies, expected uint64) (Policies, error) {
 		}
 		next[kind] = state
 	}
-	if err := write(m.path, disk{p, next, m.connections}); err != nil {
+	if err := m.writer(m.path, disk{p, next, m.connections}); err != nil {
 		return p, err
 	}
 	m.policies = p
@@ -206,6 +271,7 @@ func (m *Manager) Start(ctx context.Context) {
 	m.started = true
 	m.runtimeContext = ctx
 	m.mu.Unlock()
+	go m.orphanLoop(ctx)
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -218,21 +284,4 @@ func (m *Manager) Start(ctx context.Context) {
 			}
 		}
 	}()
-}
-func (m *Manager) tick(ctx context.Context, now time.Time) {
-	v := m.View()
-	if v.Running {
-		return
-	}
-	for _, kind := range []string{"data", "logs"} {
-		p := v.Policies.Data
-		if kind == "logs" {
-			p = v.Policies.Logs
-		}
-		state := v.States[kind]
-		if p.Enabled && (state.NextRun.IsZero() || !now.Before(state.NextRun)) {
-			_ = m.Run(ctx, kind)
-			return
-		}
-	}
 }
