@@ -3,9 +3,10 @@
 - Change class: `D` — 인증·인가 경계 추가, 신규 자격 증명 수용 경로
 - Owner: 미지정 — 수용 전 지정
 - Related issue: 미등록 — 출처 [api-integration PLAN P0](../api-integration/PLAN.md)
-- Status: `Proposed / awaiting review; Revision 4 re-review pending`
+- Status: `Proposed / awaiting review; Revision 5 re-review pending`
 - Revision 2 (2026-10-07): addresses T-005 security review round 1 (BLOCKER).
 - Revision 3 (2026-10-07): addresses T-005 round 2 (ACL order, rootdn list syntax, service-account identification, JWKS state machine, selectAuth precedence, IP throttle numbers); re-review pending; acceptance by the maintainer instruction of 2026-10-07 follows a passing re-review
+- Revision 5 (2026-10-07): precision fixes from T-005 round 4 (test model, budget bound, response split, selectAuth wording, ACL verification sync); re-review pending
 - Revision 4 (2026-10-07): addresses T-005 round 3 (JWKS state table, duplicate-cookie behaviour, IP throttle reservation/boundaries, ACL readback); re-review pending
 - Accepted by / date: 미수용 — 이 문서는 제안이며 Class D 수용 전 구현 착수 금지
 - 작성일: 2026-10-04 (Revision 2: 2026-10-07)
@@ -116,7 +117,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 - Covers: `REQ-006`
 - Given “인증 경로 분리 규칙”의 매트릭스 전 셀(경로 P/PA/PO/N × Authorization A0/AV/AI/AD × 쿠키 C0/CV/CI/Cp)과 기능 꺼짐, 그리고 Origin 조합(foreign·`null`·중복·없음 × POST/GET)
 - When 해당 요청 호출
-- Then 각 셀이 표의 단일 결과와 일치한다. Authorization이 없는 요청의 중복 `ldapium_session` 쿠키는 **기존과 동일**하다([유효, 무효]=200, [무효, 유효]=401: 첫 쿠키만 읽음, 회귀 테스트). 형식이 틀리거나 중복된 `Authorization`은 어떤 경우에도 쿠키 인증으로 폴백하지 않고(401), 유효 bearer+쿠키 이름 존재는 400, PA 경로의 Authorization은 400이며 쿠키가 발행·삭제되지 않고, 머신 요청은 `Set-Cookie`를 발행하지 않는다. 상태 변경 메서드에 foreign/`null`/중복 `Origin`이 있으면 bearer가 유효해도 gate의 403이 우선하고 핸들러가 실행되지 않는다. **GET은 gate 대상이 아니므로** foreign `Origin`이어도 유효 bearer GET은 200이다(CORS 헤더 부재로 브라우저 읽기는 막힘). preflight `authorization`은 거부.
+- Then 각 셀이 표의 단일 결과와 일치한다. Authorization이 없는 요청의 중복 `ldapium_session` 쿠키는 **기존과 동일**하다([유효, 무효]=200, [무효, 유효]=401: 첫 쿠키만 읽음, 회귀 테스트). **보호(P) 경로에서, 앞선 게이트(Origin gate 403 등)를 통과한 뒤** 형식이 틀리거나 중복된 `Authorization`은 쿠키 인증으로 폴백하지 않고(401; 그 밖 경로 분류와 우선순위는 매트릭스가 정본), 유효 bearer+쿠키 이름 존재는 400, PA 경로의 Authorization은 400이며 쿠키가 발행·삭제되지 않고, 머신 요청은 `Set-Cookie`를 발행하지 않는다. 상태 변경 메서드에 foreign/`null`/중복 `Origin`이 있으면 bearer가 유효해도 gate의 403이 우선하고 핸들러가 실행되지 않는다. **GET은 gate 대상이 아니므로** foreign `Origin`이어도 유효 bearer GET은 200이다(CORS 헤더 부재로 브라우저 읽기는 막힘). preflight `authorization`은 거부.
 
 ### `AC-007` — 모드 독립
 
@@ -137,7 +138,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 - Covers: `REQ-016`
 - Given 로컬 `httptest` JWKS 서버(조회 횟수 계수)와 live Keycloak 앞의 계수 프록시
 - When (a) 무작위 kid 토큰 1000건, (b) 알려진 kid + 잘못된 서명 1000건을 동시에 보냄 (c) 키 회전 (d) 응답 크기 1 MiB 초과·키 21개 이상·리다이렉트·5초 초과 지연 (e) `http://` 원격 issuer 설정
-- Then (a)(b) upstream 조회 횟수는 상태 기계 시나리오 a·b·c·d의 정확한 값(단위, fake clock)이고 e2e는 구간 T에서 ⌈T/30s⌉ 이하임을 확인, 오류는 401이고 negative cache(≤256 kid, 만료=삽입 시점의 `R`, 조회 완료마다 비움)가 상한을 넘지 않는다. (c) 새 kid 토큰은 `R`(마지막 성공 + 30s) 이후 첫 요청에서 200이며 그 전은 401(시나리오 g, 문서화된 비용). (d) 조회 거부·기존 캐시 유지·503. (e) 기동 실패(로컬 테스트 예외 플래그 없이), 플래그가 있으면 기동 시 WARN 로그.
+- Then (a)(b) upstream 조회 횟수는 상태 기계 시나리오 a·b·c·d의 정확한 값(단위, fake clock)이고 e2e는 닫힌 구간 [t0, t0+T]에서 조회 시작이 1+⌈T/30s⌉ 이하임을 확인, 응답은 상태 기계 표의 조건별 단일 규칙을 따른다(정상 조회 후 미지 kid=401, 조회 실패·backoff=503+`Retry-After`; 알려진 kid의 위조 서명=401)이며 negative cache(≤256 kid, 만료=삽입 시점의 `R`, 조회 완료마다 비움)가 상한을 넘지 않는다. (c) 새 kid 토큰은 `R`(마지막 성공 + 30s) 이후 첫 요청에서 200이며 그 전은 401(시나리오 g, 문서화된 비용). (d) 조회 거부·기존 캐시 유지·503. (e) 기동 실패(로컬 테스트 예외 플래그 없이), 플래그가 있으면 기동 시 WARN 로그.
 
 ### `AC-009` — 설정 오류·bind 실패 fail closed
 
@@ -204,7 +205,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 - Given 위 LDIF를 **새로 초기화한 컨테이너 세 구성**에 적용: (a) `LDAP_ANONYMOUS_READ_BASE` 미설정, (b) 설정(예 `ou=people,<root>`), (c) 운영자 추가 선행 allow가 있는 구성. `B`=`ou=people,<root>`, `M`은 `ou=system`에 위치, 비교용으로 일반 사용자·관리자·익명 신원
 - When 머신 DN으로 slapd에 직접: ① 자기 비밀번호 변경(`ldappasswd`, `ldapmodify`로 `userPassword`/`shadowLastChange`) ② 자기 항목의 일반 속성 수정 ③ 다른 항목 `ldapadd`/`ldapmodify`/`ldapdelete`/`modrdn` ④ `B` 밖 항목(예 `ou=system`, 루트, 다른 OU) base 검색(`(objectClass=*)`)과 `entry`/`uid`/`objectClass` 요청 ⑤ `B` 안 검색에서 `userPassword`·`shadowLastChange`를 명시 요청 ⑥ accesslog·config·Monitor 읽기
 - 추가 구성 (c): 적용 전 운영자가 **선행 allow 규칙을 직접 추가**해 둔 DB(예 `{0}to attrs=description by users write`)에 같은 LDIF를 적용. 모든 구성에서 적용 직후 `olcDatabase={1}mdb,cn=config`의 `olcAccess`를 **읽어** 머신 규칙 3개가 `{0}`–`{2}`이고 기존 규칙(운영자 추가분 포함)이 그 뒤로 밀렸음을 확인한다(읽은 순서가 기대와 다르면 실패).
-- Then ①②③은 모두 `insufficient access`(50), ④는 항목이 반환되지 않고(`noSuchObject`/빈 결과) 두 분기에서 동일, ⑤ `B` 항목은 반환되되 비밀 속성은 없음, ⑥ 거부(opt-in 미적용 상태). 같은 LDIF 적용 전후로 일반 사용자의 자기 비밀번호 변경(성공)·관리자·익명(분기 (a)/(b)별 기존 동작)의 결과가 변하지 않는다. `M` bind 자체는 성공한다.
+- Then ①②③은 모두 `insufficient access`(50), ④는 항목이 반환되지 않고(`noSuchObject`/빈 결과) 세 구성에서 동일, ⑤ `B` 항목은 반환되되 비밀 속성은 없음, ⑥ 거부(opt-in 미적용 상태). 같은 LDIF 적용 전후로 일반 사용자의 자기 비밀번호 변경(성공)·관리자·익명(구성 (a)/(b)/(c)별 기존 동작)의 결과가 변하지 않는다. `M` bind 자체는 성공한다.
 
 ### `AC-019` — 긴급 차단·롤백
 
@@ -333,6 +334,7 @@ null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체�
 **파라미터(기본)**: `TTL`=10m, `MAX_STALE`=1h, `MIN`=30s, backoff `b(n)=min(30s·2^(n−1), 300s)`(n=연속 실패 횟수), fetch timeout 5s, negative cache ≤256개.
 **변수**: `S`(마지막 조회 성공 시각), `A`(마지막 조회 시도 시각), `fails`(연속 실패), `R`(**다음 조회 허용 시각**, 아래 갱신 규칙), `K`(키 집합), `N`(negative cache), `D`∈{none, ok}(discovery).
 **조회 예산 게이트** `G = (now ≥ R)`(경계 포함: `now == R`이면 허용). 조회 시도가 끝날 때마다 `R`을 다시 계산한다: 성공 → `S=A=now, fails=0, R=now+MIN`, `K` 교체, **`N` 전체 비움**; 실패 → `A=now, fails++, R=now+b(fails)`. 기동 시 `R=0`. 모든 조회(요청 구동·백그라운드)는 `G`가 참일 때만 시작하며, 동시에 필요한 요청은 진행 중인 1건(single-flight, timeout 5s)을 공유하고 추가 조회로 세지 않는다.
+**테스트 모델(시작 vs 완료)**: 조회 한 번(= discovery가 필요하면 discovery+JWKS를 합친 **1회 refresh**, 예산에는 1건으로 센다)은 시작 시각 `t_s`, 소요 `δ`, 완료 시각 `t_c = t_s + δ`를 가진다. `G`는 **시작 시점**에 `now ≥ R`로 판정하고, `R`·`S`·`A`는 **완료 시각 `t_c`** 기준으로 갱신한다(성공 `R=t_c+MIN`, 실패 `R=t_c+b(fails)`). 요청의 응답은 조회 완료 뒤에 나간다(성공 시 200은 `t_c`). 아래 시나리오는 fake clock에서 달리 적지 않으면 `δ=0`이다.
 **키 상태**: `age = now − S`. `NONE`(성공한 적 없음 또는 `D=none`) / `FRESH`(age ≤ TTL) / `STALE`(TTL < age ≤ TTL+MAX_STALE, 경계 포함) / `EXPIRED`(age > TTL+MAX_STALE).
 **negative cache 항목**: 키 = `kid`. 값 = 만료 시각 `e_k`. 삽입은 “직전 조회가 성공이었고(`fails=0`) 그 kid가 `K`에 없다”는 판정을 낸 시점이며 `e_k = R`(삽입 시점의 다음 조회 허용 시각). 항목은 `now < e_k`인 동안만 유효하다 → 항목은 조회가 다시 허용되는 바로 그 시각에 사라지고, 어떤 조회 완료도 `N`을 비운다. negative cache는 단지 `G` 판정을 반복하지 않게 하는 메모이며 **결과를 바꾸지 않는다**(항목을 지워도 아래 표의 응답은 같다).
 
@@ -359,11 +361,12 @@ null·누락·타입 오류 claim은 모두 거부이며 기본값으로 대체�
 | c | `STALE`(age=TTL+1s)에서 알려진 kid + 위조 서명 폭주, IdP 정상 | 첫 요청이 백그라운드 1건 시작·성공 → `FRESH`가 되어 이후 0건; 위조 요청의 응답은 401 |
 | d | c와 같으나 IdP 중지 600s | 시도 시각 t0, t0+30, t0+90, t0+210, t0+450 = 5건(backoff 30·60·120·240), 응답은 알려진 kid라 401(위조)/200(진짜 서명) |
 | e | age=TTL+MAX_STALE(경계) vs +1s | 경계: 알려진 kid 200(`STALE`), +1s: `EXPIRED`라 `G`이면 조회(IdP 중지 시 503), `!G`이면 503 + `Retry-After` |
-| f | discovery 실패 후 복구(`D=none`, IdP 중지로 기동 → t=100에 IdP 복구) | 시도 t=0, 30, 90, 210(성공): 그 사이 모든 bearer 요청 503 + `Retry-After`=⌈R−now⌉, 쿠키 로그인은 정상; t=210의 시도(백그라운드 타이머 또는 요청) 후 재시작 없이 200 |
-| g | 새 키 회전: S=0, t=29의 새 kid 401, t=30의 새 kid | t=29 조회 0건·401, t=30 조회 1건·성공·200 |
+| f1 | discovery 실패 후 복구(`D=none`, `δ=0`, IdP 중지로 기동 → t=100에 IdP 복구) | 시작 t=0, 30, 90, 210(성공): 그 사이 모든 bearer 요청 503 + `Retry-After`=⌈R−now⌉, 쿠키 로그인은 정상; t=210의 시도(백그라운드 타이머 또는 요청) 후 재시작 없이 200 |
+| f2 | f1과 같으나 실패 조회가 timeout으로 `δ=5s`(IdP는 t=100에 복구) | 시작 t=0(완료 5, `R=35`), 35(완료 40, `R=100`), 100(성공, 완료 100): 그 사이 bearer는 503 + `Retry-After`=⌈R−now⌉, t=100 시작 조회가 성공해 재시작 없이 200 |
+| g | 새 키 회전: S=0(완료 0), t=29의 새 kid, t=30의 새 kid | t=29 조회 0건·401; t=30 조회 **시작** 1건·성공, 200은 완료 시각 `30+δ`(δ=0이면 30) |
 | h | t=29에 k1 부정 항목(e=30), t=30에 다른 kid k2, 이 조회가 실패 | t=30 조회 1건, 503 + `Retry-After`=30, `R=60`; k1은 t=59까지 행 6의 503 |
 
-불변식: ① 어떤 구간 `T`에서도 조회 시도는 ⌈T/MIN⌉ 이하이며 실패 시 backoff로 더 드물다(a·d). ② 조회를 시작하는 요청은 행 2·3(STALE)·7뿐이고 모두 `G`가 참일 때다. ③ stale 키로 200을 주는 것은 행 3뿐이며 최대 `TTL+MAX_STALE`(1h10m)까지(IdP 키 compromise 시 이 한계가 제거 지연이므로 긴급 차단은 D7의 서버측 경로). ④ 전 행의 `Retry-After`는 정수 초(1–300).
+불변식: ① **닫힌 구간 `[t0, t0+T]`에서 조회 시작은 최대 `1 + ⌈T/MIN⌉`건**이며(예: `[30,330]`에서 t=30,60,…,330의 11건) 실패 시 backoff로 더 드물다(a·d). 이 정의를 AC-016·검증 표·TASKS 전부에 쓴다. ② 조회를 시작하는 요청은 행 2·3(STALE)·7뿐이고 모두 `G`가 참일 때다. ③ stale 키로 200을 주는 것은 행 3뿐이며 최대 `TTL+MAX_STALE`(1h10m)까지(IdP 키 compromise 시 이 한계가 제거 지연이므로 긴급 차단은 D7의 서버측 경로). ④ 전 행의 `Retry-After`는 정수 초(1–300).
 
 **discovery**(`NewProvider` 상당): 기동 시 1회(timeout 5s) 시도(`R=0`이므로 `G` 참). 실패는 기동 실패가 아니다(기존 SSO 초기화 `server.go:79-86`은 기동 실패를 유지하며 머신 인증과 독립) — 로그 ERROR 후 `D=none`이 되어 모든 bearer 요청이 행 1·2에 따라 503. `D=none`인 동안 **백그라운드 타이머가 `R` 시각에** discovery를 재시도하고(트래픽이 없어도 복구), 성공하면 즉시 JWKS를 조회해 `D=ok`·`K` 설정(둘 다 같은 `R`/backoff 일정). 설정 오류(issuer 형식·https 위반)는 기동 실패. discovery 문서의 `issuer`가 설정값과 다르면: 기동 시점 접촉에서 발견되면 기동 실패(설정 오류), 이후 재시도에서 발견되면 `D=none` 유지 + ERROR 로그(503). 쿠키 로그인·SSO는 어느 경우에도 영향받지 않는다.
 
@@ -515,7 +518,7 @@ Helm: `ui.machineAuth.{enabled,issuerURL,audience,allowedClients,tokenMaxTTL,clo
 | `AC-015` | 단위(DN 정규화·BASE_DN 가드, `MonitorStats` 로그 포함 여부) + e2e(accesslog/config/Monitor DN, 가드 끈 빌드의 ACL 백스톱) | go test; e2e | 403 표, accesslog 검색 미발행 |
 | `AC-016` | 단위(계수 서버, fake clock: 폭주 시 조회 ≤ 1+⌈T/30s⌉, 크기·키 수·리다이렉트·timeout) + e2e(계수 프록시 뒤 실제 Keycloak 회전·폭주) | go test; e2e | 조회 횟수 표 |
 | `AC-017` | 단위(`cursorBinding` 도메인 분리) + e2e(client 2개, 사람 cursor, 토큰 갱신) | go test; e2e | 400/200 표 |
-| `AC-018` | e2e: 새로 초기화한 컨테이너 **두 분기**((a) `LDAP_ANONYMOUS_READ_BASE` 미설정 (b) 설정)에서 머신 DN으로 slapd에 직접 자기 비밀번호 변경·쓰기·`B` 밖 검색·비밀 속성 요청 + 타 신원(일반 사용자·관리자·익명) 전후 불변 | 컨테이너 e2e | 분기별 50 거부 로그·빈 결과 표, 타 신원 회귀 통과 |
+| `AC-018` | e2e: 새로 초기화한 컨테이너 **세 구성**((a) `LDAP_ANONYMOUS_READ_BASE` 미설정 (b) 설정 (c) 운영자 추가 선행 allow가 있는 DB; 적용 후 `olcAccess` 순서를 읽어 확인)에서 머신 DN으로 slapd에 직접 자기 비밀번호 변경·쓰기·`B` 밖 검색·비밀 속성 요청 + 타 신원(일반 사용자·관리자·익명) 전후 불변 | 컨테이너 e2e | 구성별 `olcAccess` 순서 확인·50 거부 로그·빈 결과 표, 타 신원 회귀 통과 |
 | `AC-019` | 롤아웃 드릴(2 replica Helm 또는 compose 2개): 비활성화 후 구토큰 통과 → allowlist 제거 전 replica 교체 후 401 → rollback | e2e/드릴 | 단계별 응답 표, 이전 pod 0개 |
 
 단위/정적(순수 함수·계약)과 라이브 e2e를 구분한다. LDAP wire 코드는 저장소 원칙대로 단위 테스트하지 않고 e2e로만 검증하며 모킹 프레임워크를 도입하지 않는다.
@@ -555,7 +558,7 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 | `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 기존 CI 통과, 차트 렌더, 롤백 드릴 |
 | `REQ-014` | AC-010 | T-017, T-021 | 로그·응답 grep |
 | `REQ-015` | AC-005, AC-015 | T-040, T-021 | accesslog/config/Monitor 403 표, 로그 미발행 |
-| `REQ-016` | AC-008, AC-016 | T-010, T-019, T-025 | 조회 횟수 표, https 기동 검증 |
+| `REQ-016` | AC-008, AC-016 | T-010, T-019, T-025 | 조회 시작 상한 1+⌈T/30⌉·시나리오 a–h 표, https 기동 검증 |
 | `REQ-017` | AC-017 | T-041, T-021 | cursor 교차 재생·갱신 후 연속 |
 | `REQ-018` | AC-019 | T-027, T-030, T-032 | 롤아웃 드릴 표, 운영 문서 |
 
@@ -673,3 +676,15 @@ T-005 재검토 3라운드(Codex): ACL·rootdn·서비스 계정 규칙은 OK(AC
 - D8: negative cache 만료 기준을 고정 TTL 30s에서 “삽입 시점의 다음 조회 허용 시각 `R`”로 변경(30s 거부 상한은 표에서 도출되는 성질로 격하).
 - D9: IP throttle 경계를 포함형으로 확정, reservation 해제 경로·Retry-After 규칙 추가.
 - D2: 중복 세션 쿠키는 기존 브라우저 동작을 유지(Authorization 헤더에만 중복 거부 규칙).
+
+## Revision 5 (2026-10-07)
+
+T-005 재검토 4라운드(Codex): 설계 차단 없음, 정밀도·일관성 결함 5건만 지적됐다. 새 장치를 추가하지 않고 정의만 고쳤다.
+
+| # | 지적 | 처리 | 위치 |
+|---|---|---|---|
+| R5-1 | `R`은 조회 완료 기준인데 시나리오는 `δ=0`을 가정 | 테스트 모델 명시(시작 `t_s`·소요 `δ`·완료 `t_c`, `G`는 시작 시점, `R`은 완료 기준, 기본 `δ=0`); f를 f1(`δ=0`: 0/30/90/210)과 f2(실패 `δ=5s`: 시작 0/35/100, t=100 복구)로 분리; g의 200은 완료 시각 | JWKS 상태 기계 |
+| R5-2 | 예산 상한 `⌈T/30⌉` vs `1+⌈T/30⌉` 불일치, discovery→JWKS 계수 | 닫힌 구간 `[t0, t0+T]`에서 시작 ≤ `1+⌈T/30⌉`로 통일; discovery+JWKS는 **1회 refresh = 예산 1건** | 불변식 ①, AC-016, 검증 표, T-019 |
+| R5-3 | 폭주 요구 “오류는 401” vs 조회 실패 503 | AC-016이 상태 기계 표의 조건별 규칙을 참조(정상 조회 후 미지 kid 401, 조회 실패·backoff 503) | AC-016 |
+| R5-4 | “잘못된 Authorization은 모든 경우 401”이 매트릭스와 충돌 | 보호 경로에서 앞선 게이트 통과 후로 한정, 정본은 매트릭스 | AC-006 |
+| R5-5 | AC-018 검증 표 2구성 vs T-026 3구성 | 표를 3구성(운영자 선행 allow, `olcAccess` 순서 읽기)으로 동기화 | 검증 표, AC-018 |
