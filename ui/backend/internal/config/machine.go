@@ -318,15 +318,18 @@ func checkMachineBindDN(bindDN string, cfg Config, rootDNs []string) error {
 		}
 	}
 	// An operator who separated entries with commas instead of ';' produces one
-	// long, valid-looking DN whose leading RDNs are the real DNs. Refuse when the
-	// bind DN equals any leading-RDN prefix of an entry. (A repeated-suffix check
-	// was considered and rejected: legitimate DNs such as
-	// cn=a,ou=x,dc=example,dc=org can look the same, so it would false-positive.)
+	// long, valid-looking DN that contains each real DN as a contiguous run of
+	// RDNs. Refuse when the bind DN equals ANY contiguous run (i..j) of an entry,
+	// which also refuses a bind DN equal to a pure suffix such as the base DN (not
+	// a sensible machine identity). A repeated-suffix check was rejected: it
+	// false-positives on legitimate DNs.
 	for _, other := range privileged {
 		if d, err := ldap.ParseDN(other); err == nil {
-			for k := 1; k < len(d.RDNs); k++ {
-				if bind.EqualFold(&ldap.DN{RDNs: d.RDNs[:k]}) {
-					return fmt.Errorf("MACHINE_LDAP_BIND_DN matches the start of a configured DN entry; separate DN list entries with ';', not ','")
+			for i := 0; i < len(d.RDNs); i++ {
+				for j := i + 1; j <= len(d.RDNs); j++ {
+					if bind.EqualFold(&ldap.DN{RDNs: d.RDNs[i:j]}) {
+						return fmt.Errorf("MACHINE_LDAP_BIND_DN matches a run of RDNs inside a configured DN entry; separate DN list entries with ';', not ','")
+					}
 				}
 			}
 		}
