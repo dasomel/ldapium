@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
 """Live verification of self-service change-password failure against real LDAP & UI containers.
 
-Exercises the real browser UI (Playwright) against a live stack to observe the exact
-screen text, status codes, error envelope, and UI logs for password change rejections.
+Exercises the real browser UI (Playwright) against a live stack and asserts the status
+code, error envelope code, screen text and UI log for each password change rejection.
+Image tags come from LDAPIUM_IMAGE / LDAPIUM_UI_IMAGE (default ldapium:e2e, ldapium-ui:e2e);
+LDAPIUM_CP_PREFIX renames the throwaway docker objects.
 """
 import http.cookiejar
 import json
 import os
+import pathlib
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
 import uuid
 
-ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:lane-249')
-ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:lane-249')
+ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
+ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:e2e')
 root = 'dc=example,dc=org'
 admin_dn = 'cn=admin,' + root
-prefix = 'ldapium-cp-249-' + uuid.uuid4().hex[:6]
+prefix = os.environ.get('LDAPIUM_CP_PREFIX', 'ldapium-cp-') + uuid.uuid4().hex[:8]
 network = prefix + '-net'
 volumes = [prefix + '-cfg', prefix + '-data']
 ldap_name = prefix + '-ldap'
 ui_name = prefix + '-ui'
 containers = []
+created_volumes = []
+network_created = False
+frontend_dir = pathlib.Path(__file__).resolve().parents[2] / 'ui' / 'frontend'
+pw_file = '/tmp/.admin-pw'
 
 admin_password = 'Admin-' + uuid.uuid4().hex[:12] + '!'
 user_password = 'Current-Pass-123!'
@@ -32,18 +40,27 @@ user_dn = 'uid=cpuser,ou=people,' + root
 def run_cmd(args, **kwargs):
   return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs).stdout.strip()
 
+def check(condition, message):
+  if not condition:
+    raise AssertionError(message)
+  print('ok:', message)
+
 def cleanup():
-  for c in set(containers + [ldap_name, ui_name]):
+  # Only objects this run created: a name collision never removes someone else's container.
+  for c in containers:
     subprocess.run(['docker', 'rm', '-f', c], capture_output=True)
-  for v in volumes:
+  for v in created_volumes:
     subprocess.run(['docker', 'volume', 'rm', v], capture_output=True)
-  subprocess.run(['docker', 'network', 'rm', network], capture_output=True)
+  if network_created:
+    subprocess.run(['docker', 'network', 'rm', network], capture_output=True)
 
 try:
   print('Creating docker network %s...' % network)
   run_cmd(['docker', 'network', 'create', network])
+  network_created = True
   for v in volumes:
     run_cmd(['docker', 'volume', 'create', v])
+    created_volumes.append(v)
 
   print('Starting LDAP container (%s)...' % ldap_image)
   run_cmd(['docker', 'run', '-d', '--name', ldap_name, '--network', network,
@@ -57,11 +74,15 @@ try:
           env={**os.environ, 'LDAP_ADMIN_PASSWORD': admin_password})
   containers.append(ldap_name)
 
+  # The admin password reaches the tools via a 0600 file inside the disposable container
+  # (written from its own environment), so it never rides in a tool's argv.
+  run_cmd(['docker', 'exec', ldap_name, 'sh', '-c', 'umask 077; printf %s "$LDAP_ADMIN_PASSWORD" > ' + pw_file])
+
   # Wait for LDAP to accept admin bind
   ldap_ready = False
   for _ in range(60):
     res = subprocess.run(['docker', 'exec', ldap_name, 'sh', '-c',
-                          'ldapwhoami -x -H ldap://127.0.0.1 -D "$0" -w "$LDAP_ADMIN_PASSWORD"', admin_dn],
+                          'ldapwhoami -x -H ldap://127.0.0.1 -D "$0" -y ' + pw_file, admin_dn],
                          capture_output=True, text=True)
     if res.returncode == 0:
       ldap_ready = True
@@ -75,20 +96,13 @@ try:
       f"dn: ou=people,{root}\nobjectClass: organizationalUnit\nou: people\n\n"
       f"dn: ou=groups,{root}\nobjectClass: organizationalUnit\nou: groups\n\n"
       f"dn: {user_dn}\nobjectClass: inetOrgPerson\nuid: cpuser\ncn: CP User\nsn: User\n"
+      f"userPassword: {user_password}\n"
   )
   res = subprocess.run(['docker', 'exec', '-i', ldap_name, 'sh', '-c',
-                        'ldapadd -x -H ldap://127.0.0.1 -D "$0" -w "$LDAP_ADMIN_PASSWORD"', admin_dn],
+                        'ldapadd -x -H ldap://127.0.0.1 -D "$0" -y ' + pw_file, admin_dn],
                        input=ldif, capture_output=True, text=True)
   if res.returncode != 0:
     raise RuntimeError(f"Scaffold failed: {res.stderr}")
-
-  # Set initial password for cpuser
-  res = subprocess.run(['docker', 'exec', '-i', ldap_name, 'sh', '-c',
-                        'ldappasswd -x -H ldap://127.0.0.1 -D "$0" -w "$LDAP_ADMIN_PASSWORD" -s "$1" "$2"',
-                        admin_dn, user_password, user_dn],
-                       capture_output=True, text=True)
-  if res.returncode != 0:
-    raise RuntimeError(f"Setting initial password failed: {res.stderr}")
 
   print('Starting UI container (%s)...' % ui_image)
   run_cmd(['docker', 'run', '-d', '--name', ui_name, '--network', network,
@@ -195,7 +209,9 @@ async function main() {{
     '{user_password}'
   );
 
-  console.log('SCENARIO_1_REQUEST_ID: ' + (r1.bodyJson && r1.bodyJson.requestId ? r1.bodyJson.requestId : ''));
+  for (const r of [r1, r2, r3]) {{
+    console.log('SCENARIO_RESULT: ' + JSON.stringify({{ name: r.name, status: r.status, code: r.bodyJson && r.bodyJson.code, requestId: r.bodyJson && r.bodyJson.requestId, screenText: r.screenText }}));
+  }}
   await browser.close();
   console.log('\\nAll browser scenarios complete.');
 }}
@@ -206,30 +222,36 @@ main().catch((err) => {{
 }});
 """
 
-  script_path = 'ui/frontend/pw_change_test.mjs'
-  with open(script_path, 'w') as f:
-    f.write(node_script)
-
-  req_id = ''
+  # A unique file inside the frontend dir (so @playwright/test resolves), never a fixed name.
+  fd, script_path = tempfile.mkstemp(prefix='.pw_change_', suffix='.mjs', dir=str(frontend_dir))
   try:
-    result = subprocess.run(['node', 'pw_change_test.mjs'], cwd='ui/frontend', capture_output=True, text=True)
-    print(result.stdout)
-    if result.returncode != 0:
-      print(result.stderr, file=sys.stderr)
-      raise RuntimeError('Node runner exited with non-zero code')
-    for line in result.stdout.splitlines():
-      if line.startswith('SCENARIO_1_REQUEST_ID: '):
-        req_id = line.split(':', 1)[1].strip()
+    with os.fdopen(fd, 'w') as f:
+      f.write(node_script)
+    result = subprocess.run(['node', os.path.basename(script_path)], cwd=str(frontend_dir), capture_output=True, text=True)
   finally:
-    if os.path.exists(script_path):
-      os.remove(script_path)
+    os.remove(script_path)
+  print(result.stdout)
+  if result.returncode != 0:
+    print(result.stderr, file=sys.stderr)
+    raise RuntimeError('Node runner exited with non-zero code')
+  results = [json.loads(l.split(':', 1)[1]) for l in result.stdout.splitlines() if l.startswith('SCENARIO_RESULT: ')]
+  check(len(results) == 3, 'three scenarios reported')
+  r1, r2, r3 = results
+  check(r1['status'] == 500 and r1['code'] == 'internal' and r1['screenText'] == 'internal error',
+        'wrong current password: 500, code internal, screen "internal error"')
+  check(r2['status'] == 400 and r2['code'] == 'invalid_request' and 'strength checks' in r2['screenText'],
+        'weak new password: 400, code invalid_request, policy text visible')
+  check(r3['status'] == 400 and r3['code'] == 'invalid_request' and 'not being changed' in r3['screenText'],
+        'unchanged password: 400, code invalid_request, policy text visible')
 
-  print('\nUI container server log for 500 failure:')
+  req_id = r1['requestId']
+  check(bool(req_id), 'scenario 1 carries a requestId')
   ui_logs = subprocess.run(['docker', 'logs', ui_name], capture_output=True, text=True)
-  all_logs = ui_logs.stdout + ui_logs.stderr
-  for line in all_logs.splitlines():
-    if (req_id and req_id in line) or 'internal error' in line.lower() or 'ldap result' in line.lower():
-      print('  LOG:', line)
+  check(ui_logs.returncode == 0, 'UI log lookup succeeded')
+  lines = [l for l in (ui_logs.stdout + ui_logs.stderr).splitlines() if req_id in l]
+  for line in lines:
+    print('  LOG:', line)
+  check(any('Result Code 53' in l for l in lines), 'UI log for the 500 requestId has "Result Code 53"')
 
 finally:
   print('\nCleaning up containers...')

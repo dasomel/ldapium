@@ -1,9 +1,9 @@
 # Evidence: HTTP API error envelope, `/metrics`, CORS (#218, #249)
 
 Environment: macOS, docker context `colima`, Go 1.27.1, Node v26.10.0, Playwright 1.63 (chromium), Python 3.
-Image tags: `ldapium:lane-249` (slapd, built from `image/Dockerfile`) and `ldapium-ui:lane-249` (UI backend & frontend, built from `ui/Dockerfile`).
+Image tags: the edge-codes run used `ldapium:lane-249` / `ldapium-ui:lane-249`; the change-password re-run (below) used fresh builds `ldapium:lane-249b` (`docker build -t ldapium:lane-249b -f image/Dockerfile ./image`) and `ldapium-ui:lane-249b` (`docker build -t ldapium-ui:lane-249b ui`).
 Date: 2026-10-06.
-Docker objects were prefixed `ldapium-edge-249-` and `ldapium-cp-249-`, and cleaned up after execution.
+Docker objects were prefixed `ldapium-edge-249-` and `ldapium-cp-249b-`, and cleaned up after execution.
 
 ## T-001..T-004 Baselines and Downstream Review
 
@@ -22,7 +22,7 @@ Docker objects were prefixed `ldapium-edge-249-` and `ldapium-cp-249-`, and clea
 ## Groups Screen E2E Test (T-015, AC-002)
 
 Added `group list failure shows the validation text` to `ui/frontend/e2e/error-envelope.spec.ts` mirroring the existing user list failure case.
-Ran Playwright test suite against dev server (`E2E_BASE_URL=http://localhost:15249`):
+Ran Playwright test suite against dev server (`E2E_BASE_URL=http://localhost:15249`; mocked routes, no backend):
 ```
 Running 6 tests using 1 worker
   ✓ login shows the 429 text and ignores the new keys (930ms)
@@ -36,7 +36,9 @@ Running 6 tests using 1 worker
 
 ## Live Change-Password Check & Decision (T-017, AC-017)
 
-Run against live stack (`ldapium:lane-249` and `ldapium-ui:lane-249`) with Chromium driving `ChangePasswordPage.tsx`:
+Re-run 2026-10-06 against `ldapium:lane-249b` and `ldapium-ui:lane-249b` with Chromium driving `ChangePasswordPage.tsx`:
+`LDAPIUM_IMAGE=ldapium:lane-249b LDAPIUM_UI_IMAGE=ldapium-ui:lane-249b LDAPIUM_CP_PREFIX=ldapium-cp-249b- python3 scripts/test/test-change-password-live.py`.
+The script now asserts every outcome below (status, `code`, screen text, and `LDAP Result Code 53` in the UI log for the 500's requestId; a missing log line fails the run). All `ok:` checks passed. requestIds below are from the earlier lane-249 run; the 249b run produced the same statuses, codes and texts with new requestIds (e.g. `hlxLepQJGyjuTTHVlYqEeUCYrOTlMvJS` for scenario 1):
 
 1. **Scenario 1 — Wrong current password:**
    - Input: Current = `Wrong-Current-Pass-999!`, New = `Valid-New-Pass-456!`, Confirm = `Valid-New-Pass-456!`.
@@ -82,3 +84,9 @@ ok: /metrics on the metrics port only (18 routes in the label set); public /metr
 PASS: unlock idempotent (204/404), lock->bind fails->unlock->bind works, group member 204/409/404, error envelope on 400/401/403/404/405/409/412/422/428/500 (error==message, requestId==X-Request-Id, no DN), password-policy text without DN, meta allowlist, no userPassword in /api/entry, conditional writes (If-Match/ETag/PATCH/create rollback)
 ```
 Status: PASS (exit 0).
+
+## Frontend Playwright specs run for T-041
+
+Scope actually run: only the specs that use mocked routes and need no backend or credentials, against `npx vite --port 15260 --strictPort` (`E2E_BASE_URL=http://localhost:15260`; vite binds IPv6 localhost, so `127.0.0.1` does not connect):
+`npx playwright test api-docs conditional-writes.spec error-envelope` -> `24 passed (16.7s)`.
+NOT run: `applications`, `backups`, `backup-jobs`, `conditional-writes-live`, `grafana-permissions`, `groups-pagination`, `health`, `keycloak-apps`, `origin-gate`, `ui-review`. They require `E2E_ADMIN_DN`/`E2E_ADMIN_PASSWORD` and a live stack (`applications.spec.ts` and `backups.spec.ts` throw at load without them, observed), Grafana or Keycloak; CI runs them (`ui-e2e.yml`, `ui-fixture-e2e.yml`).
