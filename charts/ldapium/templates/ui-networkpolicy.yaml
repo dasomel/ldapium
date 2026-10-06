@@ -34,6 +34,6 @@ spec:
     - from:
         {{- toYaml .Values.ui.metrics.networkPolicy.from | nindent 8 }}
       ports:
-        - port: {{ int .Values.ui.metrics.port }}
+        - port: {{ include "ldapium.ui.metricsPort" . }}
           protocol: TCP
 {{- end }}

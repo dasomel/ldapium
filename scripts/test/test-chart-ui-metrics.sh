@@ -98,6 +98,13 @@ check "PodMonitor targets the ui-metrics container port" has "$pm" 'port: ui-met
 check "serviceMonitor without ui.metrics.enabled fails" fails_with 'requires ui.metrics.enabled' --set ui.metrics.serviceMonitor.enabled=true
 check "podMonitor without ui.metrics.enabled fails" fails_with 'requires ui.metrics.enabled' --set ui.metrics.podMonitor.enabled=true
 check "ui.metrics.port 8080 (the container's HTTP listener) fails" fails_with 'must not be 8080' "${on[@]}" --set ui.metrics.port=8080
+# Ports are validated and compared numerically, not as written.
+for bad_port in 0 65536 -1 99999; do
+	check "ui.metrics.port $bad_port fails (must be 1-65535)" fails_with '1-65535' "${on[@]}" --set "ui.metrics.port=$bad_port"
+done
+check "ui.metrics.port 08080 is the same port as 8080 and fails" fails_with 'must not be 8080' "${on[@]}" --set-string ui.metrics.port=08080
+check "ui.metrics.port abc fails" fails_with '1-65535' "${on[@]}" --set-string ui.metrics.port=abc
+check "ui.metrics.port 09331 renders as 9331" has "$(render "${on[@]}" --set-string ui.metrics.port=09331 --show-only templates/ui-deployment.yaml)" 'value: ":9331"'
 # The Service port is not the container listener: 80 -> 8080 is a normal setup and must not hide the collision.
 check "ui.metrics.port 8080 fails even when ui.service.port is 80" fails_with 'must not be 8080' "${on[@]}" --set ui.service.port=80 --set ui.metrics.port=8080
 check "a metrics port equal to the Service port is fine when it is not 8080" render "${on[@]}" --set ui.service.port=9331 >/dev/null

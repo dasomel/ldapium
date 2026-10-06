@@ -73,6 +73,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ui
 {{- end -}}
 
+{{/*
+The validated UI metrics port as a plain number. It must be digits only, within
+1-65535, and not 8080 (the UI container's own HTTP listener, which METRICS_ADDR
+would collide with, so the backend would refuse to start). Compared numerically,
+so 08080 is 8080. Included wherever the port is rendered, so a bad value fails
+every template that would use it.
+*/}}
+{{- define "ldapium.ui.metricsPort" -}}
+{{- $raw := printf "%v" .Values.ui.metrics.port | trim -}}
+{{- if not (regexMatch "^[0-9]+$" $raw) }}{{ fail (printf "ui.metrics.port must be a number in 1-65535, got %q" $raw) }}{{ end -}}
+{{- $port := atoi $raw -}}
+{{- if or (lt $port 1) (gt $port 65535) }}{{ fail (printf "ui.metrics.port must be in 1-65535, got %q" $raw) }}{{ end -}}
+{{- if eq $port 8080 }}{{ fail "ui.metrics.port must not be 8080: that is the UI container's own HTTP listener (the metrics listener would collide with it and the backend would refuse to start)" }}{{ end -}}
+{{- $port -}}
+{{- end -}}
+
 {{/* Labels of the UI metrics Service. A distinct component keeps it out of the selector of every other Service/ServiceMonitor of this chart. */}}
 {{- define "ldapium.ui.metricsLabels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}

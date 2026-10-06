@@ -152,7 +152,7 @@ spec:
             # selector is broad and whose endpoint port is named metrics, cannot
             # pick this up.
             - name: ui-metrics
-              containerPort: {{ int .Values.ui.metrics.port }}
+              containerPort: {{ include "ldapium.ui.metricsPort" . }}
               protocol: TCP
             {{- end }}
           # /api/auth/config is unauthenticated and answers from configuration
@@ -317,7 +317,7 @@ spec:
               value: {{ .Values.ui.trustedProxies | quote }}
             {{- if .Values.ui.metrics.enabled }}
             - name: METRICS_ADDR
-              value: {{ printf ":%d" (int .Values.ui.metrics.port) | quote }}
+              value: {{ printf ":%s" (include "ldapium.ui.metricsPort" .) | quote }}
             {{- end }}
             {{- if .Values.ui.sso.enabled }}
             - name: SSO_ENABLED
