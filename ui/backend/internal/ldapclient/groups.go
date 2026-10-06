@@ -116,6 +116,39 @@ func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInpu
 	return nil
 }
 
+// groupPatchModify builds the single Modify a PatchGroup sends.
+func groupPatchModify(dn string, p domain.GroupPatch, ctrls []ldap.Control) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, ctrls)
+	patchAttr(mod, "cn", p.CN)
+	patchAttr(mod, "description", p.Description)
+	return mod
+}
+
+// PatchGroup applies a merge patch to the group at dn in one Modify.
+func (c *client) PatchGroup(ctx context.Context, dn string, p domain.GroupPatch, ifMatch string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.Empty() {
+		return fmt.Errorf("%w: patch changes no field", domain.ErrInvalidInput)
+	}
+	if p.CN != nil && (p.CN.Clear || p.CN.Value == "") {
+		return fmt.Errorf("%w: cn cannot be removed", domain.ErrInvalidInput)
+	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.Modify(groupPatchModify(dn, p, ctrls)); err != nil {
+		return mapErr("patch group", err)
+	}
+	return nil
+}
+
 // DeleteGroup removes the group entry at dn.
 func (c *client) DeleteGroup(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {

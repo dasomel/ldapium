@@ -12,6 +12,7 @@ import (
 
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
@@ -84,7 +85,7 @@ func (r *recordingClient) ListGroups(context.Context, string) ([]domain.Group, b
 
 // newWriteTestServer builds the real router (so routing, method handling and
 // the error handler are exercised) with one logged-in session bound to rc.
-func newWriteTestServer(t *testing.T, rc *recordingClient) (*Server, *http.Cookie) {
+func newWriteTestServer(t *testing.T, bound ldapclient.Client) (*Server, *http.Cookie) {
 	t.Helper()
 	cfg := config.Config{SessionSecret: testSecret, SessionTTL: time.Minute, BaseDN: "dc=example,dc=org"}
 	store := session.NewStore(time.Minute)
@@ -93,7 +94,7 @@ func newWriteTestServer(t *testing.T, rc *recordingClient) (*Server, *http.Cooki
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	sess, err := store.Create("cn=admin,dc=example,dc=org", rc)
+	sess, err := store.Create("cn=admin,dc=example,dc=org", bound)
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}

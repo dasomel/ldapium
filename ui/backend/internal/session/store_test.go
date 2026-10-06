@@ -46,6 +46,12 @@ func (f *fakeClient) UpdateUser(context.Context, string, domain.UserInput, strin
 	return nil
 }
 func (f *fakeClient) DeleteUser(context.Context, string, string) error { return nil }
+func (f *fakeClient) PatchUser(context.Context, string, domain.UserPatch, string) error {
+	return nil
+}
+func (f *fakeClient) PatchGroup(context.Context, string, domain.GroupPatch, string) error {
+	return nil
+}
 func (f *fakeClient) SetPassword(context.Context, string, string, string) (string, error) {
 	return "", nil
 }

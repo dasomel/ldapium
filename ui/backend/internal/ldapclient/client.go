@@ -81,6 +81,10 @@ type Client interface {
 	CreateUser(ctx context.Context, base string, in domain.UserInput) (string, error)
 	// UpdateUser replaces the given attributes on the user at dn.
 	UpdateUser(ctx context.Context, dn string, in domain.UserInput, ifMatch string) error
+	// PatchUser changes only the attributes present in the patch (JSON
+	// Merge Patch semantics); everything else on the entry is left alone,
+	// unlike UpdateUser which clears every optional field it is not given.
+	PatchUser(ctx context.Context, dn string, patch domain.UserPatch, ifMatch string) error
 	// DeleteUser removes the user entry at dn.
 	DeleteUser(ctx context.Context, dn, ifMatch string) error
 	// SetPassword changes the password of dn via RFC 3062 Password Modify.
@@ -114,6 +118,8 @@ type Client interface {
 	CreateGroup(ctx context.Context, base string, in domain.GroupInput) (string, error)
 	// UpdateGroup replaces the given attributes on the group at dn.
 	UpdateGroup(ctx context.Context, dn string, in domain.GroupInput, ifMatch string) error
+	// PatchGroup changes only the attributes present in the patch.
+	PatchGroup(ctx context.Context, dn string, patch domain.GroupPatch, ifMatch string) error
 	// DeleteGroup removes the group entry at dn.
 	DeleteGroup(ctx context.Context, dn, ifMatch string) error
 	// AddMember adds memberDN to the group's member attribute.

@@ -191,7 +191,7 @@ func TestWrongMethodAnswers405WithAllow(t *testing.T) {
 		{"single-method path", "POST", "/api/auth/config", []string{"GET", "HEAD", "OPTIONS"}},
 		{"multi-method path", "GET", "/api/groups/members", []string{"POST", "DELETE", "OPTIONS"}},
 		{"multi-method path, other wrong verb", "PUT", "/api/groups/members", []string{"POST", "DELETE", "OPTIONS"}},
-		{"multi-method collection", "PATCH", "/api/users", []string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"}},
+		{"multi-method collection", "TRACE", "/api/users", []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

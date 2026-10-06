@@ -235,7 +235,7 @@ def run():
 
   text, headers = expect(404, 'GET', '/api/no-such-endpoint', None, 'unknown api path')
   envelope(text, headers, 'not_found', 'unknown path 404')
-  text, headers = expect(405, 'PATCH', '/api/users', None, 'wrong method')
+  text, headers = expect(405, 'TRACE', '/api/users', None, 'wrong method')
   check(headers.get('Allow'), 'wrong method response lacks Allow header')
   envelope(text, headers, 'method_not_allowed', 'wrong method 405')
 

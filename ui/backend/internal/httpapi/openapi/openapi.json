@@ -1070,6 +1070,85 @@
             }
           }
         ]
+      },
+      "patch": {
+        "operationId": "patchUser",
+        "summary": "Patch a user",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases every optional field (`givenName`, `mail`, `department`, `organization`, `organizationalUnit`) that it omits.",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Patched"
+          },
+          "400": {
+            "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "403": {
+            "description": "Permission denied by directory ACL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/merge-patch+json or application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatchRequest"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatchRequest"
+              }
+            }
+          }
+        }
       }
     },
     "/api/users/password": {
@@ -1534,6 +1613,85 @@
             }
           }
         ]
+      },
+      "patch": {
+        "operationId": "patchGroup",
+        "summary": "Patch a group",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases `description` when it is omitted.",
+        "tags": [
+          "Groups"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Patched"
+          },
+          "400": {
+            "description": "Invalid patch: empty string, unknown key, `uid`/`password`, removing `cn`/`sn`, no field to change, or invalid value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Group not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "403": {
+            "description": "Permission denied by directory ACL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/merge-patch+json or application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatchRequest"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatchRequest"
+              }
+            }
+          }
+        }
       }
     },
     "/api/groups/members": {
@@ -5474,6 +5632,94 @@
           "requestId": "5nQe3kXyZpLwTqA0vB9cJmRdUsHf2GoE",
           "retryable": false
         }
+      },
+      "UserPatchRequest": {
+        "type": "object",
+        "description": "JSON Merge Patch (RFC 7396) for a user. A key that is absent keeps its current value; a non-empty string sets it; `null` removes it. An empty string is rejected (400) because set-to-empty versus remove is ambiguous. `uid` (immutable) and `password` (use POST /api/users/password) are rejected, as is any unknown key. `cn` and `sn` are required attributes and cannot be removed. At least one field besides `dn` is required.",
+        "properties": {
+          "dn": {
+            "type": "string",
+            "description": "Distinguished name of the user to patch."
+          },
+          "cn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "givenName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set, or null to remove."
+          },
+          "mail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set (must be a valid address), or null to remove."
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "departmentNumber. Set, or null to remove."
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "o. Set, or null to remove."
+          },
+          "organizationalUnit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "ou. Set, or null to remove."
+          }
+        },
+        "required": [
+          "dn"
+        ],
+        "additionalProperties": false
+      },
+      "GroupPatchRequest": {
+        "type": "object",
+        "description": "JSON Merge Patch (RFC 7396) for a group's own attributes; membership has its own endpoints. Absent keys are kept, a non-empty string sets, `null` removes `description`. `cn` cannot be removed. Unknown keys and empty strings are rejected (400). At least one field besides `dn` is required.",
+        "properties": {
+          "dn": {
+            "type": "string",
+            "description": "Distinguished name of the group to patch."
+          },
+          "cn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Set, or null to remove."
+          }
+        },
+        "required": [
+          "dn"
+        ],
+        "additionalProperties": false
       }
     }
   },

@@ -112,6 +112,12 @@ func (f *fakeLoginClient) UpdateUser(context.Context, string, domain.UserInput, 
 	return nil
 }
 func (f *fakeLoginClient) DeleteUser(context.Context, string, string) error { return nil }
+func (f *fakeLoginClient) PatchUser(context.Context, string, domain.UserPatch, string) error {
+	return nil
+}
+func (f *fakeLoginClient) PatchGroup(context.Context, string, domain.GroupPatch, string) error {
+	return nil
+}
 func (f *fakeLoginClient) SetPassword(context.Context, string, string, string) (string, error) {
 	return "", nil
 }

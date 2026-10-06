@@ -169,6 +169,60 @@ func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput,
 	return nil
 }
 
+// patchAttr applies one field of a merge patch: absent is a no-op, an
+// explicit clear is Replace with no values (idempotent, see replaceOrClear),
+// anything else a single-value Replace.
+func patchAttr(mod *ldap.ModifyRequest, attrType string, f *domain.PatchField) {
+	switch {
+	case f == nil:
+	case f.Clear:
+		mod.Replace(attrType, []string{})
+	default:
+		mod.Replace(attrType, []string{f.Value})
+	}
+}
+
+// userPatchModify builds the single Modify a PatchUser sends: one Replace per
+// field present in the patch and nothing else.
+func userPatchModify(dn string, p domain.UserPatch, ctrls []ldap.Control) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, ctrls)
+	patchAttr(mod, "cn", p.CN)
+	patchAttr(mod, "sn", p.SN)
+	patchAttr(mod, "givenName", p.GivenName)
+	patchAttr(mod, "mail", p.Mail)
+	patchAttr(mod, "departmentNumber", p.Department)
+	patchAttr(mod, "o", p.Organization)
+	patchAttr(mod, "ou", p.OrganizationalUnit)
+	return mod
+}
+
+// PatchUser applies a merge patch to the user at dn in one Modify. cn and sn
+// are required attributes, so clearing them is refused here as well as by
+// the HTTP layer.
+func (c *client) PatchUser(ctx context.Context, dn string, p domain.UserPatch, ifMatch string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.Empty() {
+		return fmt.Errorf("%w: patch changes no field", domain.ErrInvalidInput)
+	}
+	if (p.CN != nil && (p.CN.Clear || p.CN.Value == "")) || (p.SN != nil && (p.SN.Clear || p.SN.Value == "")) {
+		return fmt.Errorf("%w: cn and sn cannot be removed", domain.ErrInvalidInput)
+	}
+	ctrls, err := revisionControls(ifMatch)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.conn.Modify(userPatchModify(dn, p, ctrls)); err != nil {
+		return mapErr("patch user", err)
+	}
+	return nil
+}
+
 // replaceOrClear replaces attrType with a single value, or clears it when
 // value is empty (LDAP rejects zero-length attribute values, so an empty
 // string can't be written directly).
