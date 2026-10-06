@@ -37,10 +37,6 @@ type Server struct {
 	sessions     *session.Store
 	sso          *oidcAuthenticator
 	loginLimiter *loginLimiter
-	// writeOrigins are the extra origins the write Origin gate accepts
-	// besides the request's own (see originGate). Empty until the CORS
-	// allow-list is wired in; the gate is on regardless.
-	writeOrigins []string
 	// metrics is a no-op until EnableMetrics replaces it (see metrics.go).
 	metrics metrics.Recorder
 	// idem is the in-memory Idempotency-Key store (nil unless
@@ -116,6 +112,12 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}))
 	s.echo.Use(s.restoreMethodMiddleware())
 	s.echo.Use(middleware.Secure())
+	// CORS exists only when origins are configured (D218-12), and is read-only:
+	// the write Origin gate does not consult the list. After RequestID and the
+	// logger so a preflight answered here still carries X-Request-Id and is logged.
+	if len(cfg.CORSAllowedOrigins) > 0 {
+		s.echo.Use(corsMiddleware(cfg.CORSAllowedOrigins))
+	}
 	s.echo.Use(s.originGate())
 
 	if cfg.BackupOperatorConfig != "" {

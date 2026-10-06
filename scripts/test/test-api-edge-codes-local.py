@@ -147,12 +147,14 @@ def scaffold():
 
 
 metrics_url = ['']
+cors_origin = 'https://console.example'
 
 
 def start_ui():
   # --tmpfs + APP_PROFILES_*: the profile routes are what produce 422/412/428/415.
   command(['docker', 'run', '-d', '--name', ui, '--network', network, '-p', '127.0.0.1::8080', '-p', '127.0.0.1::9331', '--tmpfs', '/tmp:rw,mode=1777',
            '-e', 'METRICS_ADDR=:9331',
+           '-e', 'CORS_ALLOWED_ORIGINS=' + cors_origin,
            '-e', 'APP_PROFILES_PATH=/tmp/profiles.json', '-e', 'APP_PROFILES_ADMIN_DNS=' + admin_dn,
            '-e', 'LDAP_URL=ldap://edge-ldap:389', '-e', 'LDAP_BASE_DN=' + root,
            '-e', 'LDAP_USER_CREATE_BASE=ou=people,' + root, '-e', 'LDAP_GROUP_CREATE_BASE=ou=groups,' + root,
@@ -457,6 +459,62 @@ def envelope(text, headers, code, what, forbidden=()):
   return body
 
 
+def cors_checks(url, call):
+  """#218 D218-12: CORS is read-only and exact-origin (CORS_ALLOWED_ORIGINS=cors_origin), Vary: Origin everywhere."""
+  def vary_origin(headers):
+    return any(token.strip().lower() == 'origin' for value in (headers.get_all('Vary') or []) for token in value.split(','))
+
+  def cors_headers(headers):
+    return sorted(key for key in headers.keys() if key.lower().startswith('access-control-'))
+
+  cases = [('listed origin', {'Origin': cors_origin}, True), ('unlisted origin', {'Origin': 'https://evil.example'}, False),
+           ('null origin', {'Origin': 'null'}, False), ('no Origin header', {'Origin': None}, False)]
+  for path, expect_status in (('/api/auth/config', 200), ('/api/no-such-endpoint', 404), ('/', 200)):
+    for label, origin_header, granted in cases:
+      status, text, headers = call('GET', path, None, origin_header)
+      check(status == expect_status, 'CORS GET %s (%s): %d' % (path, label, status))
+      check(vary_origin(headers), 'CORS GET %s (%s): no Vary: Origin' % (path, label))
+      if granted:
+        check(headers.get('Access-Control-Allow-Origin') == cors_origin and headers.get('Access-Control-Allow-Credentials') == 'true',
+              'CORS GET %s: listed origin not granted: %s' % (path, cors_headers(headers)))
+        check(headers.get('Access-Control-Expose-Headers') == 'X-Request-Id, Retry-After, ETag', 'CORS GET %s: expose headers' % path)
+      else:
+        check(not cors_headers(headers), 'CORS GET %s (%s): unexpected %s' % (path, label, cors_headers(headers)))
+
+  # Preflight: granted for reads only, answered before the handler (204, no body).
+  status, text, headers = call('OPTIONS', '/api/users', None, {'Origin': cors_origin, 'Access-Control-Request-Method': 'GET'})
+  check(status == 204 and text == '' and vary_origin(headers), 'CORS preflight GET: %d %r' % (status, text))
+  check(headers.get('Access-Control-Allow-Origin') == cors_origin and headers.get('Access-Control-Allow-Methods') == 'GET, HEAD, OPTIONS' and
+        headers.get('Access-Control-Allow-Headers') == 'Content-Type, Accept' and headers.get('Access-Control-Max-Age') == '600' and
+        headers.get('Access-Control-Allow-Credentials') == 'true', 'CORS preflight GET headers: %s' % cors_headers(headers))
+  for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+    status, text, headers = call('OPTIONS', '/api/users', None, {'Origin': cors_origin, 'Access-Control-Request-Method': method})
+    check(status == 204 and headers.get('Allow') and not cors_headers(headers) and vary_origin(headers),
+          'CORS preflight %s was granted or lost Vary: %d %s' % (method, status, cors_headers(headers)))
+  status, text, headers = call('OPTIONS', '/api/users', None, {'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'GET'})
+  check(status == 204 and not cors_headers(headers) and vary_origin(headers), 'CORS preflight from an unlisted origin was granted')
+
+  # CORS is read-only: a listed origin gets NO write path. Its simple cross-origin
+  # POSTs (user create, and logout with a form-ish content type) are refused by the
+  # write gate before any handler runs, write nothing and do not end the session.
+  status, text, headers = call('POST', '/api/users', {'uid': 'cors-user', 'cn': 'Cors User', 'sn': 'User'}, {'Origin': cors_origin})
+  envelope(text, headers, 'origin_mismatch', 'user create from a CORS-listed origin')
+  check(status == 403 and not cors_headers(headers), 'CORS-listed origin user create: %d %s' % (status, cors_headers(headers)))
+  status, text, headers = call('GET', '/api/entry?' + urllib.parse.urlencode({'dn': 'uid=cors-user,ou=people,' + root}))
+  check(status == 404, 'the refused create from a listed origin wrote an entry: %d' % status)
+  status, text, headers = call('POST', '/api/logout', None, {'Origin': cors_origin, 'Content-Type': 'text/plain'})
+  envelope(text, headers, 'origin_mismatch', 'logout from a CORS-listed origin')
+  check(status == 403, 'logout from a CORS-listed origin: %d' % status)
+  status, text, headers = call('GET', '/api/me')
+  check(status == 200, 'a listed origin logged the session out: /api/me %d' % status)
+  status, text, headers = call('PUT', '/api/v1/applications/cors-app/integration-profile', {}, {'Origin': cors_origin, 'If-Match': '"0"'})
+  envelope(text, headers, 'origin_mismatch', 'profile write from a CORS-listed origin')
+  check(status == 403 and not cors_headers(headers), 'profile write from a CORS-listed origin: %d' % status)
+  status, text, headers = call('POST', '/api/users', {'uid': 'cors-evil', 'cn': 'x', 'sn': 'x'}, {'Origin': 'https://evil.example'})
+  envelope(text, headers, 'origin_mismatch', 'unlisted origin write')
+  print('ok: CORS read-only for %s (Vary: Origin on every response, preflight GET/HEAD/OPTIONS only, listed origins cannot write: user create and logout are 403, session survives)' % cors_origin)
+
+
 def metrics_checks(url):
   """#218 D218-10: /metrics lives on its own listener; the public port answers it with the 404 envelope."""
   def fetch(base, path, method='GET'):
@@ -653,6 +711,7 @@ def run():
 
   setup_ops()
   conditional_writes(url, login_as)
+  cors_checks(url, call)
   metrics_checks(url)
 
   print('PASS: unlock idempotent (204/404), lock->bind fails->unlock->bind works, group member 204/409/404, error envelope on 400/401/403/404/405/409/412/422/428/500 (error==message, requestId==X-Request-Id, no DN), password-policy text without DN, meta allowlist, no userPassword in /api/entry, conditional writes (If-Match/ETag/PATCH/create rollback)')

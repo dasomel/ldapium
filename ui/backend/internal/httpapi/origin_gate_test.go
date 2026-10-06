@@ -11,8 +11,9 @@ import (
 
 // The write Origin gate (change package api-error-envelope, D218-16, AC-016):
 // an Origin header on a state-changing /api request must be the request's own
-// origin or an allow-listed one, otherwise 403 origin_mismatch before any
-// handler runs. No Origin header means a non-browser caller and is untouched.
+// origin, otherwise 403 origin_mismatch before any handler runs. A CORS-listed
+// origin is not the request's own origin and gets no exception: CORS is read-only.
+// No Origin header means a non-browser caller and is untouched.
 
 func TestSameOrigin(t *testing.T) {
 	cases := []struct {
@@ -64,9 +65,9 @@ func TestSameOrigin(t *testing.T) {
 
 // probe is mounted on a bare Echo so "the handler was not reached" is observed
 // directly, independent of what real handlers would answer.
-func probeServer(t *testing.T, allow []string) (*echo.Echo, *int) {
+func probeServer(t *testing.T) (*echo.Echo, *int) {
 	t.Helper()
-	s := &Server{writeOrigins: allow}
+	s := &Server{}
 	e := echo.New()
 	e.HTTPErrorHandler = apiErrorHandler(e.DefaultHTTPErrorHandler)
 	e.Use(requestIDForTest)
@@ -88,7 +89,7 @@ func requestIDForTest(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 func TestOriginGate_Probe(t *testing.T) {
-	const allowed = "https://console.example"
+	const listed = "https://console.example" // would be a CORS_ALLOWED_ORIGINS entry
 	type tc struct {
 		name, method, path string
 		origin             *string // nil = header absent
@@ -100,7 +101,7 @@ func TestOriginGate_Probe(t *testing.T) {
 		cases = append(cases,
 			tc{m + " same origin", m, "/api/x", str("http://example.com"), true},
 			tc{m + " no origin", m, "/api/x", nil, true},
-			tc{m + " allow-listed origin", m, "/api/x", str(allowed), true},
+			tc{m + " CORS-listed origin", m, "/api/x", str(listed), false},
 			tc{m + " foreign origin", m, "/api/x", str("https://evil.example"), false},
 			tc{m + " null origin", m, "/api/x", str("null"), false},
 			tc{m + " empty origin header", m, "/api/x", str(""), false},
@@ -112,7 +113,7 @@ func TestOriginGate_Probe(t *testing.T) {
 		cases = append(cases, tc{m + " foreign origin is not gated", m, "/api/x", str("https://evil.example"), true})
 	}
 	for _, c := range cases {
-		e, reached := probeServer(t, []string{allowed})
+		e, reached := probeServer(t)
 		req := httptest.NewRequest(c.method, c.path, nil)
 		if c.origin != nil {
 			req.Header["Origin"] = []string{*c.origin}
@@ -131,16 +132,23 @@ func TestOriginGate_Probe(t *testing.T) {
 	}
 }
 
-// With no allow-list (every release before CORS) the allow-listed origin of
-// the table above is simply foreign.
-func TestOriginGate_EmptyAllowListRejectsOtherOrigins(t *testing.T) {
-	e, reached := probeServer(t, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/x", nil)
-	req.Header.Set("Origin", "https://console.example")
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden || *reached != 0 {
-		t.Fatalf("status %d reached %d, want 403 and 0", rec.Code, *reached)
+// Two Origin headers are ambiguous: exactly one value is required, so the gate
+// refuses the request even when the first value is the request's own origin.
+func TestOriginGate_MultipleOriginHeaders(t *testing.T) {
+	for _, values := range [][]string{
+		{"http://example.com", "https://evil.example"},
+		{"https://evil.example", "http://example.com"},
+		{"http://example.com", "http://example.com"},
+	} {
+		e, reached := probeServer(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/x", nil)
+		req.Header["Origin"] = values
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		env := requireEnvelope(t, strings.Join(values, " + "), rec)
+		if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch || env.Error != originGateMessage || *reached != 0 {
+			t.Errorf("Origin %v: %d %+v reached=%d, want the gate's 403 and no handler", values, rec.Code, env, *reached)
+		}
 	}
 }
 
@@ -148,9 +156,10 @@ func TestOriginGate_EmptyAllowListRejectsOtherOrigins(t *testing.T) {
 // gate's own message is distinct from requireProfileWrite's, so "denied by the
 // gate" is observable on routes that also have the stricter per-handler check.
 func TestOriginGate_EveryWriteRoute(t *testing.T) {
-	f := newContractFixture(t)
-	const allowed = "https://console.example"
-	f.s.writeOrigins = []string{allowed}
+	// CORS is configured with the origin below, to prove that listing it for
+	// reads gives it no way through the write gate.
+	f := corsFixture(t)
+	const listed = corsOrigin
 
 	var writes []contractReq
 	for _, r := range f.s.echo.Routes() {
@@ -168,19 +177,6 @@ func TestOriginGate_EveryWriteRoute(t *testing.T) {
 	if len(writes) < 20 {
 		t.Fatalf("only %d write routes enumerated; the route table walk is broken", len(writes))
 	}
-	hasPrefix := func(p string, ps ...string) bool {
-		for _, x := range ps {
-			if strings.HasPrefix(p, x) {
-				return true
-			}
-		}
-		return false
-	}
-	// Routes whose handler also demands Origin == Host (requireProfileWrite).
-	strict := func(p string) bool {
-		return hasPrefix(p, "/api/v1/applications", "/api/v1/backups", "/api/v1/keycloak")
-	}
-
 	for _, w := range writes {
 		label := w.method + " " + w.path
 		do := func(origin *string) (*httptest.ResponseRecorder, errorEnvelope, bool) {
@@ -217,14 +213,9 @@ func TestOriginGate_EveryWriteRoute(t *testing.T) {
 		if rec, env, isErr := do(nil); denied(rec, env, isErr) {
 			t.Errorf("%s without Origin was denied by the gate", label)
 		}
-		// (e) allow-listed origin: passes the gate; the per-handler check on
-		// profile/backup/keycloak writes still refuses it with its own message.
-		rec, env, isErr := do(str(allowed))
-		if denied(rec, env, isErr) {
-			t.Errorf("%s allow-listed origin was denied by the gate", label)
-		}
-		if strict(w.path) && rec.Code != http.StatusNotFound && !(isErr && env.Code == codeOriginMismatch) {
-			t.Errorf("%s allow-listed origin: status %d %+v, want requireProfileWrite's origin_mismatch to stay", label, rec.Code, env)
+		// (e) CORS-listed origin: refused by the gate like any foreign origin.
+		if rec, env, isErr := do(str(listed)); !denied(rec, env, isErr) {
+			t.Errorf("%s CORS-listed origin: status %d %+v, want the gate's 403", label, rec.Code, env)
 		}
 	}
 }
