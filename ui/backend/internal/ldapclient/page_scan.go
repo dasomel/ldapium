@@ -126,11 +126,7 @@ func (c *client) keyScanOnce(ctx context.Context, base, filter, keyAttr string, 
 		if err := ctx.Err(); err != nil {
 			return nil, false, requestCtxErr(err)
 		}
-		if err := c.lockConn(ctx); err != nil {
-			return nil, false, err
-		}
-		entries, cookie, err := c.runChunk(ctx, req)
-		c.mu.Unlock()
+		entries, cookie, err := c.lockedChunk(ctx, req)
 		if err != nil {
 			return nil, false, err
 		}
@@ -157,6 +153,17 @@ func (c *client) keyScanOnce(ctx context.Context, base, filter, keyAttr string, 
 	}
 }
 
+// lockedChunk runs one chunk under c.mu. The unlock is deferred: a panic in
+// the chunk (the HTTP layer recovers it) must not leave the session's
+// connection locked forever.
+func (c *client) lockedChunk(ctx context.Context, req *ldap.SearchRequest) ([]*ldap.Entry, []byte, error) {
+	if err := c.lockConn(ctx); err != nil {
+		return nil, nil, err
+	}
+	defer c.mu.Unlock()
+	return c.runChunk(ctx, req)
+}
+
 // fetchByUUID is phase 2: the full entries of the selected candidates, keyed
 // by entryUUID, in batches. Entries deleted or hidden since phase 1 are simply
 // absent from the result.
@@ -179,11 +186,7 @@ func (c *client) fetchByUUID(ctx context.Context, base string, selected []candid
 			reqAttrs,
 			nil,
 		)
-		if err := c.lockConn(ctx); err != nil {
-			return nil, err
-		}
-		entries, _, err := c.runChunk(ctx, req)
-		c.mu.Unlock()
+		entries, _, err := c.lockedChunk(ctx, req)
 		if err != nil {
 			return nil, err
 		}
