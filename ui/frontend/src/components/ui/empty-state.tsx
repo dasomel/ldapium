@@ -26,7 +26,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
   )
 }
 
-export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorState({ message, hint, onRetry }: { message: string; hint?: string; onRetry?: () => void }) {
   const t = useT()
   return (
     <div role="alert" className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
@@ -38,6 +38,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
         {/* message is the server's/network's own error text — never
          * translated, see lib/i18n/en.ts's file-level comment. */}
         <p className="max-w-sm font-mono text-[12.5px] text-muted-foreground">{message}</p>
+        {hint && <p className="max-w-md text-[13px] text-accent mt-2">{hint}</p>}
       </div>
       {onRetry && (
         <button onClick={onRetry} className="text-[13px] font-medium text-accent hover:underline">

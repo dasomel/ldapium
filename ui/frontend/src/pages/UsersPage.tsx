@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronsLeft, ChevronsRight, CircleAlert, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CircleAlert, KeyRound, Lock, Pencil, Plus, Search, Trash2, Unlock, UserRound, X } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { User, UserFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
+import { useAuth } from '@/context/AuthContext'
 import { useLanguage } from '@/context/LanguageContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,20 +17,26 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { UserFormDialog } from '@/components/users/UserFormDialog'
 import { SetPasswordDialog } from '@/components/users/SetPasswordDialog'
 import { MemberOfDialog } from '@/components/users/MemberOfDialog'
+import { GroupPagination } from '@/components/groups/GroupPagination'
 
-const PAGE_SIZES = [10, 20, 50, 100]
-const PAGE_WINDOW_SIZE = 10
+const MAX_EMPTY_ADVANCES = 20
 
 export function UsersPage() {
   const { notify } = useToast()
+  const { dn } = useAuth()
   const { language, t } = useLanguage()
   const write = useWriteAttempt()
+
   const [users, setUsers] = useState<User[] | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null)
   const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [cursor, setCursor] = useState<string | undefined>(undefined)
+  const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined)
   const [pageSize, setPageSize] = useState(10)
+  const [scanCapped, setScanCapped] = useState(false)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
@@ -37,56 +44,170 @@ export function UsersPage() {
   const [deleting, setDeleting] = useState<User | null>(null)
   const [memberOfUser, setMemberOfUser] = useState<User | null>(null)
 
+  const requestGenRef = useRef(0)
+  // False while unmounted: late write/retry callbacks must not start new requests.
+  const aliveRef = useRef(true)
+  const lastRequestRef = useRef<{
+    cursorParam?: string
+    stackParam: Array<string | undefined>
+    qParam: string
+    sizeParam: number
+  } | null>(null)
+  const prevDnRef = useRef(dn)
+  const isMountedRef = useRef(false)
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
+  // Latest view (cursor/stack/q/limit), refreshed every render: async write
+  // callbacks close over stale state, so they read the view from here instead.
+  const viewRef = useRef({ cursor, cursorStack, q: debouncedQuery, pageSize })
+  viewRef.current = { cursor, cursorStack, q: debouncedQuery, pageSize }
 
-  function load() {
+  // Every request takes a generation; a response (or error) whose generation
+  // is no longer current is dropped, so a slow older request cannot overwrite
+  // newer rows or the cursor stack, and unmount invalidates everything.
+  function loadPage(
+    cursorParam?: string,
+    stackParam: Array<string | undefined> = cursorStack,
+    qParam = debouncedQuery,
+    sizeParam = pageSize,
+    advances = 0,
+  ) {
+    if (!aliveRef.current) return
+    const gen = ++requestGenRef.current
+    lastRequestRef.current = { cursorParam, stackParam, qParam, sizeParam }
     setError(null)
+    if (advances === 0) setScanCapped(false)
     api
-      .listUsers()
-      .then(({ items, truncated }) => {
+      .listUsers({ limit: sizeParam, cursor: cursorParam, q: qParam || undefined })
+      .then(({ items, hasMore: more, nextCursor: next }) => {
+        if (gen !== requestGenRef.current) return
+        const hasMoreBool = Boolean(more)
+        setHasMore(hasMoreBool)
+        setNextCursor(next)
+        setCursor(cursorParam)
+        setCursorStack(stackParam)
+
+        // Empty page with hasMore: true -> auto-advance per CHANGE.md, bounded
+        if (items.length === 0 && hasMoreBool && next) {
+          if (advances < MAX_EMPTY_ADVANCES) {
+            loadPage(next, stackParam, qParam, sizeParam, advances + 1)
+            return
+          }
+          setScanCapped(true)
+        }
         setUsers(items)
-        setTruncated(truncated)
-        setPage(1)
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : t('users.loadFailed')))
+      .catch((err) => {
+        if (gen !== requestGenRef.current) return
+        if (err instanceof ApiError) {
+          // 400 cursor_invalid -> restart from first page if cursor was provided or stack was non-empty
+          if (err.code === 'cursor_invalid' || (err.status === 400 && err.message.includes('cursor'))) {
+            if (cursorParam || stackParam.length > 0) {
+              notify('error', t('common.cursorInvalidNotice'))
+              setCursor(undefined)
+              setCursorStack([])
+              loadPage(undefined, [], qParam, sizeParam)
+              return
+            }
+          }
+          setError({ message: err.message, code: err.code })
+        } else {
+          setError({ message: t('users.loadFailed') })
+        }
+      })
   }
 
-  useEffect(load, [])
+  // Retry re-issues the request that failed (same cursor, q, limit).
+  function retryLast() {
+    const r = lastRequestRef.current
+    if (r) loadPage(r.cursorParam, r.stackParam, r.qParam, r.sizeParam)
+  }
 
-  // Re-read after a conflict or a lost response. Unlike load() it keeps the
-  // current page, so the operator stays where they were.
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      requestGenRef.current++
+    }
+  }, [])
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    const timer = setTimeout(() => {
+      setDebouncedQuery(trimmed)
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    if (!isMountedRef.current) {
+      isMountedRef.current = true
+      loadPage(undefined, [], debouncedQuery, pageSize)
+      return
+    }
+    setCursor(undefined)
+    setCursorStack([])
+    loadPage(undefined, [], debouncedQuery, pageSize)
+  }, [debouncedQuery])
+
+  useEffect(() => {
+    if (prevDnRef.current !== dn) {
+      prevDnRef.current = dn
+      setCursor(undefined)
+      setCursorStack([])
+      loadPage(undefined, [], debouncedQuery, pageSize)
+    }
+  }, [dn])
+
+  // Re-read after a conflict or a lost response (keeps current page).
   async function reread() {
-    const { items, truncated } = await api.listUsers()
-    setUsers(items)
-    setTruncated(truncated)
+    if (!aliveRef.current) return []
+    const gen = requestGenRef.current
+    const startQ = viewRef.current.q
+    const v = viewRef.current
+    const { items } = await api.listUsers({
+      limit: v.pageSize,
+      cursor: v.cursor,
+      q: startQ || undefined,
+    })
+    if (gen === requestGenRef.current && viewRef.current.q === startQ) setUsers(items)
     return items
   }
 
-  const filtered = useMemo(() => {
-    if (!users) return []
-    const q = query.trim().toLowerCase()
-    if (!q) return users
-    return users.filter((u) =>
-      [u.uid, u.cn, u.mail, u.displayName, u.department, u.organization, u.organizationalUnit].some((v) =>
-        v?.toLowerCase().includes(q),
-      ),
-    )
-  }, [users, query])
+  // Post-write refresh: always the CURRENT view, and skipped entirely when the
+  // query changed since the write began (the new query already loads its own page).
+  function refreshAfterWrite(startQ: string) {
+    const v = viewRef.current
+    if (v.q !== startQ) return
+    loadPage(v.cursor, v.cursorStack, v.q, v.pageSize)
+  }
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
-  const currentPage = Math.min(page, pageCount)
-  const pageUsers = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const pageNumbers = useMemo(() => {
-    const visiblePages = Math.min(PAGE_WINDOW_SIZE, pageCount)
-    const firstPage = Math.floor((currentPage - 1) / visiblePages) * visiblePages + 1
-    return Array.from({ length: Math.min(visiblePages, pageCount - firstPage + 1) }, (_, index) => firstPage + index)
-  }, [currentPage, pageCount])
+  const handleNext = () => {
+    if (!hasMore || !nextCursor) return
+    const newStack = [...cursorStack, cursor]
+    loadPage(nextCursor, newStack, debouncedQuery, pageSize)
+  }
 
-  useEffect(() => {
-    setPage(1)
-  }, [query])
+  const handlePrevious = () => {
+    if (cursorStack.length === 0) return
+    const prevCursor = cursorStack[cursorStack.length - 1]
+    const newStack = cursorStack.slice(0, -1)
+    loadPage(prevCursor, newStack, debouncedQuery, pageSize)
+  }
+
+  const handleFirst = () => {
+    if (cursorStack.length === 0) return
+    loadPage(undefined, [], debouncedQuery, pageSize)
+  }
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize)
+    setCursor(undefined)
+    setCursorStack([])
+    loadPage(undefined, [], debouncedQuery, newSize)
+  }
 
   async function handleCreateOrUpdate(input: UserFormInput) {
+    const startQ = viewRef.current.q
     if (editing) {
       const target = editing
       await write(
@@ -102,8 +223,6 @@ export function UsersPage() {
             [t('userForm.departmentLabel'), target.department, input.department],
             [t('userForm.organizationLabel'), target.organization, input.organization],
           ]),
-          // Re-seed the open form from the re-read entry: it carries the new
-          // etag, and the notice tells the operator the values are current.
           onStale: async () => {
             const fresh = (await reread()).find((u) => u.dn === target.dn)
             if (fresh) setEditing(fresh)
@@ -116,19 +235,20 @@ export function UsersPage() {
       await write({ fingerprint: ['create', input] }, (w) => api.createUser(input, w))
       notify('success', t('users.createdToast', { uid: input.uid }))
     }
-    load()
+    setFormOpen(false)
+    setEditing(null)
+    refreshAfterWrite(startQ)
   }
 
   async function handleSetPassword(dn: string, password: string) {
     const res = await api.setPassword(dn, password || undefined)
     notify('success', t('users.passwordUpdatedToast'))
-    // A password change moves the entry's etag; re-read so the next edit or
-    // delete does not hit a needless 412.
     reread().catch(() => undefined)
     return res.generatedPassword
   }
 
   async function handleDelete() {
+    const startQ = viewRef.current.q
     if (!deleting) return
     const target = deleting
     try {
@@ -136,57 +256,54 @@ export function UsersPage() {
         api.deleteUser(target.dn, w),
       )
     } catch (err) {
-      // ConfirmDialog shows no error text, so report it here. The dialog
-      // closes; submitting again is the same attempt (same key) when the
-      // outcome is still open.
       if (!(err instanceof ApiError)) throw err
       notify('error', err.message)
       return
     }
     notify('success', t('users.deletedToast', { uid: target.uid }))
     setDeleting(null)
-    load()
+    refreshAfterWrite(startQ)
   }
 
-  // Not run through ConfirmDialog: unlocking isn't destructive (it can't
-  // lose data — the account was working fine before it got locked out),
-  // so it gets the same one-click treatment as Edit and Set password
-  // rather than the retype-to-confirm flow reserved for deletes.
   async function handleUnlock(u: User) {
+    const startQ = viewRef.current.q
     try {
       await api.unlockUser(u.dn)
       notify('success', t('users.unlockedToast', { uid: u.uid }))
-      load()
+      refreshAfterWrite(startQ)
     } catch (err) {
       notify('error', err instanceof ApiError ? err.message : t('users.unlockFailedToast', { uid: u.uid }))
     }
   }
 
-  // Same one-click treatment as Unlock, not the retype-to-confirm
-  // ConfirmDialog flow reserved for Delete: disabling doesn't lose data
-  // and is immediately reversible with a single Unlock click.
   async function handleLock(u: User) {
+    const startQ = viewRef.current.q
     try {
       await api.lockUser(u.dn)
       notify('success', t('users.lockedToast', { uid: u.uid }))
-      load()
+      refreshAfterWrite(startQ)
     } catch (err) {
       notify('error', err instanceof ApiError ? err.message : t('users.lockFailedToast', { uid: u.uid }))
     }
   }
 
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
+    if (e.target !== e.currentTarget || !users) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      rowRefs.current[index + 1]?.focus()
+      if (index + 1 < users.length) rowRefs.current[index + 1]?.focus()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      rowRefs.current[index - 1]?.focus()
+      if (index - 1 >= 0) rowRefs.current[index - 1]?.focus()
     } else if (e.key === 'Enter') {
-      setEditing(pageUsers[index])
+      e.preventDefault()
+      setEditing(users[index])
       setFormOpen(true)
     }
   }
+
+  const currentPageNumber = cursorStack.length + 1
+  const showPagination = !error && users !== null && (users.length > 0 || hasMore || cursorStack.length > 0)
 
   return (
     <div className="space-y-4">
@@ -194,7 +311,8 @@ export function UsersPage() {
         <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            aria-label={t('users.filterPlaceholder')} placeholder={t('users.filterPlaceholder')}
+            aria-label={t('users.filterPlaceholder')}
+            placeholder={t('users.filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-8 pr-8"
@@ -202,7 +320,10 @@ export function UsersPage() {
           {query && (
             <button
               type="button"
-              onClick={() => setQuery('')}
+              onClick={() => {
+                setQuery('')
+                setDebouncedQuery('')
+              }}
               title={t('users.clearFilter')}
               className="absolute right-1.5 top-1/2 rounded-console p-1.5 -translate-y-1/2 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -229,39 +350,54 @@ export function UsersPage() {
             {t('users.title')}
             {users && (
               <span className="font-mono text-xs font-normal text-muted-foreground">
-                {t('users.totalCount', { count: filtered.length })}
+                {users.length}
               </span>
             )}
           </CardTitle>
         </CardHeader>
-        {truncated && (
-          <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
-            {t('users.truncatedBanner', { n: users?.length ?? 0 })}
-          </div>
-        )}
         <CardContent className="p-0">
-          {error && <ErrorState message={error} onRetry={load} />}
+          {error && (
+            <ErrorState
+              message={error.message}
+              hint={error.code === 'size_limit_exceeded' ? t('common.sizeLimitHint') : undefined}
+              onRetry={
+                error.code === 'scan_timeout' || error.code === 'unavailable'
+                  ? retryLast
+                  : () => loadPage(undefined, [], debouncedQuery, pageSize)
+              }
+            />
+          )}
           {!error && users === null && (
             <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
               <Spinner /> {t('users.loading')}
             </div>
           )}
-          {users?.length === 0 && (
-            <EmptyState
-              icon={UserRound}
-              title={t('users.emptyTitle')}
-              description={t('users.emptyDescription')}
-              action={
-                <Button size="sm" onClick={() => setFormOpen(true)}>
-                  <Plus className="size-4" /> {t('users.newUserButton')}
-                </Button>
-              }
-            />
+          {!error && users?.length === 0 && !hasMore && cursorStack.length === 0 && (
+            debouncedQuery ? (
+              <EmptyState
+                icon={Search}
+                title={t('common.noMatches')}
+                description={t('common.noMatchesDescription', { query: debouncedQuery })}
+              />
+            ) : (
+              <EmptyState
+                icon={UserRound}
+                title={t('users.emptyTitle')}
+                description={t('users.emptyDescription')}
+                action={
+                  <Button size="sm" onClick={() => setFormOpen(true)}>
+                    <Plus className="size-4" /> {t('users.newUserButton')}
+                  </Button>
+                }
+              />
+            )
           )}
-          {!!users?.length && filtered.length === 0 && (
-            <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
+          {!error && users && users.length === 0 && (hasMore || cursorStack.length > 0) && (
+            <div className="p-6 text-center text-[13px] text-muted-foreground">
+              {scanCapped ? t('common.emptyScanCapped') : t('common.emptyPageWithMore')}
+            </div>
           )}
-          {filtered.length > 0 && (
+          {!error && users && users.length > 0 && (
             <Table>
               <TableHead>
                 <tr>
@@ -274,14 +410,22 @@ export function UsersPage() {
                       {t('users.colStatus')}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button type="button" aria-label={t('users.statusHelpLabel')} className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          <button
+                            type="button"
+                            aria-label={t('users.statusHelpLabel')}
+                            className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
                             <CircleAlert className="size-3.5" />
                           </button>
                         </TooltipTrigger>
                         <TooltipContent className="max-w-sm">
                           <div className="space-y-2">
-                            <p><strong>{t('users.statusUnlockedTitle')}</strong> — {t('users.statusUnlockedDescription')}</p>
-                            <p><strong>{t('users.lockedBadge')}</strong> — {t('users.statusLockedDescription')}</p>
+                            <p>
+                              <strong>{t('users.statusUnlockedTitle')}</strong> — {t('users.statusUnlockedDescription')}
+                            </p>
+                            <p>
+                              <strong>{t('users.lockedBadge')}</strong> — {t('users.statusLockedDescription')}
+                            </p>
                           </div>
                         </TooltipContent>
                       </Tooltip>
@@ -291,7 +435,7 @@ export function UsersPage() {
                 </tr>
               </TableHead>
               <TableBody>
-                {pageUsers.map((u, i) => (
+                {users.map((u, i) => (
                   <TableRow
                     key={u.dn}
                     ref={(el) => {
@@ -315,10 +459,7 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell>
                       {u.locked ? (
-                        <Badge
-                          variant="danger"
-                          className="gap-1"
-                        >
+                        <Badge variant="danger" className="gap-1">
                           <Lock className="size-3" />
                           {t('users.lockedBadge')}
                         </Badge>
@@ -331,16 +472,29 @@ export function UsersPage() {
                         {u.locked ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" aria-label={t('users.unlockTitle')} onClick={() => handleUnlock(u)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={t('users.unlockTitle')}
+                                onClick={() => handleUnlock(u)}
+                              >
                                 <Unlock className="size-3.5" />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>{t('users.unlockTitle')}{u.lockedAt && ` · ${new Date(u.lockedAt).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US')}`}</TooltipContent>
+                            <TooltipContent>
+                              {t('users.unlockTitle')}
+                              {u.lockedAt && ` · ${new Date(u.lockedAt).toLocaleString(language === 'ko' ? 'ko-KR' : 'en-US')}`}
+                            </TooltipContent>
                           </Tooltip>
                         ) : (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" aria-label={t('users.lockTitle')} onClick={() => handleLock(u)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={t('users.lockTitle')}
+                                onClick={() => handleLock(u)}
+                              >
                                 <Lock className="size-3.5" />
                               </Button>
                             </TooltipTrigger>
@@ -349,7 +503,15 @@ export function UsersPage() {
                         )}
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" aria-label={t('common.edit')} onClick={() => { setEditing(u); setFormOpen(true) }}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t('common.edit')}
+                              onClick={() => {
+                                setEditing(u)
+                                setFormOpen(true)
+                              }}
+                            >
                               <Pencil className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
@@ -357,7 +519,12 @@ export function UsersPage() {
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" aria-label={t('setPasswordDialog.title')} onClick={() => setPasswordUser(u)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t('setPasswordDialog.title')}
+                              onClick={() => setPasswordUser(u)}
+                            >
                               <KeyRound className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
@@ -365,7 +532,13 @@ export function UsersPage() {
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" aria-label={t('common.delete')} className="hover:bg-danger/10 hover:text-danger" onClick={() => setDeleting(u)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t('common.delete')}
+                              className="hover:bg-danger/10 hover:text-danger"
+                              onClick={() => setDeleting(u)}
+                            >
                               <Trash2 className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
@@ -378,85 +551,18 @@ export function UsersPage() {
               </TableBody>
             </Table>
           )}
-          {filtered.length > 0 && (
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-t border-border px-4 py-3">
-              <div className="flex items-center gap-2">
-                <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-                  {t('users.rowsPerPage')}
-                  <select
-                    value={pageSize}
-                    onChange={(e) => {
-                      setPageSize(Number(e.target.value))
-                      setPage(1)
-                    }}
-                    className="h-8 rounded-console border border-input bg-surface px-2 text-[12.5px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {PAGE_SIZES.map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <nav className="flex items-center gap-2" aria-label={t('users.paginationNavigation')}>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={currentPage === 1}
-                  onClick={() => setPage(1)}
-                  title={t('users.firstPage')}
-                >
-                  <ChevronsLeft className="size-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={currentPage === 1}
-                  onClick={() => setPage(Math.max(1, pageNumbers[0] - 1))}
-                  title={t('users.previousPage')}
-                >
-                  &lt;
-                </Button>
-                {pageNumbers.map((pageNumber) => (
-                  <Button
-                    key={pageNumber}
-                    variant={pageNumber === currentPage ? 'subtle' : 'outline'}
-                    size="icon"
-                    onClick={() => setPage(pageNumber)}
-                    aria-current={pageNumber === currentPage ? 'page' : undefined}
-                    title={t('users.pageNumber', { page: pageNumber })}
-                  >
-                    {pageNumber}
-                  </Button>
-                ))}
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={currentPage === pageCount}
-                  onClick={() => setPage(Math.min(pageCount, pageNumbers[pageNumbers.length - 1] + 1))}
-                  title={t('users.nextPage')}
-                >
-                  &gt;
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={currentPage === pageCount}
-                  onClick={() => setPage(pageCount)}
-                  title={t('users.lastPage')}
-                >
-                  <ChevronsRight className="size-4" />
-                </Button>
-              </nav>
-              <span className="justify-self-end text-[12.5px] text-muted-foreground">
-                {t('users.paginationSummary', {
-                  from: (currentPage - 1) * pageSize + 1,
-                  to: Math.min(currentPage * pageSize, filtered.length),
-                  total: filtered.length,
-                })}
-              </span>
-            </div>
+          {showPagination && (
+            <GroupPagination
+              page={currentPageNumber}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              canPrevious={cursorStack.length > 0}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              onFirst={handleFirst}
+              onPageSize={handlePageSizeChange}
+              navAriaLabel={t('users.paginationNavigation')}
+            />
           )}
         </CardContent>
       </Card>

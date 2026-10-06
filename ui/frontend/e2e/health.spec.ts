@@ -44,7 +44,22 @@ function userRow(page: import('@playwright/test').Page, uid: string) {
 }
 
 async function filterUsers(page: import('@playwright/test').Page, query: string) {
-  await page.getByPlaceholder('Filter users…').fill(query)
+  const input = page.getByPlaceholder('Filter users…')
+  if ((await input.inputValue()) === query) return
+  // Search is server-side (debounced `q`), so wait for the filtered list to arrive
+  // before callers count rows; otherwise they read the previous, unfiltered page.
+  const filtered = page.waitForResponse((r) => {
+    const url = new URL(r.url())
+    return url.pathname === '/api/users' && (url.searchParams.get('q') ?? '') === query
+  })
+  await input.fill(query)
+  const body = (await (await filtered).json()) as { users?: Array<{ uid: string }> | null }
+  const uids = (body.users ?? []).map((u) => u.uid)
+  // A response arriving is not the same as React having rendered it: wait until the
+  // table shows exactly the rows of the filtered response (no stale rows left, none
+  // missing), so callers never conclude "absent" from the previous page.
+  await expect(page.locator('tbody tr')).toHaveCount(uids.length)
+  for (const uid of uids) await expect(userRow(page, uid)).toBeVisible()
 }
 
 async function deleteUserIfPresent(page: import('@playwright/test').Page, uid: string) {
@@ -89,7 +104,11 @@ test('creates, edits, resets the password for, and deletes a user through the UI
   await login(page)
   await page.getByRole('link', { name: 'Users' }).click()
   await expect(page).toHaveURL(/\/users$/)
-  await expect(page.getByText(/^\d+ total$/)).toBeVisible()
+  // The cursor-paged list has no total. It has loaded once either the pagination footer
+  // (rows present) or the empty state (a fresh directory: no footer) is on screen.
+  await expect(
+    page.getByRole('navigation', { name: 'User list pagination' }).or(page.getByText('No users yet')),
+  ).toBeVisible()
 
   // A failed prior run can leave this dedicated account behind. Remove it
   // through the same confirmation UI before starting, keeping reruns

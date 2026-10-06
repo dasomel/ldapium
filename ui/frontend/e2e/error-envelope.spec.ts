@@ -37,7 +37,7 @@ test('login shows the 429 text and ignores the new keys', async ({ page }) => {
 
 test('user list failure shows the validation text', async ({ page }) => {
   await mockSession(page)
-  await page.route('**/api/users', (r) =>
+  await page.route('**/api/users*', (r) =>
     r.fulfill({ status: 400, json: envelope('dn does not look like a distinguished name', 'invalid_request') }),
   )
   await page.goto('/users')
@@ -46,7 +46,7 @@ test('user list failure shows the validation text', async ({ page }) => {
 
 test('group list failure shows the validation text', async ({ page }) => {
   await mockSession(page)
-  await page.route('**/api/groups', (r) =>
+  await page.route('**/api/groups*', (r) =>
     r.fulfill({ status: 400, json: envelope('dn does not look like a distinguished name', 'invalid_request') }),
   )
   await page.goto('/groups')

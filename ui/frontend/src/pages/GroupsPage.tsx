@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Search, Trash2, Users2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { describeChanges, useWriteAttempt } from '@/lib/useWriteAttempt'
 import type { Group, GroupFormInput } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
+import { useAuth } from '@/context/AuthContext'
 import { useT } from '@/context/LanguageContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,57 +44,194 @@ function TruncatedText({ text, className = '' }: { text: string; className?: str
   )
 }
 
+const MAX_EMPTY_ADVANCES = 20
+
 export function GroupsPage() {
   const { notify } = useToast()
+  const { dn } = useAuth()
   const t = useT()
   const write = useWriteAttempt()
+
   const [groups, setGroups] = useState<Group[] | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null)
   const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [cursor, setCursor] = useState<string | undefined>(undefined)
+  const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined)
   const [pageSize, setPageSize] = useState(10)
+  const [scanCapped, setScanCapped] = useState(false)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Group | null>(null)
   const [membersGroup, setMembersGroup] = useState<Group | null>(null)
   const [deleting, setDeleting] = useState<Group | null>(null)
 
+  const requestGenRef = useRef(0)
+  // False while unmounted: late write/retry callbacks must not start new requests.
+  const aliveRef = useRef(true)
+  const lastRequestRef = useRef<{
+    cursorParam?: string
+    stackParam: Array<string | undefined>
+    qParam: string
+    sizeParam: number
+  } | null>(null)
+  const prevDnRef = useRef(dn)
+  const isMountedRef = useRef(false)
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([])
+  // Latest view (cursor/stack/q/limit), refreshed every render: async write
+  // callbacks close over stale state, so they read the view from here instead.
+  const viewRef = useRef({ cursor, cursorStack, q: debouncedQuery, pageSize })
+  viewRef.current = { cursor, cursorStack, q: debouncedQuery, pageSize }
 
-  function load() {
+  // Every request takes a generation; a response (or error) whose generation
+  // is no longer current is dropped, so a slow older request cannot overwrite
+  // newer rows or the cursor stack, and unmount invalidates everything.
+  function loadPage(
+    cursorParam?: string,
+    stackParam: Array<string | undefined> = cursorStack,
+    qParam = debouncedQuery,
+    sizeParam = pageSize,
+    advances = 0,
+  ) {
+    if (!aliveRef.current) return
+    const gen = ++requestGenRef.current
+    lastRequestRef.current = { cursorParam, stackParam, qParam, sizeParam }
     setError(null)
+    if (advances === 0) setScanCapped(false)
     api
-      .listGroups()
-      .then(({ items, truncated }) => {
+      .listGroups({ limit: sizeParam, cursor: cursorParam, q: qParam || undefined })
+      .then(({ items, hasMore: more, nextCursor: next }) => {
+        if (gen !== requestGenRef.current) return
+        const hasMoreBool = Boolean(more)
+        setHasMore(hasMoreBool)
+        setNextCursor(next)
+        setCursor(cursorParam)
+        setCursorStack(stackParam)
+
+        // Empty page with hasMore: true -> auto-advance per CHANGE.md, bounded
+        if (items.length === 0 && hasMoreBool && next) {
+          if (advances < MAX_EMPTY_ADVANCES) {
+            loadPage(next, stackParam, qParam, sizeParam, advances + 1)
+            return
+          }
+          setScanCapped(true)
+        }
         setGroups(items)
-        setTruncated(truncated)
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : t('groups.loadFailed')))
+      .catch((err) => {
+        if (gen !== requestGenRef.current) return
+        if (err instanceof ApiError) {
+          // 400 cursor_invalid -> restart from first page if cursor was provided or stack was non-empty
+          if (err.code === 'cursor_invalid' || (err.status === 400 && err.message.includes('cursor'))) {
+            if (cursorParam || stackParam.length > 0) {
+              notify('error', t('common.cursorInvalidNotice'))
+              setCursor(undefined)
+              setCursorStack([])
+              loadPage(undefined, [], qParam, sizeParam)
+              return
+            }
+          }
+          setError({ message: err.message, code: err.code })
+        } else {
+          setError({ message: t('groups.loadFailed') })
+        }
+      })
   }
 
-  useEffect(load, [])
+  // Retry re-issues the request that failed (same cursor, q, limit).
+  function retryLast() {
+    const r = lastRequestRef.current
+    if (r) loadPage(r.cursorParam, r.stackParam, r.qParam, r.sizeParam)
+  }
 
-  // Re-read after a conflict or a lost response (see UsersPage.reread).
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      requestGenRef.current++
+    }
+  }, [])
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    const timer = setTimeout(() => {
+      setDebouncedQuery(trimmed)
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    if (!isMountedRef.current) {
+      isMountedRef.current = true
+      loadPage(undefined, [], debouncedQuery, pageSize)
+      return
+    }
+    setCursor(undefined)
+    setCursorStack([])
+    loadPage(undefined, [], debouncedQuery, pageSize)
+  }, [debouncedQuery])
+
+  useEffect(() => {
+    if (prevDnRef.current !== dn) {
+      prevDnRef.current = dn
+      setCursor(undefined)
+      setCursorStack([])
+      loadPage(undefined, [], debouncedQuery, pageSize)
+    }
+  }, [dn])
+
+  // Re-read after a conflict or a lost response (keeps the current page).
   async function reread() {
-    const { items, truncated } = await api.listGroups()
-    setGroups(items)
-    setTruncated(truncated)
+    if (!aliveRef.current) return []
+    const gen = requestGenRef.current
+    const startQ = viewRef.current.q
+    const v = viewRef.current
+    const { items } = await api.listGroups({
+      limit: v.pageSize,
+      cursor: v.cursor,
+      q: startQ || undefined,
+    })
+    if (gen === requestGenRef.current && viewRef.current.q === startQ) setGroups(items)
     return items
   }
 
-  const filtered = useMemo(() => {
-    if (!groups) return []
-    const q = query.trim().toLowerCase()
-    if (!q) return groups
-    return groups.filter((g) => g.cn.toLowerCase().includes(q) || g.description?.toLowerCase().includes(q))
-  }, [groups, query])
+  // Post-write refresh: always the CURRENT view, and skipped entirely when the
+  // query changed since the write began (the new query already loads its own page).
+  function refreshAfterWrite(startQ: string) {
+    const v = viewRef.current
+    if (v.q !== startQ) return
+    loadPage(v.cursor, v.cursorStack, v.q, v.pageSize)
+  }
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
-  const currentPage = Math.min(page, pageCount)
-  const pageGroups = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const handleNext = () => {
+    if (!hasMore || !nextCursor) return
+    const newStack = [...cursorStack, cursor]
+    loadPage(nextCursor, newStack, debouncedQuery, pageSize)
+  }
+
+  const handlePrevious = () => {
+    if (cursorStack.length === 0) return
+    const prevCursor = cursorStack[cursorStack.length - 1]
+    const newStack = cursorStack.slice(0, -1)
+    loadPage(prevCursor, newStack, debouncedQuery, pageSize)
+  }
+
+  const handleFirst = () => {
+    if (cursorStack.length === 0) return
+    loadPage(undefined, [], debouncedQuery, pageSize)
+  }
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize)
+    setCursor(undefined)
+    setCursorStack([])
+    loadPage(undefined, [], debouncedQuery, newSize)
+  }
 
   async function handleCreateOrUpdate(input: GroupFormInput) {
+    const startQ = viewRef.current.q
     if (editing) {
       const target = editing
       await write(
@@ -116,15 +254,23 @@ export function GroupsPage() {
       await write({ fingerprint: ['create', input] }, (w) => api.createGroup(input, w))
       notify('success', t('groups.createdToast', { cn: input.cn }))
     }
-    load()
+    setFormOpen(false)
+    setEditing(null)
+    refreshAfterWrite(startQ)
   }
 
   async function handleDelete() {
+    const startQ = viewRef.current.q
     if (!deleting) return
     const target = deleting
     try {
-      await write({ fingerprint: ['delete', target.dn], etag: target.etag, onStale: reread }, (w) =>
-        api.deleteGroup(target.dn, w),
+      await write(
+        {
+          fingerprint: ['delete', target.dn],
+          etag: target.etag,
+          onStale: reread,
+        },
+        (w) => api.deleteGroup(target.dn, w),
       )
     } catch (err) {
       // ConfirmDialog shows no error text; see UsersPage.handleDelete.
@@ -134,39 +280,39 @@ export function GroupsPage() {
     }
     notify('success', t('groups.deletedToast', { cn: target.cn }))
     setDeleting(null)
-    load()
+    refreshAfterWrite(startQ)
   }
 
   async function handleSaveMembers(groupDn: string, members: string[]) {
-    const group = groups?.find((candidate) => candidate.dn === groupDn)
+    const startQ = viewRef.current.q
+    const group = groups?.find((g) => g.dn === groupDn)
     if (!group) return
-    // No If-Match and no key here: these are many parallel single-member
-    // writes, and each one moves the group's etag, so a tag would make them
-    // conflict with each other.
     const previous = new Set(group.members)
     const next = new Set(members)
-
     await Promise.all([
       ...members.filter((memberDn) => !previous.has(memberDn)).map((memberDn) => api.addMember(groupDn, memberDn)),
       ...group.members.filter((memberDn) => !next.has(memberDn)).map((memberDn) => api.removeMember(groupDn, memberDn)),
     ])
-    load()
+    refreshAfterWrite(startQ)
   }
 
   function onRowKeyDown(e: React.KeyboardEvent<HTMLTableRowElement>, index: number) {
-    if (e.target !== e.currentTarget) return
+    if (e.target !== e.currentTarget || !groups) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      if (index + 1 < pageGroups.length) rowRefs.current[index + 1]?.focus()
+      if (index + 1 < groups.length) rowRefs.current[index + 1]?.focus()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      rowRefs.current[index - 1]?.focus()
+      if (index - 1 >= 0) rowRefs.current[index - 1]?.focus()
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      setEditing(pageGroups[index])
+      setEditing(groups[index])
       setFormOpen(true)
     }
   }
+
+  const currentPageNumber = cursorStack.length + 1
+  const showPagination = !error && groups !== null && (groups.length > 0 || hasMore || cursorStack.length > 0)
 
   return (
     <div className="max-w-6xl space-y-4">
@@ -174,9 +320,10 @@ export function GroupsPage() {
         <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            aria-label={t('groups.filterPlaceholder')} placeholder={t('groups.filterPlaceholder')}
+            aria-label={t('groups.filterPlaceholder')}
+            placeholder={t('groups.filterPlaceholder')}
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setPage(1) }}
+            onChange={(e) => setQuery(e.target.value)}
             className="pl-8"
           />
         </div>
@@ -196,37 +343,52 @@ export function GroupsPage() {
           <CardTitle className="flex items-center gap-2">
             <Users2 className="size-4 text-accent" />
             {t('nav.groups')}
-            {groups && <span className="font-mono text-xs font-normal text-muted-foreground">{filtered.length}</span>}
+            {groups && <span className="font-mono text-xs font-normal text-muted-foreground">{groups.length}</span>}
           </CardTitle>
         </CardHeader>
-        {truncated && (
-          <div className="border-b border-border bg-accent-muted px-4 py-2 text-[12.5px] text-accent">
-            {t('groups.truncatedBanner', { n: groups?.length ?? 0 })}
-          </div>
-        )}
         <CardContent className="p-0">
-          {error && <ErrorState message={error} onRetry={load} />}
+          {error && (
+            <ErrorState
+              message={error.message}
+              hint={error.code === 'size_limit_exceeded' ? t('common.sizeLimitHint') : undefined}
+              onRetry={
+                error.code === 'scan_timeout' || error.code === 'unavailable'
+                  ? retryLast
+                  : () => loadPage(undefined, [], debouncedQuery, pageSize)
+              }
+            />
+          )}
           {!error && groups === null && (
             <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
               <Spinner /> {t('groups.loading')}
             </div>
           )}
-          {groups?.length === 0 && (
-            <EmptyState
-              icon={Users2}
-              title={t('groups.emptyTitle')}
-              description={t('groups.emptyDescription')}
-              action={
-                <Button size="sm" onClick={() => setFormOpen(true)}>
-                  <Plus className="size-4" /> {t('groups.newGroupButton')}
-                </Button>
-              }
-            />
+          {!error && groups?.length === 0 && !hasMore && cursorStack.length === 0 && (
+            debouncedQuery ? (
+              <EmptyState
+                icon={Search}
+                title={t('common.noMatches')}
+                description={t('common.noMatchesDescription', { query: debouncedQuery })}
+              />
+            ) : (
+              <EmptyState
+                icon={Users2}
+                title={t('groups.emptyTitle')}
+                description={t('groups.emptyDescription')}
+                action={
+                  <Button size="sm" onClick={() => setFormOpen(true)}>
+                    <Plus className="size-4" /> {t('groups.newGroupButton')}
+                  </Button>
+                }
+              />
+            )
           )}
-          {!!groups?.length && filtered.length === 0 && (
-            <EmptyState icon={Search} title={t('common.noMatches')} description={t('common.noMatchesDescription', { query })} />
+          {!error && groups && groups.length === 0 && (hasMore || cursorStack.length > 0) && (
+            <div className="p-6 text-center text-[13px] text-muted-foreground">
+              {scanCapped ? t('common.emptyScanCapped') : t('common.emptyPageWithMore')}
+            </div>
           )}
-          {filtered.length > 0 && (
+          {!error && groups && groups.length > 0 && (
             <Table className="table-fixed">
               <TableHead>
                 <tr>
@@ -237,7 +399,7 @@ export function GroupsPage() {
                 </tr>
               </TableHead>
               <TableBody>
-                {pageGroups.map((g, i) => (
+                {groups.map((g, i) => (
                   <TableRow
                     key={g.dn}
                     ref={(el) => {
@@ -296,8 +458,19 @@ export function GroupsPage() {
               </TableBody>
             </Table>
           )}
-          {!error && filtered.length > 0 && <GroupPagination page={currentPage} pageSize={pageSize} total={filtered.length}
-            onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1) }} />}
+          {showPagination && (
+            <GroupPagination
+              page={currentPageNumber}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              canPrevious={cursorStack.length > 0}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              onFirst={handleFirst}
+              onPageSize={handlePageSizeChange}
+              navAriaLabel={t('groups.paginationNavigation')}
+            />
+          )}
         </CardContent>
       </Card>
 

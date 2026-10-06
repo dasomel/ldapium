@@ -79,6 +79,11 @@ const ko: Record<DictKey, string> = {
   'common.newPasswordLabel': '새 비밀번호',
   'common.showPassword': '비밀번호 표시',
   'common.hidePassword': '비밀번호 숨기기',
+  'common.sizeLimitHint': '디렉터리 크기 제한에 도달했습니다. 더 구체적인 검색어로 검색 범위를 좁혀보세요.',
+  'common.cursorInvalidNotice': '페이지네이션 커서가 더 이상 유효하지 않아 첫 페이지부터 다시 시작합니다.',
+  'common.scanTimeoutNotice': '디렉터리 스캔 시간이 초과되었습니다. 다시 시도해 주세요.',
+  'common.emptyPageWithMore': '이 페이지에는 항목이 없지만 다음 항목이 더 존재합니다.',
+  'common.emptyScanCapped': '지금까지 확인한 항목에서 일치하는 결과가 없습니다. 다시 시도하거나 더 구체적인 검색어로 범위를 좁혀보세요.',
 
   'settings.title': '서버 설정',
   'settings.readOnlyNote': '이 디렉터리 연결의 읽기 전용 구성 정보입니다.',
@@ -286,6 +291,7 @@ const ko: Record<DictKey, string> = {
   'users.paginationNavigation': '사용자 목록 페이지 이동',
   'users.pageNumber': '{page} 페이지',
   'users.pageIndicator': '{page}/{total} 페이지',
+  'users.cursorPaginationSummary': '{page} 페이지',
 
   'groups.paginationNavigation': '그룹 페이지 이동',
   'groups.filterPlaceholder': '그룹 검색…',

@@ -216,4 +216,13 @@ export interface ApiErrorBody {
 export interface ListResult<T> {
   truncated: boolean
   items: T[]
+  hasMore?: boolean
+  nextCursor?: string
 }
+
+export interface ListParams {
+  limit?: number
+  cursor?: string
+  q?: string
+}
+

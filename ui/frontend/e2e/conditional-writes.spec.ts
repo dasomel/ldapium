@@ -58,7 +58,7 @@ async function mockServer(page: Page, opts: MockOptions = {}): Promise<Mock> {
       },
     }),
   )
-  await page.route('**/api/users', (r) => {
+  await page.route('**/api/users*', (r) => {
     if (r.request().method() === 'GET') {
       userListGets++
       return r.fulfill({ json: { users: [user], truncated: false } })
@@ -66,7 +66,7 @@ async function mockServer(page: Page, opts: MockOptions = {}): Promise<Mock> {
     writes.push(r.request())
     return r.fulfill({ status: 204 })
   })
-  await page.route('**/api/groups', (r) => {
+  await page.route('**/api/groups*', (r) => {
     if (r.request().method() === 'GET') return r.fulfill({ json: { groups: [group], truncated: false } })
     writes.push(r.request())
     return r.fulfill({ status: 204 })
@@ -141,9 +141,9 @@ test('stale edit: 412 shows the re-read notice, refetches and re-seeds the form 
   await openUserEdit(page)
   // Someone else changes the entry; the server now answers 412 for the old tag.
   mock.setUser({ cn: 'J. Doe (changed elsewhere)', etag: ETAG_2 })
-  await page.unroute('**/api/users')
+  await page.unroute('**/api/users*')
   let puts = 0
-  await page.route('**/api/users', (r: Route) => {
+  await page.route('**/api/users*', (r: Route) => {
     const req = r.request()
     if (req.method() === 'GET') return r.fulfill({ json: { users: [userBody('J. Doe (changed elsewhere)', ETAG_2)], truncated: false } })
     mock.writes.push(req)
@@ -199,9 +199,9 @@ test('stale delete: 412 closes the dialog with the notice and refetches the list
 test('a retried submit reuses one Idempotency-Key; the next change gets a new one', async ({ page }) => {
   const mock = await mockServer(page, { idempotencyEnabled: true })
   await openUserEdit(page)
-  await page.unroute('**/api/users')
+  await page.unroute('**/api/users*')
   let calls = 0
-  await page.route('**/api/users', (r) => {
+  await page.route('**/api/users*', (r) => {
     const req = r.request()
     if (req.method() === 'GET') return r.fulfill({ json: { users: [userBody('John Doe', ETAG_1)], truncated: false } })
     mock.writes.push(req)
@@ -229,9 +229,9 @@ test('a retried submit reuses one Idempotency-Key; the next change gets a new on
 test('editing the form after a failed attempt is a different request and gets a new key', async ({ page }) => {
   const mock = await mockServer(page, { idempotencyEnabled: true })
   await openUserEdit(page)
-  await page.unroute('**/api/users')
+  await page.unroute('**/api/users*')
   let calls = 0
-  await page.route('**/api/users', (r) => {
+  await page.route('**/api/users*', (r) => {
     const req = r.request()
     if (req.method() === 'GET') return r.fulfill({ json: { users: [userBody('John Doe', ETAG_1)], truncated: false } })
     mock.writes.push(req)
@@ -248,8 +248,8 @@ test('editing the form after a failed attempt is a different request and gets a 
 test('422 idempotency_unsupported retries once without the key and stops asking', async ({ page }) => {
   const mock = await mockServer(page, { idempotencyEnabled: true })
   await openUserEdit(page)
-  await page.unroute('**/api/users')
-  await page.route('**/api/users', (r) => {
+  await page.unroute('**/api/users*')
+  await page.route('**/api/users*', (r) => {
     const req = r.request()
     if (req.method() === 'GET') return r.fulfill({ json: { users: [userBody('John Doe', ETAG_1)], truncated: false } })
     mock.writes.push(req)
@@ -273,14 +273,14 @@ test('422 idempotency_unsupported retries once without the key and stops asking'
 test('idempotency error codes get understandable messages', async ({ page }) => {
   const mock = await mockServer(page, { idempotencyEnabled: true })
   await openUserEdit(page)
-  await page.unroute('**/api/users')
+  await page.unroute('**/api/users*')
   const replies: Array<[number, string, string]> = [
     [409, 'idempotency_outcome_unknown', 'the outcome of this write is unknown'],
     [409, 'idempotency_key_conflict', 'still being processed'],
     [503, 'idempotency_capacity', 'record capacity reached'],
   ]
   let i = 0
-  await page.route('**/api/users', (r) => {
+  await page.route('**/api/users*', (r) => {
     const req = r.request()
     if (req.method() === 'GET') return r.fulfill({ json: { users: [userBody('John Doe', ETAG_1)], truncated: false } })
     mock.writes.push(req)
@@ -316,7 +316,7 @@ test('create sends a key but no If-Match', async ({ page }) => {
 
 test('group edit and delete send If-Match; bulk member saves send none', async ({ page }) => {
   const mock = await mockServer(page, { idempotencyEnabled: false })
-  await page.route('**/api/users', (r) =>
+  await page.route('**/api/users*', (r) =>
     r.request().method() === 'GET'
       ? r.fulfill({ json: { users: [userBody('John Doe', ETAG_1), { ...userBody('Jane Roe', ETAG_1), dn: `uid=jroe,ou=people,${BASE}`, uid: 'jroe' }], truncated: false } })
       : r.fulfill({ status: 204 }),
