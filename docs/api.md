@@ -163,6 +163,7 @@ done
 | `idempotency_unsupported` | 422 | 이 서버에서 멱등 기능이 꺼져 있는데 키가 붙음 |
 | `if_match_required` | 428 | `If-Match` 필요 |
 | `login_rate_limited` | 429 | 로그인 실패 제한(`retryable: true`, `Retry-After`) |
+| `machine_rate_limited` | 429 | 머신 bearer 요청이 IP 실패 throttle(서명·JWKS 이전) 또는 검증된 client의 rate/동시 실행 한도에 걸림(`retryable: true`, 정확한 `Retry-After`) |
 | `internal` | 500 | 예상 못 한 실패(문구 고정, `requestId`로 로그 조회) |
 | `upstream_failed` | 502 | Keycloak 작업 실패 |
 | `keycloak_disabled` | 503 | Keycloak 관리자 연결 비활성(`retryable: false`) |
@@ -308,7 +309,7 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 
 ## 머신 bearer 인증 (기본 꺼짐)
 
-> **이 빌드는 실행 신원까지 들어 있습니다(단위 2).** 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 제한(limiter)·Helm·운영자 ACL 가이드·Keycloak e2e는 후속 단위입니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
+> **이 빌드는 실행 신원과 제한(limiter)까지 들어 있습니다(단위 2·4).** 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 운영자 ACL 가이드·Keycloak e2e는 후속 단위입니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
 
 켜지 않으면(`MACHINE_AUTH_ENABLED` 미설정) `Authorization` 헤더는 완전히 무시되고 기존 동작·응답은 달라지지 않습니다. 켜면 Keycloak 서비스 계정 access token(`client_credentials`)을 `Authorization: Bearer <jwt>`로 보낼 수 있습니다.
 
@@ -318,11 +319,12 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 - **검증 실패는 401**(`token_invalid`, 순수 만료만 `token_expired`), **서명 키 조회 장애는 503 + `Retry-After`**, 정상 조회 뒤의 알 수 없는 `kid`는 401입니다. 토큰 정책(`aud` 정확 멤버십, `azp`==`client_id`, 서비스 계정 판별, 수명 상한·skew, `alg` allowlist)과 JWKS 상태 기계는 CHANGE.md가 정본입니다.
 - **실행(머신 전용 LDAP 계정):** 요청마다 `MACHINE_LDAP_BIND_DN`으로 bind했다가 응답·취소·패닉에서 닫습니다. 전역 LDAP 슬롯(`MACHINE_MAX_CONCURRENCY`, 기본 8)을 bind **이전**에 비차단으로 잡고(없으면 503 + `Retry-After: 1`), `MACHINE_REQUEST_TIMEOUT`(기본 10s) 하나가 dial·bind·검색 전부의 deadline입니다. bind 실패·디렉터리 중단·deadline 초과는 503이며 다른 신원으로 폴백하지 않습니다. 읽기 전용은 LDAP ACL이 강제합니다(운영자 ACL 가이드는 후속 단위, 패키지의 CHANGE.md가 규칙 정본).
 - **민감 base 경계:** `getEntry`·`listTree`는 `LDAP_BASE_DN` 밖의 DN(`cn=accesslog`·`cn=config`·`cn=Monitor` 포함, 대소문자·공백·escape 변형도 파싱 후 비교)을 LDAP 연결을 열기 전에 403 `scope_denied`로 거부합니다. `listTree`는 자식이 1000개를 넘으면 422 `size_limit_exceeded`(본문이 배열이라 잘라 내지 않고 거부). `getMonitor`는 `audit.read`가 유효 scope에 없으면 accesslog를 읽지 않아 `recentLogs`가 비어 있습니다. 사람 세션의 응답은 그대로입니다.
+- **제한(단위 4, 모두 프로세스(replica)별 상태, 대기열 없이 즉시 거부):** 순서는 ① `Authorization` 문법 → ② **IP 실패 throttle**(서명·JWKS 이전) → ③ 전역 인증 동시성(`MACHINE_MAX_AUTH_CONCURRENCY`, 기본 16, 초과 시 503 + `Retry-After: 1`) → ④ 검증 → ⑤ **검증된 client**의 token bucket(`MACHINE_RATE_LIMIT_RPS`/`_BURST`)과 client 동시 실행(`MACHINE_CLIENT_CONCURRENCY`) → ⑥ 전역 LDAP 슬롯. 검증을 통과하지 못한 토큰의 `azp`는 어떤 client 상태도 만들거나 소모하지 않습니다. IP 키는 `c.RealIP()`(IPv6는 /64 묶음)이며 `UI_TRUSTED_PROXIES`가 신뢰 프록시를 정합니다. **IP 실패 throttle:** 슬라이딩 윈도우 `MACHINE_AUTH_FAILURE_WINDOW`(기본 60s, 경계 포함) 안에 실패 `MACHINE_AUTH_FAILURE_LIMIT`(기본 10)회가 되면 이후 요청은 검증 전에 429 `machine_rate_limited`입니다. 실패는 형식 오류 `Authorization`과 검증 401뿐이고(403·429·503·취소·성공은 세지 않음), 진행 중 요청은 슬롯을 예약해 동시 폭주가 한도를 넘지 못하며 예약은 어떤 종료 경로에서도 정확히 한 번 반납됩니다(누락돼도 `MACHINE_REQUEST_TIMEOUT` 뒤 만료). `Retry-After`는 가장 오래된 관련 실패가 윈도우에서 빠질 때까지의 초(최소 1), 예약만 가득 찬 경우는 1입니다. 성공은 카운터를 초기화하지 않으므로 한도에 걸린 IP는 유효 토큰도 429입니다. 추적 IP 수는 `MACHINE_IP_LIMITER_MAX`(기본 10000)로 유계이고 가득 찬 채 모두 차단 상태면 새 IP는 거부됩니다. **한계:** client별 budget은 limiter 예산만 격리합니다. LDAP·JWKS·전역 동시성 같은 공유 자원은 격리되지 않습니다.
 - **커서:** 머신 주체의 `cursor`는 issuer+client id에 묶입니다. 토큰을 갱신해도 이어서 조회할 수 있고, 다른 client나 사람 세션에서 재생하면 400 `cursor_invalid`입니다.
 - **감사:** `Authorization`을 실은 모든 요청(조기 반환 포함)은 로그 한 줄(`event=machine_access`)을 남깁니다. 형식은 [`audit-event-schema.md`](audit-event-schema.md)의 "머신 접근 이벤트".
 - **시작 조건(`MACHINE_AUTH_ENABLED=true`):** issuer는 https만(로컬 테스트용 `MACHINE_OIDC_INSECURE_HTTP=true` 예외, 기동 시 WARN), audience·허용 client·머신 bind DN·`MACHINE_LDAP_ROOT_DNS`(`;` 구분, 리터럴 `;`는 `\3B`) 필수, bind DN이 관리자·서비스 계정·rootdn과 ParseDN 동등이면 기동 실패, `UI_TRUSTED_PROXIES`가 `private`(기본)이면 기동 실패, `MACHINE_CLOCK_SKEW` 0–60s, `MACHINE_TOKEN_MAX_TTL` (0, 1h].
 
 ## 아직 지원하지 않는 것
 
-머신 bearer는 기본 꺼짐이며(제한·Helm·운영 가이드는 후속 단위) 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
+머신 bearer는 기본 꺼짐이며(운영 가이드·e2e는 후속 단위) 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.

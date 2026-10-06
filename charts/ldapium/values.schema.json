@@ -25,6 +25,159 @@
           }
         }
       }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "machineAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Machine bearer authentication (#214). Unknown keys are refused on purpose: MACHINE_OIDC_INSECURE_HTTP is a local-test escape hatch that the chart does not expose.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "issuerURL": {
+              "type": "string",
+              "pattern": "^$|^https://[^ ]+$"
+            },
+            "audience": {
+              "type": "string",
+              "not": {
+                "const": "account"
+              }
+            },
+            "allowedClients": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "scopes"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^=;,\\s]+$"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "directory.users.read",
+                        "directory.groups.read",
+                        "directory.tree.read",
+                        "directory.entry.read",
+                        "directory.policies.read",
+                        "server.monitor.read",
+                        "audit.read",
+                        "server.settings.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "tokenMaxTTL": {
+              "type": "string",
+              "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+            },
+            "clockSkew": {
+              "type": "string",
+              "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+            },
+            "ldapBindDN": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "existingSecretKey": {
+              "type": "string"
+            },
+            "extraRootDNs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "jwks": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cacheTTL": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+                },
+                "maxStale": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+                },
+                "minRefresh": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+                }
+              }
+            },
+            "authFailureLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "authFailureWindow": {
+              "type": "string",
+              "pattern": "^[0-9]+(ns|us|ms|s|m|h)([0-9]+(ns|us|ms|s|m|h))*$"
+            },
+            "rateLimit": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "rps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                },
+                "burst": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                }
+              }
+            },
+            "clientConcurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxConcurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxAuthConcurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "ipLimiterMax": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "requestTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            }
+          }
+        }
+      }
     }
   }
 }

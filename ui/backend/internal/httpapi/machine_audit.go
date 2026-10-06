@@ -49,7 +49,7 @@ const (
 	reasonOriginMismatch  = "origin_mismatch"     // Origin gate
 	reasonPreflight       = "preflight"           // answered by CORS
 	reasonScope           = "scope"               // not allowlisted, or scope not granted
-	reasonRate            = "rate"                // reserved for the limiters (T-018)
+	reasonRate            = "rate"                // IP throttle or client budget refused (429)
 	reasonBindFailed      = "bind_failed"         // machine LDAP bind failed or timed out
 	reasonCapacity        = "capacity"            // global LDAP concurrency slot unavailable
 	reasonDeadline        = "deadline"            // request deadline expired in the directory
@@ -97,6 +97,15 @@ func auditStateOf(c echo.Context) *machineAuditState {
 // of a single step) need no special case.
 func (s *machineAuditState) setReason(r string) {
 	if s != nil && s.reason == "" {
+		s.reason = r
+	}
+}
+
+// forceReason overrides an earlier reason: a limiter refusal replaces the
+// reason of the request class it cut short (a bad header from a throttled IP
+// is audited as rate, not bad_header).
+func (s *machineAuditState) forceReason(r string) {
+	if s != nil {
 		s.reason = r
 	}
 }

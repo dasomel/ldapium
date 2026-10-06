@@ -49,6 +49,12 @@ type machineAuth struct {
 	baseDN   string
 	exec     machineExec
 	cancel   context.CancelFunc
+
+	// Limits (D9, T-018); each is nil when its config value is unset, which
+	// config.Load never allows in production (every one has a range with min 1).
+	ip        *machineIPThrottle
+	budget    *clientBudget
+	authSlots chan struct{}
 }
 
 // newMachineAuth builds the verifier and starts the JWKS source. A discovery
@@ -100,7 +106,13 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 	if cfg.SSO.ClientID != "" {
 		denied[cfg.SSO.ClientID] = true
 	}
+	clientIDs := make([]string, len(m.Clients))
+	for i, c := range m.Clients {
+		clientIDs[i] = c.ID
+	}
 	ma := &machineAuth{
+		ip:       newMachineIPThrottle(m.AuthFailureLimit, m.AuthFailureWindow, m.IPLimiterMax, m.RequestTimeout, now),
+		budget:   newClientBudget(m.RateLimitRPS, m.RateLimitBurst, m.ClientConcurrency, clientIDs, now),
 		keys:     keys,
 		ceilings: machineCeilings(m.Clients),
 		baseDN:   cfg.BaseDN,
@@ -121,6 +133,9 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 		},
 	}
 
+	if m.MaxAuthConcurrency > 0 {
+		ma.authSlots = make(chan struct{}, m.MaxAuthConcurrency)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ma.cancel = cancel
 	initCtx, initCancel := context.WithTimeout(ctx, 2*machineauth.FetchTimeout)
@@ -165,6 +180,9 @@ func (s *Server) machineMiddleware() echo.MiddlewareFunc {
 			}
 			switch dec.Action {
 			case actReject:
+				if dec.Reason == reasonBadHeader {
+					return s.machine.rejectBadHeader(c, dec)
+				}
 				return apiErr(dec.Status, dec.Code, dec.Message)
 			case actBearer:
 				return s.machine.serve(c, dec.Token, next)
@@ -174,19 +192,95 @@ func (s *Server) machineMiddleware() echo.MiddlewareFunc {
 	}
 }
 
-// serve is the bearer path: verify (401/503) -> deny-by-default guard (403)
-// -> scope (403) -> execution. Verification failure wins over the non-GET /
-// not-allowlisted rejection, per the matrix. It never touches the session
-// store and never sets a cookie.
+// admitIP is step (2) of D9: reserve a slot of the source's failure budget
+// before any signature or JWKS work. The caller releases the ticket (defer)
+// and marks 401 outcomes on it. A nil ticket means the throttle is disabled.
+func (m *machineAuth) admitIP(c echo.Context) (*ipTicket, error) {
+	tk, retry, ok := m.ip.admit(c.RealIP())
+	if ok {
+		return tk, nil
+	}
+	auditStateOf(c).forceReason(reasonRate)
+	return nil, rateLimited(c, retry, "too many failed authentication attempts from this address")
+}
+
+// rateLimited answers 429 machine_rate_limited with the exact Retry-After.
+func rateLimited(c echo.Context, retryAfter int, msg string) error {
+	c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(retryAfter))
+	return apiErr(http.StatusTooManyRequests, codeMachineRateLimited, msg)
+}
+
+// releaseIP is the single release point of a ticket: whatever way the request
+// ends (return, panic), the reservation is given back exactly once, and a
+// client that went away is never counted as a failure.
+func releaseIP(c echo.Context, tk *ipTicket) {
+	tk.release(c.Request().Context().Err() == nil)
+}
+
+// rejectBadHeader answers the grammar rejection (401; D9 counts it as a
+// failure of the source) through the same throttle as a bearer attempt.
+func (m *machineAuth) rejectBadHeader(c echo.Context, dec selectResult) error {
+	tk, err := m.admitIP(c)
+	if err != nil {
+		return err
+	}
+	defer releaseIP(c, tk)
+	tk.fail()
+	return apiErr(dec.Status, dec.Code, dec.Message)
+}
+
+// acquireAuthSlot takes a global authentication slot without blocking (D9
+// step 3). With the cap unset there is no slot.
+func (m *machineAuth) acquireAuthSlot() (func(), bool) {
+	if m.authSlots == nil {
+		return func() {}, true
+	}
+	select {
+	case m.authSlots <- struct{}{}:
+		return func() { <-m.authSlots }, true
+	default:
+		return nil, false
+	}
+}
+
+// serve is the bearer path: IP throttle (429) -> global authentication slot
+// (503) -> verify (401/503) -> client budget (429) -> deny-by-default guard
+// (403) -> scope (403) -> execution. Verification failure wins over the
+// non-GET / not-allowlisted rejection, per the matrix. It never touches the
+// session store and never sets a cookie.
 func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc) error {
 	st := auditStateOf(c)
+	tk, err := m.admitIP(c)
+	if err != nil {
+		return err
+	}
+	defer releaseIP(c, tk)
+
+	release, ok := m.acquireAuthSlot()
+	if !ok {
+		st.setReason(reasonCapacity)
+		c.Response().Header().Set(echo.HeaderRetryAfter, "1")
+		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication concurrency limit reached")
+	}
 	p, fail := m.verifier.Verify(c.Request().Context(), token)
+	release()
 	if fail != nil {
+		// A 401 is the source's failure; a 503 (key source trouble) is not.
+		if !fail.Unavailable {
+			tk.fail()
+		}
 		st.setReason(string(fail.Reason))
 		return machineFailure(c, fail)
 	}
 	// From here on the identity is verified, so it is what the audit line names.
 	st.setActor(p)
+	// Step (5): only now, with a verified client, is its budget touched.
+	releaseClient, retry, ok := m.budget.acquire(p.ClientID)
+	if !ok {
+		st.forceReason(reasonRate)
+		return rateLimited(c, retry, "client request budget exhausted")
+	}
+	defer releaseClient()
 	// HEAD is rewritten to GET before routing; the machine path judges the
 	// method the client sent, so HEAD is refused like any non-GET (D17).
 	method := c.Request().Method
