@@ -81,6 +81,7 @@ func call(t *testing.T, handler func(echo.Context) error, sess *session.Session,
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	rec.Header().Set(echo.HeaderXRequestID, "RID9XYZ")
 	c.Set(sessionContextKey, sess)
 	if err := handler(c); err != nil {
 		t.Fatalf("handler returned %v", err)
@@ -402,5 +403,33 @@ func TestKeysetClientGoneIsNotAnError500(t *testing.T) {
 	rec := call(t, newPageServer().handleListUsers, pageSession(f, "s"), "/api/users", "limit=10")
 	if rec.Code == 500 {
 		t.Errorf("a cancelled request became a 500: %s", rec.Body)
+	}
+}
+
+// The keyset errors are envelopes like every other /api error (#218): exactly
+// the five keys, and no LDAP diagnostic text reaches the body even when the
+// wrapped error carries a DN and a secret-looking token.
+func TestKeysetErrorsAreEnvelopesAndNeverLeakDiagnostics(t *testing.T) {
+	diag := ": " + leakDN + " " + leakSentinel
+	for _, err := range []error{
+		fmt.Errorf("%w"+diag, domain.ErrSizeLimitExceeded),
+		fmt.Errorf("%w"+diag, domain.ErrScanLimitExceeded),
+		fmt.Errorf("%w"+diag, domain.ErrScanTimeout),
+		fmt.Errorf("%w"+diag, domain.ErrBusy),
+		errors.New("ldap dial" + diag),
+	} {
+		f := &fakePageClient{fakeLoginClient: &fakeLoginClient{}, pageErr: err}
+		rec := call(t, newPageServer().handleListUsers, pageSession(f, "s"), "/api/users", "limit=10")
+		env := requireEnvelope(t, err.Error(), rec)
+		if env.Error != env.Message {
+			t.Errorf("error %q != message %q", env.Error, env.Message)
+		}
+		if strings.Contains(rec.Body.String(), leakDN) || strings.Contains(rec.Body.String(), leakSentinel) {
+			t.Errorf("diagnostic leaked into %s", rec.Body)
+		}
+	}
+	for _, q := range []string{"limit=0", "cursor=garbage", "sort=mail"} {
+		f := &fakePageClient{fakeLoginClient: &fakeLoginClient{}}
+		requireEnvelope(t, q, call(t, newPageServer().handleListUsers, pageSession(f, "s"), "/api/users", q))
 	}
 }
