@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Server) handleListUsers(c echo.Context) error {
+	if pagedModeRequested(c) {
+		return s.handleListUsersPage(c)
+	}
 	users, truncated, err := currentSession(c).Bound.ListUsers(c.Request().Context(), s.cfg.BaseDN)
 	if err != nil {
 		return respondErr(c, err)

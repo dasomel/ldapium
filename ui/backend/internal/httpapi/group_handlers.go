@@ -10,6 +10,9 @@ import (
 )
 
 func (s *Server) handleListGroups(c echo.Context) error {
+	if pagedModeRequested(c) {
+		return s.handleListGroupsPage(c)
+	}
 	groups, truncated, err := currentSession(c).Bound.ListGroups(c.Request().Context(), s.cfg.BaseDN)
 	if err != nil {
 		return respondErr(c, err)

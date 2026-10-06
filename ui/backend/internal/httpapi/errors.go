@@ -91,6 +91,11 @@ const (
 	codeIdempotencyOutcomeUnknown = "idempotency_outcome_unknown"
 	codeIdempotencyCapacity       = "idempotency_capacity"
 	codeIdempotencyUnsupported    = "idempotency_unsupported"
+	// Keyset listing (#215).
+	codeCursorInvalid     = "cursor_invalid"
+	codeSizeLimitExceeded = "size_limit_exceeded"
+	codeScanLimitExceeded = "scan_limit_exceeded"
+	codeScanTimeout       = "scan_timeout"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -107,6 +112,7 @@ const (
 	partialFailureMessage = "user creation did not complete: the password step failed and the new entry was not removed as verified; " +
 		"check the entry named in dn (state says what was and was not done), then set its password with POST /api/users/password " +
 		"or remove it with DELETE /api/users?dn="
+	scanTimeoutMessage = "the listing timed out; narrow it with q or try again later"
 
 	idempotencyCapacityMessage = "idempotency record capacity reached; retry later"
 
@@ -155,6 +161,10 @@ var codeTable = map[string]codeSpec{
 	codeIdempotencyOutcomeUnknown: {http.StatusConflict, ""},
 	codeIdempotencyCapacity:       {http.StatusServiceUnavailable, idempotencyCapacityMessage},
 	codeIdempotencyUnsupported:    {http.StatusUnprocessableEntity, ""},
+	codeCursorInvalid:             {http.StatusBadRequest, ""},
+	codeSizeLimitExceeded:         {http.StatusUnprocessableEntity, ""},
+	codeScanLimitExceeded:         {http.StatusUnprocessableEntity, ""},
+	codeScanTimeout:               {http.StatusServiceUnavailable, scanTimeoutMessage},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
