@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -227,7 +228,10 @@ func (m *Manager) readWorkerResult(j *Job) (*WorkerResult, resultStatus) {
 	if m.root == "" || !IsValidJobID(j.JobID) {
 		return nil, resultAbsent
 	}
-	dir := filepath.Join(m.root, ".results")
+	dir := filepath.Join(filepath.Clean(m.root), ".results")
+	if !strings.HasPrefix(dir, filepath.Clean(m.root)+string(filepath.Separator)) {
+		return nil, resultInvalid
+	}
 	info, err := os.Lstat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -238,7 +242,7 @@ func (m *Manager) readWorkerResult(j *Job) (*WorkerResult, resultStatus) {
 	if !info.IsDir() {
 		return nil, resultInvalid
 	}
-	b, err := readRegularFile(filepath.Join(dir, j.JobID+".json"), maxResultBytes)
+	b, err := readRegularFile(m.root, filepath.Join(dir, j.JobID+".json"), maxResultBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, resultAbsent
@@ -400,16 +404,20 @@ func (m *Manager) tick(ctx context.Context, now time.Time) {
 // never reads outside an owned run directory (readOwnedManifest) and keeps only
 // flat file names backed by regular files inside it (artifactFiles).
 func findMatchingManifest(root, kind, jobID, instanceID string) *ArtifactManifest {
-	if root == "" || !IsValidJobID(jobID) {
+	k, ok := fixedKind(kind)
+	if !ok || root == "" || !IsValidJobID(jobID) {
 		return nil
 	}
-	base := filepath.Join(root, kind)
+	base := filepath.Join(filepath.Clean(root), k)
+	if !strings.HasPrefix(base, filepath.Clean(root)+string(filepath.Separator)) {
+		return nil
+	}
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return nil
 	}
 	for _, entry := range entries {
-		raw, dir, ok := readOwnedManifest(base, entry.Name(), kind, instanceID)
+		raw, dir, ok := readOwnedManifest(root, k, entry.Name(), instanceID)
 		if !ok || raw.JobID != jobID {
 			continue
 		}
@@ -524,7 +532,7 @@ func (m *Manager) StartJob(ctx context.Context, req RunRequest) (*Job, error) {
 	if req.Kind == "logs" && !m.logsAvailable {
 		return nil, fmt.Errorf("log sources not registered")
 	}
-	kind := req.Kind
+	kind, _ := fixedKind(req.Kind) // validated above; the constant, not the request string, goes on
 	if req.Trigger != JobTriggerSchedule {
 		req.Trigger = JobTriggerManual
 	}
@@ -609,9 +617,12 @@ func actorFP(req RunRequest) string {
 // as done once no .pending-* directory remains (read-only, D217-6).
 func (m *Manager) present(j *Job) *Job {
 	c := cloneJob(j)
-	if c.StagingCleanup == StagingCleanupPending && m.root != "" {
-		if left, _ := filepath.Glob(filepath.Join(m.root, c.Kind, ".pending-*")); len(left) == 0 {
-			c.StagingCleanup = StagingCleanupDone
+	if k, ok := fixedKind(c.Kind); ok && c.StagingCleanup == StagingCleanupPending && m.root != "" {
+		pattern := filepath.Join(filepath.Clean(m.root), k, ".pending-*")
+		if strings.HasPrefix(pattern, filepath.Clean(m.root)+string(filepath.Separator)) {
+			if left, _ := filepath.Glob(pattern); len(left) == 0 {
+				c.StagingCleanup = StagingCleanupDone
+			}
 		}
 	}
 	return c

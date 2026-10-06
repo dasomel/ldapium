@@ -1,12 +1,13 @@
 package backup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -23,19 +24,6 @@ const (
 // errWorkerKilled marks a worker that ignored SIGTERM for the whole grace
 // period and had to be SIGKILLed, so its staging directory may be left behind.
 var errWorkerKilled = errors.New("worker killed after grace period")
-
-// limitedBuffer keeps at most max bytes of worker stdout; the rest is dropped.
-type limitedBuffer struct {
-	buf bytes.Buffer
-	max int
-}
-
-func (l *limitedBuffer) Write(p []byte) (int, error) {
-	if room := l.max - l.buf.Len(); room > 0 {
-		l.buf.Write(p[:min(room, len(p))])
-	}
-	return len(p), nil
-}
 
 // SetJobTimeouts sets the per-kind maximum run time (config enforces the
 // 1m..24h bounds; tests use shorter values directly).
@@ -81,9 +69,12 @@ func (g *procGroup) signal(sig syscall.Signal) bool {
 }
 
 // sweep ends members the worker left behind after it exited (a child that
-// outlives its parent). A surviving member keeps the pgid allocated, so it is
-// probed first (signal 0): an empty group is left alone. Members get SIGTERM,
-// then SIGKILL after the grace period.
+// outlives its parent; the worker waits for its own subprocesses, so anything
+// left is an orphan by definition). Residual risk, accepted in D217-19: signal 0
+// proves a process group with this id exists, not that it is ours; a surviving
+// member keeps the id allocated, so a foreign group would need the whole id
+// space to wrap inside the probe-to-signal gap. It is therefore bounded: one
+// probe, one SIGTERM, a wait that only probes, and one SIGKILL after a fresh probe.
 func (g *procGroup) sweep(grace time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -91,14 +82,14 @@ func (g *procGroup) sweep(grace time.Duration) {
 		return
 	}
 	_ = g.send(g.pgid, syscall.SIGTERM)
-	deadline := time.Now().Add(grace)
-	for time.Now().Before(deadline) {
+	for deadline := time.Now().Add(grace); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if g.send(g.pgid, 0) != nil {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	_ = g.send(g.pgid, syscall.SIGKILL)
+	if g.send(g.pgid, 0) == nil {
+		_ = g.send(g.pgid, syscall.SIGKILL)
+	}
 }
 
 // execWorker runs the worker in its own process group. When ctx ends (cancel,
@@ -109,13 +100,34 @@ func (g *procGroup) sweep(grace time.Duration) {
 func (m *Manager) execWorker(ctx context.Context, kind, jobID string, stdin []byte) ([]byte, error) {
 	cmd := exec.Command(m.python, m.worker, "--config", m.operator, "--kind", kind, "--job-id", jobID)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdin = bytes.NewReader(stdin)
-	out := &limitedBuffer{max: maxResultBytes}
-	cmd.Stdout = out
-	// A grandchild that outlives the worker must not hold Wait open forever.
-	cmd.WaitDelay = 2 * time.Second
-	if err := cmd.Start(); err != nil {
+	// Neither stream is a Go-side copy: stdout is a private temp file (result JSON
+	// only, no secrets) and stdin a pipe we feed ourselves. Wait then returns right
+	// after the kernel reaps the leader instead of also waiting for a grandchild
+	// that still holds an inherited pipe, which would keep `exited` false.
+	outFile, err := os.CreateTemp("", "ldapium-worker-out-")
+	if err != nil {
 		return nil, err
+	}
+	defer os.Remove(outFile.Name())
+	defer outFile.Close()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdin, cmd.Stdout = pr, outFile
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
+		return nil, err
+	}
+	pr.Close()
+	go func() {
+		_, _ = pw.Write(stdin)
+		pw.Close()
+	}()
+	readOut := func() []byte {
+		b, _ := io.ReadAll(io.LimitReader(io.NewSectionReader(outFile, 0, maxResultBytes), maxResultBytes))
+		return b
 	}
 	send := m.signalGroup
 	if send == nil {
@@ -130,12 +142,15 @@ func (m *Manager) execWorker(ctx context.Context, kind, jobID string, stdin []by
 	go func() {
 		err := cmd.Wait()
 		g.markExited()
+		if m.afterReap != nil {
+			m.afterReap() // test seam: widen the reaped-but-not-yet-handled window
+		}
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		g.sweep(grace)
-		return out.buf.Bytes(), err
+		return readOut(), err
 	case <-ctx.Done():
 	}
 	g.signal(syscall.SIGTERM)
@@ -144,12 +159,12 @@ func (m *Manager) execWorker(ctx context.Context, kind, jobID string, stdin []by
 	select {
 	case err := <-done:
 		g.sweep(grace)
-		return out.buf.Bytes(), err
+		return readOut(), err
 	case <-timer.C:
 		g.signal(syscall.SIGKILL)
 		err := <-done
 		g.sweep(grace)
-		return out.buf.Bytes(), fmt.Errorf("%w: %v", errWorkerKilled, err)
+		return readOut(), fmt.Errorf("%w: %v", errWorkerKilled, err)
 	}
 }
 

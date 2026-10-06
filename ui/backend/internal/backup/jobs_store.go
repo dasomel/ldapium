@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -145,7 +146,11 @@ func removeResultFiles(resultsDir string, ids []string) {
 		if !IsValidJobID(id) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(resultsDir, id+".json")); err != nil && !os.IsNotExist(err) {
+		file := filepath.Join(filepath.Clean(resultsDir), id+".json")
+		if !strings.HasPrefix(file, filepath.Clean(resultsDir)+string(filepath.Separator)) {
+			continue
+		}
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
 			log.Printf("backup_result_file_remove_failed job_id=%s", id)
 		}
 	}
@@ -274,7 +279,7 @@ func validateJobs(jobs []*Job) error {
 // wrong-version or invalid-record file is quarantined and startup continues with
 // an empty history; only a plain I/O failure is returned.
 func loadJobFile(path string) ([]*Job, error) {
-	b, err := readRegularFile(path, maxJobFileBytes)
+	b, err := readRegularFile(filepath.Dir(path), path, maxJobFileBytes)
 	switch {
 	case os.IsNotExist(err):
 		return []*Job{}, nil

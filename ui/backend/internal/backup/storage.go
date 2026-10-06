@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -30,11 +31,36 @@ var (
 	sha256HexRe    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
-// readRegularFile reads a bounded regular file without following a final
+// fixedKind maps a kind to the constant it names; the raw string is never used
+// in a path. Everything that turns a kind into a path goes through it.
+func fixedKind(kind string) (string, bool) {
+	switch kind {
+	case "data":
+		return "data", true
+	case "logs":
+		return "logs", true
+	}
+	return "", false
+}
+
+// Path containment. Every os.* call below that takes a derived path is preceded,
+// in the same function, by the same check inline:
+//
+//	p := filepath.Clean(path)
+//	strings.HasPrefix(p, filepath.Clean(root)+string(filepath.Separator))
+//
+// Ids and names are also validated by strict regexes before they are joined, so
+// an id with "../", an absolute path or a NUL byte never reaches a path.
+
+// readRegularFile reads a bounded regular file (which must lie under root) without following a final
 // symlink (O_NOFOLLOW) and without blocking on a FIFO (O_NONBLOCK); the type
 // and size are checked on the opened descriptor so there is no Lstat/open race.
-func readRegularFile(path string, max int64) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+func readRegularFile(root, path string, max int64) ([]byte, error) {
+	clean := filepath.Clean(path)
+	if strings.ContainsRune(path, 0) || !strings.HasPrefix(clean, filepath.Clean(root)+string(filepath.Separator)) {
+		return nil, errNotRegular
+	}
+	f, err := os.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, errNotRegular
@@ -72,37 +98,60 @@ type ownedManifest struct {
 	SHA256     map[string]string `json:"sha256,omitempty"`
 }
 
-// realDir reports whether path is itself a directory and not a symlink to one.
-func realDir(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.IsDir()
+// lstatDir returns path's own info if it is a directory and not a symlink to one.
+func lstatDir(root, path string) (os.FileInfo, bool) {
+	clean := filepath.Clean(path)
+	if strings.ContainsRune(path, 0) || !strings.HasPrefix(clean, filepath.Clean(root)+string(filepath.Separator)) {
+		return nil, false
+	}
+	info, err := os.Lstat(clean)
+	return info, err == nil && info.IsDir()
 }
 
-// readOwnedManifest applies the D36 ownership rule to <base>/<runDir>: the
+// readOwnedManifest applies the D36 ownership rule to <root>/<kind>/<runDir>: the
 // directory is a real (non-symlink) directory named like a run, complete.json
 // is a bounded regular non-symlink file, and its owner/instance/kind match and
 // its run_id equals the directory name. Both capacity reporting and job
 // artifact references go through it so neither can be pointed outside an owned
 // run directory.
-func readOwnedManifest(base, runDir, kind, instanceID string) (*ownedManifest, string, bool) {
-	if !runName.MatchString(runDir) {
+func readOwnedManifest(root, kind, runDir, instanceID string) (*ownedManifest, string, bool) {
+	k, ok := fixedKind(kind)
+	if !ok || !runName.MatchString(runDir) || !filepath.IsAbs(root) {
 		return nil, "", false
 	}
 	// Every component below the owned root must be a real directory: a symlinked
 	// <root>/<kind> would otherwise let outside manifests and files be accepted.
-	if !realDir(base) {
+	base := filepath.Join(filepath.Clean(root), k)
+	if !strings.HasPrefix(base, filepath.Clean(root)+string(filepath.Separator)) {
+		return nil, "", false
+	}
+	baseInfo, ok := lstatDir(root, base)
+	if !ok {
 		return nil, "", false
 	}
 	dir := filepath.Join(base, runDir)
-	if !realDir(dir) {
+	if !strings.HasPrefix(dir, base+string(filepath.Separator)) {
 		return nil, "", false
 	}
-	b, err := readRegularFile(filepath.Join(dir, "complete.json"), maxManifestBytes)
+	dirInfo, ok := lstatDir(root, dir)
+	if !ok {
+		return nil, "", false
+	}
+	b, err := readRegularFile(root, filepath.Join(dir, "complete.json"), maxManifestBytes)
 	if err != nil {
 		return nil, "", false
 	}
+	// Lstat-then-open is not atomic: if either directory was swapped for a symlink
+	// meanwhile, it is a different file now. (Writers to the backup root are already
+	// inside the volume's trust boundary: residual risk, D217-19.)
+	if again, ok := lstatDir(root, base); !ok || !os.SameFile(baseInfo, again) {
+		return nil, "", false
+	}
+	if again, ok := lstatDir(root, dir); !ok || !os.SameFile(dirInfo, again) {
+		return nil, "", false
+	}
 	var marker ownedManifest
-	if json.Unmarshal(b, &marker) != nil || marker.Owner != "ldapium-backup-v1" || marker.InstanceID != instanceID || marker.Kind != kind || marker.RunID != runDir {
+	if json.Unmarshal(b, &marker) != nil || marker.Owner != "ldapium-backup-v1" || marker.InstanceID != instanceID || marker.Kind != k || marker.RunID != runDir {
 		return nil, "", false
 	}
 	return &marker, dir, true
@@ -126,7 +175,11 @@ func artifactFiles(dir string, sums map[string]string) []ArtifactManifestFile {
 		if !artifactNameRe.MatchString(name) || name == ".." || !sha256HexRe.MatchString(sums[name]) {
 			continue
 		}
-		info, err := os.Lstat(filepath.Join(dir, name))
+		file := filepath.Join(filepath.Clean(dir), name)
+		if !strings.HasPrefix(file, filepath.Clean(dir)+string(filepath.Separator)) {
+			continue
+		}
+		info, err := os.Lstat(file)
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
@@ -145,7 +198,13 @@ func (m *Manager) storage() map[string]Storage {
 	for _, kind := range []string{"data", "logs"} {
 		var total Storage
 		latest := ""
-		base := filepath.Join(m.root, kind)
+		base := filepath.Join(filepath.Clean(m.root), kind)
+		if !strings.HasPrefix(base, filepath.Clean(m.root)+string(filepath.Separator)) {
+			continue
+		}
+		if _, ok := lstatDir(m.root, base); !ok {
+			continue
+		}
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			continue
@@ -154,8 +213,8 @@ func (m *Manager) storage() map[string]Storage {
 			if !entry.IsDir() || !runName.MatchString(entry.Name()) {
 				continue
 			}
-			_, dir, ok := readOwnedManifest(base, entry.Name(), kind, m.instanceID)
-			if !ok {
+			_, dir, ok := readOwnedManifest(m.root, kind, entry.Name(), m.instanceID)
+			if !ok || !strings.HasPrefix(dir, base+string(filepath.Separator)) {
 				continue
 			}
 			files, err := os.ReadDir(dir)
