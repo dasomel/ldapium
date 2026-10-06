@@ -171,7 +171,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 - `LDAP_REPLICATION_IDENTITY` (`admin` default / `prepare` / `dedicated`), unit 1
   of the staged replication-identity change (#229, `docs/changes/replication-identity`,
   T-010). Only `admin` is effective and it changes nothing (`cn=config` and
-  `olcSyncrepl` byte-identical). Any other value is validated and then the
+  `olcSyncrepl` byte-identical). Any other value is validated and then (until
+  unit 2 below made `prepare` effective) the
   container refuses to start ("not implemented in this image yet"): an invalid
   value, a non-admin mode without `LDAP_REPLICATION_ENABLED`, `LDAP_ADMIN_DN`
   equal to `cn=replicator,<root>`, `prepare` with an explicit replication
@@ -179,6 +180,23 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   or non-ASCII characters, length below 32, fewer than 10 distinct characters, or equal to the admin password;
   a hygiene check, not proof of randomness) are refused with fixed messages.
   Do not set it to anything but `admin` until later units ship.
+- `LDAP_REPLICATION_IDENTITY=prepare`, unit 2 of the same change (#229, T-011):
+  installs the replication identity's read-only ACL as the FIRST `olcAccess` rule
+  (`{0}to * by dn.exact="cn=replicator,<root>" ssf=128 read by dn.exact=... none
+  by * break`; slapd renumbers the other rules, so everyone else's rights are
+  unchanged) and an `olcLimits` rule (`size=unlimited time=unlimited`) with one
+  offline `slapmodify -n 0`, verified by reading `cn=config` back; a second start
+  is a no-op. It never creates the identity entry and replication still binds as
+  the admin DN. It starts only when the node holds no entry at the reserved DN or
+  the rule is already stored, and it refuses (fixed messages, volume untouched):
+  an existing entry without the rule, stored `olcAuthzRegexp`/`olcAuthIDRewrite`,
+  `olcAuthzPolicy` other than `none`, `olcTLSVerifyClient` other than `never`
+  (so `prepare` and `LDAP_TLS_MUTUAL_AUTH` do not combine), any entry with
+  `authzTo`/`authzFrom`, a stored `olcRootDN` equal to the reserved DN, a root DN
+  with quotes/backslashes/non-ASCII, and a serverID-1 start on a fresh volume.
+  `admin` stays byte-identical; `dedicated` still refuses to start. Rollback: an
+  older image or `admin` leaves the rule in place, which is harmless while no
+  entry exists at the reserved DN.
 - `LDAP_PAGED_TOTAL_LIMIT` (#215), opt-in: lifts the total of a paged search
   for authenticated non-root identities, which `LDAP_SIZE_LIMIT` otherwise caps
   at 10000 however small the pages are (the admin DN is already exempt). Unset
