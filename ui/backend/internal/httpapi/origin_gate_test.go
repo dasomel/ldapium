@@ -132,6 +132,26 @@ func TestOriginGate_Probe(t *testing.T) {
 	}
 }
 
+// Two Origin headers are ambiguous: exactly one value is required, so the gate
+// refuses the request even when the first value is the request's own origin.
+func TestOriginGate_MultipleOriginHeaders(t *testing.T) {
+	for _, values := range [][]string{
+		{"http://example.com", "https://evil.example"},
+		{"https://evil.example", "http://example.com"},
+		{"http://example.com", "http://example.com"},
+	} {
+		e, reached := probeServer(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/x", nil)
+		req.Header["Origin"] = values
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		env := requireEnvelope(t, strings.Join(values, " + "), rec)
+		if rec.Code != http.StatusForbidden || env.Code != codeOriginMismatch || env.Error != originGateMessage || *reached != 0 {
+			t.Errorf("Origin %v: %d %+v reached=%d, want the gate's 403 and no handler", values, rec.Code, env, *reached)
+		}
+	}
+}
+
 // Every registered write route, through the real server (AC-016 a-e). The
 // gate's own message is distinct from requireProfileWrite's, so "denied by the
 // gate" is observable on routes that also have the stricter per-handler check.

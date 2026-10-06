@@ -133,7 +133,7 @@ curl -sS -b jar.txt -X PUT \
   -d @profile.json "$BASE/api/v1/applications/grafana/integration-profile"
 ```
 
-- **쓰기 Origin 게이트:** 로그인·로그아웃을 포함한 모든 상태 변경 요청(POST/PUT/PATCH/DELETE)은 `Origin` 헤더가 **있으면** 서버 자신의 origin(스킴·Host)과 같아야 하고, 아니면 핸들러 실행 전에 403 `origin_mismatch`입니다(`Origin: null`, 빈 값 포함). `Origin` 헤더가 없는 요청(curl, 스크립트, 서비스)은 영향이 없어 위 로그인 예시처럼 그대로 동작합니다. 이 게이트는 끌 수 없습니다. **영향:** `Origin`을 항상 보내는 비브라우저 HTTP 클라이언트는 그 값을 서버 origin으로 맞추거나 헤더를 빼야 합니다. 리버스 프록시/Ingress는 브라우저가 보낸 `Host`를 그대로 전달하고 TLS 종단 시 `X-Forwarded-Proto: https`를 붙여야 합니다(서버는 `Host`와 `X-Forwarded-Proto` 계열 헤더로 자기 origin을 계산하고, 비교 전에 호스트 대소문자·후행 점·기본 포트(:80/:443)·IPv6 표기를 정규화하며 `X-Forwarded-Host`는 쓰지 않습니다). `Host`를 재작성하면 정상 UI 쓰기도 403이 됩니다.
+- **쓰기 Origin 게이트:** 로그인·로그아웃을 포함한 모든 상태 변경 요청(POST/PUT/PATCH/DELETE)은 `Origin` 헤더가 **있으면** 서버 자신의 origin(스킴·Host)과 같아야 하고, 아니면 핸들러 실행 전에 403 `origin_mismatch`입니다(`Origin: null`, 빈 값, `Origin` 헤더가 둘 이상인 요청 포함). `Origin` 헤더가 없는 요청(curl, 스크립트, 서비스)은 영향이 없어 위 로그인 예시처럼 그대로 동작합니다. 이 게이트는 끌 수 없습니다. **영향:** `Origin`을 항상 보내는 비브라우저 HTTP 클라이언트는 그 값을 서버 origin으로 맞추거나 헤더를 빼야 합니다. 리버스 프록시/Ingress는 브라우저가 보낸 `Host`를 그대로 전달하고 TLS 종단 시 `X-Forwarded-Proto: https`를 붙여야 합니다(서버는 `Host`와 `X-Forwarded-Proto` 계열 헤더로 자기 origin을 계산하고, 비교 전에 호스트 대소문자·후행 점·기본 포트(:80/:443)·IPv6 표기를 정규화하며 `X-Forwarded-Host`는 쓰지 않습니다). `Host`를 재작성하면 정상 UI 쓰기도 403이 됩니다.
 - 쓰기 엔드포인트(프로필, 방식, 백업, Keycloak, 매핑 미리보기)는 `Origin`이 서버 자신의 origin과 같아야 하고(아니면 403) `Content-Type: application/json`이어야 합니다(아니면 415).
 - `If-Match` 누락 428, revision 불일치 412, 형식 오류는 엔드포인트에 따라 400 또는 428.
 - Keycloak 역할 작업은 정수 revision 대신 스냅샷의 따옴표 붙은 64자리 hex fingerprint(ETag)를 사용합니다.
@@ -209,7 +209,7 @@ curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
 
 ## CORS (기본 꺼짐)
 
-기본값에서는 어떤 응답에도 `Access-Control-*`·`Vary: Origin` 헤더가 붙지 않고, `OPTIONS`는 위 설명대로 204와 `Allow`만 반환합니다. 환경 변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분, 정확한 `scheme://host[:port]`만; 브라우저가 생략하는 기본 포트 `:80`/`:443`은 정규화로 제거됨)를 설정하면 켜집니다. `*`, `null`, 경로·쿼리·프래그먼트·사용자 정보, 빈 항목, 빈·범위 밖(1–65535 아님) 포트는 기동을 거부합니다. 차트는 `ui.cors.allowedOrigins`입니다.
+기본값에서는 어떤 응답에도 `Access-Control-*`·`Vary: Origin` 헤더가 붙지 않고, `OPTIONS`는 위 설명대로 204와 `Allow`만 반환합니다. 환경 변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분, 정확한 `scheme://host[:port]`만; 브라우저가 생략하는 기본 포트 `:80`/`:443`은 정규화로 제거됨)를 설정하면 켜집니다. `*`, `null`, 경로·쿼리·프래그먼트·사용자 정보, 빈 항목, 빈·범위 밖(1–65535 아님) 포트, 비 ASCII(IDN) 항목은 기동을 거부합니다(브라우저는 Origin에 punycode `xn--` 형태를 보내므로 그 형태로 적습니다). 차트는 `ui.cors.allowedOrigins`입니다.
 
 - **읽기 전용입니다.** 목록에 있는 Origin에만 `Access-Control-Allow-Origin: <그 Origin>`·`Access-Control-Allow-Credentials: true`·`Access-Control-Expose-Headers: X-Request-Id, Retry-After, ETag`가 `GET`/`HEAD` 응답(오류 응답 포함)에 붙습니다. 일치하지 않는 Origin, `null`, 쓰기 메서드(POST/PUT/PATCH/DELETE) 응답에는 `Access-Control-*`가 붙지 않습니다.
 - `Vary: Origin`은 활성화되면 **모든** 응답(Origin이 없는 요청, 일치·불일치, `OPTIONS` 포함)에 붙습니다. 공유 캐시가 한 Origin의 응답을 다른 Origin에 재사용하지 않게 하기 위해서입니다.
