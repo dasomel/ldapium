@@ -131,7 +131,9 @@ func (c *client) keyScanOnce(ctx context.Context, base, filter, keyAttr string, 
 		if err := ctx.Err(); err != nil {
 			return nil, false, requestCtxErr(err)
 		}
-		c.mu.Lock()
+		if err := c.lockConn(ctx); err != nil {
+			return nil, false, err
+		}
 		entries, cookie, err := c.runChunk(ctx, req)
 		c.mu.Unlock()
 		if err != nil {
@@ -182,7 +184,9 @@ func (c *client) fetchByUUID(ctx context.Context, base string, selected []candid
 			reqAttrs,
 			nil,
 		)
-		c.mu.Lock()
+		if err := c.lockConn(ctx); err != nil {
+			return nil, err
+		}
 		entries, _, err := c.runChunk(ctx, req)
 		c.mu.Unlock()
 		if err != nil {

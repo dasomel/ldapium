@@ -610,3 +610,64 @@ func TestListPagesNeverRequestOrReturnUserPassword(t *testing.T) {
 		t.Errorf("a password value reached the page: %s", out)
 	}
 }
+
+// M2: the request deadline must also interrupt WAITING for the connection
+// lock (held by, say, a slow legacy listing), and the request must give up its
+// scan slot instead of occupying it.
+func TestListUsersPageDeadlineInterruptsWaitingForTheConnectionLock(t *testing.T) {
+	d := &fakeDir{}
+	seedUsers(d, 1000, 12)
+	c := newFakeClient(d)
+
+	c.mu.Lock() // a competing holder that outlives the request deadline
+	time.AfterFunc(700*time.Millisecond, c.mu.Unlock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.ListUsersPage(ctx, "dc=e", domain.PageQuery{Limit: 10})
+	if !errors.Is(err, domain.ErrScanTimeout) {
+		t.Fatalf("err = %v, want ErrScanTimeout", err)
+	}
+	if took := time.Since(start); took > 400*time.Millisecond {
+		t.Errorf("returned after %v: the deadline did not interrupt the lock wait", took)
+	}
+	if d.calls.Load() != 0 {
+		t.Errorf("a search ran although the lock was never acquired")
+	}
+	select {
+	case c.scanSem <- struct{}{}:
+		<-c.scanSem
+	default:
+		t.Error("the scan slot is still occupied after the request gave up")
+	}
+	// Once the holder lets go, the abandoned waiter takes the lock and
+	// releases it again: nothing stays locked.
+	time.Sleep(900 * time.Millisecond)
+	if !c.mu.TryLock() {
+		t.Fatal("connection lock leaked by the abandoned waiter")
+	}
+	c.mu.Unlock()
+}
+
+func TestListUsersPageDeadlineInterruptsTheLockWaitOfPhaseTwo(t *testing.T) {
+	d := &fakeDir{}
+	seedUsers(d, 300, 13)
+	c := newFakeClient(d)
+	c.betweenPhases = func() { // phase 1 is done; a competitor takes the connection
+		c.mu.Lock()
+		time.AfterFunc(700*time.Millisecond, c.mu.Unlock)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.ListUsersPage(ctx, "dc=e", domain.PageQuery{Limit: 10})
+	if !errors.Is(err, domain.ErrScanTimeout) || time.Since(start) > 450*time.Millisecond {
+		t.Fatalf("err = %v after %v, want ErrScanTimeout at the deadline", err, time.Since(start))
+	}
+	time.Sleep(900 * time.Millisecond)
+	if !c.mu.TryLock() {
+		t.Fatal("connection lock leaked")
+	}
+	c.mu.Unlock()
+}

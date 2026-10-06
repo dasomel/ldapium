@@ -85,6 +85,17 @@ func encodeCursor(key []byte, resource, q, binding string, pos domain.PagePositi
 	return token, nil
 }
 
+// decodeCanonical decodes unpadded base64url and accepts only the one spelling
+// encodeCursor produces: Go's decoder silently skips CR and LF, so a newline
+// inside the MAC part would otherwise verify as the same MAC.
+func decodeCanonical(s string) ([]byte, bool) {
+	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
+	if err != nil || base64.RawURLEncoding.EncodeToString(b) != s {
+		return nil, false
+	}
+	return b, true
+}
+
 // decodeCursor verifies the MAC before it parses anything, then checks that
 // the cursor belongs to this resource, q and session. Every failure is the
 // same errCursorInvalid: the caller learns nothing about which check failed.
@@ -96,13 +107,12 @@ func decodeCursor(key []byte, token, resource, q, binding string) (domain.PagePo
 	if len(parts) != 3 || parts[0] != cursorVersion {
 		return domain.PagePosition{}, errCursorInvalid
 	}
-	enc := base64.RawURLEncoding.Strict()
-	gotMAC, err := enc.DecodeString(parts[2])
-	if err != nil || !hmac.Equal(gotMAC, cursorMAC(key, parts[0]+"."+parts[1])) {
+	gotMAC, ok := decodeCanonical(parts[2])
+	if !ok || !hmac.Equal(gotMAC, cursorMAC(key, parts[0]+"."+parts[1])) {
 		return domain.PagePosition{}, errCursorInvalid
 	}
-	raw, err := enc.DecodeString(parts[1])
-	if err != nil {
+	raw, ok := decodeCanonical(parts[1])
+	if !ok {
 		return domain.PagePosition{}, errCursorInvalid
 	}
 	var p cursorPayload

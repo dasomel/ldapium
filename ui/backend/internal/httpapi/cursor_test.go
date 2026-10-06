@@ -64,7 +64,7 @@ func TestCursorCarriesArbitraryBytesLosslessly(t *testing.T) {
 
 func TestCursorRejectsEveryOneByteTamper(t *testing.T) {
 	key, binding, token := newTestCursor(t)
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_."
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.\r\n \t+/="
 	for i := 0; i < len(token); i++ {
 		for _, r := range []byte(alphabet) {
 			if r == token[i] {
@@ -74,6 +74,34 @@ func TestCursorRejectsEveryOneByteTamper(t *testing.T) {
 			if _, err := decodeCursor(key, mutated, "users", "ali", binding); err == nil {
 				t.Fatalf("tampered cursor accepted: byte %d %q -> %q", i, token[i], r)
 			}
+		}
+	}
+}
+
+// Go's base64 decoder skips CR and LF, so a token with a newline inside the MAC
+// part would decode to the same MAC. A cursor must be accepted in exactly one
+// spelling.
+func TestCursorRejectsWhitespaceAndNonCanonicalSpellings(t *testing.T) {
+	key, binding, token := newTestCursor(t)
+	parts := strings.Split(token, ".")
+	for _, ins := range []string{"\n", "\r", "\r\n", " ", "\t", "%0A"} {
+		for i := 0; i <= len(token); i++ {
+			mutated := token[:i] + ins + token[i:]
+			if _, err := decodeCursor(key, mutated, "users", "ali", binding); err == nil {
+				t.Fatalf("cursor with %q inserted at %d accepted: %q", ins, i, mutated)
+			}
+		}
+	}
+	// Non-zero trailing bits in the last base64 character decode to the same
+	// bytes in a lenient decoder; only the canonical spelling may pass.
+	last := parts[2][len(parts[2])-1]
+	for _, r := range []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") {
+		if r == last {
+			continue
+		}
+		mutated := parts[0] + "." + parts[1] + "." + parts[2][:len(parts[2])-1] + string(r)
+		if _, err := decodeCursor(key, mutated, "users", "ali", binding); err == nil {
+			t.Fatalf("non-canonical MAC spelling accepted: last char %q -> %q", last, r)
 		}
 	}
 }

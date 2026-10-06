@@ -613,6 +613,27 @@ def scenario_slow(slow_ms_probe=150):
   check(st2 == 200 and json.loads(text2)['groups'], 'a narrow cursor request after the cancelled chunk failed: %d %s' % (st2, text2[:200]))
   record('connection after a cancelled chunk', 'same session: /api/entry 200 in %.0fms, then a q-narrowed cursor request 200 with %d group(s) (SearchAsync cancellation left the shared connection healthy)' % (secs2 * 1000, len(json.loads(text2)['groups'])))
 
+  # The request deadline must also end the WAIT for the connection lock: a slow
+  # legacy listing holds it for its whole scan, and a cursor request on that
+  # session must still answer at its own 30 s deadline and free its scan slot.
+  api3 = Api(url2)
+  api3.login(admin_dn, admin_password)
+  legacy = []
+  holder = threading.Thread(target=lambda: legacy.append(api3.call('GET', '/api/users', timeout=600)[0]))
+  holder.start()
+  time.sleep(3)
+  t = time.perf_counter()
+  status, body, headers, secs, text = api3.page('users', limit=50)
+  took = time.perf_counter() - t
+  check(status == 503 and body.get('code') == 'scan_timeout', 'expected 503 scan_timeout while the lock is held, got %d %s' % (status, text[:300]))
+  check(26 < took < 36, 'a cursor request behind a slow legacy listing ended after %.1fs, expected about its 30s deadline' % took)
+  legacy_alive = holder.is_alive()
+  holder.join()
+  record('deadline while WAITING for the connection lock', '503 scan_timeout after %.1fs although a slow legacy listing still held the connection (%s); legacy finished with %s afterwards' % (took, 'still running at that moment' if legacy_alive else 'it had just finished', legacy))
+  st3, text3, _, _ = api3.call('GET', '/api/groups?q=%s&limit=5' % urllib.parse.quote('group00042'))
+  check(st3 == 200 and json.loads(text3)['groups'], 'the session cannot list after the abandoned lock wait: %d %s' % (st3, text3[:200]))
+  record('scan slot and lock after the abandoned wait', 'the same session served a cursor request again (200, %d group(s))' % len(json.loads(text3)['groups']))
+
 
 def run():
   command(['docker', 'network', 'create', network])

@@ -74,6 +74,32 @@ func (c *client) liveSearch(ctx context.Context, req *ldap.SearchRequest) ([]*ld
 	return entries, cookie, resp.Err()
 }
 
+// lockConn takes the connection lock but stops waiting when ctx ends, so a
+// request deadline also bounds the wait behind a long holder (the legacy
+// listing keeps c.mu for its whole scan). On error nothing is held. The
+// waiter goroutine cannot be cancelled (sync.Mutex has no such API), so an
+// abandoned one takes the lock when it frees up and gives it straight back.
+func (c *client) lockConn(ctx context.Context) error {
+	if c.mu.TryLock() {
+		return nil
+	}
+	got := make(chan struct{})
+	go func() {
+		c.mu.Lock()
+		close(got)
+	}()
+	select {
+	case <-got:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-got
+			c.mu.Unlock()
+		}()
+		return requestCtxErr(ctx.Err())
+	}
+}
+
 func (c *client) chunkTimeout() time.Duration {
 	if c.chunkTimeoutOverride > 0 {
 		return c.chunkTimeoutOverride
