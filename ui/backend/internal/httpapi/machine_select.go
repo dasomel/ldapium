@@ -144,6 +144,9 @@ type selectResult struct {
 	Status  int
 	Code    string
 	Message string
+	// Reason is the audit reason of the early return or ignore (D10); empty
+	// when a later step decides.
+	Reason string
 }
 
 const (
@@ -152,8 +155,8 @@ const (
 	msgBearerNotHere   = "Authorization is not accepted on this endpoint"
 )
 
-func rejectSel(status int, code, msg string) selectResult {
-	return selectResult{Action: actReject, Status: status, Code: code, Message: msg}
+func rejectSel(status int, code, msg, reason string) selectResult {
+	return selectResult{Action: actReject, Status: status, Code: code, Message: msg, Reason: reason}
 }
 
 // selectAuth implements the precedence matrix, first match wins:
@@ -171,25 +174,27 @@ func selectAuth(in selectInput) selectResult {
 		return selectResult{Action: actIgnore}
 	}
 	switch in.Class {
-	case classN, classPO:
+	case classN:
 		return selectResult{Action: actIgnore}
+	case classPO:
+		return selectResult{Action: actIgnore, Reason: reasonIgnoredPublic}
 	}
 	kind, token := classifyAuthorization(in.AuthHeaders)
 	if in.Class == classPA {
 		if kind == authA0 {
 			return selectResult{Action: actIgnore}
 		}
-		return rejectSel(http.StatusBadRequest, codeInvalidRequest, msgBearerNotHere)
+		return rejectSel(http.StatusBadRequest, codeInvalidRequest, msgBearerNotHere, reasonBearerNotHere)
 	}
 	// classP
 	switch kind {
 	case authA0:
 		return selectResult{Action: actCookie}
 	case authAI, authAD:
-		return rejectSel(http.StatusUnauthorized, codeTokenInvalid, msgBearerInvalid)
+		return rejectSel(http.StatusUnauthorized, codeTokenInvalid, msgBearerInvalid, reasonBadHeader)
 	}
 	if in.HasSessionCookie {
-		return rejectSel(http.StatusBadRequest, codeInvalidRequest, msgBearerAndCookie)
+		return rejectSel(http.StatusBadRequest, codeInvalidRequest, msgBearerAndCookie, reasonMixed)
 	}
 	return selectResult{Action: actBearer, Token: token}
 }

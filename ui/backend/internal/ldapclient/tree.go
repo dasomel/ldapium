@@ -27,18 +27,22 @@ func (c *client) Tree(ctx context.Context, parentDN string) ([]domain.TreeNode, 
 		[]string{"objectClass"},
 		nil,
 	)
-	res, err := c.conn.Search(req)
+	res, err := c.search(req)
 	if err != nil {
 		return nil, mapErr("list children", err)
 	}
 
 	nodes := make([]domain.TreeNode, 0, len(res.Entries))
 	for _, e := range res.Entries {
+		has, perr := c.hasChildrenLocked(ctx, e.DN)
+		if perr != nil {
+			return nil, mapErr("probe children", perr)
+		}
 		nodes = append(nodes, domain.TreeNode{
 			DN:            e.DN,
 			RDN:           rdnOf(e.DN),
 			ObjectClasses: e.GetAttributeValues("objectClass"),
-			HasChildren:   c.hasChildrenLocked(e.DN),
+			HasChildren:   has,
 		})
 	}
 	return nodes, nil
@@ -51,7 +55,11 @@ func (c *client) Tree(ctx context.Context, parentDN string) ([]domain.TreeNode, 
 // The probe asks for a single entry, which makes "more than one child" an
 // error rather than a result — see hasChildrenFromProbe for why that is the
 // answer and not a failure.
-func (c *client) hasChildrenLocked(dn string) bool {
+//
+// The error is non-nil only for a strict context (machine requests, see
+// strict.go) and only when the connection or the request deadline failed; for
+// every other caller a failed probe stays "no children", as before.
+func (c *client) hasChildrenLocked(ctx context.Context, dn string) (bool, error) {
 	req := ldap.NewSearchRequest(
 		dn,
 		ldap.ScopeSingleLevel, ldap.NeverDerefAliases, 1, 0, false,
@@ -59,11 +67,14 @@ func (c *client) hasChildrenLocked(dn string) bool {
 		[]string{"dn"},
 		nil,
 	)
-	res, err := c.conn.Search(req)
+	res, err := c.search(req)
 	if err != nil {
-		return hasChildrenFromProbe(0, err)
+		if StrictSecondaryReads(ctx) && isInfraError(ctx, err) {
+			return false, err
+		}
+		return hasChildrenFromProbe(0, err), nil
 	}
-	return hasChildrenFromProbe(len(res.Entries), nil)
+	return hasChildrenFromProbe(len(res.Entries), nil), nil
 }
 
 // hasChildrenFromProbe interprets the outcome of that one-entry probe.

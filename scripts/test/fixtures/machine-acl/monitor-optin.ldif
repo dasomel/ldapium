@@ -1,0 +1,9 @@
+# Opt-in: only a deployment that grants the server.monitor.read scope adds this
+# to the cn=Monitor database (its default ACL is "by * none"). Tokens as in
+# main-database.ldif; @MONITOR_DB_DN@ is e.g. olcDatabase={3}monitor,cn=config.
+dn: @MONITOR_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@MACHINE_DN@" read
+  by * break

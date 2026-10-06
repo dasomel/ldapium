@@ -1,0 +1,10 @@
+# TEST ONLY - never apply to a real deployment. A deliberately over-privileged
+# bind identity (it reads every attribute, userPassword included) for the
+# AC-005 proof that the application's own guards, not the directory ACLs,
+# keep secret values out of machine responses.
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@MACHINE_DN@" read
+  by * break

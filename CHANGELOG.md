@@ -37,9 +37,27 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   response or route changes. OpenAPI gains `securitySchemes.machineBearer` plus
   `security`/`x-machine-scope` on exactly the eight allowed GET operations, and three
   new stable error codes `token_invalid`, `token_expired`, `scope_denied`.
-  **Enabling it does not expose any data yet:** the per-request least-privilege LDAP
-  bind identity is a later unit, so an authorized machine request currently ends in
-  a fixed `503`.
+  **Enabling it did not expose any data in unit 1:** an authorized machine request
+  ended in a fixed `503` until unit 2 below.
+- Machine bearer authentication, unit 2 (#214, **default off**): the machine
+  execution identity and its boundaries. An authorized machine request now runs as
+  the one dedicated LDAP account `MACHINE_LDAP_BIND_DN`, bound per request and closed
+  when the request ends (also on panic, client abort and timeout); the global LDAP
+  slot (`MACHINE_MAX_CONCURRENCY`) is taken, non-blocking, before the bind, one
+  `MACHINE_REQUEST_TIMEOUT` deadline bounds dial, bind and every search, and a bind
+  failure is a `503` with no fallback to another identity. Machine-only boundaries:
+  `getEntry`/`listTree` refuse any DN outside `LDAP_BASE_DN` (so cn=accesslog,
+  cn=config and cn=Monitor) with `403 scope_denied` before any LDAP connection is
+  opened, `listTree` refuses a listing of more than 1000 children with `422
+  size_limit_exceeded`, and `getMonitor` reads the accesslog only with the `audit.read`
+  scope. List cursors of a machine principal are bound to issuer plus client id (a
+  refreshed token keeps paging; cross-client and human/machine replay is `400
+  cursor_invalid`). Every request that carries an `Authorization` header while the
+  feature is on is exactly one `event=machine_access` log line (see
+  `docs/audit-event-schema.md`). The Go interface `Client.MonitorStats` gained an
+  `includeAccessLog` parameter (human sessions pass `true`; unchanged behaviour).
+  With `MACHINE_AUTH_ENABLED` unset nothing changes. Still later units: the
+  operator ACL guide, the rate/concurrency limiters, Helm values and the Keycloak e2e.
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause

@@ -54,7 +54,7 @@ func (c *client) AuditActions(ctx context.Context, limit int, before string) ([]
 		[]ldap.Control{sortCtrl},
 	)
 
-	res, err := c.conn.Search(req)
+	res, err := c.search(req)
 	var entries []*ldap.Entry
 	sorted := false
 
@@ -118,7 +118,7 @@ func (c *client) searchAccessLogPaged(ctx context.Context, base, filter string, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		res, err := c.conn.Search(req)
+		res, err := c.search(req)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +169,7 @@ func (c *client) recentLogsLocked(ctx context.Context, limit int) ([]domain.Audi
 		[]ldap.Control{sortCtrl},
 	)
 
-	res, err := c.conn.Search(req)
+	res, err := c.search(req)
 	var entries []*ldap.Entry
 	sorted := false
 
