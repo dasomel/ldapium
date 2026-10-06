@@ -5,6 +5,7 @@ import type {
   Entry,
   Group,
   GroupFormInput,
+  ListParams,
   ListResult,
   LogoutResponse,
   Me,
@@ -98,9 +99,16 @@ export const api = {
   listPasswordPolicies: () =>
     request<{ policies: PasswordPolicy[] }>('/password-policies').then((r) => r.policies),
 
-  listUsers: () =>
-    request<{ users: User[]; truncated: boolean }>('/users').then(
-      ({ users, truncated }): ListResult<User> => ({ items: users, truncated }),
+  listUsers: (params?: ListParams) =>
+    request<{ users: User[]; truncated: boolean; hasMore?: boolean; nextCursor?: string }>(
+      `/users${qs({ limit: params?.limit ? String(params.limit) : undefined, cursor: params?.cursor, q: params?.q })}`,
+    ).then(
+      ({ users, truncated, hasMore, nextCursor }): ListResult<User> => ({
+        items: users ?? [],
+        truncated: Boolean(truncated),
+        hasMore,
+        nextCursor,
+      }),
     ),
   createUser: (input: UserFormInput, opts?: WriteOptions) =>
     request<{ dn: string }>('/users', { method: 'POST', body: JSON.stringify(input), headers: writeHeaders(opts) }),
@@ -116,9 +124,16 @@ export const api = {
   unlockUser: (dn: string) => request<void>('/users/unlock', { method: 'POST', body: JSON.stringify({ dn }) }),
   lockUser: (dn: string) => request<void>('/users/lock', { method: 'POST', body: JSON.stringify({ dn }) }),
 
-  listGroups: () =>
-    request<{ groups: Group[]; truncated: boolean }>('/groups').then(
-      ({ groups, truncated }): ListResult<Group> => ({ items: groups, truncated }),
+  listGroups: (params?: ListParams) =>
+    request<{ groups: Group[]; truncated: boolean; hasMore?: boolean; nextCursor?: string }>(
+      `/groups${qs({ limit: params?.limit ? String(params.limit) : undefined, cursor: params?.cursor, q: params?.q })}`,
+    ).then(
+      ({ groups, truncated, hasMore, nextCursor }): ListResult<Group> => ({
+        items: groups ?? [],
+        truncated: Boolean(truncated),
+        hasMore,
+        nextCursor,
+      }),
     ),
   createGroup: (input: GroupFormInput, opts?: WriteOptions) =>
     request<{ dn: string }>('/groups', { method: 'POST', body: JSON.stringify(input), headers: writeHeaders(opts) }),
