@@ -97,7 +97,10 @@ check "PodMonitor renders" has "$pm" 'kind: PodMonitor'
 check "PodMonitor targets the ui-metrics container port" has "$pm" 'port: ui-metrics'
 check "serviceMonitor without ui.metrics.enabled fails" fails_with 'requires ui.metrics.enabled' --set ui.metrics.serviceMonitor.enabled=true
 check "podMonitor without ui.metrics.enabled fails" fails_with 'requires ui.metrics.enabled' --set ui.metrics.podMonitor.enabled=true
-check "ui.metrics.port equal to the public port fails" fails_with 'must differ' "${on[@]}" --set ui.metrics.port=8080
+check "ui.metrics.port 8080 (the container's HTTP listener) fails" fails_with 'must not be 8080' "${on[@]}" --set ui.metrics.port=8080
+# The Service port is not the container listener: 80 -> 8080 is a normal setup and must not hide the collision.
+check "ui.metrics.port 8080 fails even when ui.service.port is 80" fails_with 'must not be 8080' "${on[@]}" --set ui.service.port=80 --set ui.metrics.port=8080
+check "a metrics port equal to the Service port is fine when it is not 8080" render "${on[@]}" --set ui.service.port=9331 >/dev/null
 
 # 5. slapd's own resources are identical with and without UI metrics, and its
 #    ServiceMonitor selector (component server) cannot match the metrics Service.
