@@ -141,7 +141,7 @@ PUT/PATCH/DELETE, member add/remove and entry move (each also checked to have wr
 matching `If-Match` applies and moves the ETag on the same routes; malformed tags are 400 and `*` is
 unconditional; two sessions racing the same ETag give exactly one 204 and one 412 in each of 15
 rounds, and the stored value is the 204 winner's; PATCH keeps unmentioned fields while PUT still erases
-them; a user create whose password step fails (see below) returns `state: rolled_back`, leaves no
+them; a user create whose password step fails (see below) returns an envelope saying the user was not created, leaves no
 entry (`GET /api/entry` 404) and the same uid can then be created; 10 rounds of delete + re-create of
 the same DN each defeat the old `(&(entryUUID=..)(entryCSN=..))` assertion delete with LDAP 122 and the
 re-created entry survives; an unknown critical control (`ldapmodify -e '!1.2.3.4.5.6.7.8'`) is refused
@@ -152,7 +152,7 @@ root-bound create is simply accepted (`ldappasswd -s Ab1` as `cn=admin` succeede
 this image's default policy (`pwdSafeModify: TRUE`) refuses to set an initial password at all:
 `Insufficient access (50) Additional info: Must supply old password to be changed as well as new one`
 (any password, including a strong one). That is the forced failure: Add succeeds, the Password Modify
-fails (403), the identity-bound delete removes the entry, response `state: rolled_back`.
+fails (403), the identity-bound delete removes the entry, 403 `forbidden` envelope "user not created: ...".
 Consequence worth knowing: with this default policy only a root-bound administrator can create users
 with an initial password.
 
@@ -222,10 +222,12 @@ dropped by last-write-wins after the heal. Route writes to a single node to keep
   and the frontend (T-014, T-016, T-018, T-019, T-024) are Part B / follow-ups.
 - The revision condition travels as a trailing `ifMatch string` argument (bare CSN, "" = unconditional) on
   the `ldapclient.Client` write methods; `PatchUser`/`PatchGroup` are new methods.
-- Error bodies still use the pre-envelope `{"error": ...}` shape; only the new outcomes add `code`
-  (`revision_conflict`, `partial_failure`), `retryable`, `state`, `dn`. They are built in
-  `httpapi/conditional.go` (`respondRevisionConflict`, `respondCreateFailure`) so the envelope change can
-  absorb them in one place.
+- Errors use the #218 envelope (rebased onto #234): a stale tag is `domain.ErrRevisionConflict`, mapped by
+  `domainStatus` to 412 `revision_conflict`; `partial_failure` (500) is a new registry code and the one
+  envelope with the extra `state` and `dn` keys (states `partial`, `unknown`, `identity_changed`), with the
+  registry's static 5xx text. A rolled-back create is NOT a separate `state`: it is a plain envelope
+  (400/403/500 by cause, text starting "user not created", diagnostics through the D218-15 allowlist), so the
+  package's `state: rolled_back` key does not exist. Logs use `logQuote`/`logDetail`.
 - Spike corrections to D216-1: a successful bind that clears earlier `pwdFailureTime` values also bumps
   `entryCSN` (not only the failed bind), and `LDAP_LASTBIND_ENABLED=true` bumps it on every successful
   bind; memberOf maintenance and refint's removal of a deleted member do NOT bump the affected entries'
