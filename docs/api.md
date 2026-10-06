@@ -308,7 +308,7 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 
 ## 머신 bearer 인증 (기본 꺼짐)
 
-> **이 빌드는 실행 신원까지 들어 있습니다(단위 2).** 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 제한(limiter)·Helm·운영자 ACL 가이드·Keycloak e2e는 후속 단위입니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
+> **이 빌드는 실행 신원까지 들어 있습니다(단위 2).** 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 제한(limiter)·Helm·Keycloak e2e는 후속 단위입니다. 운영자용 계정 생성·ACL 절차는 [`machine-ldap-account.md`](machine-ldap-account.md)에 있습니다. 설계: [`docs/changes/machine-principal-auth/CHANGE.md`](changes/machine-principal-auth/CHANGE.md).
 
 켜지 않으면(`MACHINE_AUTH_ENABLED` 미설정) `Authorization` 헤더는 완전히 무시되고 기존 동작·응답은 달라지지 않습니다. 켜면 Keycloak 서비스 계정 access token(`client_credentials`)을 `Authorization: Bearer <jwt>`로 보낼 수 있습니다.
 
@@ -316,7 +316,7 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 - **유효 권한 = 토큰 scope ∩ 서버의 client 상한**(`MACHINE_ALLOWED_CLIENTS`=`clientId=scope,scope;…`).
 - **쿠키와 bearer는 섞지 않습니다.** 유효 형식의 `Authorization`과 `ldapium_session` 쿠키가 함께 오면 400, 형식이 틀리거나 `Authorization` 줄이 둘 이상이면 쿠키 유무와 무관하게 401 `token_invalid`(쿠키 폴백 없음), 로그인·로그아웃·SSO 4개 경로에 `Authorization`이 있으면 400입니다. bearer 요청은 `Set-Cookie`를 받지 않고 CORS는 확장되지 않습니다(프리플라이트의 `authorization`은 허용 헤더가 아님). 상태 변경 요청의 `Origin` 게이트는 그대로 가장 바깥입니다.
 - **검증 실패는 401**(`token_invalid`, 순수 만료만 `token_expired`), **서명 키 조회 장애는 503 + `Retry-After`**, 정상 조회 뒤의 알 수 없는 `kid`는 401입니다. 토큰 정책(`aud` 정확 멤버십, `azp`==`client_id`, 서비스 계정 판별, 수명 상한·skew, `alg` allowlist)과 JWKS 상태 기계는 CHANGE.md가 정본입니다.
-- **실행(머신 전용 LDAP 계정):** 요청마다 `MACHINE_LDAP_BIND_DN`으로 bind했다가 응답·취소·패닉에서 닫습니다. 전역 LDAP 슬롯(`MACHINE_MAX_CONCURRENCY`, 기본 8)을 bind **이전**에 비차단으로 잡고(없으면 503 + `Retry-After: 1`), `MACHINE_REQUEST_TIMEOUT`(기본 10s) 하나가 dial·bind·검색 전부의 deadline입니다. bind 실패·디렉터리 중단·deadline 초과는 503이며 다른 신원으로 폴백하지 않습니다. 읽기 전용은 LDAP ACL이 강제합니다(운영자 ACL 가이드는 후속 단위, 패키지의 CHANGE.md가 규칙 정본).
+- **실행(머신 전용 LDAP 계정):** 요청마다 `MACHINE_LDAP_BIND_DN`으로 bind했다가 응답·취소·패닉에서 닫습니다. 전역 LDAP 슬롯(`MACHINE_MAX_CONCURRENCY`, 기본 8)을 bind **이전**에 비차단으로 잡고(없으면 503 + `Retry-After: 1`), `MACHINE_REQUEST_TIMEOUT`(기본 10s) 하나가 dial·bind·검색 전부의 deadline입니다. bind 실패·디렉터리 중단·deadline 초과는 503이며 다른 신원으로 폴백하지 않습니다. 읽기 전용은 LDAP ACL이 강제합니다(절차와 확정 LDIF는 [`machine-ldap-account.md`](machine-ldap-account.md), 규칙 정본은 패키지의 CHANGE.md). ACL은 모든 LDAP 노드에 적용·확인해야 합니다.
 - **민감 base 경계:** `getEntry`·`listTree`는 `LDAP_BASE_DN` 밖의 DN(`cn=accesslog`·`cn=config`·`cn=Monitor` 포함, 대소문자·공백·escape 변형도 파싱 후 비교)을 LDAP 연결을 열기 전에 403 `scope_denied`로 거부합니다. `listTree`는 자식이 1000개를 넘으면 422 `size_limit_exceeded`(본문이 배열이라 잘라 내지 않고 거부). `getMonitor`는 `audit.read`가 유효 scope에 없으면 accesslog를 읽지 않아 `recentLogs`가 비어 있습니다. 사람 세션의 응답은 그대로입니다.
 - **커서:** 머신 주체의 `cursor`는 issuer+client id에 묶입니다. 토큰을 갱신해도 이어서 조회할 수 있고, 다른 client나 사람 세션에서 재생하면 400 `cursor_invalid`입니다.
 - **감사:** `Authorization`을 실은 모든 요청(조기 반환 포함)은 로그 한 줄(`event=machine_access`)을 남깁니다. 형식은 [`audit-event-schema.md`](audit-event-schema.md)의 "머신 접근 이벤트".

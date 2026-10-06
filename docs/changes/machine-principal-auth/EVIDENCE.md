@@ -159,3 +159,62 @@ jq '[.paths|to_entries[]|.key as $p|.value|to_entries[]|select(.key|test("^(get|
       (map(select(.sec!="[]" and .m=="get"))|length), (map(select(.sec!="[]" and .m!="get"))|length)' $O
 # 53 8 45 20 25
 ```
+
+## 4. 머신 ACL 읽기 전용 라이브 증명 (T-015 / T-026 / AC-018, 단위 3, 2026-10-07)
+
+환경: Docker 29.8.2 (macOS), 이미지 `ldapium:a3`(`sha256:e8c48181691c…`, 이 브랜치의 `image/`를 변경 없이 빌드), UI 이미지
+`ldapium-ui:a3`(`sha256:be3f0b49141a…`), OpenLDAP은 이미지 내장 빌드. 컨테이너는 `--network none`, 비밀은 0600 파일·stdin만.
+스크립트: `scripts/test/test-machine-acl-readonly-live.py`. 관리 명령은 운영 가이드의 것과 문자 그대로 같다(스크립트가 가이드 본문에서
+적용·조회·롤백 명령과 LDIF 블록이 동일함을 검사한다).
+
+### 4.1 결과 (실제 실행; 수정 라운드 후 이미지 `ldapium:a3b`/`ldapium-ui:a3b`)
+
+| 실행 | 결과 |
+|---|---|
+| 정상 | `RESULT: 349 checks passed, 0 failed, mutation=none, 20s`, 종료 0 (첫 라운드 238, 여덟 비밀 속성 증명 추가로 349) |
+| 변이 11종: `scripts/test/test-machine-acl-mutations.sh` (구성 a만) | 전부 `detected`, 종료 0: `reorder` 16, `widen` 12, `nosecret` 35, `drop:<속성>` 8종(`userPassword` 8, 나머지 7)개 실패 검사 + 예상한 이름의 검사 포함 |
+| 인프라 오류 대조: 같은 드라이버를 존재하지 않는 이미지로 실행 | 11종 전부 `NOT DETECTED (the run ended in an error, not in a failed check)`, 종료 1 (스크립트는 `ERROR: docker run: Unable to find image…`와 `RESULT: 6 checks passed, 0 failed`를 출력) |
+| `test-machine-execution-live.py`(같은 LDIF, 새 비밀 속성 목록, 실제 UI 요청) | `69 PASS`, 종료 0 (단위 2의 `olcAccess` 기대 문자열을 새 목록에 맞게 한 줄 수정) |
+
+**비밀 속성별 증명(수정 라운드):** 규칙 `{0}`이 보호하는 8속성 전부를 `uid=secrets,ou=people`에 알아볼 수 있는 값으로 심었다 — `userPassword`·`shadowLastChange`·
+`userPKCS12`·`oathSecret`·`oathEncKey`·`oathTokenPIN`은 `extensibleObject`로(이 이미지의 slapd가 받는다), `pKCS8PrivateKey;binary`는 유효한 PKCS#8 DER(Ed25519 헤더+난수 32바이트),
+`pwdHistory`는 운영 속성이라 그 항목의 비밀번호를 두 번 바꿔 생성. 속성마다 (1) 관리자 대조가 값을 읽음, (2) `M`이 명시 목록·`*`·`+`로 속성도 값도 받지 못함, (3) `(attr=*)` 필터가 아무것도
+찾지 못함, 그리고 `M`이 같은 항목을 읽을 수 있음(빈 응답이 ACL 때문임)을 확인했다. 시드하지 못한 속성은 없다. 변이 `drop:<속성>`은 그 속성 하나만 규칙에서 빼며 해당 속성의 (2)·(3)이 실패한다.
+
+변이가 실패시키는 검사의 예: `reorder`는 읽기 순서 확인과 함께 **자기 비밀번호 변경이 성공(rc 0)**한다. `widen`은 `B` 밖 항목이 반환되는 것, `nosecret`은 모든 비밀 속성이 반환되는 것을 잡는다.
+
+### 4.2 세 구성 각각에서 확인한 것 (a: `LDAP_ANONYMOUS_READ_BASE` 미설정, b: `ou=people,<root>`, c: 운영자 선행 allow `{0}to attrs=description by users write`)
+
+- 적용 전 대조(제어): `M`은 일반 사용자다 — `B` 밖을 읽고, 자기 항목을 쓰고, 자기 비밀번호를 바꾼다(`by self write`). (c)에서는 다른 항목의 `description`도 쓴다(운영자 규칙).
+  이 규칙이 `M`에서 이것을 빼앗는다.
+- 적용 직후 `olcAccess` 읽기: 머신 규칙 3개가 정확히 `{0}`–`{2}`(문자열 비교), 그 뒤로 기존 규칙이 원래 순서(a: 3개, b: 5개, c: 4개). `M`이 들어간 규칙은 위치 0–2뿐.
+  monitor·accesslog DB의 `olcAccess`는 전후 동일.
+- `M`: bind 성공; `B` 안 정확히 5개 항목을 읽음; 비밀 속성(명시·`*`·`+`·`* +`·필터 `(userPassword=*)` 등) 미반환(대조: 관리자는 값과 `pwdHistory`가 있음을 봄);
+  `B` 밖 10개 프로브(루트·`ou=system`·자기 항목·`ou=other`·그룹·필터, `dn uid objectClass entry cn` 요청)는 항목 0개·rc 32(`noSuchObject`); 루트에서 시작한 subtree 검색도 rc 32;
+  `cn=accesslog`(141항목, 대조)·`cn=Monitor`(81)·`cn=config`(7) 읽기는 항목 0개, rc 32.
+- 쓰기 시도 17종(add 4곳, 다른 항목·자기 항목 modify, 자기 `userPassword`(삭제+추가 형태와 replace)·`shadowLastChange`, `ldappasswd` 2종, delete 2종, modrdn 2종): 모두 insufficient access
+  (`ldapmodify`/`ldapadd`/`ldapdelete`/`ldapmodrdn` rc 50, `ldappasswd`는 rc 1과 `Result: Insufficient access (50)`). 이후 관리자 조회: 생성·이름 변경·삭제 없음, `M`의 `userPassword` 해시 불변, `M` bind 성공.
+  (c)에서 `B` 안 다른 항목 modify도 50 — 운영자의 `by users write`가 뒤로 밀려 `M`에 닿지 않는다.
+- 다른 신원 불변(적용 전후 같은 프로브 14종의 반환 코드와 정규화한 출력): 관리자(전체 검색·`userPassword` 읽기·쓰기), 익명(DN 목록·`uid` 검색·`userPassword` 검색·`ou=system` base), 일반 사용자(전체 검색·다른 사용자의
+  `userPassword` 검색·`M` 읽기·다른 항목 쓰기 거부·자기 쓰기·**자기 비밀번호 변경 성공**). (a)/(b)/(c)의 익명 결과는 구성별로 달랐고 각 구성에서 전후가 같았다.
+- 롤백: 문서의 롤백 명령 성공, 롤백 후 `olcAccess` 원문이 적용 전과 **바이트 단위로 동일**, `M`은 다시 `B` 밖을 읽음, 롤백을 한 번 더 실행하면 `refusing` 으로 거부되고 아무것도 바뀌지 않음.
+- `B` 밖 응답은 (a)/(b)/(c)에서 동일(프로브별 rc·항목·정규화 출력 비교 10건).
+
+### 4.3 운영 가이드 명령 직접 실행
+
+가이드의 `sh` 블록 18개를 순서대로 새 컨테이너에서 실행했다(`bash`, 비밀 파일 제외): 준비·`MAIN_DB_DN` 조회(한 줄)·계정 생성(강한 비밀번호 44자)·ACL 적용·읽기·`M`으로 `whoami`/`+` 검색/쓰기/자기 비밀번호 변경/`cn=config`
+읽기·opt-in DB DN 조회(`olcDatabase={2}mdb`, `{3}monitor`)·비밀 속성 도출·회전(`ldappasswd` 성공)·잠금 해제·롤백·정리. 기대 결과와 일치(쓰기 50, 비밀번호 변경 50, `cn=config` 32).
+잠금: 틀린 비밀번호로 5번 bind(49) 후 `pwdAccountLockedTime` 삭제가 성공(잠겨 있었음), 잠기지 않았을 때는 `No such attribute (16)`.
+
+### 4.4 관측으로 확인한 사실(설계 문서의 가정 보강)
+
+- ldapi EXTERNAL은 이 이미지에서 uid 999와 root 모두 `cn=config`를 읽지 못함(`No such object (32)`). `cn=admin,cn=config` simple bind(ldapi 소켓)는 되고 변경이 온라인으로 즉시 적용됨.
+- 인덱스를 명시한 `add: olcAccess`는 기존 규칙을 뒤로 밀고, `delete: olcAccess` + `{2}`,`{1}`,`{0}`은 원래 텍스트로 되돌림.
+- 기본 비밀번호 정책: `pwdSafeModify: TRUE`(replace·`ldappasswd`는 정책이 먼저 50으로 거부), `pwdInHistory: 5`, `pwdLockout: TRUE`(5회/900s).
+- `M`은 루트 항목에 접근이 없어 `B`가 루트보다 좁으면 루트에서 시작한 검색이 `B` 안 항목이 있어도 rc 32.
+
+### 4.5 실행하지 않음
+
+- 다중 노드·복제 라이브(복제 사실은 `entrypoint.sh` 코드 읽기), `LDAP_REPLICATION_IDENTITY=prepare`와의 상호작용(코드 읽기만, CHANGE.md D30; 공존 순서 `{0}` 복제 + `{1}`–`{3}` 머신은 별도 Codex 라이브 확인이며 이 PR의 시험이 아님, T-034), Kubernetes/차트 환경.
+- 좁힌 `B`(예 `ou=people`)로 UI 머신 호출 전체를 돌리는 시험(slapd 수준만 증명; 기본 `B`는 단위 2 라이브 시험이 UI 요청까지 확인).
+- CI에서의 실행(워크플로 연결은 이 PR, 첫 실행 결과는 PR 체크).
