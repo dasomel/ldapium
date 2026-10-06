@@ -121,6 +121,7 @@ LDAP connection details and a session secret explicitly.
 | `COOKIE_SECURE` | no | `true` | Mark the session cookie `Secure`; disable only for plain-HTTP local dev |
 | `UI_LOGIN_FAILURE_LIMIT` | no | `10` | Failed `POST /api/login` attempts allowed per client IP (see `UI_TRUSTED_PROXIES` below for how that IP is resolved) within the window before a `429` is returned; `0` disables the limiter. In-memory and per-pod — with multiple UI replicas the OpenLDAP ppolicy lockout is the backstop that holds cluster-wide |
 | `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
+| `UI_LOGIN_LIMITER_MAX_ENTRIES` | no | `10000` | Hard cap on client sources the login limiter tracks (IPv6 counts per /64; must be >= 1). When full, expired sources go first, then the non-blocked source with the fewest stored failures (as of its last update; oldest on ties); a blocked source is never evicted, and only if all slots are blocked does a new source get the same `429` a blocked one does |
 | `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients (#214, change package `machine-principal-auth`). **Unit 1 only: with it on, an authorized request still ends in a fixed `503` because the least-privilege LDAP bind identity is not implemented yet.** Unset, no `MACHINE_*` variable is read and nothing changes. When on, startup requires `MACHINE_OIDC_ISSUER_URL` (https; inherits `SSO_ISSUER_URL`; `MACHINE_OIDC_INSECURE_HTTP=true` is a local-test exception that logs a WARN), `MACHINE_OIDC_AUDIENCE`, `MACHINE_ALLOWED_CLIENTS` (`clientId=scope,scope;clientId2=scope`), `MACHINE_LDAP_BIND_DN`, `MACHINE_LDAP_BIND_PASSWORD`, `MACHINE_LDAP_ROOT_DNS` (`;`-separated, escape a literal `;` as `\3B`), and `UI_TRUSTED_PROXIES` set to CIDRs or `none` (not `private`). Optional tuning (`MACHINE_OIDC_ALGS`, `MACHINE_TOKEN_MAX_TTL`, `MACHINE_CLOCK_SKEW` 0-60s, `MACHINE_JWKS_CACHE_TTL`/`_MAX_STALE`/`_MIN_REFRESH`, `MACHINE_SA_USERNAME_PREFIX`, limiter and concurrency values) and the full contract are in `docs/changes/machine-principal-auth/CHANGE.md` and `docs/api.md` |
 | `UI_IDEMPOTENCY_ENABLED` | no | `false` | Honour `Idempotency-Key` on the core user/group writes (#216). Records are in process memory (24h) and a restart forgets them, so enable it only for a single UI process (the chart does: one replica, `Recreate`). Off, a keyed write is refused with `422 idempotency_unsupported` |
 | `UI_IDEMPOTENCY_TTL` | no | `24h` | How long a completed record replays (1m-7d) |
@@ -166,6 +167,22 @@ one user mistyping a password repeatedly can get a different, correct user
 on the same IP a `429` on their next attempt. The default 10 failures per
 1-minute window keeps that window brief; `UI_LOGIN_FAILURE_LIMIT=0` turns
 the limiter off entirely if this trade-off doesn't fit a deployment.
+
+The limiter's memory is bounded (`UI_LOGIN_LIMITER_MAX_ENTRIES`) and IPv6
+clients are grouped per /64. When the table is full a new source evicts, in
+order, an expired source, then the non-blocked source with the fewest failures
+(oldest on ties); a blocked source is never evicted, so no flood resets it.
+"Fewest failures" compares the counts stored as of each source's last update
+(its own request or the once-per-window sweep), not a time-decayed count, so a
+source with partially expired failures can be kept over one whose real count is
+higher. A source with f stored failures is evicted only when the other slots
+hold sources that are blocked or have at least f stored failures; if the table holds only
+equal-count sources the oldest goes (at f=1 that is cheap, and costs the victim
+one failure of budget). The price is fail-closed behaviour: a new source is
+refused with the blocked-source `429` only when **all** slots are blocked,
+which costs an attacker `UI_LOGIN_LIMITER_MAX_ENTRIES` x
+`UI_LOGIN_FAILURE_LIMIT` failed binds inside one window (100000 at the
+defaults); already tracked sources are unaffected.
 
 ### Keycloak client setup
 

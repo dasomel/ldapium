@@ -66,7 +66,7 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 		cfg:          cfg,
 		dialer:       dialer,
 		sessions:     sessions,
-		loginLimiter: newLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow),
+		loginLimiter: newBoundedLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow, cfg.LoginLimiterMaxEntries),
 		metrics:      metrics.Nop{},
 	}
 	for _, opt := range opts {

@@ -110,6 +110,34 @@ func TestLoad_LoginFailureLimitOverrideAndDisable(t *testing.T) {
 	}
 }
 
+func TestLoad_LoginLimiterMaxEntries(t *testing.T) {
+	mk := func(v string) map[string]string {
+		m := map[string]string{
+			"LDAP_URL":       "ldap://ldap.example.com:389",
+			"LDAP_BASE_DN":   "dc=example,dc=com",
+			"SESSION_SECRET": "01234567890123456789012345678901",
+		}
+		if v != "" {
+			m["UI_LOGIN_LIMITER_MAX_ENTRIES"] = v
+		}
+		return m
+	}
+	for in, want := range map[string]int{"": 10000, "50": 50} {
+		cfg, err := Load(env(mk(in)))
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", in, err)
+		}
+		if cfg.LoginLimiterMaxEntries != want {
+			t.Errorf("%q: LoginLimiterMaxEntries = %d, want %d", in, cfg.LoginLimiterMaxEntries, want)
+		}
+	}
+	for _, bad := range []string{"0", "-1", "abc"} {
+		if _, err := Load(env(mk(bad))); err == nil {
+			t.Errorf("UI_LOGIN_LIMITER_MAX_ENTRIES=%q: expected an error", bad)
+		}
+	}
+}
+
 func TestLoad_LoginFailureLimitRejectsInvalidValues(t *testing.T) {
 	base := map[string]string{
 		"LDAP_URL":       "ldap://ldap.example.com:389",
