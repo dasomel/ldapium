@@ -25,6 +25,7 @@ import secrets
 import socket
 import socketserver
 import struct
+import sys
 import subprocess
 import threading
 import tempfile
@@ -64,6 +65,27 @@ created_network = False
 def check(condition, message):
   assert condition, message
   print('PASS: ' + message)
+
+
+def mask(text):
+  # Scrub every secret this run generated before anything reaches CI logs.
+  text = text if isinstance(text, str) else str(text)
+  for secret in (admin_password, ops_password, session_secret, 'sso-secret'):
+    text = text.replace(secret, '***')
+  return text
+
+
+def dump_container_logs():
+  for c in containers:
+    res = subprocess.run(['docker', 'logs', '--tail', '200', c], capture_output=True, text=True)
+    print(f'--- docker logs {c} (scrubbed, last 200 lines) ---', file=sys.stderr)
+    print(mask(res.stdout + res.stderr), file=sys.stderr)
+
+
+def describe(status, hdrs, body):
+  keep = ('location', 'content-type', 'etag', 'set-cookie', 'www-authenticate')
+  shown = {k: mask(v) for k, v in (hdrs.items() if hdrs is not None else []) if k.lower() in keep}
+  return f'status={status} headers={shown} body={mask(json.dumps(body) if not isinstance(body, str) else body)[:500]}'
 
 
 def cleanup():
@@ -707,7 +729,10 @@ description: bumped-during-create
     subprocess.run(['docker', 'rm', '-fv', ui_container], capture_output=True)
     sso_ui_port = get_free_port()
     sso_env = {
-        'LDAP_URL': f'ldap://host.docker.internal:{ldap_host_port}',
+        # Same docker network as slapd: ldap_host_port is published on 127.0.0.1 only, which a
+        # container reaches via host.docker.internal on Docker Desktop/Colima but NOT on a Linux
+        # runner (host-gateway is the bridge IP, where a loopback-bound port is not listening).
+        'LDAP_URL': f'ldap://{ldap_container}:389',
         'SSO_ENABLED': 'true',
         'SSO_ISSUER_URL': f'http://host.docker.internal:{oidc.port}',
         'SSO_CLIENT_ID': 'ldapium-sso',
@@ -723,11 +748,18 @@ description: bumped-during-create
     sso_ui_url, _ = start_ui_container(ui_container, sso_env, fixed_port=sso_ui_port)
     sso_api = ApiClient(sso_ui_url)
 
-    # Perform SSO flow: GET /api/sso/start -> redirects to /auth -> redirects to /api/sso/callback
-    # Python urllib handles 302 redirects automatically
+    # Perform SSO flow: GET /api/sso/start -> redirects to /auth -> redirects to /api/sso/callback.
+    # urllib follows the 302/303 chain; a failed login ends on /login?sso_error=... with 200,
+    # so the final URL and the session itself are asserted, not just the status.
     req = urllib.request.Request(sso_ui_url + '/api/sso/start', headers={'Origin': sso_ui_url})
-    with sso_api.opener.open(req) as resp:
-      check(resp.status == 200, f'(d) SSO login flow completed (status={resp.status})')
+    with sso_api.opener.open(req, timeout=30) as resp:
+      final_url = resp.geturl()
+      check(resp.status == 200, f'(d) SSO login flow completed (status={resp.status}, final_url={mask(final_url)})')
+    check('sso_error' not in final_url, f'(d) SSO login did not end on an error redirect (final_url={mask(final_url)})')
+    check(any(c.name for c in sso_api.jar), f'(d) session cookie stored (cookies={[c.name for c in sso_api.jar]})')
+    status, hdrs, body = sso_api.call('GET', '/api/me')
+    check(status == 200 and isinstance(body, dict) and body.get('dn'),
+          f'(d) /api/me reports an authenticated SSO session ({describe(status, hdrs, body)})')
 
     # Create test user for lastbind check
     sso_user_uid = 'sso-user-' + secrets.token_hex(4)
@@ -745,7 +777,7 @@ userPassword: {sso_user_pw}
 
     # In SSO mode, read the entry to obtain ETag (CSN0)
     status, hdrs, body = sso_api.call('GET', f'/api/entry?dn={urllib.parse.quote(sso_user_dn)}')
-    check(status == 200, '(d) GET /api/entry succeeded in SSO mode')
+    check(status == 200, f'(d) GET /api/entry succeeded in SSO mode ({describe(status, hdrs, body)})')
     tag0 = hdrs.get('ETag')
     check(tag0 and tag0.startswith('"') and tag0.endswith('"'), f'(d) obtained quoted ETag {tag0}')
 
@@ -772,7 +804,7 @@ userPassword: {sso_user_pw}
         'mail': 'stale@example.org'
     }
     status, hdrs, body = sso_api.call('PUT', '/api/users', stale_put_body, {'If-Match': tag0})
-    check(status == 412, f'(d) stale If-Match with bumped lastbind entryCSN returned 412 (got {status})')
+    check(status == 412, f'(d) stale If-Match with bumped lastbind entryCSN returned 412 ({describe(status, hdrs, body)})')
     check(body.get('code') == 'revision_conflict', f'(d) error code is revision_conflict (got {body.get("code")})')
     check(body.get('retryable') is False, '(d) revision_conflict retryable is False')
     check(entry_snapshot(sso_user_dn) == entry_before_stale,
@@ -791,7 +823,7 @@ userPassword: {sso_user_pw}
         'mail': 'updated@example.org'
     }
     status, hdrs, _ = sso_api.call('PUT', '/api/users', matching_put_body, {'If-Match': tag1})
-    check(status == 204, f'(d) matching If-Match conditional write succeeded with 204 (got {status})')
+    check(status == 204, f'(d) matching If-Match conditional write succeeded with 204 ({describe(status, hdrs, _)})')
 
     # Verify attribute update and new ETag
     status, hdrs, body = sso_api.call('GET', f'/api/entry?dn={urllib.parse.quote(sso_user_dn)}')
@@ -800,6 +832,9 @@ userPassword: {sso_user_pw}
     check(body.get('attributes', {}).get('mail') == ['updated@example.org'], '(d) attributes updated in directory')
 
     print('\nAll checks (a), (b), (c), (d) passed successfully!')
+  except BaseException:
+    dump_container_logs()
+    raise
   finally:
     print('Cleaning up test containers and network...')
     cleanup()
