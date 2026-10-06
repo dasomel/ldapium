@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,5 +184,80 @@ func TestMapErr_SizeLimitExceeded(t *testing.T) {
 
 	if !errors.Is(got, domain.ErrSizeLimitExceeded) {
 		t.Errorf("mapErr(%v) = %v, want domain.ErrSizeLimitExceeded (it used to fall through to an opaque 500)", le, got)
+	}
+}
+
+// D264-1/D264-3: result 53 means "current password rejected" only on a
+// Password Modify that carried an old password.
+func TestMapSetPasswordErr_UnwillingToPerform(t *testing.T) {
+	le := &ldap.Error{ResultCode: ldap.LDAPResultUnwillingToPerform, Err: errors.New("unwilling to verify old password")}
+	wrapped := fmt.Errorf("outer: %w", le)
+
+	for _, err := range []error{le, wrapped} {
+		got := mapSetPasswordErr("OldSecret1!", err)
+		if !errors.Is(got, domain.ErrCurrentPasswordRejected) {
+			t.Errorf("old password + 53: got %v, want ErrCurrentPasswordRejected", got)
+		}
+		if !strings.Contains(got.Error(), "LDAP Result Code 53") {
+			t.Errorf("the diagnostic must stay in the error for the log: %v", got)
+		}
+	}
+
+	// Without an old password (admin reset) 53 stays unclassified.
+	got := mapSetPasswordErr("", le)
+	if errors.Is(got, domain.ErrCurrentPasswordRejected) {
+		t.Errorf("53 without an old password must stay unmapped, got %v", got)
+	}
+	if !errors.Is(got, le) {
+		t.Errorf("unmapped error must keep its cause: %v", got)
+	}
+}
+
+// The text gate (D264-1): result 53 with any other diagnostic is NOT a rejected
+// current password, even with an old password in the request. Fail closed.
+func TestMapSetPasswordErr_Other53DiagnosticsAreNotMapped(t *testing.T) {
+	for _, diag := range []string{
+		"operation restricted", // olcReadOnly=TRUE, correct current password
+		"new password value is empty",
+		"Must supply correct old password to change to new one",
+		"Unwilling to verify old password", // case-sensitive: a reworded text must not map
+		"unwilling to verify the old password",
+		"",
+	} {
+		var inner error
+		if diag != "" {
+			inner = errors.New(diag)
+		}
+		le := &ldap.Error{ResultCode: ldap.LDAPResultUnwillingToPerform, Err: inner}
+		got := mapSetPasswordErr("OldSecret1!", le)
+		if errors.Is(got, domain.ErrCurrentPasswordRejected) {
+			t.Errorf("53 %q mapped to ErrCurrentPasswordRejected: %v", diag, got)
+		}
+		if !errors.Is(got, le) {
+			t.Errorf("53 %q: unmapped error must keep its cause: %v", diag, got)
+		}
+	}
+}
+
+func TestMapSetPasswordErr_OtherResultsUnchanged(t *testing.T) {
+	cases := []struct {
+		code uint16
+		want error
+	}{
+		{ldap.LDAPResultInvalidCredentials, domain.ErrInvalidCredentials},
+		{ldap.LDAPResultInsufficientAccessRights, domain.ErrPermissionDenied},
+		{ldap.LDAPResultConstraintViolation, domain.ErrInvalidInput},
+		{ldap.LDAPResultNoSuchObject, domain.ErrNotFound},
+	}
+	for _, tt := range cases {
+		got := mapSetPasswordErr("old", &ldap.Error{ResultCode: tt.code, Err: errors.New("x")})
+		if !errors.Is(got, tt.want) {
+			t.Errorf("code %d: got %v, want %v", tt.code, got, tt.want)
+		}
+	}
+	// A transport error (LDAP down) is not a rejection.
+	got := mapSetPasswordErr("old", errors.New("connection reset"))
+	if errors.Is(got, domain.ErrCurrentPasswordRejected) {
+		t.Errorf("transport error mapped to rejection: %v", got)
 	}
 }

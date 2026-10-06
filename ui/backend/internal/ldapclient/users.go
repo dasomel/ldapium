@@ -2,7 +2,9 @@ package ldapclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
@@ -296,9 +298,33 @@ func (c *client) SetPassword(ctx context.Context, dn, oldPassword, newPassword s
 	req := ldap.NewPasswordModifyRequest(dn, oldPassword, newPassword)
 	res, err := c.conn.PasswordModify(req)
 	if err != nil {
-		return "", mapErr("set password", err)
+		return "", mapSetPasswordErr(oldPassword, err)
 	}
 	return res.GeneratedPassword, nil
+}
+
+// oldPasswordNotVerified is slapd core's own diagnostic (passwd.c) for a
+// Password Modify whose old password it would not verify.
+const oldPasswordNotVerified = "unwilling to verify old password"
+
+// mapSetPasswordErr is mapErr plus the one result that means "current password
+// rejected": unwillingToPerform (53) on a request that carried an old password
+// AND whose diagnostic is exactly slapd's "unwilling to verify old password"
+// (case-sensitive substring). Result 53 is also what slapd sends for
+// "operation restricted" (olcReadOnly), "new password value is empty" and
+// others that have nothing to do with the current password, so the text gate is
+// what keeps those from being reported as a rejected password. It fails closed
+// (D264-1): if a slapd release rewords the text, the result falls through to the
+// redacted 500, never to a wrong 400. Result 53 anywhere else (an admin reset,
+// any other diagnostic) stays unmapped (D264-3). The slapd diagnostic is kept
+// after the sentinel for the log; the HTTP layer withholds it from the body.
+func mapSetPasswordErr(oldPassword string, err error) error {
+	var le *ldap.Error
+	if oldPassword != "" && errors.As(err, &le) && le.ResultCode == ldap.LDAPResultUnwillingToPerform &&
+		le.Err != nil && strings.Contains(le.Err.Error(), oldPasswordNotVerified) {
+		return fmt.Errorf("%w: %s", domain.ErrCurrentPasswordRejected, le)
+	}
+	return mapErr("set password", err)
 }
 
 // unlockModify builds the modify request Unlock sends, factored out so the

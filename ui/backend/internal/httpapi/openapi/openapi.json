@@ -1543,7 +1543,7 @@
       "post": {
         "operationId": "setPassword",
         "summary": "Set or reset a password",
-        "description": "RFC 3062 Password Modify. With `password` omitted the server generates one and returns it once in `generatedPassword` (treat as a secret; never log it). `oldPassword` is for self-service changes; a wrong one yields 401. `If-Match` is not supported here (the RFC 3062 Password Modify operation cannot carry the condition): sending it is 400.",
+        "description": "RFC 3062 Password Modify. With `password` omitted the server generates one and returns it once in `generatedPassword` (treat as a secret; never log it). `oldPassword` is for self-service changes. When slapd answers LDAP unwillingToPerform with the diagnostic `unwilling to verify old password` on a request that carries `oldPassword`, the answer is 400 `current_password_rejected` with a fixed text: the cause is ambiguous (slapd says the same when current-password verification is not enabled or the caller cannot read the target's userPassword), so the text does not assert that the password is wrong. 400 follows the other input/policy rejections. Result 53 for any other reason (for example `operation restricted` on a read-only database) stays a redacted 500. `If-Match` is not supported here (the RFC 3062 Password Modify operation cannot carry the condition): sending it is 400.",
         "tags": [
           "Users"
         ],
@@ -1569,7 +1569,7 @@
             }
           },
           "400": {
-            "description": "Validation failed; also any `If-Match` header",
+            "description": "Validation failed (`invalid_request`, with the curated password-policy text where one applies); any `If-Match` header; or `current_password_rejected` (the current password was not accepted, or current-password verification is not enabled; fixed text, `retryable: false`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6926,6 +6926,7 @@
               "already_exists",
               "backup_busy",
               "conflict",
+              "current_password_rejected",
               "cursor_invalid",
               "feature_disabled",
               "forbidden",

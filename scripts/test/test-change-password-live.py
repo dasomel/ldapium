@@ -241,8 +241,14 @@ main().catch((err) => {{
   results = [json.loads(l.split(':', 1)[1]) for l in result.stdout.splitlines() if l.startswith('SCENARIO_RESULT: ')]
   check(len(results) == 3, 'three scenarios reported')
   r1, r2, r3 = results
-  check(r1['status'] == 500 and r1['code'] == 'internal' and r1['screenText'] == 'internal error',
-        'wrong current password: 500, code internal, screen "internal error"')
+  # #264 (D264-1/2): result 53 on the old-password path is 400 current_password_rejected;
+  # the screen shows the translated ambiguous-cause text, never the server's fixed sentence.
+  check(r1['status'] == 400 and r1['code'] == 'current_password_rejected'
+        and r1['screenText'].startswith('Your current password may be incorrect'),
+        'wrong current password: 400, code current_password_rejected, screen shows the ambiguous-cause message')
+  check(r1['body']['retryable'] is False and 'was not accepted' in r1['body']['error']
+        and 'Unwilling' not in r1['body']['error'],
+        'wrong current password: fixed text, no slapd diagnostic in the body')
   check(r2['status'] == 400 and r2['code'] == 'invalid_request' and 'strength checks' in r2['screenText'],
         'weak new password: 400, code invalid_request, policy text visible')
   check(r3['status'] == 400 and r3['code'] == 'invalid_request' and 'not being changed' in r3['screenText'],
@@ -267,7 +273,77 @@ main().catch((err) => {{
   lines = [l for l in (ui_logs.stdout + ui_logs.stderr).splitlines() if req_id in l]
   for line in lines:
     print('  LOG:', line)
-  check(any('Result Code 53' in l for l in lines), 'UI log for the 500 requestId has "Result Code 53"')
+  check(any('Result Code 53' in l for l in lines), 'UI log for the 400 requestId has "Result Code 53"')
+
+  # Negative control (D264-3): a genuine LDAP outage on the same endpoint is still the
+  # redacted 500 internal. Log in first (login needs LDAP), then stop slapd and repeat the
+  # wrong-current-password request.
+  jar = http.cookiejar.CookieJar()
+  opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+  def api_post(path, payload, op=None):
+    req = urllib.request.Request(base_url + path, data=json.dumps(payload).encode(),
+                                 headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+      with (op or opener).open(req, timeout=30) as resp:
+        return resp.status, json.loads(resp.read() or b'null'), resp.headers.get('X-Request-Id')
+    except urllib.error.HTTPError as e:
+      return e.code, json.loads(e.read() or b'null'), e.headers.get('X-Request-Id')
+
+  def can_bind(password):
+    fresh = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    return api_post('/api/login', {'identity': user_dn, 'password': password}, fresh)[0] == 200
+
+  def set_read_only(value):
+    ldif = f"dn: olcDatabase={{1}}mdb,cn=config\nchangetype: modify\nreplace: olcReadOnly\nolcReadOnly: {value}\n"
+    res = subprocess.run(['docker', 'exec', '-i', ldap_name, 'sh', '-c',
+                          'ldapmodify -x -H ldap://127.0.0.1 -D cn=admin,cn=config -y ' + pw_file],
+                         input=ldif, capture_output=True, text=True)
+    if res.returncode != 0:
+      raise RuntimeError('olcReadOnly %s failed: %s' % (value, res.stderr))
+
+  st, _, _ = api_post('/api/login', {'identity': user_dn, 'password': user_password})
+  check(st == 200, 'negative control: login')
+  # The three rejected changes above must not have touched the password.
+  check(can_bind(user_password), 'after the rejected changes the OLD password still binds')
+
+  # D264-1 text gate: with olcReadOnly=TRUE slapd answers a CORRECT current password with
+  # 53 "operation restricted". That must stay a redacted 500, never current_password_rejected.
+  new_password = 'Valid-New-Pass-456!'
+  set_read_only('TRUE')
+  try:
+    st, body, rid = api_post('/api/users/password',
+                             {'dn': user_dn, 'oldPassword': user_password, 'password': new_password})
+    check(st == 500 and body['code'] == 'internal' and body['error'] == 'internal error' and body['requestId'] == rid,
+          'read-only slapd, CORRECT current password: 500 internal, not current_password_rejected (%s)' % json.dumps(body))
+    ui_logs = subprocess.run(['docker', 'logs', ui_name], capture_output=True, text=True)
+    check(any(rid in l and 'operation restricted' in l for l in (ui_logs.stdout + ui_logs.stderr).splitlines()),
+          'UI log for the read-only 500 holds the slapd diagnostic "operation restricted"')
+  finally:
+    set_read_only('FALSE')
+  check(can_bind(user_password), 'after the read-only attempt the OLD password still binds')
+
+  # Normal mode again: a wrong current password is still 400 current_password_rejected,
+  # a correct one changes the password and the NEW password binds.
+  st, body, _ = api_post('/api/users/password',
+                         {'dn': user_dn, 'oldPassword': 'Wrong-Current-Pass-999!', 'password': new_password})
+  check(st == 400 and body['code'] == 'current_password_rejected', 'normal mode, wrong current password: 400 current_password_rejected')
+  # Observation (D264-4, not an assertion): wrong OLD passwords in the Password Modify
+  # extop are not counted by ppolicy, so there is no lockout throttling on this path.
+  obs = subprocess.run(['docker', 'exec', ldap_name, 'sh', '-c',
+                        'ldapsearch -x -LLL -H ldap://127.0.0.1 -D "$0" -y ' + pw_file + ' -b "$1" -s base pwdFailureTime pwdAccountLockedTime',
+                        admin_dn, user_dn], capture_output=True, text=True)
+  print('OBSERVATION pwdFailureTime/pwdAccountLockedTime after 2 wrong current passwords: %r' % obs.stdout.strip())
+  st, body, _ = api_post('/api/users/password', {'dn': user_dn, 'oldPassword': user_password, 'password': new_password})
+  check(st == 200, 'normal mode, correct current password: 200 (%s)' % json.dumps(body))
+  check(can_bind(new_password) and not can_bind(user_password), 'after the successful change the NEW password binds and the OLD one does not')
+  user_password = new_password
+
+  run_cmd(['docker', 'stop', '-t', '2', ldap_name])
+  st, body, rid = api_post('/api/users/password',
+                           {'dn': user_dn, 'oldPassword': 'Wrong-Current-Pass-999!', 'password': 'Another-New-Pass-789!'})
+  check(st == 500 and body['code'] == 'internal' and body['error'] == 'internal error'
+        and body['requestId'] == rid and not dn_re.search(json.dumps(body)),
+        'LDAP outage: still 500 internal, redacted body (%s)' % json.dumps(body))
 
 finally:
   print('\nCleaning up containers...')

@@ -293,6 +293,7 @@
 | `idempotency_capacity` | 503 | **#216**: 멱등 기록 상한 도달, 새 키 거부. `retryable:true` + `Retry-After`(일시적 503 규칙) |
 | `idempotency_unsupported` | 422 | **#216**: 멱등 기능이 꺼진 배포에서 키가 붙음. `retryable:false` |
 | `partial_failure` | 500 | **#216**: 사용자 생성 부분 성공(보상 불가). `retryable:false`, 선택 키 `state`·`dn`(D216-5, D218-15의 DN 비노출에 대한 명시적 예외 한 건) |
+| `current_password_rejected` | 400 | **#264**: 본인 비밀번호 변경에서 `oldPassword`가 실린 Password Modify의 LDAP 결과 53(원인 모호, D264-1·2), `retryable:false`, 고정 문구 |
 | `token_invalid` | 401 | **#214 예약**: bearer 서명·`iss`/`aud` 검증 실패 |
 | `token_expired` | 401 | **#214 예약**: 만료·`nbf` 이전 토큰 |
 | `scope_denied` | 403 | **#214 예약**: 토큰 scope가 오퍼레이션 allowlist 밖 |

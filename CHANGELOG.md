@@ -20,6 +20,21 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Self-service change password with a current password the directory does not
+  accept is now `400` with the new stable code `current_password_rejected` and a
+  fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause
+  is ambiguous by design (slapd answers LDAP result 53 both when the current
+  password does not verify and when current-password verification is not
+  enabled), so the text does not say the password is wrong. It is 400 like the other
+  input and policy rejections, not 401/403. Only the slapd diagnostic
+  `unwilling to verify old password` on a request that carries `oldPassword` maps
+  to it; result 53 for any other reason (for example `operation restricted` on a
+  read-only database), result 53 without `oldPassword` and every other
+  unclassified error stay a redacted `500 internal`. If a future slapd rewords
+  that diagnostic, this case degrades to 500, never to a wrong 400. The web UI
+  shows its translated "ambiguous current password" message for this code.
+  Rollback: revert the commit; clients that only read `error` keep working
+  either way and older clients just see the text.
 - Optional `Idempotency-Key` on the core user/group writes, entry move and backup
   start (change package `api-conditional-writes`, part B, #216). A retry of the
   same request replays the first result (`Idempotent-Replayed: true`) and writes

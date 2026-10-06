@@ -70,6 +70,32 @@ test('password-policy refusal is shown as the server sent it', async ({ page }) 
   await expect(page.getByText('invalid input: Password does not pass required number of strength checks (1 of 3)')).toBeVisible()
 })
 
+// #264 (D264-1/2): the server answers a current password it will not verify
+// with 400 `current_password_rejected`; the screen branches on the code and
+// shows the translated ambiguous-cause text, not the server's fixed sentence.
+test('current_password_rejected shows the translated ambiguous-cause message', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/password-policies*', (r) => r.fulfill({ json: [] }))
+  await page.route('**/api/users/password*', (r) =>
+    r.fulfill({
+      status: 400,
+      json: envelope(
+        'the current password was not accepted (or current-password verification is not enabled on the server)',
+        'current_password_rejected',
+      ),
+    }),
+  )
+  await page.goto('/change-password')
+  await page.locator('#current-password').fill('Wrong-current-1!')
+  await page.locator('#new-password').fill('Valid-New-Pass-456!')
+  await page.locator('#confirm-password').fill('Valid-New-Pass-456!')
+  await page.getByRole('button', { name: 'Change password', exact: true }).click()
+  await expect(page.getByText('Your current password may be incorrect', { exact: false })).toBeVisible()
+  await expect(page.getByText('was not accepted')).toHaveCount(0)
+  // The 400 is not a session loss: still on the page, not bounced to /login.
+  await expect(page).toHaveURL(/\/change-password$/)
+})
+
 // The application-profile and backup screens used to read only `message`.
 // They read `error` first now; a body that carries only one of the two keys
 // (an older server) still works.

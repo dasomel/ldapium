@@ -48,6 +48,7 @@ In the OpenAPI document, `security: []` means public, operations with `x-admin: 
 ## Safety
 
 - `userPassword` is never returned by any endpoint, even hashed.
+- POST /api/users/password with `oldPassword` (self-service change): when slapd answers "unwilling to verify old password" the answer is 400 `current_password_rejected` (fixed text, `retryable: false`; ambiguous by design: slapd says the same when current-password verification is not enabled or the caller cannot read the target's userPassword). Any other failure, including result 53 for another reason such as a read-only database, stays a redacted 500 `internal`.
 - POST /api/users/password without `password` returns a server-generated `generatedPassword` once; treat it as a secret and never log it.
 - Destructive operations (DELETE users/groups/profiles/connections, entry move, Keycloak role operations, backup runs) are not reversible. Confirm intent before calling them and do not retry blindly.
 - Never assume a truncated list is complete. Prefer read-only calls unless the task requires a change.

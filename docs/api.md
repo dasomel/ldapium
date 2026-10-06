@@ -134,6 +134,7 @@ done
 |---|---|---|
 | `invalid_request` | 400 | 본문 파싱 실패, 필수 값 누락, 입력 검증, 표에 없는 4xx |
 | `invalid_credentials` | 401 | 로그인/비밀번호 확인 실패 |
+| `current_password_rejected` | 400 | 본인 비밀번호 변경에서 현재 비밀번호를 디렉터리가 받아들이지 않음(`oldPassword`가 있는 Password Modify의 LDAP 결과 53). 원인이 모호합니다: 현재 비밀번호가 틀렸을 때와 서버에서 현재 비밀번호 검증이 켜져 있지 않을 때 slapd가 같은 결과를 냅니다. 현재 비밀번호가 맞아도 호출자가 대상의 `userPassword`를 읽을 수 없거나 대상에 `userPassword`가 없을 때도 같은 결과가 납니다. 그래서 문구는 고정이고 "틀렸다"고 단정하지 않습니다(`retryable: false`). 400인 이유는 다른 입력·정책 거절과의 일관성입니다. `oldPassword`가 있고 slapd 진단이 `unwilling to verify old password`일 때만 이 코드가 되며, 다른 이유의 결과 53(예: 읽기 전용 DB의 `operation restricted`), `oldPassword` 없는 요청의 결과 53, 그 밖의 분류되지 않은 오류는 계속 500 `internal`입니다(slapd가 문구를 바꾸면 500으로 퇴행하며 잘못된 400은 되지 않음) |
 | `unauthenticated` | 401 | 세션 쿠키 없음 또는 서명 불일치 |
 | `session_expired` | 401 | 세션 만료 |
 | `forbidden` | 403 | 디렉터리 ACL 거부, Keycloak 경계 |

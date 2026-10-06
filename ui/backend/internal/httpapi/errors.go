@@ -96,6 +96,13 @@ const (
 	codeSizeLimitExceeded = "size_limit_exceeded"
 	codeScanLimitExceeded = "scan_limit_exceeded"
 	codeScanTimeout       = "scan_timeout"
+	// codeCurrentPasswordRejected: self-service password change whose current
+	// password slapd refused to verify (#264, D264-1). 400 like the other
+	// input/policy rejections (invalid_request family); 403 stays for
+	// permission/Origin and 422 for separate validation. The fixed text comes
+	// from the producer (domain.ErrCurrentPasswordRejected), never from
+	// codeTable.static, which is for 5xx only.
+	codeCurrentPasswordRejected = "current_password_rejected"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -169,6 +176,7 @@ var codeTable = map[string]codeSpec{
 	codeSizeLimitExceeded:         {http.StatusUnprocessableEntity, ""},
 	codeScanLimitExceeded:         {http.StatusUnprocessableEntity, ""},
 	codeScanTimeout:               {http.StatusServiceUnavailable, scanTimeoutMessage},
+	codeCurrentPasswordRejected:   {http.StatusBadRequest, ""},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
@@ -328,6 +336,8 @@ func domainStatus(err error) (status int, code string, sentinel error, ok bool) 
 		return http.StatusForbidden, codeForbidden, domain.ErrPermissionDenied, true
 	case errors.Is(err, domain.ErrInvalidInput):
 		return http.StatusBadRequest, codeInvalidRequest, domain.ErrInvalidInput, true
+	case errors.Is(err, domain.ErrCurrentPasswordRejected):
+		return http.StatusBadRequest, codeCurrentPasswordRejected, domain.ErrCurrentPasswordRejected, true
 	case errors.Is(err, domain.ErrRevisionConflict):
 		// A conditional write whose If-Match no longer matches (#216). The
 		// sentinel text is fixed; no DN or filter ever reaches the body.
@@ -340,7 +350,7 @@ func domainStatus(err error) (status int, code string, sentinel error, ok bool) 
 // never construct the body by hand and the mapping lives in exactly one
 // place.
 //
-// The six mapped cases are curated, user-facing conditions ("not found",
+// The mapped cases are curated, user-facing conditions ("not found",
 // ...). Their text is the sentinel's own fixed text, plus a diagnostic only
 // when publicDiagnostic vouches for it (D218-15): ldapclient wraps the LDAP
 // server's diagnostic text, which can carry DNs and attribute names, so any

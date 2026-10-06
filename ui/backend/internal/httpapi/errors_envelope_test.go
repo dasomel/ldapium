@@ -18,7 +18,7 @@ import (
 // one is a contract change: update this list, docs/api.md and openapi.json in
 // the same commit.
 var goldenCodes = []string{
-	"admin_required", "already_exists", "backup_busy", "conflict", "cursor_invalid", "feature_disabled",
+	"admin_required", "already_exists", "backup_busy", "conflict", "current_password_rejected", "cursor_invalid", "feature_disabled",
 	"forbidden", "idempotency_capacity", "idempotency_key_conflict", "idempotency_key_reused", "idempotency_outcome_unknown",
 	"idempotency_unsupported", "if_match_required", "internal", "invalid_credentials", "invalid_request",
 	"job_not_cancellable", "job_not_found", "keycloak_disabled", "login_rate_limited", "method_not_allowed", "not_found",
