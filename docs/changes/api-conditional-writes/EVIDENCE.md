@@ -292,8 +292,8 @@ record and survive a backend restart; the keys of every other route are process 
 ## Part C: Live verification of remaining gaps (issue #251)
 
 Run 2026-10-06 against disposable containers using images built from this worktree:
-- OpenLDAP server: `ldapium:lane-251` (`docker build -t ldapium:lane-251 -f image/Dockerfile ./image`)
-- UI backend: `ldapium-ui:lane-251` (`docker build -t ldapium-ui:lane-251 --target backup-runtime -f ui/Dockerfile ui`)
+- OpenLDAP server: `ldapium:lane-251b` (`docker build -t ldapium:lane-251b -f image/Dockerfile ./image`)
+- UI backend: `ldapium-ui:lane-251b` (`docker build -t ldapium-ui:lane-251b --target backup-runtime -f ui/Dockerfile ui`)
 - Platform: macOS / Colima (Docker 27.x)
 
 This closes the four live-verification gaps highlighted in `CLOSE-OUT-2026-10.md` and Part A/B `EVIDENCE.md`:
@@ -326,50 +326,67 @@ This closes the four live-verification gaps highlighted in `CLOSE-OUT-2026-10.md
 - The refreshed `If-Match` header is accepted with HTTP 204, confirming end-to-end conditional writes under SSO and ppolicy lastbind.
 
 ### Actual Output
+
+Run 2026-10-06 (review-fix pass), `LDAPIUM_IMAGE=ldapium:lane-251b LDAPIUM_UI_IMAGE=ldapium-ui:lane-251b LDAPIUM_TEST_PREFIX=ldapium-cw-251b- python3 scripts/test/test-api-conditional-writes-local.py`, exit 0. The script defaults to `ldapium:e2e` / `ldapium-ui:e2e`.
+Review hardening: fixed sleeps replaced by deadline polling (directory state for the dropped write, 409 `idempotency_key_conflict` retry loop, proxy released by the bump-done event); the lock replay and the stale-412 request assert the whole entry (attributes, lock timestamp, entryCSN) is byte-identical before and after; `docker rm -fv` leaves no anonymous volumes (`docker volume ls` diff before/after the run is empty).
+Non-vacuity: with each new equality assertion temporarily mutated (`== before + 'x'`) the run exits 1 with the AssertionError; script restored afterwards.
 ```
 $ python3 scripts/test/test-api-conditional-writes-local.py
---- Starting conditional writes live verification suite ---
-LDAP image: ldapium:lane-251
-UI image: ldapium-ui:lane-251
-Network: ldapium-cw-251-8e99e4-net
-LDAP container: ldapium-cw-251-8e99e4-ldap (port 13893)
-Bootstrapped ou=people, ou=admins and ops user
-Granted ops operator ACL on the database
+b123db16efbef7a368f4c31d4d0f4a58cc996af4f692192d59609fa293d6a268
+add4ecf5306410d3228edc09748e02457a371fa3c3686af46d98bae68b5dd8c6
+73ac4536506bdb59cfa1e0abe8c6dd463b53d474189bcef329e1c616d5b05f9c
+ab842e46974f25366c279040124b7f91849ee3ef91758feab4a148f33ec94434
+Starting test run ldapium-cw-251b-c9246e using LDAP image ldapium:lane-251b and UI image ldapium-ui:lane-251b...
+Starting OpenLDAP slapd container...
+PASS: bootstrapped ou=people, ou=admins and ops user
+PASS: granted ops operator ACL on the database
 
 --- Executing (b): wire-level go-ldap Delete with mismatching assertion control ---
+PASS: (b) go-ldap Delete with mismatching assertion control answers LDAP 122 and maps to ErrRevisionConflict/CreatePartial
 === RUN   TestLiveAssertionDelete
 --- PASS: TestLiveAssertionDelete (0.02s)
 PASS
-ok  	github.com/dasomel/ldapium/ui/backend/internal/ldapclient	0.022s
-
-LDAP proxy listening on host port 56789
-UI container started at http://127.0.0.1:18085
+ok  	github.com/dasomel/ldapium/ui/backend/internal/ldapclient	0.224s
+LDAP proxy listening on host port 62845
+PASS: LDAP login as uid=ops,ou=admins,dc=example,dc=org (status=200)
 
 --- Executing (a): socket kill mid-write and retry with same Idempotency-Key ---
-PASS: (a) create retry returned 201
+PASS: (a) create retry returned 201 (got 201)
 PASS: (a) create retry carries Idempotent-Replayed: true
 PASS: (a) create body has correct DN
-PASS: (a) LDAP has exactly 1 entry for cw-idem-1
-PASS: (a) lock retry returned 204
+PASS: (a) LDAP has exactly 1 entry for cw-idem-1 (count=1)
+PASS: (a) lock retry returned 204 (got 204)
 PASS: (a) lock retry carries Idempotent-Replayed: true
-PASS: (a) lock retry was idempotent (pwdAccountLockedTime unchanged)
+PASS: (a) entry is locked in directory
+PASS: (a) replay left the entry byte-identical (lock timestamp and entryCSN unchanged)
 
---- Executing (c): force refused compensation on user create to observe 500 partial_failure ---
-PASS: (c) create request returned 500
-PASS: (c) code is partial_failure
-PASS: (c) state is partial
-PASS: (c) dn is correct
-PASS: (c) uncompensated entry survives in LDAP
+--- Executing (c): forcing genuinely refused compensation -> 500 partial_failure ---
+PASS: (c) create with refused compensation returned 500 (got 500)
+PASS: (c) response body is JSON dict
+PASS: (c) response code is partial_failure (got partial_failure)
+PASS: (c) response state is partial (got partial)
+PASS: (c) response dn is uid=cw-part-e3c8d179,ou=people,dc=example,dc=org
+PASS: (c) partial_failure retryable is False
+PASS: (c) entry survived in LDAP with bumped description
 
---- Executing (d): ppolicy lastbind bumping entryCSN and If-Match in SSO mode ---
-PASS: (d) bind bumped entryCSN from 20261006133246.618641Z#000000#000#000000 to 20261006133246.634812Z#000000#000#000000
-PASS: (d) stale If-Match returned 412 revision_conflict
-PASS: (d) user cn unchanged after 412
-PASS: (d) fresh If-Match update succeeded with 204
-PASS: (d) user cn updated after valid If-Match
+--- Executing (d): ppolicy lastbind + If-Match in SSO mode ---
+PASS: (d) SSO login flow completed (status=200)
+PASS: (d) created target user uid=sso-user-7a771b1e,ou=people,dc=example,dc=org
+PASS: (d) GET /api/entry succeeded in SSO mode
+PASS: (d) obtained quoted ETag "20261006135451.203249Z#000000#000#000000"
+PASS: (d) bind as uid=sso-user-7a771b1e,ou=people,dc=example,dc=org succeeded
+PASS: (d) slapd lastbind overlay wrote pwdLastSuccess
+PASS: (d) stale If-Match with bumped lastbind entryCSN returned 412 (got 412)
+PASS: (d) error code is revision_conflict (got revision_conflict)
+PASS: (d) revision_conflict retryable is False
+PASS: (d) stale request left the entry byte-identical (attributes and entryCSN unchanged)
+PASS: (d) entryCSN moved after lastbind (tag0="20261006135451.203249Z#000000#000#000000", tag1="20261006135451.259819Z#000000#000#000000")
+PASS: (d) matching If-Match conditional write succeeded with 204 (got 204)
+PASS: (d) ETag moved after successful conditional write
+PASS: (d) attributes updated in directory
 
-ALL CHECKS PASSED: conditional writes and idempotency verified.
+All checks (a), (b), (c), (d) passed successfully!
+Cleaning up test containers and network...
 ```
 
-Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1).
-
+Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1), delete/recreate stress, assertion-unsupported-server case.

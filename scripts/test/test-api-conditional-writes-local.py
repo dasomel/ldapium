@@ -41,8 +41,8 @@ except ImportError:
   HAVE_CRYPTO = False
 
 repo_root = pathlib.Path(__file__).resolve().parents[2]
-ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:lane-251')
-ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:lane-251')
+ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
+ui_image = os.environ.get('LDAPIUM_UI_IMAGE', 'ldapium-ui:e2e')
 prefix = os.environ.get('LDAPIUM_TEST_PREFIX', 'ldapium-cw-251-')
 run_id = uuid.uuid4().hex[:6]
 name_prefix = prefix + run_id
@@ -68,9 +68,37 @@ def check(condition, message):
 
 def cleanup():
   for c in containers:
-    subprocess.run(['docker', 'rm', '-f', c], capture_output=True)
+    subprocess.run(['docker', 'rm', '-fv', c], capture_output=True)
   if created_network:
     subprocess.run(['docker', 'network', 'rm', network], capture_output=True)
+
+
+def wait_until(predicate, what, timeout=30.0):
+  # Poll an observable condition with a deadline instead of sleeping a fixed time.
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return
+    time.sleep(0.1)
+  raise AssertionError(f'timed out after {timeout}s waiting for {what}')
+
+
+def entry_snapshot(dn):
+  res = ldap_admin_tool('ldapsearch', ['-LLL', '-b', dn, '-s', 'base', '*', '+'])
+  assert res.returncode == 0, f'ldapsearch {dn} failed: {res.stderr}'
+  return res.stdout
+
+
+def retry_keyed(api, method, path, body, key):
+  # While the dropped request is still in flight the key is held: 409 idempotency_key_conflict.
+  # Retry on exactly that until the original finishes, then expect the recorded result.
+  deadline = time.monotonic() + 30
+  while True:
+    status, hdrs, resp = api.call(method, path, body, {'Idempotency-Key': key})
+    in_flight = status == 409 and isinstance(resp, dict) and resp.get('code') == 'idempotency_key_conflict'
+    if not in_flight or time.monotonic() > deadline:
+      return status, hdrs, resp
+    time.sleep(0.2)
 
 
 def ldap_admin_tool(tool, args, input_data=None):
@@ -125,6 +153,7 @@ class LDAPProxy:
     self.intercept_pwd_modify = False
     self.drop_next_modify = False
     self.pwd_modify_event = threading.Event()
+    self.bump_done = threading.Event()
     self.running = True
     threading.Thread(target=self._accept_loop, daemon=True).start()
 
@@ -159,8 +188,8 @@ class LDAPProxy:
               return
             if self.intercept_pwd_modify and b'1.3.6.1.4.1.4203.1.11.1' in data:
               self.pwd_modify_event.set()
-              # Delay forwarding to allow external entryCSN bump in slapd
-              time.sleep(2.0)
+              # Hold the request until the external entryCSN bump has landed in slapd
+              self.bump_done.wait(timeout=30)
           dst.sendall(data)
       except Exception:
         pass
@@ -319,7 +348,7 @@ def start_ui_container(container_name, extra_env=None, fixed_port=None):
     for k, v in extra_env.items():
       env += ['-e', f'{k}={v}']
 
-  subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True)
+  subprocess.run(['docker', 'rm', '-fv', container_name], capture_output=True)
   port_arg = ['-p', f'127.0.0.1:{fixed_port}:8080'] if fixed_port else ['-p', '127.0.0.1::8080']
   cmd = [
       'docker', 'run', '-d', '--name', container_name,
@@ -459,11 +488,13 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
     s.close()
 
-    # Wait for the backend's decoupled context.WithoutCancel to finish the write
-    time.sleep(0.8)
+    # Wait until the decoupled write (context.WithoutCancel) is observable in the directory
+    idem_dn = f'uid=cw-idem-1,ou=people,{base_dn}'
+    wait_until(lambda: 'dn: uid=cw-idem-1' in ldap_admin_tool('ldapsearch', ['-b', base_dn, '(uid=cw-idem-1)', 'dn']).stdout,
+               'dropped create to reach the directory')
 
     # Retry with the EXACT SAME Idempotency-Key
-    status, hdrs, body = api.call('POST', '/api/users', user_body, {'Idempotency-Key': idem_key_create})
+    status, hdrs, body = retry_keyed(api, 'POST', '/api/users', user_body, idem_key_create)
     check(status == 201, f'(a) create retry returned 201 (got {status})')
     check(hdrs.get('Idempotent-Replayed') == 'true', '(a) create retry carries Idempotent-Replayed: true')
     check(body.get('dn') == f'uid=cw-idem-1,ou=people,{base_dn}', '(a) create body has correct DN')
@@ -492,16 +523,19 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     s.sendall(raw_lock_req)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
     s.close()
-    time.sleep(0.8)
+    wait_until(lambda: 'pwdAccountLockedTime:' in entry_snapshot(idem_dn), 'dropped lock to reach the directory')
+    locked_before = entry_snapshot(idem_dn)
 
     # Retry lock with same key
-    status, hdrs, _ = api.call('POST', '/api/users/lock', lock_body, {'Idempotency-Key': idem_key_lock})
+    status, hdrs, _ = retry_keyed(api, 'POST', '/api/users/lock', lock_body, idem_key_lock)
     check(status == 204, f'(a) lock retry returned 204 (got {status})')
     check(hdrs.get('Idempotent-Replayed') == 'true', '(a) lock retry carries Idempotent-Replayed: true')
 
     # Verify user is locked and entryCSN is stable
-    lock_search = ldap_admin_tool('ldapsearch', ['-b', f'uid=cw-idem-1,ou=people,{base_dn}', '-s', 'base', '+'])
-    check('pwdAccountLockedTime:' in lock_search.stdout, '(a) entry is locked in directory')
+    locked_after = entry_snapshot(idem_dn)
+    check('pwdAccountLockedTime:' in locked_after, '(a) entry is locked in directory')
+    # Whole-entry equality covers pwdAccountLockedTime, entryCSN and modifyTimestamp
+    check(locked_after == locked_before, '(a) replay left the entry byte-identical (lock timestamp and entryCSN unchanged)')
 
     # -------------------------------------------------------------------------------------------------
     # (c) Force a genuinely refused compensation and observe 500 partial_failure response
@@ -509,6 +543,7 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     print('\n--- Executing (c): forcing genuinely refused compensation -> 500 partial_failure ---')
     proxy.intercept_pwd_modify = True
     proxy.pwd_modify_event.clear()
+    proxy.bump_done.clear()
 
     partial_uid = 'cw-part-' + secrets.token_hex(4)
     partial_dn = f'uid={partial_uid},ou=people,{base_dn}'
@@ -520,16 +555,20 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     }
 
     def bump_entry():
-      # Wait for proxy to intercept PasswordModifyRequest
-      if proxy.pwd_modify_event.wait(timeout=10):
-        # Entry exists in slapd! Bump description to change entryCSN from csn0 to csn1
-        bump_ldif = f"""dn: {partial_dn}
+      try:
+        # Wait for proxy to intercept PasswordModifyRequest
+        if proxy.pwd_modify_event.wait(timeout=30):
+          # Entry exists in slapd! Bump description to change entryCSN from csn0 to csn1
+          bump_ldif = f"""dn: {partial_dn}
 changetype: modify
 replace: description
 description: bumped-during-create
 """
-        res = ldap_admin_tool('ldapmodify', [], bump_ldif)
-        assert res.returncode == 0, 'bumped description successfully'
+          res = ldap_admin_tool('ldapmodify', [], bump_ldif)
+          assert res.returncode == 0, 'bumped description successfully'
+      finally:
+        # Release the proxy only once the bump is committed (or the wait gave up)
+        proxy.bump_done.set()
 
     bumper_thread = threading.Thread(target=bump_entry, daemon=True)
     bumper_thread.start()
@@ -567,7 +606,7 @@ description: bumped-during-create
     oidc.start()
 
     # Stop LDAP-mode UI and start SSO-mode UI
-    subprocess.run(['docker', 'rm', '-f', ui_container], capture_output=True)
+    subprocess.run(['docker', 'rm', '-fv', ui_container], capture_output=True)
     sso_ui_port = get_free_port()
     sso_env = {
         'LDAP_URL': f'ldap://host.docker.internal:{ldap_host_port}',
@@ -624,6 +663,9 @@ userPassword: {sso_user_pw}
     lastbind_check = ldap_admin_tool('ldapsearch', ['-b', sso_user_dn, '-s', 'base', '+'])
     check('pwdLastSuccess:' in lastbind_check.stdout, '(d) slapd lastbind overlay wrote pwdLastSuccess')
 
+    # Snapshot the whole entry (attributes + entryCSN) so a write-then-412 bug cannot hide
+    entry_before_stale = entry_snapshot(sso_user_dn)
+
     # Attempt conditional write with stale ETag (tag0) in SSO mode
     stale_put_body = {
         'dn': sso_user_dn,
@@ -635,6 +677,8 @@ userPassword: {sso_user_pw}
     check(status == 412, f'(d) stale If-Match with bumped lastbind entryCSN returned 412 (got {status})')
     check(body.get('code') == 'revision_conflict', f'(d) error code is revision_conflict (got {body.get("code")})')
     check(body.get('retryable') is False, '(d) revision_conflict retryable is False')
+    check(entry_snapshot(sso_user_dn) == entry_before_stale,
+          '(d) stale request left the entry byte-identical (attributes and entryCSN unchanged)')
 
     # Re-read the entry to get fresh ETag (tag1)
     status, hdrs, body = sso_api.call('GET', f'/api/entry?dn={urllib.parse.quote(sso_user_dn)}')
