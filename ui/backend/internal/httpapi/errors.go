@@ -103,6 +103,13 @@ const (
 	// from the producer (domain.ErrCurrentPasswordRejected), never from
 	// codeTable.static, which is for 5xx only.
 	codeCurrentPasswordRejected = "current_password_rejected"
+	// Machine bearer authentication (#214, machine-principal-auth D10/D13): the
+	// token failed verification (generic; the reason goes to the audit line, never
+	// the body), the token was valid but expired, or an authenticated machine
+	// principal asked for an operation outside the allowlist or its scopes.
+	codeTokenInvalid = "token_invalid"
+	codeTokenExpired = "token_expired"
+	codeScopeDenied  = "scope_denied"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -177,6 +184,9 @@ var codeTable = map[string]codeSpec{
 	codeScanLimitExceeded:         {http.StatusUnprocessableEntity, ""},
 	codeScanTimeout:               {http.StatusServiceUnavailable, scanTimeoutMessage},
 	codeCurrentPasswordRejected:   {http.StatusBadRequest, ""},
+	codeTokenInvalid:              {http.StatusUnauthorized, ""},
+	codeTokenExpired:              {http.StatusUnauthorized, ""},
+	codeScopeDenied:               {http.StatusForbidden, ""},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)

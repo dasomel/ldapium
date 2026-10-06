@@ -23,7 +23,7 @@ var goldenCodes = []string{
 	"idempotency_unsupported", "if_match_required", "internal", "invalid_credentials", "invalid_request",
 	"job_not_cancellable", "job_not_found", "keycloak_disabled", "login_rate_limited", "method_not_allowed", "not_found",
 	"origin_mismatch", "partial_failure", "persistence_unavailable", "revision_conflict", "scan_limit_exceeded", "scan_timeout",
-	"session_expired", "size_limit_exceeded", "unauthenticated",
+	"scope_denied", "session_expired", "size_limit_exceeded", "token_expired", "token_invalid", "unauthenticated",
 	"unavailable", "unsupported_media_type", "upstream_failed", "validation_failed",
 }
 
