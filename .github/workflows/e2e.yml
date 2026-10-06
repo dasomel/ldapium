@@ -151,6 +151,11 @@ jobs:
       - name: Replication identity prepare (ACL + olcLimits, refusals, read-only identity) — #229 T-011
         run: ./scripts/test/test-replication-identity-prepare.sh ldapium:e2e
 
+      - name: Replication identity dedicated (verified TLS, consumer-only nodes, wipe recovery, refusals) — #229 T-012
+        env:
+          BASE_IMAGE: ${{ steps.base_image.outputs.image }}
+        run: ./scripts/test/test-replication-identity-dedicated.sh ldapium:e2e "$BASE_IMAGE"
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
