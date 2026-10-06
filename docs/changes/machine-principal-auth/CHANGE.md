@@ -3,12 +3,12 @@
 - Change class: `D` — 인증·인가 경계 추가, 신규 자격 증명 수용 경로
 - Owner: 미지정 — 수용 전 지정
 - Related issue: 미등록 — 출처 [api-integration PLAN P0](../api-integration/PLAN.md)
-- Status: `Proposed / awaiting review; Revision 5 re-review pending`
+- Status: `Accepted (2026-10-07; Revision 5; staged implementation, default off)`
 - Revision 2 (2026-10-07): addresses T-005 security review round 1 (BLOCKER).
 - Revision 3 (2026-10-07): addresses T-005 round 2 (ACL order, rootdn list syntax, service-account identification, JWKS state machine, selectAuth precedence, IP throttle numbers); re-review pending; acceptance by the maintainer instruction of 2026-10-07 follows a passing re-review
 - Revision 5 (2026-10-07): precision fixes from T-005 round 4 (test model, budget bound, response split, selectAuth wording, ACL verification sync); re-review pending
 - Revision 4 (2026-10-07): addresses T-005 round 3 (JWKS state table, duplicate-cookie behaviour, IP throttle reservation/boundaries, ACL readback); re-review pending
-- Accepted by / date: 미수용 — 이 문서는 제안이며 Class D 수용 전 구현 착수 금지
+- Accepted by / date: dasomel / 2026-10-07 — 근거: 유지보수자(사용자) 지시('승인 후 구현까지', 2026-10-07)와 독립 Codex 보안 재검토 5라운드(1라운드 BLOCKER → Revision 2–5 반영 → 최종 확인 PASS). 수용 범위는 **설계(v1 읽기 전용, 기본 꺼짐)**이며 구현은 TASKS.md 순서대로 단계 병합한다. 각 구현 PR은 Class D로 독립 검토를 받는다. 코드 수준 항목(ACL 적용 후 `olcAccess` 읽기 확인, 라이브 e2e 등)은 해당 task의 완료 조건이다.
 - 작성일: 2026-10-04 (Revision 2: 2026-10-07)
 
 > 이 문서는 설계 제안이다. 코드·ACL·Helm·OpenAPI는 변경하지 않았고, 아래 동작은
@@ -564,7 +564,7 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 
 ## Review record
 
-- Accepted scope/requirements: 없음 — 수용 대기. 2026-10-07 유지보수자 지시('승인 후 구현까지')는 Revision 2의 재검토 통과 후 수용·단계 병합으로 이행한다. T-005 1차 독립 보안 검토(Codex)는 BLOCKER였고 Revision 2가 이를 반영했다.
+- Accepted scope/requirements: REQ-001–REQ-018 설계(Revision 5), 읽기 전용 v1, 기본 꺼짐. 2026-10-07 유지보수자 지시('승인 후 구현까지')를 재검토 5라운드 통과 후 이행해 수용했다(Revision 5 최종 확인 PASS). T-005 1차 독립 보안 검토(Codex)는 BLOCKER였고 Revision 2가 이를 반영했다.
 - Material changes after acceptance and re-review: 해당 없음.
 - Open questions or blockers: Q1–Q10은 2026-10-04 유지보수자 지시("열린 질문 권장으로 처리")로 권고안 채택(Revision 2에서 뒤집힌 것 없음, Q5·Q9·Q10에 주석). 아래 결정 표 참조. 패키지 자체의 수용(Accepted)은 별도 검토가 필요하며 구현은 그 이후에 시작한다.
 
@@ -585,7 +585,7 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 | Q9 | 현재 `openapi.json` 집계를 기준으로 사용. "39"는 경로 수였다. **Revision 2: 결정 유지, 수치 갱신** — `jq` 재집계 53개(공개 8·보호 45); 초안의 48/40은 5개 누락 | Problem, 분류 표 |
 | Q10 | 토큰 TTL 10분 수용. 즉시 폐기용 introspection은 후속. **Revision 2: 결정 유지**; 관측상 Keycloak 기본 TTL은 300s이고 MAX_TTL은 상한일 뿐이며 상한 범위 (0,1h]를 추가 | AC-012, D7 |
 
-잔여 차단 사항: 위 결정으로 설계 질문은 닫혔지만, 이 패키지는 여전히 `Proposed / awaiting review`다.
+잔여 차단 사항: 위 결정으로 설계 질문은 닫혔고, 재검토 5라운드 통과로 이 패키지는 2026-10-07 `Accepted`가 되었다(맨 아래 기록 참조).
 
 ## Revision 2 (2026-10-07)
 
@@ -688,3 +688,7 @@ T-005 재검토 4라운드(Codex): 설계 차단 없음, 정밀도·일관성 �
 | R5-3 | 폭주 요구 “오류는 401” vs 조회 실패 503 | AC-016이 상태 기계 표의 조건별 규칙을 참조(정상 조회 후 미지 kid 401, 조회 실패·backoff 503) | AC-016 |
 | R5-4 | “잘못된 Authorization은 모든 경우 401”이 매트릭스와 충돌 | 보호 경로에서 앞선 게이트 통과 후로 한정, 정본은 매트릭스 | AC-006 |
 | R5-5 | AC-018 검증 표 2구성 vs T-026 3구성 | 표를 3구성(운영자 선행 allow, `olcAccess` 순서 읽기)으로 동기화 | 검증 표, AC-018 |
+
+### Acceptance (2026-10-07)
+
+T-005 재검토 5라운드(Codex): 4라운드는 정밀도 5건을 남겼고(JWKS 시험 모델·예산 구간 정의·응답 분리, selectAuth 문장 범위, ACL 검증표 동기화) Revision 5가 처리했다. 5라운드는 새 모순 1건(`CHANGE.md` 테스트 모델의 "응답은 조회 완료 뒤" 문장이 행 3의 즉시 응답과 충돌)만 남겼고, 조회를 기다리는 요청으로 한정해 해소했다. 최종 확인은 **PASS**. 유지보수자(사용자) 지시에 따라 상태를 `Accepted`로 바꾸고 구현을 TASKS.md 순서로 단계 병합한다(기본 꺼짐, 단계마다 독립 검토).

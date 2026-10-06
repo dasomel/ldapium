@@ -1,6 +1,6 @@
 # Tasks: 외부 HTTP API용 머신 주체 인증 (읽기 전용)
 
-설계: [CHANGE.md](CHANGE.md) (Status: `Proposed / awaiting review; Revision 5 re-review pending`, 2026-10-07) · 증거: [EVIDENCE.md](EVIDENCE.md).
+설계: [CHANGE.md](CHANGE.md) (Status: `Accepted (2026-10-07; Revision 5)`) · 증거: [EVIDENCE.md](EVIDENCE.md).
 T-001·T-004는 완료, 나머지는 미착수이며 Class D 패키지 수용(재검토 통과 후) 전에는 `Implement` 이후 단계를 시작하지 않는다.
 구현은 기본 꺼짐 상태로 단계 병합한다(CHANGE.md “병합 단위”). LDAP ACL·`image/entrypoint.sh` 변경이 생기면
 `.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다. 각 항목의 “검수”는 그 항목의 PR이 통과해야 하는 수용 확인이다.
