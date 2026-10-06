@@ -104,8 +104,11 @@ test('creates, edits, resets the password for, and deletes a user through the UI
   await login(page)
   await page.getByRole('link', { name: 'Users' }).click()
   await expect(page).toHaveURL(/\/users$/)
-  // The cursor-paged list has no total; the pagination footer renders once rows have loaded.
-  await expect(page.getByRole('navigation', { name: 'User list pagination' })).toBeVisible()
+  // The cursor-paged list has no total. It has loaded once either the pagination footer
+  // (rows present) or the empty state (a fresh directory: no footer) is on screen.
+  await expect(
+    page.getByRole('navigation', { name: 'User list pagination' }).or(page.getByText('No users yet')),
+  ).toBeVisible()
 
   // A failed prior run can leave this dedicated account behind. Remove it
   // through the same confirmation UI before starting, keeping reruns
