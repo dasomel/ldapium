@@ -75,6 +75,13 @@ type Client interface {
 	// result was cut off at maxListResults rather than the directory
 	// genuinely containing no more entries.
 	ListUsers(ctx context.Context, base string) (users []domain.User, truncated bool, err error)
+	// ListUsersPage returns the next q.Limit users after q.After in the fixed
+	// (lowercased smallest uid, lowercased DN) order, optionally narrowed by
+	// the substring q.Q. Unlike ListUsers it is chunked and cancellable: the
+	// connection lock is held per RFC 2696 page, never for the whole scan.
+	// Errors: domain.ErrSizeLimitExceeded (server limit, never a partial
+	// page), ErrScanLimitExceeded, ErrScanTimeout, ErrBusy.
+	ListUsersPage(ctx context.Context, base string, q domain.PageQuery) (domain.UserPage, error)
 	// CreateUser creates a new user entry under base and, if password is
 	// non-empty, sets its initial password via the Password Modify
 	// extended operation (RFC 3062).
@@ -114,6 +121,8 @@ type Client interface {
 	// when the result was cut off at maxListResults rather than the
 	// directory genuinely containing no more entries.
 	ListGroups(ctx context.Context, base string) (groups []domain.Group, truncated bool, err error)
+	// ListGroupsPage is the groups counterpart of ListUsersPage (key: cn).
+	ListGroupsPage(ctx context.Context, base string, q domain.PageQuery) (domain.GroupPage, error)
 	// CreateGroup creates a new groupOfNames entry under base.
 	CreateGroup(ctx context.Context, base string, in domain.GroupInput) (string, error)
 	// UpdateGroup replaces the given attributes on the group at dn.

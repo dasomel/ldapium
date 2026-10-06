@@ -56,6 +56,50 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 
 프로필/백업 그룹은 설정된 관리자 DN만 호출할 수 있으며(403), 기능이 꺼져 있으면 404입니다.
 
+## 목록 페이지네이션 (users, groups)
+
+`GET /api/users`, `GET /api/groups`는 파라미터 없이 부르면 예전과 **바이트 단위로 같은** 응답(`{users|groups, truncated}`, 최대 5000건)을 돌려줍니다. `limit`, `cursor`, `q`, `sort` 중 **하나라도** 보내면(값이 비어 있어도) 커서 모드이며, 5000건 상한 없이 처음부터 끝까지 순회할 수 있습니다.
+
+| 파라미터 | 의미 |
+|---|---|
+| `limit` | 페이지 크기 1-200 (기본 50) |
+| `cursor` | 직전 응답의 `nextCursor` (불투명 토큰) |
+| `q` | 부분 문자열 필터, 64자 이하·유효한 UTF-8·제어 문자 불가, 앞뒤 공백 제거. users는 `uid`·`cn`·`mail`·`displayName`, groups는 `cn`·`description`에 대소문자 무시로 매칭. `*()\` 등은 문자 그대로 매칭 |
+| `sort` | 기본 키만 허용(users `uid`, groups `cn`, 오름차순). 다른 값은 422 |
+
+응답: `{"users":[...], "truncated":false, "hasMore":true, "nextCursor":"v1...."}`. `truncated`는 커서 모드에서 항상 `false`, 이어짐은 `hasMore`입니다. `nextCursor`는 `hasMore`가 `true`일 때만 있습니다.
+
+```bash
+cursor=""
+while :; do
+  page=$(curl -sS -b jar.txt --get "$BASE/api/users" \
+    --data-urlencode "limit=200" --data-urlencode "q=" --data-urlencode "cursor=$cursor")
+  echo "$page" | jq -r '.users[].dn'
+  [ "$(echo "$page" | jq -r .hasMore)" = true ] || break
+  cursor=$(echo "$page" | jq -r .nextCursor)
+done
+```
+
+- **계속 여부는 `hasMore`로만 판단**하세요. 페이지가 `limit`보다 짧거나 비어 있어도 `hasMore`가 `true`일 수 있습니다(페이지를 조립하는 사이 엔트리가 바뀐 경우). `nextCursor`는 항상 전진합니다.
+- **순서**: (소문자로 바꾼 가장 작은 `uid`(groups는 `cn`), 소문자 DN)의 바이트 사전식 오름차순. `uid`가 없는 사용자는 맨 앞(키 `""`)에 DN 순으로 옵니다.
+- **커서**는 로그인 세션, 리소스(users/groups), `q`에 묶입니다. 재로그인하면(같은 DN이라도 새 세션) 이전 커서는 무효이며 순회를 처음부터 다시 시작해야 합니다. 같은 `q`를 모든 페이지에 다시 보내세요. 변조·잘림·다른 세션/리소스/`q`의 커서는 원인 구분 없이 400 `cursor_invalid`입니다. 커서에는 비밀이 없고(위치만 담음), HMAC은 무결성과 결속을 위한 것입니다.
+- **동시 변경 보장**(스냅샷이 아님): 순회 내내 존재하고 정렬 키·DN이 바뀌지 않은 엔트리는 **정확히 1회** 반환됩니다. 현재 커서 위치 뒤에 추가된 엔트리는 나올 수 있고, 위치 이하에 추가된 엔트리는 이번 순회에 나오지 않습니다. 자기 페이지를 읽기 전에 삭제된 엔트리는 나오지 않고, 이미 반환된 엔트리는 반환된 채로 남습니다. 이름이 바뀌거나 정렬 키가 바뀐 엔트리는 두 번(앞 위치 → 뒤 위치) 또는 한 번도 안(뒤 → 앞) 나올 수 있습니다.
+- **비용**: 페이지마다 후보 전체를 한 번 훑습니다(페이지당 O(N), 전체 순회 O(N²/limit)). 요청당 후보 100000건, 요청 deadline 30초로 제한됩니다. 같은 로그인 세션의 다른 요청은 디렉터리 연결을 청크(RFC 2696 한 페이지, 최대 5초) 단위로만 기다립니다. 같은 세션에서 동시에 두 커서 요청을 보내면 두 번째는 첫 번째가 끝나기를 기다립니다. `q`로 후보를 좁히면 비용이 줄어듭니다.
+- **서버 크기 제한**: OpenLDAP의 `olcSizeLimit`(기본 10000)은 페이지 크기가 아니라 paged search **전체**에 적용됩니다. 관리자 DN(rootDN)은 면제이지만 일반 사용자·SSO 서비스 계정은 후보가 10000건을 넘으면 첫 페이지부터 **422 `size_limit_exceeded`**를 받습니다(부분 결과 없음). 해결: `q`로 후보를 10000건 이하로 좁히거나, 제한이 없는 신원(관리자 DN)으로 호출하거나, 운영자가 `LDAP_PAGED_TOTAL_LIMIT`(차트 `ldap.limits.pagedTotal`)을 켜는 것입니다. 이 값을 켜면 인증된 모든 사용자가 ACL이 허용하는 범위를 끝까지 페이징할 수 있으므로 기본은 꺼져 있습니다([`image/README.md`](../image/README.md)).
+- 커서 모드의 항목에도 레거시 목록과 같은 `etag`(읽을 수 있을 때)가 있고, 같은 항목의 `GET /api/entry` `ETag` 헤더와 같은 값입니다. 그대로 `If-Match`에 보내 조건부 쓰기를 할 수 있습니다.
+- `userPassword`는 커서 모드에서도 요청·반환되지 않습니다.
+
+커서 모드의 오류는 모든 `/api` 오류와 같은 [오류 봉투](#오류-형식)입니다. 아래 코드는 코드 표에 등록되어 있습니다.
+
+| 상태 | `code` | `retryable` | 원인 |
+|---|---|---|---|
+| 400 | `cursor_invalid` | false | 변조·잘림·알 수 없는 버전·다른 세션/리소스/`q`·재로그인·`SESSION_SECRET` 교체·2048바이트 초과 |
+| 422 | `validation_failed` | false | `limit` 범위·형식, `q` 길이·인코딩·제어 문자, 기본 키가 아닌 `sort` (메시지에는 필드명만) |
+| 422 | `size_limit_exceeded` | false | 디렉터리 크기 제한(위 설명) |
+| 422 | `scan_limit_exceeded` | false | 후보가 요청당 100000건 초과 — `q`로 좁히기 |
+| 503 | `scan_timeout` | false | 요청 deadline 30초 초과 — `q`로 좁히거나 나중에 재시도 |
+| 503 | `unavailable` | true | 같은 세션의 다른 커서 요청이 끝나지 않음 (`Retry-After`) |
+
 ## 오류 형식
 
 모든 `/api` 오류(4xx/5xx, 알 수 없는 경로, 허용되지 않는 메서드, 패닉 포함)는 하나의 JSON 본문입니다.
@@ -115,6 +159,10 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `upstream_failed` | 502 | Keycloak 작업 실패 |
 | `keycloak_disabled` | 503 | Keycloak 관리자 연결 비활성(`retryable: false`) |
 | `unavailable` | 503 | 일시적 의존성 장애(`retryable: true`, `Retry-After`) |
+| `cursor_invalid` | 400 | 목록 커서 변조·잘림·다른 세션/리소스/`q` (원인 구분 없음) |
+| `size_limit_exceeded` | 422 | 디렉터리 크기 제한이 커서 스캔을 막음(부분 결과 없음) |
+| `scan_limit_exceeded` | 422 | 커서 스캔 후보가 요청당 100000건 초과 |
+| `scan_timeout` | 503 | 커서 목록이 요청 deadline(30초)을 넘김(`retryable: false`) |
 
 후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `idempotency_*` 외의 이름)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
 
@@ -207,7 +255,7 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 
 | 항목 | 값 |
 |---|---|
-| `GET /api/users`, `/api/groups` | 최대 5000건. 초과 시 `truncated: true` (커서 없음) |
+| `GET /api/users`, `/api/groups` | 파라미터 없음: 최대 5000건, 초과 시 `truncated: true`. `limit`/`cursor`/`q`/`sort`를 보내면 커서 모드: 페이지당 `limit` 1-200 (기본 50), 순회 길이 제한 없음([목록 페이지네이션](#목록-페이지네이션-users-groups)) |
 | `GET /api/audit/actions` | `limit` 1-200 (기본 50), `before`에 이전 응답의 `nextBefore` |
 | 로그인 | IP별 실패 횟수 제한, 초과 시 429 + `Retry-After` |
 | 요청 본문 | 프로필 64KiB, 방식/연결 32KiB, 정책/역할 작업/미리보기 16KiB |
@@ -224,7 +272,7 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 | 404 / 405 | 대상 없음·기능 비활성·알 수 없는 경로 / 허용되지 않는 메서드 |
 | 409 / 412 / 428 | 충돌(`idempotency_key_conflict`·`idempotency_outcome_unknown` 포함) / revision·ETag 불일치(`revision_conflict`) / If-Match 필요(프로필·백업) |
 | 500 | 예상치 못한 실패, 또는 `partial_failure`(사용자 생성 후 비밀번호 단계 미완료) |
-| 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성 |
+| 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성, 커서 목록의 `scan_timeout`·`unavailable` |
 
 ## 안전 규칙
 
@@ -252,5 +300,5 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 
 ## 아직 지원하지 않는 것
 
-머신 토큰/서비스 주체, 페이지네이션 커서, 백업 job ID는 지원하지 않습니다.
+머신 토큰/서비스 주체는 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.

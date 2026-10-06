@@ -60,6 +60,12 @@ func (f *fakeClient) Lock(context.Context, string, string) error   { return nil 
 func (f *fakeClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
 	return nil, false, nil
 }
+func (f *fakeClient) ListUsersPage(context.Context, string, domain.PageQuery) (domain.UserPage, error) {
+	return domain.UserPage{}, nil
+}
+func (f *fakeClient) ListGroupsPage(context.Context, string, domain.PageQuery) (domain.GroupPage, error) {
+	return domain.GroupPage{}, nil
+}
 func (f *fakeClient) CreateGroup(context.Context, string, domain.GroupInput) (string, error) {
 	return "", nil
 }

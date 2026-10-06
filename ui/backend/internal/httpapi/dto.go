@@ -15,6 +15,24 @@ type groupListResponse struct {
 	Truncated bool           `json:"truncated"`
 }
 
+// userPageResponse and groupPageResponse are the keyset-mode bodies of
+// GET /api/users and /api/groups. truncated stays (it is a required field of
+// the legacy schema) and is always false here: continuation is hasMore and
+// nextCursor, which is present only while more entries exist.
+type userPageResponse struct {
+	Users      []domain.User `json:"users"`
+	Truncated  bool          `json:"truncated"`
+	HasMore    bool          `json:"hasMore"`
+	NextCursor string        `json:"nextCursor,omitempty"`
+}
+
+type groupPageResponse struct {
+	Groups     []domain.Group `json:"groups"`
+	Truncated  bool           `json:"truncated"`
+	HasMore    bool           `json:"hasMore"`
+	NextCursor string         `json:"nextCursor,omitempty"`
+}
+
 type passwordPolicyListResponse struct {
 	Policies []domain.PasswordPolicy `json:"policies"`
 }

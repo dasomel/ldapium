@@ -41,15 +41,21 @@ func (c *client) ListGroups(ctx context.Context, base string) ([]domain.Group, b
 
 	groups := make([]domain.Group, 0, len(entries))
 	for _, e := range entries {
-		groups = append(groups, domain.Group{
-			DN:          e.DN,
-			CN:          e.GetAttributeValue("cn"),
-			Description: e.GetAttributeValue("description"),
-			Members:     e.GetAttributeValues("member"),
-			ETag:        domain.ETagFromCSN(e.GetAttributeValue("entryCSN")),
-		})
+		groups = append(groups, entryToGroup(e))
 	}
 	return groups, truncated, nil
+}
+
+// entryToGroup maps a groupAttrs entry to the domain type; the legacy and the
+// keyset listing share it so both carry the same fields, ETag included.
+func entryToGroup(e *ldap.Entry) domain.Group {
+	return domain.Group{
+		DN:          e.DN,
+		CN:          e.GetAttributeValue("cn"),
+		Description: e.GetAttributeValue("description"),
+		Members:     e.GetAttributeValues("member"),
+		ETag:        domain.ETagFromCSN(e.GetAttributeValue("entryCSN")),
+	}
 }
 
 // CreateGroup creates a new groupOfNames entry under base. groupOfNames

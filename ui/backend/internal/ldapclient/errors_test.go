@@ -175,3 +175,13 @@ func TestMapErr_NoSuchAttributeStaysUnmapped(t *testing.T) {
 		t.Errorf("mapErr mapped NoSuchAttribute to ErrNotFound: %v", got)
 	}
 }
+
+func TestMapErr_SizeLimitExceeded(t *testing.T) {
+	le := &ldap.Error{ResultCode: ldap.LDAPResultSizeLimitExceeded, Err: errors.New("size limit exceeded")}
+
+	got := mapErr("list page", le)
+
+	if !errors.Is(got, domain.ErrSizeLimitExceeded) {
+		t.Errorf("mapErr(%v) = %v, want domain.ErrSizeLimitExceeded (it used to fall through to an opaque 500)", le, got)
+	}
+}

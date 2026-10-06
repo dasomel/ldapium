@@ -46,6 +46,12 @@ func mapErr(op string, err error) error {
 			// path with the original error logged, never to an
 			// unconditional write.
 			return domain.ErrRevisionConflict
+
+		case ldap.LDAPResultSizeLimitExceeded:
+			// The directory's own size limit (olcSizeLimit, counted over the
+			// TOTAL of a paged search). Mapped so it stops falling through to
+			// an opaque 500; callers never get a partial result with it.
+			return domain.ErrSizeLimitExceeded
 		case ldap.LDAPResultConstraintViolation, ldap.LDAPResultObjectClassViolation, ldap.LDAPResultInvalidAttributeSyntax:
 			return fmt.Errorf("%w: %s", domain.ErrInvalidInput, le.Err)
 		case ldap.LDAPResultNotAllowedOnNonLeaf:
