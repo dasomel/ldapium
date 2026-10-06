@@ -104,6 +104,7 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 		if err != nil {
 			return nil, fmt.Errorf("initialize backups: %w", err)
 		}
+		s.backups.SetJobTimeouts(cfg.BackupJobTimeoutData, cfg.BackupJobTimeoutLogs)
 	}
 	s.routes(spa)
 	return s, nil

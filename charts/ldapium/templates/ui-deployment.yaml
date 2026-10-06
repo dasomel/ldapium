@@ -252,6 +252,10 @@ spec:
               value: /usr/bin/python3
             - name: BACKUP_ADMIN_DNS
               value: {{ join ";" .Values.ui.backups.adminDNs | quote }}
+            - name: BACKUP_JOB_TIMEOUT_DATA
+              value: {{ .Values.ui.backups.jobTimeout.data | quote }}
+            - name: BACKUP_JOB_TIMEOUT_LOGS
+              value: {{ .Values.ui.backups.jobTimeout.logs | quote }}
             - name: RCLONE_CACHE_DIR
               value: /tmp/rclone
             - name: PYTHONDONTWRITEBYTECODE

@@ -530,6 +530,7 @@ BACKUP_POLICY_PATH=/var/lib/ldapium-backups/policies.json
 BACKUP_WORKER_PATH=/opt/ldapium/backup-tools/backup_worker.py
 BACKUP_PYTHON=/usr/bin/python3
 BACKUP_ADMIN_DNS=cn=admin,dc=example,dc=org
+BACKUP_JOB_TIMEOUT_DATA=2h   # optional, 1m-24h; same for BACKUP_JOB_TIMEOUT_LOGS
 ```
 
 Operator example: [operator.example.json](backend/backup-tools/operator.example.json).
@@ -578,13 +579,29 @@ Remote namespace: `<prefix>/<instance_id>/<data|logs>/<run>`; pending upload mar
 first, data copied and downloaded for comparison, completion marker last and
 reread. Verify/prune can consume significant read bandwidth. Use an additional
 storage quota/lifecycle backstop for outages/corrupt objects and transient staging.
-Cancellation terminates the whole worker process group. A private worker file
+Cancellation (and the per-kind job timeout, `BACKUP_JOB_TIMEOUT_DATA` / `BACKUP_JOB_TIMEOUT_LOGS`,
+default 2h) sends SIGTERM to the whole worker process group and SIGKILL after 10 seconds. A private worker file
 lock prevents overlap; HA/multiple independent writers are unsupported.
 
 API (backup-admin session required): GET `/api/v1/backups`, PUT
 `/api/v1/backups/policies` with same-origin JSON and quoted revision `If-Match`,
 POST `/api/v1/backups/jobs/data|logs` with same-origin JSON content type and empty
-body. Accepted execution is 202; subsequent status may fail. No archive download
+body. Accepted execution is 202 with `job_id` and a `Location` header; read the outcome from
+GET `/api/v1/backups/jobs/{id}` (list: GET `/api/v1/backups/jobs`) and cancel with POST
+`/api/v1/backups/jobs/{id}/cancel`. Only one job runs at a time: a second start is 409
+`backup_busy` with `active_job_id` (that names the running job, it does not prove it is
+yours). Job records live in `backup-jobs.json` next to the policy file (at most 200 records /
+90 days; the latest success per kind is always kept; no secrets, only a requester
+fingerprint) and are safe to delete.
+
+Operating notes: `abandoned` means the controller restarted and no worker result could be
+established (the worker may still have produced a local copy, listed under `artifact`).
+`worker_busy` means another worker held the lock; it is retried after 60 seconds, not after a
+whole interval. After a controller restart a worker that is still running keeps its job
+`running` with `orphan_suspected`; the controller polls the worker lock (5s growing to 30s)
+and settles the job from the worker's result file once the lock is free. Such a job cannot be
+cancelled from the API (its pid is not stored), and a stuck worker blocks new backups until
+it is stopped by the operator. Accepted execution is 202; subsequent status may fail. No archive download
 endpoint: raw backup attributes/password hashes never reach an HTTP response.
 Health's LDAP-recorded last-backup field continues to describe legacy CronJob
 backups; Backups is authoritative for this controller's job history.

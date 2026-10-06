@@ -3928,11 +3928,11 @@
         "x-required-role": "backup-admin"
       }
     },
-    "/api/v1/backups/jobs/{kind}": {
+    "/api/v1/backups/jobs/{id}": {
       "post": {
         "operationId": "runBackup",
         "summary": "Start a backup run",
-        "description": "Requires a session whose DN is in the backup administrator list (requireBackupAdmin); 404 when backups are disabled, 403 for other identities. Errors use the {\"message\"} shape. Write guard: the Origin header must equal the request's own scheme://host (else 403; scripted clients must set it). Request Content-Type must be application/json (otherwise 415). Empty body; the run uses the saved policy and operator-owned secrets. Asynchronous: 202 means started. There is no job ID; poll GET /api/v1/backups and read `states[kind]` and `running`.",
+        "description": "Requires a session whose DN is in the backup administrator list (requireBackupAdmin); 404 `feature_disabled` when backups are disabled, 403 for other identities. Write guard: the Origin header must equal the request's own scheme://host (else 403; scripted clients must set it). Request Content-Type must be application/json (otherwise 415). The body must be empty. The run uses the saved policy and operator-owned secrets. Asynchronous: 202 means started and carries the job ID in the body and in `Location`; poll GET /api/v1/backups/jobs/{id}. Only one job runs at a time: a second start is 409 `backup_busy` carrying `active_job_id` and `active_kind`; that names the running job but does not prove it is yours, and a retry after it ended starts a new run. The request records the requester as a one-way fingerprint only.",
         "tags": [
           "Backups"
         ],
@@ -3944,24 +3944,41 @@
         "responses": {
           "202": {
             "description": "Started",
+            "headers": {
+              "Location": {
+                "description": "Absolute path of the new job: /api/v1/backups/jobs/{job_id}.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "job_id": {
+                      "type": "string",
+                      "description": "Opaque job identifier (at most 64 characters)."
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "data",
+                        "logs"
+                      ]
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "running"
                       ]
-                    },
-                    "kind": {
-                      "type": "string"
                     }
                   },
                   "required": [
-                    "status",
-                    "kind"
+                    "job_id",
+                    "kind",
+                    "status"
                   ]
                 }
               }
@@ -3978,7 +3995,7 @@
             }
           },
           "409": {
-            "description": "A backup is already running",
+            "description": "`backup_busy`: a job is already running (or the worker lock is held). `active_job_id` and `active_kind` name it when known.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3988,7 +4005,7 @@
             }
           },
           "422": {
-            "description": "Unknown kind, source unavailable, or status persistence failed",
+            "description": "Unknown kind, or log sources not registered",
             "content": {
               "application/json": {
                 "schema": {
@@ -4022,20 +4039,322 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`persistence_unavailable`: the start record could not be written, so no worker was started. Retryable (Retry-After).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "parameters": [
           {
-            "name": "kind",
+            "name": "id",
             "in": "path",
             "required": true,
-            "description": "Backup kind",
+            "description": "For POST: the backup kind to run.",
             "schema": {
               "type": "string",
               "enum": [
                 "data",
                 "logs"
               ]
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Must equal the request's own scheme://host (no path). Anything else, or a missing Origin, is rejected with 403. Browsers send it automatically; scripted clients must set it explicitly.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-admin": true,
+        "x-required-role": "backup-admin"
+      },
+      "get": {
+        "operationId": "getBackupJob",
+        "summary": "Get one backup job",
+        "description": "Requires a session whose DN is in the backup administrator list (requireBackupAdmin); 404 `feature_disabled` when backups are disabled, 403 for other identities. The ID is opaque; a malformed or unknown ID is 404 `job_not_found` (records are kept for at most 200 jobs / 90 days).",
+        "tags": [
+          "Backups"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`, or the feature is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Session DN is not a configured backup administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "For GET: the job ID returned by the start call.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        ],
+        "x-admin": true,
+        "x-required-role": "backup-admin"
+      }
+    },
+    "/api/v1/backups/jobs": {
+      "get": {
+        "operationId": "listBackupJobs",
+        "summary": "List backup jobs",
+        "description": "Requires a session whose DN is in the backup administrator list (requireBackupAdmin); 404 `feature_disabled` when backups are disabled, 403 for other identities. Newest first, at most 200 records are kept (and none older than 90 days, except the latest success per kind). No cursor yet.",
+        "tags": [
+          "Backups"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BackupJob"
+                      }
+                    }
+                  },
+                  "required": [
+                    "jobs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown kind, status or limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Session DN is not a configured backup administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Feature disabled on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "data",
+                "logs"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "abandoned"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "1-100, default 20.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "x-admin": true,
+        "x-required-role": "backup-admin"
+      }
+    },
+    "/api/v1/backups/jobs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelBackupJob",
+        "summary": "Cancel a running backup job",
+        "description": "Requires a session whose DN is in the backup administrator list (requireBackupAdmin); 404 `feature_disabled` when backups are disabled, 403 for other identities. Write guard: the Origin header must equal the request's own scheme://host (else 403; scripted clients must set it). Request Content-Type must be application/json (otherwise 415). The body must be empty. Sends SIGTERM to the worker's process group and SIGKILL after a 10 second grace period. 202: the cancel request was recorded and the job ends as `cancelled` asynchronously; a local copy that was already finalized is kept. 200: already cancelled (idempotent). 409 `job_not_cancellable`: any other finished job, or a job whose worker was adopted after a restart (`orphan_suspected`, its process is unknown). `staging_cleanup` says honestly whether the worker's staging directory was removed (`done`) or may remain until the next run (`pending`).",
+        "tags": [
+          "Backups"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Already cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJob"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Cancel recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body must be empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`, or the feature is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`job_not_cancellable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`persistence_unavailable`: the cancel request could not be recorded; no signal was sent. Retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Session DN is not a configured backup administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job ID.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
             }
           },
           {
@@ -5595,7 +5914,8 @@
             "format": "date-time"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "One of `running`, `succeeded`, `failed`, `interrupted` (the controller restarted mid-run) or `cancelled`. Clients that validate this strictly must accept `cancelled`."
           },
           "last_attempt": {
             "type": "string",
@@ -5787,7 +6107,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text. Exception: `partial_failure` (500, POST /api/users) additionally carries `state` and `dn`.",
+        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text. Exception: `partial_failure` (500, POST /api/users) additionally carries `state` and `dn`; `backup_busy` (409, POST /api/v1/backups/jobs/{kind}) additionally carries `active_job_id` and `active_kind`.",
         "required": [
           "error",
           "message",
@@ -5818,12 +6138,15 @@
               "internal",
               "invalid_credentials",
               "invalid_request",
+              "job_not_cancellable",
+              "job_not_found",
               "keycloak_disabled",
               "login_rate_limited",
               "method_not_allowed",
               "not_found",
               "origin_mismatch",
               "partial_failure",
+              "persistence_unavailable",
               "revision_conflict",
               "session_expired",
               "unauthenticated",
@@ -5854,6 +6177,18 @@
           "dn": {
             "type": "string",
             "description": "Only with `code: partial_failure`: the DN of the entry to check (the value a 201 would have returned). The one DN an error body carries."
+          },
+          "active_job_id": {
+            "type": "string",
+            "description": "Only on `backup_busy`: the job that holds the single run slot. It can be looked up with GET /api/v1/backups/jobs/{id}; it does not prove the job is yours."
+          },
+          "active_kind": {
+            "type": "string",
+            "enum": [
+              "data",
+              "logs"
+            ],
+            "description": "Only on `backup_busy`: the kind of the running job."
           }
         },
         "example": {
@@ -5951,6 +6286,216 @@
           "dn"
         ],
         "additionalProperties": false
+      },
+      "BackupJob": {
+        "type": "object",
+        "description": "One backup run. Contains no secrets, no remote output, no paths outside the backup root and no requester DN (only a one-way fingerprint).",
+        "required": [
+          "job_id",
+          "kind",
+          "trigger",
+          "status",
+          "requested_by",
+          "policy_revision",
+          "created_at"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Opaque, URL-safe, at most 64 characters."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "data",
+              "logs"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "schedule"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "abandoned"
+            ],
+            "description": "`abandoned`: the controller restarted and no result could be established."
+          },
+          "requested_by": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "scheduler"
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "description": "16-hex one-way fingerprint of the requesting identity."
+              }
+            }
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deadline_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start time plus the per-kind maximum run time."
+          },
+          "cancel_requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "orphan_suspected": {
+            "type": "boolean",
+            "description": "The controller restarted while a worker still held the lock; the job stays `running` until that worker ends."
+          },
+          "orphan_reason": {
+            "type": "string",
+            "enum": [
+              "worker_lock_held",
+              "lock_probe_error"
+            ]
+          },
+          "staging_cleanup": {
+            "type": "string",
+            "enum": [
+              "done",
+              "pending",
+              "not_applicable"
+            ]
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "deadline_exceeded",
+                  "abandoned",
+                  "worker_failed",
+                  "worker_busy",
+                  "unverified_result",
+                  "result_invalid"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Fixed text per code."
+              }
+            }
+          },
+          "local": {
+            "type": "object",
+            "required": [
+              "verified"
+            ],
+            "properties": {
+              "verified": {
+                "type": "boolean"
+              }
+            }
+          },
+          "destinations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "succeeded",
+                    "failed",
+                    "skipped",
+                    "unknown"
+                  ]
+                },
+                "error_code": {
+                  "type": "string",
+                  "enum": [
+                    "transfer_failed",
+                    "verify_failed",
+                    "config_invalid",
+                    "previous_destination_failed"
+                  ]
+                }
+              }
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "required": [
+              "run_id"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "bytes",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },

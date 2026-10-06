@@ -52,7 +52,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | Users | `GET/POST/PUT/PATCH/DELETE /api/users`, `POST /api/users/password`, `/lock`, `/unlock` |
 | Groups | `GET/POST/PUT/PATCH/DELETE /api/groups`, `POST/DELETE /api/groups/members` |
 | Application profiles (`x-admin`) | `GET /api/v1/application-profile-types`, `GET /api/v1/applications`, `GET/PUT /api/v1/applications/integration-methods[/{method}]`, `GET/PUT/DELETE /api/v1/applications/{id}/integration-profile`, `GET .../keycloak-roles`, `GET .../roles`, `GET .../integration-status`, `POST .../integration-verify`, `POST .../keycloak-role-operations`, `GET .../configuration-export`, `POST .../mapping-preview` |
-| Backups (`x-admin`) | `GET /api/v1/backups`, `PUT /api/v1/backups/policies`, `PUT /api/v1/backups/connections`, `DELETE /api/v1/backups/connections/{id}`, `POST /api/v1/backups/jobs/{kind}` |
+| Backups (`x-admin`) | `GET /api/v1/backups`, `PUT /api/v1/backups/policies`, `PUT /api/v1/backups/connections`, `DELETE /api/v1/backups/connections/{id}`, `POST /api/v1/backups/jobs/{kind}`, `GET /api/v1/backups/jobs`, `GET /api/v1/backups/jobs/{id}`, `POST /api/v1/backups/jobs/{id}/cancel` |
 
 프로필/백업 그룹은 설정된 관리자 DN만 호출할 수 있으며(403), 기능이 꺼져 있으면 404입니다.
 
@@ -96,7 +96,10 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `method_not_allowed` | 405 | 허용되지 않는 메서드(`Allow` 헤더) |
 | `conflict` | 409 | 디렉터리 상태와 충돌 |
 | `already_exists` | 409 | 이미 있음 |
-| `backup_busy` | 409 | 백업이 실행 중(`retryable: true`) |
+| `backup_busy` | 409 | 백업이 실행 중(`retryable: true`). `active_job_id`·`active_kind`가 실행 중인 job을 가리킨다(조회용이며 내 요청의 job이라는 증명은 아니다) |
+| `job_not_found` | 404 | 형식이 맞지 않거나 보관에 없는 백업 job ID |
+| `job_not_cancellable` | 409 | 실행 중이 아닌 job(이미 `cancelled`는 200 멱등) 또는 재기동 뒤 인수한 고아 워커 job |
+| `persistence_unavailable` | 503 | 시작·취소 요청 기록을 쓸 수 없음: 워커를 시작하지 않았고 신호도 보내지 않았다(`retryable: true`, `Retry-After`) |
 | `revision_conflict` | 412 | `If-Match` 불일치 |
 | `partial_failure` | 500 | 사용자 생성 후 비밀번호 단계가 끝나지 않음(`retryable: false`). 오류 본문의 유일한 예외로 `state`와 `dn` 키가 더 있음(아래 "사용자 생성 실패 처리") |
 | `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
@@ -108,7 +111,7 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 | `keycloak_disabled` | 503 | Keycloak 관리자 연결 비활성(`retryable: false`) |
 | `unavailable` | 503 | 일시적 의존성 장애(`retryable: true`, `Retry-After`) |
 
-후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `job_not_found`, `job_not_cancellable`, `persistence_unavailable`, `idempotency_*`)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
+후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `idempotency_*`)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
 
 4xx 문구에는 DN·비밀이 없습니다. LDAP 서버가 돌려준 진단 문구는 해당 코드의 고정 문구(예: `invalid input`)로 대체되고 원문은 `requestId`와 함께 서버 로그에만 남습니다. 단 비밀번호 변경 화면이 사용자에게 보여 주는 알려진 비밀번호 정책 문구(ppolicy·ppm의 고정 문구, 예: `Password fails quality checking policy`)는 DN을 제거한 형태로 그대로 전달됩니다. 목록에 없는 새 문구는 검토 후 추가될 때까지 가려집니다.
 
