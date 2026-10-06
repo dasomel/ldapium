@@ -680,7 +680,7 @@ if want refusals; then
   psl="$(syncrepl_list "$probe_name")"
   check "recovery: olcSyncrepl re-rendered from the environment (two values, identity bind, default retry)" "2:2:2" \
     "$(grep -c . <<<"$psl" || true):$(grep -c "binddn=\"${iddn}\"" <<<"$psl" || true):$(grep -c 'retry="5 10 30 +"' <<<"$psl" || true)"
-  check "recovery: the start logged the removal of the unreadable stored values" "1" "$(dlogs "$probe_name" | grep -c 'removing the stored olcSyncrepl' || true)"
+  check "recovery: the start logged the removal of the unreadable stored values" "1" "$(dlogs "$probe_name" | grep -c 'removed the unloadable stored olcSyncrepl' || true)"
   probe_done
 
   # The reproduced input, against a plain-LDAP decoy that logs every connection: the node must
