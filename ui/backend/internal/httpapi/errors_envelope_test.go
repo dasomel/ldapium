@@ -75,6 +75,7 @@ func TestEnvelope_RetryableRules(t *testing.T) {
 	}{
 		{codeLoginRateLimited, "POST", true},
 		{codeUnavailable, "GET", true},
+		{codeScanTimeout, "GET", true},
 		{codeBackupBusy, "POST", true},
 		{codeUpstreamFailed, "GET", true},
 		{codeUpstreamFailed, "HEAD", true},
@@ -110,6 +111,7 @@ func TestEnvelope_RetryAfterOnlyForRetryable429And503(t *testing.T) {
 	}{
 		{429, codeLoginRateLimited, "5"},
 		{503, codeUnavailable, "5"},
+		{503, codeScanTimeout, "5"},
 		{503, codeKeycloakDisabled, ""},
 		{502, codeUpstreamFailed, ""},
 		{409, codeBackupBusy, ""},

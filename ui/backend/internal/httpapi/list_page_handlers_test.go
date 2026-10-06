@@ -358,7 +358,7 @@ func TestKeysetErrorMapping(t *testing.T) {
 	}{
 		{"size limit", fmt.Errorf("wrapped: %w", domain.ErrSizeLimitExceeded), 422, "size_limit_exceeded", false, false, "LDAP_PAGED_TOTAL_LIMIT"},
 		{"scan limit", domain.ErrScanLimitExceeded, 422, "scan_limit_exceeded", false, false, "q"},
-		{"scan timeout", domain.ErrScanTimeout, 503, "scan_timeout", false, false, "q"},
+		{"scan timeout", domain.ErrScanTimeout, 503, "scan_timeout", true, true, "q"},
 		{"busy", domain.ErrBusy, 503, "unavailable", true, true, ""},
 	}
 	for _, tt := range tests {

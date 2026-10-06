@@ -221,7 +221,7 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeUnavailable, codeBackupBusy, codePersistenceUnavailable,
+	case codeLoginRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
 		codeIdempotencyKeyConflict, codeIdempotencyCapacity:
 		return true
 	case codeUpstreamFailed:

@@ -269,7 +269,7 @@
 | `validation_failed` | 422 | false | `limit` 범위·형식, `q` 길이·인코딩·제어문자, 기본 키 외 `sort` (필드명만 메시지에, 값은 되풀이하지 않음; #218 기존 코드) |
 | `size_limit_exceeded` | 422 | false | 서버 크기 제한(D215-14) |
 | `scan_limit_exceeded` | 422 | false | `maxScanEntries` 초과(D215-8) |
-| `scan_timeout` | 503 | false | `listRequestTimeout` 초과(D215-13) |
+| `scan_timeout` | 503 | true (`Retry-After`) | `listRequestTimeout` 초과(D215-13) |
 | `unavailable` (#218 예약 코드 사용) | 503 | true | 세션당 동시 스캔 대기 초과, `Retry-After` |
 
 ### 연계
