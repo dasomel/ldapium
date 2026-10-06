@@ -1,10 +1,10 @@
 # Change: syncrepl을 관리자 DN이 아닌 전용 복제 신원(replicator)으로 바인드
 
 - Change class: `D` — 자격 증명 취급·보안 경계·복제 토폴로지(AGENTS.md "Risk-scaled change workflow")
-- Owner: 미지정 — 수용 전 지정
+- Owner: dasomel
 - Related issue: [#229](https://github.com/dasomel/ldapium/issues/229) 두 번째 항목 (첫 번째 항목 `/proc/1/environ`은 `image/entrypoint.sh:1598-1603`에서 이미 처리). 선행 기록: [generated-credentials D43](../generated-credentials/CHANGE.md)
-- Status: `Proposed / awaiting review`
-- Accepted by / date: 미수용 — 이 문서는 제안이며 Class D 수용 전 구현 착수 금지
+- Status: `Accepted (design only; implementation conditions below)`
+- Accepted by / date: dasomel / 2026-10-06 — 근거: 사용자의 상시 지시("현재 pr 3개와 이슈 10개 다 처리", "gpt 하고 팀구성해서 멀티로 구현해서 머지")와, 독립 Codex 검토 4회(최종 4차는 "계약 보강 후 구현 시점 조건부 수용 가능", 그 보강 D64–D67은 8dffe45에서 반영, 기계적으로 확인). 수용 범위는 **설계**이며 아래 "수용 조건"이 구현 단계 완료 조건이다. 구현 PR은 Class D로서 별도 독립 검토를 받는다.
 - 작성일: 2026-10-06 · **개정 5 (단순화 + 4차 검토의 계약 보강)**: 자동 생성·토큰·훅·takeover·정규식 평가 기구를 모두 폐기하고 "명시적 운영자 명령 + fail-closed 거부"로 재설계했다(아래 "폐기한 것").
 
 ## 수용 조건 (Accepted가 과대 주장하지 않도록, 구현 시점 조건을 먼저 명시)
