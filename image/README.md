@@ -87,7 +87,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_TLS_AUTHZ_DN` | if mutual auth enabled | `uid=$1,${LDAP_ROOT_DN}` | `olcAuthzRegexp` replacement DN. The default maps the matching certificate CN to a `uid` below the base DN; override it for your DIT. An explicitly empty value is rejected. |
 | `LDAP_SEED_DIR` | no | `/opt/ldifs` | Every `*.ldif` in this directory is applied, in sorted order, via `ldapadd` — **once, on the first bootstrap of the node that creates the base DIT**. A failed seed rolls back the whole bootstrap and is retried on the next start; replicas skip seeding and receive the data by replication. Your extension point for OUs, groups, real users, ACLs, etc. |
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
-| `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in. A positive integer up to `2147483647`, or `unlimited`: appends `olcLimits: users size.prtotal=<value>` to the `mdb` database so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT` (see [Paged-search total](#paged-search-total-ldap_paged_total_limit)). Unset renders nothing. `0`, leading zeros, non-digits and anything above 2147483647 are refused at startup. Reconciled on every start. |
+| `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in, **stateless**: unset = hands off (no `olcLimits` rule is read, changed or removed); a positive integer up to `2147483647` or `unlimited` = converge to exactly one rule `users size.prtotal=<value>` appended after the operator's rules, so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT`; `off` = remove exactly `users size.prtotal=<value>`. The selector `users` is reserved while the setting is on. Any failure to apply, verify or restore aborts startup. See [Paged-search total](#paged-search-total-ldap_paged_total_limit). `0`, leading zeros, other non-digits and anything above 2147483647 are refused. |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_HASH` | no | `{ARGON2}` | `olcPasswordHash` on the frontend database, and the scheme used to mint the bootstrap admin hash. Any `{SCHEME}`-shaped value slapd supports (e.g. `{SSHA}`). Applied at bootstrap only (see below). |
 | `LDAP_UNIQUE_ATTRIBUTES` | no | `uid,mail` | Comma-separated attributes the `unique` overlay enforces uniqueness on. **Empty string disables the overlay entirely** — it is not created at all, rather than created with nothing to check. See [Uniqueness enforcement](#uniqueness-enforcement). Applied at bootstrap only (see below). |
@@ -208,71 +208,57 @@ SSO service account) need the paged total lifted:
 docker run -e LDAP_PAGED_TOTAL_LIMIT=unlimited ... ldapium   # or e.g. 50000
 ```
 
-This appends `olcLimits: users size.prtotal=<value>` to
-`olcDatabase={1}mdb,cn=config`. What it does and does not change (verified
-live, `scripts/test/test-paged-total-limit.sh`):
+**The contract is stateless and explicit.** The setting is a command, not a
+file of remembered state; every start converges to what the variable says
+(verified live, `scripts/test/test-paged-total-limit.sh`):
+
+| `LDAP_PAGED_TOTAL_LIMIT` | what the entrypoint does |
+|---|---|
+| unset / empty | **Hands off.** No `olcLimits` rule is read, changed or removed, and nothing is recorded. An operator's own `users size.prtotal=500` stays as it is. |
+| `<1..2147483647>` or `unlimited` | Converge to exactly one rule `users size.prtotal=<value>`, **appended** after the existing rules. Already there: no write. A `users size.prtotal=<other value>` rule is the setting's own shape and is changed to the value. A `users` rule of any other shape (e.g. `users size.soft=50 ...`) is a conflict: startup **aborts** and the operator decides. |
+| `off` | Remove exactly `users size.prtotal=<any value>`. A differently shaped `users` rule is left alone and logged. Nothing to remove: no-op. |
+
+Because the selector `users` is reserved while the setting is on, the rule
+this setting manages is recognised by its shape, not by a remembered marker, so
+there is no state that can drift, go stale or survive a crash half-written.
+slapd applies only the *first* matching `olcLimits` rule and allows one rule per
+selector: the rule is appended, so a rule you wrote for a DN or a group keeps its
+effect for the identities it matches (verified: an operator
+`dn.exact="..." size.soft=100 size.hard=100 size.prtotal=100` stays in force for
+that DN), and the total is lifted for the remaining authenticated identities.
+
+**Fail closed, both directions.** The change is applied after a verified backup
+of the database's config file (non-empty and identical), and what is stored
+afterwards is read back and compared. If anything fails (backup, modify,
+verification), the file is restored through a copy in the same directory and an
+atomic rename, and startup **aborts** with `paged-total reconcile failed;
+refusing to start`; a restore that cannot be completed aborts with its own
+message rather than run slapd on a half-written config. Nothing is served on a
+policy that was not proven, whether the request raised or lowered the limit.
+A crash between the change and the end of the start leaves a valid config, and
+the next start converges (no marker can disagree with it).
+
+What it does and does not change:
 
 - `users` matches every **authenticated** DN; anonymous binds keep the old cap.
 - An **unpaged** search by the same identity is still capped by
-  `LDAP_SIZE_LIMIT`; only paged searches are affected. The per-page size is
-  not capped: `size.pr` is never set because a client asking for a larger page
-  than `size.pr` fails with `Administrative limit exceeded (11)`.
-- A number caps the paged total at that number (also with
-  `sizeLimitExceeded` at the cap); `unlimited` removes the cap.
-- Unset (the default) renders nothing, so an existing install is unchanged.
+  `LDAP_SIZE_LIMIT`; only paged searches are affected. The per-page size is not
+  capped: `size.pr` is never set because a client asking for a larger page than
+  `size.pr` fails with `Administrative limit exceeded (11)`.
+- A number caps the paged total at that number (also with `sizeLimitExceeded`
+  at the cap); `unlimited` removes the cap.
 
 **Security cost.** Any authenticated user can then page through everything
 their ACLs let them read, which weakens `LDAP_SIZE_LIMIT`'s role as a last
-backstop against a bulk dump. ACLs still apply. Leave it unset unless an API
-or sync client needs a full non-root enumeration.
+backstop against a bulk dump. ACLs still apply. Leave it unset unless an API or
+sync client needs a full non-root enumeration, and use `off` (not just unsetting
+the variable) to take the rule away again.
 
-**Operator rules win (order and ownership).** slapd applies only the *first*
-`olcLimits` rule that matches an identity, and allows one rule per selector.
-So the entrypoint always **appends** its rule (never inserts it first): a rule
-you wrote for a DN, a group or any other selector keeps its effect for the
-identities it matches, and the paged total only reaches authenticated DNs no
-earlier rule claimed (verified: an operator
-`dn.exact="..." size.soft=100 size.hard=100 size.prtotal=100` stays the limit in
-force for that DN). Consequences: an operator `*` rule that precedes ours wins
-for everyone (logged at start); an operator `users` rule excludes ours
-altogether (a second `users` rule would stop slapd), so the entrypoint adds
-nothing, logs it, and you change that rule yourself with `ldapmodify`.
-
-The entrypoint modifies or removes **only a value it wrote itself**, recorded
-in `slapd.d/.paged-total-limit` (the spec text, next to `.bootstrapped`). A
-same-looking operator rule is never taken over, so with the variable unset an
-existing config is left exactly as it was, including an operator's own
-`users size.prtotal=500`.
-
-**Fail closed.** The marker is trusted only when it is exactly one line of the
-form `users size.prtotal=<positive integer or unlimited>`; otherwise ownership is
-unknown, a fixed line is logged, and every rule is kept. The rule this
-entrypoint owns is found among *all* `olcLimits` values (no index limit). The
-change is applied after a verified backup of the database's config file
-(non-empty and identical); if it fails the file is restored through a copy in the
-same directory and an atomic rename, and a restore that cannot be completed
-**aborts startup** rather than run slapd on a half-written config. After a
-successful restore startup continues with the previous limits only when they
-are no more permissive than the requested ones (raising the limit, or adding
-it, is such a case); if the request **tightens** (removes the lifted rule, or
-lowers the total) the container exits with a fixed message instead of running
-with the looser rule.
-
-**Reconciled, not bootstrap-only.** Like the hardening settings it is applied
-on every start, so it works on an existing volume; emptying the variable
-removes the rule the entrypoint added. To change the limit without a restart,
-as `cn=admin,cn=config`:
-
-```ldif
-dn: olcDatabase={1}mdb,cn=config
-changetype: modify
-add: olcLimits
-olcLimits: users size.prtotal=unlimited
-```
-
-(`delete: olcLimits` with the stored value, including its `{N}`, removes it.)
-A rule you add this way is yours: the entrypoint neither overwrites nor
-removes it.
+To change the rule without a restart, as `cn=admin,cn=config`, use
+`ldapmodify` on `olcDatabase={1}mdb,cn=config` (`add: olcLimits` /
+`olcLimits: users size.prtotal=unlimited`, or `delete: olcLimits` with the
+stored value including its `{N}`); the next start with the variable set
+converges back to it.
 
 ### Rollback and downgrade
 

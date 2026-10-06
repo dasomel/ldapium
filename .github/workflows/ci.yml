@@ -364,6 +364,11 @@ jobs:
               exit 1
             fi
           done
+          offv=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set-string ldap.limits.pagedTotal=off --show-only templates/statefulset.yaml)
+          if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$offv" | grep -q 'value: "off"'; then
+            echo "::error::ldap.limits.pagedTotal=off did not render as LDAP_PAGED_TOTAL_LIMIT=\"off\""
+            exit 1
+          fi
           unl=$(helm template t charts/ldapium --set auth.adminPassword=ci-render-only-not-a-secret --set-string ldap.limits.pagedTotal=unlimited --show-only templates/statefulset.yaml)
           if ! grep -A1 'name: LDAP_PAGED_TOTAL_LIMIT' <<<"$unl" | grep -q 'value: "unlimited"'; then
             echo "::error::ldap.limits.pagedTotal=unlimited did not render as LDAP_PAGED_TOTAL_LIMIT=\"unlimited\""
