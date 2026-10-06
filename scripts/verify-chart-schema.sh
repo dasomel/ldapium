@@ -50,3 +50,10 @@ validate replicated --set replicaCount=3
 validate tls --set tls.enabled=true --set-string tls.existingSecret=schema-validation-tls
 validate ui --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET"
 validate ui-idempotency --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET" --set ui.idempotency.enabled=true
+validate ui-machine-auth --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET" \
+	--set ui.trustedProxies=none --set ui.machineAuth.enabled=true \
+	--set-string ui.machineAuth.issuerURL=https://sso.example.com/realms/example \
+	--set-string ui.machineAuth.audience=ldapium-api \
+	--set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":["directory.users.read"]}]' \
+	--set-string 'ui.machineAuth.ldapBindDN=uid=machine\,ou=system\,dc=example\,dc=org' \
+	--set-string ui.machineAuth.existingSecret=machine-ldap

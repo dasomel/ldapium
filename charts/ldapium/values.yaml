@@ -718,6 +718,64 @@ ui:
   #    bare commas (escape with `\,` if `--set` is unavoidable).
   trustedProxies: private
 
+  # -- Machine bearer authentication for the read-only HTTP API (#214, change
+  #    package docs/changes/machine-principal-auth). OFF by default and rendering
+  #    nothing while off. A Keycloak service-account access token may call only
+  #    the eight read-only GET operations, run as ONE dedicated least-privilege
+  #    LDAP account. The chart never creates or prints a Secret, and the local
+  #    test escape hatch MACHINE_OIDC_INSECURE_HTTP is deliberately NOT a value
+  #    here (the schema rejects unknown keys under machineAuth).
+  #    Needs ui.enabled. Not usable with ui.trustedProxies=private (the default):
+  #    set explicit ingress CIDRs or "none", and make the ingress overwrite any
+  #    client-supplied X-Forwarded-For, or the per-IP throttle can be spoofed.
+  machineAuth:
+    enabled: false
+    # -- MACHINE_OIDC_ISSUER_URL, https only. Empty with ui.sso.enabled=true
+    #    inherits SSO_ISSUER_URL; otherwise required.
+    issuerURL: ""
+    # -- MACHINE_OIDC_AUDIENCE: the `aud` the token must carry (a dedicated API
+    #    audience; never "account"). Required.
+    audience: ""
+    # -- MACHINE_ALLOWED_CLIENTS: the service clients and the scope ceiling of
+    #    each (effective rights = token scope intersect this list). Required.
+    #    Scopes: directory.users.read, directory.groups.read, directory.tree.read,
+    #    directory.entry.read, directory.policies.read, server.monitor.read,
+    #    audit.read, server.settings.read.
+    #      - id: svc-reporting
+    #        scopes: [directory.users.read, directory.groups.read]
+    allowedClients: []
+    tokenMaxTTL: 10m
+    clockSkew: 30s
+    # -- Dedicated read-only LDAP account the machine requests run as. Its DN is
+    #    a plain value; the password comes from an existing Secret (required).
+    #    The account's ACL is an operator step (see the change package), and it
+    #    must not be the admin, a backup/profile admin or the service account.
+    ldapBindDN: ""
+    existingSecret: ""
+    existingSecretKey: machine-ldap-bind-password
+    # -- MACHINE_LDAP_ROOT_DNS is derived: ldap.adminDN (default
+    #    cn=admin,<ldap.rootDN>) plus these, joined with ";" (DNs contain commas).
+    #    The monitor/accesslog/config rootdns are built into the application and
+    #    are not added here. A literal ";" inside a DN must be written \3B.
+    extraRootDNs: []
+    jwks:
+      cacheTTL: 10m
+      maxStale: 1h
+      minRefresh: 30s
+    # -- Limits (per UI pod, not cluster-wide). See docs/api.md.
+    authFailureLimit: 10
+    authFailureWindow: 1m
+    rateLimit:
+      rps: 5
+      burst: 10
+    clientConcurrency: 4
+    maxConcurrency: 8
+    maxAuthConcurrency: 16
+    ipLimiterMax: 10000
+    # -- MACHINE_REQUEST_TIMEOUT in seconds (1-300). The pod's
+    #    terminationGracePeriodSeconds is raised to cover it (max(30, value+5)).
+    requestTimeoutSeconds: 10
+
   # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
   # Enabling SSO makes the UI SSO-only: LDAP passwords are never accepted by
   # the UI login endpoint. This chart configures a confidential OIDC client;

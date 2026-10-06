@@ -326,8 +326,45 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ui.sso.callbackOrigins` | `[]` | Exact browser origins → `SSO_CALLBACK_ORIGINS`; required when SSO is enabled. |
 | `ui.ldapServiceAccount.existingSecret` | `""` | Existing Secret holding the dedicated LDAP UI service account's DN and password. Required when SSO is enabled. |
 | `ui.ldapServiceAccount.dnKey` / `passwordKey` | `ldap-service-account-dn` / `ldap-service-account-password` | Keys in `ui.ldapServiceAccount.existingSecret`. |
+| `ui.machineAuth.enabled` | `false` | Opt-in machine bearer authentication for the read-only HTTP API (#214; see [Machine bearer authentication](#machine-bearer-authentication)). Off renders nothing: the manifests are byte-identical to a chart without the feature. |
+| `ui.machineAuth.issuerURL` / `audience` | `""` / `""` | → `MACHINE_OIDC_ISSUER_URL` (https only; empty with `ui.sso.enabled` inherits the SSO issuer) / `MACHINE_OIDC_AUDIENCE` (required, never `account`). |
+| `ui.machineAuth.allowedClients` | `[]` | Required. `- id: svc` + `scopes: [...]` per service client, rendered as `MACHINE_ALLOWED_CLIENTS=id=scope,scope;…`. The schema accepts only the eight known scopes. |
+| `ui.machineAuth.ldapBindDN` / `existingSecret` / `existingSecretKey` | `""` / `""` / `machine-ldap-bind-password` | Required. The dedicated LDAP account; its password is read from the existing Secret only (the chart never creates or prints it). |
+| `ui.machineAuth.extraRootDNs` | `[]` | Added to the derived `MACHINE_LDAP_ROOT_DNS` (`ldap.adminDN`, default `cn=admin,<ldap.rootDN>`, joined with `;`). The monitor/accesslog/config rootdns are built into the application. |
+| `ui.machineAuth.tokenMaxTTL` / `clockSkew` / `jwks.*` | `10m` / `30s` / `10m`,`1h`,`30s` | → `MACHINE_TOKEN_MAX_TTL`, `MACHINE_CLOCK_SKEW`, `MACHINE_JWKS_CACHE_TTL`/`_MAX_STALE`/`_MIN_REFRESH`. |
+| `ui.machineAuth.authFailureLimit` / `authFailureWindow` / `rateLimit.rps` / `rateLimit.burst` / `clientConcurrency` / `maxConcurrency` / `maxAuthConcurrency` / `ipLimiterMax` | `10` / `1m` / `5` / `10` / `4` / `8` / `16` / `10000` | The limits of `docs/api.md` ("Machine bearer authentication"), per UI pod. |
+| `ui.machineAuth.requestTimeoutSeconds` | `10` | → `MACHINE_REQUEST_TIMEOUT` (1-300 s); the pod's `terminationGracePeriodSeconds` becomes `max(30, value+5)` while the feature is on. |
 | `ui.ingress.enabled` | `false` | |
 | `ui.ingress.className` / `annotations` / `hosts` / `tls` | see values.yaml | Standard `networking.k8s.io/v1` Ingress shape. |
+
+## Machine bearer authentication
+
+`ui.machineAuth.enabled=false` is the default and renders nothing. Turning it on
+lets a Keycloak service-account token call the eight read-only GET operations as
+one dedicated least-privilege LDAP account (design: `docs/changes/machine-principal-auth`).
+The chart only wires configuration; what it does **not** do:
+
+- It never creates, derives or prints a Secret. The bind password is a
+  `secretKeyRef` to `ui.machineAuth.existingSecret`. The local-test switch
+  `MACHINE_OIDC_INSECURE_HTTP` is not a value, and the values schema rejects
+  unknown keys under `ui.machineAuth`.
+- It does not create the LDAP account or its ACL (an operator step, see the
+  change package); the account must not be the admin, a backup/profile admin or
+  the SSO service account, or the UI refuses to start.
+- It refuses `ui.trustedProxies=private` (the default) while enabled: set the
+  ingress CIDRs or `none`, and make the ingress overwrite any client-supplied
+  `X-Forwarded-For`, otherwise a client on the internal network can pick its own
+  address and dodge the per-IP failure throttle.
+- It adds no NetworkPolicy. If your cluster restricts egress, the UI pods must
+  reach the OIDC issuer (discovery and JWKS) in addition to the directory.
+
+Rendering fails, listing everything missing, unless `audience`, `allowedClients`,
+`ldapBindDN`, `existingSecret` (and `issuerURL`, unless `ui.sso.enabled` supplies
+the issuer) are set. `MACHINE_LDAP_ROOT_DNS` is derived from `ldap.adminDN`
+(default `cn=admin,<ldap.rootDN>`), with `;` between entries because a DN
+contains commas. Limits are per UI pod. For an emergency block, remove the
+client from `allowedClients` (or disable the feature) and replace **every** pod:
+revoking the Keycloak client alone does not invalidate tokens already issued.
 
 ## Hardening
 

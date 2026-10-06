@@ -213,6 +213,71 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	return false, retryAfter
 }
 
+// admit is allow() for a caller that also holds `reserved` in-flight
+// reservations for the same source (the machine IP throttle, #214 T-018): the
+// source passes only while recorded failures + reserved < limit, so concurrent
+// attempts cannot overshoot the limit the way allow/recordFailure can. When
+// refused because failures alone reached the limit, the returned wait is the
+// time until the (failures-limit+1)-th oldest failure ages out of the window
+// (inclusive boundary, so exactly at the window edge it is 0); when refused
+// only because of reservations it is 0 and the caller applies its own fixed
+// wait. The caller serialises admit/recordFailure with its reservation table.
+func (l *loginLimiter) admit(ip string, reserved int) (bool, time.Duration) {
+	if l.limit <= 0 {
+		return true, 0
+	}
+	key := limiterKey(ip)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	l.maybeSweep(now)
+	e := l.failures[key]
+	failed := 0
+	if e != nil {
+		l.prune(e, now) // an emptied entry leaves the table and has no failures
+		failed = len(e.fails)
+	}
+	if e == nil || failed == 0 {
+		// D270-2: unknown source and every slot is blocked.
+		if l.failures[key] == nil && !l.makeRoom(now, false) {
+			return false, l.window
+		}
+	}
+	if failed+reserved < l.limit {
+		return true, 0
+	}
+	if failed < l.limit {
+		return false, 0
+	}
+	wait := l.window - now.Sub(e.fails[failed-l.limit])
+	if wait < 0 {
+		wait = 0
+	}
+	return false, wait
+}
+
+// failureCount is the number of failures currently counted for ip (tests and
+// the machine throttle's introspection); it does not create state.
+func (l *loginLimiter) failureCount(ip string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.failures[limiterKey(ip)]
+	if e == nil {
+		return 0
+	}
+	l.prune(e, l.now())
+	return len(e.fails)
+}
+
+// entryCount is the number of tracked sources.
+func (l *loginLimiter) entryCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.failures)
+}
+
 // recordFailure counts one failed login attempt from ip. Callers must only
 // invoke this for the one failure mode D1 counts — see handleLogin.
 func (l *loginLimiter) recordFailure(ip string) {

@@ -73,6 +73,10 @@ type harnessOpt struct {
 	// dialer replaces the counting dialer that refuses every bind; with it the
 	// production execution step runs real handlers against a fake directory.
 	dialer ldapclient.Dialer
+	// now replaces the fixed server clock (limiter tests move it); exec replaces
+	// the stub execution step.
+	now  func() time.Time
+	exec machineExec
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -134,6 +138,9 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 		fetcher: machineauth.NewHTTPFetcher(),
 		now:     func() time.Time { return hNow },
 	}
+	if opt.now != nil {
+		deps.now = opt.now
+	}
 	if !opt.defaultEx {
 		deps.exec = func(c echo.Context, _ *machineauth.Principal, op machineOp, _ echo.HandlerFunc) error {
 			h.mu.Lock()
@@ -141,6 +148,9 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 			h.mu.Unlock()
 			return c.JSON(http.StatusOK, map[string]string{"op": op.ID})
 		}
+	}
+	if opt.exec != nil {
+		deps.exec = opt.exec
 	}
 	spa := fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}
 	var dialer ldapclient.Dialer = h.dialer

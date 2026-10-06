@@ -75,6 +75,19 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   node, the default policy locks the account after 5 bad binds, and the machine rules
   conflict with `LDAP_REPLICATION_IDENTITY=prepare` (do not combine until the combined
   order is implemented, D30 / T-034).
+- Machine bearer authentication, unit 4 (#214, **default off**): the limits and the
+  Helm values. Order per request: `Authorization` grammar, then a per-source **IP
+  failure throttle before any signature or JWKS work** (10 failures per sliding 60 s,
+  inclusive boundary; in-flight requests hold reservations that are released exactly
+  once on every exit path and expire after `MACHINE_REQUEST_TIMEOUT`; `429
+  machine_rate_limited` with an exact `Retry-After`), a global authentication
+  concurrency cap (`503` + `Retry-After: 1`), verification, then a token bucket and
+  concurrency cap per **verified** client (unverified claims never create or drain
+  state), then the global LDAP slot. State is bounded: the IP table reuses the bounded
+  login-limiter table (`MACHINE_IP_LIMITER_MAX`), per-client state is capped by the
+  allowlist. New stable error code `machine_rate_limited` (429, retryable); the audit
+  line uses `reason=rate`. Helm gains `ui.machineAuth.*` (off by default; the
+  rendered chart is byte-identical when disabled). Limits are per replica.
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause
