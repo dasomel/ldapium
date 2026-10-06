@@ -1309,8 +1309,14 @@ hd_clear() {
   #    is never taken over, so with the variable unset an existing config is
   #    left exactly as it was.
   pt_marker="${CONFIG_DIR}/.paged-total-limit"
+  pt_ops=$(mktemp)
   pt_owned=''
-  [ ! -s "$pt_marker" ] || pt_owned=$(head -n 1 "$pt_marker")
+  if [ -s "$pt_marker" ]; then
+    # Unreadable or unusable marker: fail closed. Nothing is claimed as ours,
+    # so nothing is modified or removed; the limits stay as they are.
+    pt_owned=$(head -n 1 "$pt_marker" 2>/dev/null) || pt_owned=''
+    [ -n "$pt_owned" ] || log "paged-total marker is unreadable; leaving existing olcLimits rules untouched"
+  fi
   pt_want=''
   [ -z "$LDAP_PAGED_TOTAL_LIMIT" ] || pt_want="users size.prtotal=${LDAP_PAGED_TOTAL_LIMIT}"
   pt_specs=$(sed -n '/^dn: olcDatabase={1}mdb,cn=config$/,/^$/p' "$hd_dump" | sed -n 's/^olcLimits: {[0-9]*}//p')
@@ -1327,10 +1333,13 @@ hd_clear() {
   pt_marker_action=''
   if [ -z "$pt_want" ]; then
     if [ -n "$pt_owned_idx" ]; then
-      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$hd_db"
+      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$pt_ops"
       log "removing the paged-total limit this entrypoint added earlier (${pt_owned})"
     fi
     [ -z "$pt_owned" ] || pt_marker_action='clear'
+    if [ -z "$pt_owned_idx" ] && printf '%s\n' "$pt_specs" | grep -qE '^users size\.prtotal='; then
+      log "an olcLimits 'users size.prtotal=' rule exists that this entrypoint did not record as its own; leaving it untouched"
+    fi
   elif [ -n "$pt_owned_idx" ] && [ "$pt_owned" = "$pt_want" ]; then
     : # already in place
   elif [ -z "$pt_owned_idx" ] && printf '%s\n' "$pt_specs" | grep -qE '^users([ ]|$)'; then
@@ -1339,9 +1348,9 @@ hd_clear() {
     log "an operator-set olcLimits rule for 'users' exists (${pt_want} not added; edit that rule with ldapmodify to change the paged total)"
   else
     if [ -n "$pt_owned_idx" ]; then
-      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$hd_db"
+      printf 'delete: olcLimits\nolcLimits: %s%s\n-\n' "$pt_owned_idx" "$pt_owned" >> "$pt_ops"
     fi
-    printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$hd_db"
+    printf 'add: olcLimits\nolcLimits: %s\n-\n' "$pt_want" >> "$pt_ops"
     pt_marker_action='set'
     if printf '%s\n' "$pt_specs" | grep -qE '^\*([ ]|$)'; then
       log "an operator olcLimits rule for '*' precedes the paged-total rule; slapd applies the first match, so LDAP_PAGED_TOTAL_LIMIT will not take effect for the identities that rule covers"
@@ -1354,12 +1363,36 @@ hd_clear() {
 } > "$hardening_ldif"
 log "reconciling hardening settings (slapmodify -n 0)"
 slapmodify -n 0 -F "$CONFIG_DIR" -l "$hardening_ldif"
-# Provenance marker for the paged-total rule, written only after cn=config took it.
-case "$pt_marker_action" in
-  set) printf '%s\n' "$pt_want" > "$pt_marker" ;;
-  clear) rm -f "$pt_marker" ;;
-esac
 rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
+
+# Paged-total rule (LDAP_PAGED_TOTAL_LIMIT), applied on its own so that a
+# failure here can neither take the hardening settings down with it nor leave a
+# half-applied limit behind. FAIL CLOSED: the main database's config file is
+# copied first and put back if the modify fails, so the limits that were in
+# force before this start stay in force (nothing is widened, no operator rule
+# is dropped), the provenance marker is left as it was, and slapd still starts
+# with that previous configuration.
+if [ -s "$pt_ops" ]; then
+  pt_db_file="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
+  pt_backup=$(mktemp)
+  pt_ldif=$(mktemp)
+  { printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\n'; cat "$pt_ops"; } > "$pt_ldif"
+  if cp "$pt_db_file" "$pt_backup" 2>/dev/null && slapmodify -n 0 -F "$CONFIG_DIR" -l "$pt_ldif"; then
+    # Ownership marker, written only after cn=config took the change. If it
+    # cannot be written the rule simply stays unowned (never removed later).
+    case "$pt_marker_action" in
+      set) printf '%s\n' "$pt_want" > "$pt_marker" 2>/dev/null || log "paged-total marker could not be written; the rule will be treated as operator-owned" ;;
+      clear) rm -f "$pt_marker" ;;
+    esac
+  else
+    cp "$pt_backup" "$pt_db_file" 2>/dev/null || :
+    log "paged-total reconcile failed; the previous olcLimits rules were kept"
+  fi
+  rm -f "$pt_backup" "$pt_ldif"
+elif [ "$pt_marker_action" = "clear" ]; then
+  rm -f "$pt_marker" # a marker for a rule that is no longer there
+fi
+rm -f "$pt_ops"
 
 # ---------------------------------------------------------------------------
 # 3c. Optional modules (D6..D9). Same offline mechanism as 3b, but overlays

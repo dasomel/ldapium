@@ -261,6 +261,62 @@ start "$c" "$vol"
 expect_eq "M1: a further unset start changes nothing" "$(olc_limits "$c")" "{0}users size.prtotal=800"
 clear_limits
 
+# --- Fail closed: lost/corrupt state and a failed reconcile. ---------------
+# A missing or damaged marker must never widen limits or drop an operator rule,
+# and a reconcile step that fails must leave the previous limits in force.
+printf 'add: olcLimits\nolcLimits: {0}%s\n' "$op_dn_rule" | limits_ldif
+
+# corrupt marker (garbage, several lines) with the variable unset
+docker exec "$c" sh -c "printf 'garbage line 1\nusers size.prtotal=1\n' > /etc/openldap/slapd.d/.paged-total-limit"
+start "$c" "$vol"
+expect_eq "fail-closed: a corrupt marker removes nothing" "$(olc_limits "$c")" "{0}${op_dn_rule}"
+expect_eq "fail-closed: ... the operator's limit is still in force" "$(paged "$c" "$user_dn" "$user_pw")" "100 4"
+expect_eq "fail-closed: ... and the unusable marker is dropped" "$(marker "$c")" ""
+
+# corrupt marker with the variable SET: our rule is added, ownership recorded afresh
+docker exec "$c" sh -c "printf 'garbage\n' > /etc/openldap/slapd.d/.paged-total-limit"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "fail-closed: a corrupt marker with the variable set still keeps the operator rule first" \
+  "$(olc_limits "$c" | sort | tr '\n' '|')" "{0}${op_dn_rule}|{1}users size.prtotal=unlimited|"
+expect_eq "fail-closed: ... ownership is recorded afresh" "$(marker "$c")" "users size.prtotal=unlimited"
+
+# lost marker, rule still there, variable unset: the rule is left (nothing is
+# dropped), and the entrypoint says so
+docker exec "$c" rm -f /etc/openldap/slapd.d/.paged-total-limit
+start "$c" "$vol"
+expect_eq "fail-closed: a lost marker leaves every rule in place" \
+  "$(olc_limits "$c" | sort | tr '\n' '|')" "{0}${op_dn_rule}|{1}users size.prtotal=unlimited|"
+if [[ "$(docker logs "$c" 2>&1)" == *"did not record as its own; leaving it untouched"* ]]; then
+  ok "fail-closed: the lost-marker case is logged"
+else
+  bad "fail-closed: the lost-marker case was not logged"
+fi
+clear_limits
+printf 'add: olcLimits\nolcLimits: {0}%s\n' "$op_dn_rule" | limits_ldif
+
+# a failed reconcile (config file not writable): the previous limits stay in
+# force, the marker is untouched, slapd still starts, and the failure is logged
+cfg_file="/etc/openldap/slapd.d/cn=config/olcDatabase={1}mdb.ldif"
+cfg_dir="/etc/openldap/slapd.d/cn=config"
+file_mode="$(docker exec "$c" stat -c %a "$cfg_file")"
+dir_mode="$(docker exec "$c" stat -c %a "$cfg_dir")"
+docker exec -u root "$c" sh -c "chown root:root '$cfg_file' '$cfg_dir' && chmod 444 '$cfg_file' && chmod 555 '$cfg_dir'"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "fail-closed: a failed reconcile keeps the previous olcLimits" "$(olc_limits "$c")" "{0}${op_dn_rule}"
+expect_eq "fail-closed: ... the operator's limit is still the one in force" "$(paged "$c" "$user_dn" "$user_pw")" "100 4"
+expect_eq "fail-closed: ... nothing was widened for other identities" "$(paged "$c" "$other_dn" "$user_pw")" "${size_limit} 4"
+expect_eq "fail-closed: ... no ownership was recorded" "$(marker "$c")" ""
+if [[ "$(docker logs "$c" 2>&1)" == *"paged-total reconcile failed; the previous olcLimits rules were kept"* ]]; then
+  ok "fail-closed: the failure is logged with a fixed line"
+else
+  bad "fail-closed: the failed reconcile was not logged"
+fi
+docker exec -u root "$c" sh -c "chown ldap:ldap '$cfg_file' '$cfg_dir' && chmod $file_mode '$cfg_file' && chmod $dir_mode '$cfg_dir'"
+start "$c" "$vol" -e LDAP_PAGED_TOTAL_LIMIT=unlimited
+expect_eq "fail-closed: once the file is writable again the reconcile succeeds" \
+  "$(olc_limits "$c" | sort | tr '\n' '|')" "{0}${op_dn_rule}|{1}users size.prtotal=unlimited|"
+clear_limits
+
 if [ "$fail" -ne 0 ]; then
   echo "test-paged-total-limit: FAILED" >&2
   exit 1

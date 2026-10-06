@@ -95,3 +95,14 @@ olcLimits: {0}users size.prtotal=unlimited size.hard=300
 never provisioned automatically") 프로젝트가 rootDN으로 만들지 않는다 → rootDN이 아닌 한 일반 사용자와 같은
 `olcSizeLimit`·paged total 제한을 받는다. SSO 배포에서 10000건 초과 순회가 필요하면
 `LDAP_PAGED_TOTAL_LIMIT`를 켜거나 서비스 계정을 rootDN으로 두어야 한다(후자는 권한 과다라 비권장).
+
+## 2. 리뷰 반영 후 증거 (H1/M1, fail-closed)
+
+- `scripts/test/test-paged-total-limit.sh`는 저장된 문자열이 아니라 **실제로 적용되는 한도**를 검증한다. 이전
+  구현(규칙을 `{0}`에 삽입, 값 모양만으로 소유 판단)의 이미지에서는 H1/M1 케이스 10개가 실패했고(예: 운영자의
+  `dn.exact=... size.prtotal=100` 규칙이 뒤로 밀려 해당 DN이 `1202 0`을 받음, 운영자의 `users size.prtotal=800`이
+  변수 미설정 기동에서 삭제됨), 수정 후 전부 통과한다. slapd는 같은 selector(`users`)의 규칙을 둘 허용하지 않아
+  (`unable to add limit` → 설정 오류) 운영자의 `users` 규칙이 있으면 규칙을 추가하지 않는다.
+- fail-closed: 소유 표식(`slapd.d/.paged-total-limit`)이 없거나·깨졌거나·읽을 수 없어도 규칙을 지우거나 넓히지
+  않고, 설정 파일에 쓸 수 없어 modify가 실패해도 변경 전 `olcLimits`가 그대로 유지되며(백업 복원), 고정 문구
+  한 줄만 로그에 남고 slapd는 이전 설정으로 기동한다. 이전 이미지에서는 이 실패가 엔트리포인트 종료로 이어졌다.
