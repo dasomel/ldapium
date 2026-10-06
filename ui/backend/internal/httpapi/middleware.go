@@ -27,6 +27,12 @@ const (
 // context under sessionContextKey.
 func (s *Server) requireSession(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// An authorized machine request arrives with its temporary session already
+		// attached by the execution step (machine_exec.go); there is no cookie to
+		// read. Only the bearer path sets machinePrincipalKey.
+		if isMachineRequest(c) && currentSession(c) != nil {
+			return next(c)
+		}
 		cookie, err := c.Cookie(sessionCookieName)
 		if err != nil || cookie.Value == "" {
 			return apiErr(http.StatusUnauthorized, codeUnauthenticated, "not logged in")

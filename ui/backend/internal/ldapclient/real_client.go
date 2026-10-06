@@ -22,6 +22,14 @@ type client struct {
 	// listings would invalidate each other's cookie.
 	scanSem chan struct{}
 
+	// stopWatch disarms the deadline watchdog of a connection dialed under a
+	// context with a deadline (see watchDeadline); nil otherwise.
+	stopWatch func()
+
+	// searchOverride replaces the live connection for Tree/MonitorStats/
+	// RecentLogs in tests (see strict.go); nil in production.
+	searchOverride searchFunc
+
 	// Test seams, all zero in production: a fake search function instead of
 	// the live connection, shortened limits, and a hook that runs between the
 	// two phases of a page so a test can change the directory there.
@@ -34,6 +42,9 @@ type client struct {
 func (c *client) WhoAmI() string { return c.dn }
 
 func (c *client) Close() error {
+	if c.stopWatch != nil {
+		c.stopWatch()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {

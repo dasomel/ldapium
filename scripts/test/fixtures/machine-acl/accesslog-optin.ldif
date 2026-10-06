@@ -1,0 +1,9 @@
+# Opt-in: only a deployment that grants the audit.read scope adds this to the
+# accesslog database (its default ACL is "by * none"). Tokens as in
+# main-database.ldif; @ACCESSLOG_DB_DN@ is e.g. olcDatabase={2}mdb,cn=config.
+dn: @ACCESSLOG_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@MACHINE_DN@" read
+  by * break

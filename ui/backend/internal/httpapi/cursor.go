@@ -9,10 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
+	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
 	"github.com/dasomel/ldapium/ui/backend/internal/session"
 )
 
@@ -61,13 +65,35 @@ func cursorKey(sessionSecret []byte) []byte {
 	return mac.Sum(nil)
 }
 
-// cursorBinding is the single place that decides what a cursor is bound to.
-// Today that is the login session. Machine principals (#214) with per-request
-// temporary sessions must bind to a stable subject here instead.
+// cursorBinding is the binding of a login session: a hash of Session.ID under
+// the "sid:" domain. requestCursorBinding decides which binding a request gets.
 func cursorBinding(key []byte, sess *session.Session) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte("sid:" + sess.ID))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// machineCursorBinding binds a machine principal's cursor to its issuer and
+// client id (D16): "machine:" + len(iss) + ":" + iss + client_id. The length
+// prefix keeps the two fields from sliding into each other, the "machine:"
+// domain keeps it disjoint from every "sid:" binding, and nothing that changes
+// when a token is renewed (jti, iat, exp, sub) goes in, so a client can keep
+// paging across a token refresh.
+func machineCursorBinding(key []byte, issuer, clientID string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("machine:" + strconv.Itoa(len(issuer)) + ":" + issuer + clientID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// requestCursorBinding is the single place that decides what a request's
+// cursors are bound to: the stable machine subject for an authorized machine
+// request, whose temporary Session has no ID of its own to offer, and the
+// login session for everyone else.
+func (s *Server) requestCursorBinding(c echo.Context, key []byte) string {
+	if p, ok := c.Get(machinePrincipalKey).(*machineauth.Principal); ok {
+		return machineCursorBinding(key, s.cfg.Machine.IssuerURL, p.ClientID)
+	}
+	return cursorBinding(key, currentSession(c))
 }
 
 func cursorMAC(key []byte, signed string) []byte {

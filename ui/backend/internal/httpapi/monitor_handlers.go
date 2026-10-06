@@ -12,7 +12,14 @@ import (
 // users by default, and charts/ldapium/README.md's "Web console health
 // view" section for the ACL grant an operator adds to change that.
 func (s *Server) handleGetMonitorStats(c echo.Context) error {
-	stats, err := currentSession(c).Bound.MonitorStats(c.Request().Context())
+	// The recent accesslog entries are part of this response for a human session,
+	// as always. A machine principal gets them only with the audit.read scope
+	// (D14 b); without it the accesslog search is not even issued.
+	includeAccessLog := true
+	if isMachineRequest(c) {
+		includeAccessLog, _ = c.Get(machineAuditReadKey).(bool)
+	}
+	stats, err := currentSession(c).Bound.MonitorStats(c.Request().Context(), includeAccessLog)
 	if err != nil {
 		return respondErr(c, err)
 	}

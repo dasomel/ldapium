@@ -368,6 +368,55 @@ record in the flat shape without adding a key).
 envelope getting in the way. It is not a frozen historical format beyond the
 guarantees stated here.
 
+## 머신 접근 이벤트 (`event=machine_access`)
+
+This is a different stream from the export envelope above: the UI backend's own
+structured log line for machine bearer authentication (change package
+`machine-principal-auth`, D10; additive, nothing in the envelope changes). It
+exists only when `MACHINE_AUTH_ENABLED=true`.
+
+Every request that carries an `Authorization` header while the feature is on
+produces **exactly one** line, whatever happens to it: a malformed header, the
+Origin gate, a 404, a verification failure, a scope denial, a bind failure, a
+panic, or a normal response. The line is written by a wrapper outside all of
+those steps, so an early return cannot skip it. The one exception: a request
+the Go HTTP server rejects before any handler runs (oversized headers 431, a
+malformed request line 400, a TLS failure) never reaches the application and
+has no line; it shows up only in the server or ingress logs (D25).
+
+```json
+{"event":"machine_access","provider":"oidc","actor":"svc-reader","request_id":"...","operation":"listUsers","method":"GET","status":200,"result":"success","reason":"ok","subject_fingerprint":"826ee2c670ed","bind_dn":"uid=machine,ou=system,dc=example,dc=org"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `event` | always `machine_access` |
+| `provider` | `oidc` (the token comes from an OIDC issuer) |
+| `actor` | the verified client id, or `unknown` for every request that did not pass signature and claim verification (also malformed headers, mixed credentials, the Origin gate, 404). An unverified claim is never an actor. |
+| `request_id` | the `X-Request-Id` the request ran under |
+| `operation` | the OpenAPI operation id when the method and route are on the allowlist, otherwise `METHOD route-pattern` (server-defined text, never client input), or `unknown` |
+| `method`, `status` | the method the client sent (HEAD stays HEAD) and the response status |
+| `result` | `success` (status < 400), `rate_limited` (429), otherwise `failure` |
+| `reason` | closed set, see below |
+| `token_fingerprint` | only when `actor` is `unknown`: the first 6 bytes of SHA-256 over the `Authorization` value, hex. Lets two lines be matched to the same credential without carrying it. |
+| `subject_fingerprint` | the verified token subject, hashed; only with a verified actor |
+| `bind_dn` | the machine LDAP account, only when the request reached the execution step |
+
+`reason` values: `ok`, `bad_header`, `mixed_credentials`, `bearer_not_accepted`
+(Authorization on a login/SSO path), `ignored_public`, `not_api`, `not_found`,
+`origin_mismatch`, `preflight`, the verifier's own reasons (`format`, `alg`,
+`typ`, `kid`, `sig`, `iss`, `aud`, `azp`, `sa_claims`, `scope`, `time`, `ttl`,
+`expired`, `jwks_unavailable`), `scope` (not allowlisted or not granted), `rate`
+(reserved for the limiters), `bind_failed`, `capacity` (no global LDAP slot),
+`deadline`, `canceled`, `request_rejected`, `upstream_error`, `internal` (panic).
+A value outside the set is replaced by one derived from the response.
+
+Never in the line, in any log or in any response: the token or any piece of its
+signature, the `Authorization` value, a client secret, the bind password, or the
+text of a verifier error. The live test
+(`scripts/test/test-machine-execution-live.py`) scans every container log for
+these.
+
 ## Retention, loss, and the SIEM adapter boundary
 
 Issue #126 delivers the "tested" half of the SIEM adapter boundary via `scripts/ship-audit-log.sh`

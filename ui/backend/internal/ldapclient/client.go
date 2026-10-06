@@ -53,7 +53,12 @@ type Client interface {
 	// identity this app never holds (see the doc comment in monitor.go),
 	// so callers should expect domain.ErrPermissionDenied for most bound
 	// users and treat it as "unavailable, and why" — not a server failure.
-	MonitorStats(ctx context.Context) (*domain.MonitorStats, error)
+	//
+	// includeAccessLog controls whether the recent cn=accesslog entries are
+	// read at all (the search is not issued when false). Human sessions pass
+	// true, which is the behaviour this method always had; a machine principal
+	// without the audit.read scope passes false (machine-principal-auth D14 b).
+	MonitorStats(ctx context.Context, includeAccessLog bool) (*domain.MonitorStats, error)
 
 	// AuditActions returns operator write action events from cn=accesslog
 	// (?limit=&before=). Like MonitorStats, cn=accesslog requires read ACL

@@ -116,6 +116,11 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 	// one), and respondErr reuses the same ID to correlate a redacted
 	// client-facing 500 with the unredacted error this logs server-side.
 	s.echo.Use(middleware.RequestID())
+	// One audit line per request that carries an Authorization header, emitted
+	// outside every step that can answer early (machine auth only, D10).
+	if cfg.Machine.Enabled {
+		s.echo.Use(s.machineAuditMiddleware())
+	}
 	// Do not log RequestURI: the OIDC callback carries authorization code
 	// and state in its query string. `${path}` excludes the query entirely.
 	s.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
@@ -134,7 +139,7 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 	// stays outermost for state-changing requests; absent when the flag is unset,
 	// so no request or response changes.
 	if cfg.Machine.Enabled {
-		if s.machine, err = newMachineAuth(cfg, s.machineTest); err != nil {
+		if s.machine, err = newMachineAuth(cfg, s.machineTest, dialer); err != nil {
 			return nil, err
 		}
 		s.echo.Use(s.machineMiddleware())

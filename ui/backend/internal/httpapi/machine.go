@@ -12,27 +12,19 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
+	"github.com/dasomel/ldapium/ui/backend/internal/validate"
 )
 
 // machinePrincipalKey is where a verified machine principal is stored on the
 // echo context for the execution step.
 const machinePrincipalKey = "machine_principal"
 
-// machineExecNotConfigured is why every authorized machine request ends in a
-// 503 in this build: the per-request least-privilege LDAP bind identity
-// (T-013) is a later merge unit, so enabling the flag cannot expose data yet.
-// The 5xx body is the fixed text of D218-8; this sentence goes to the log.
-const machineExecNotConfigured = "machine execution identity not configured in this build"
-
-// machineExec runs an authorized machine request. The default fails closed.
-// A later unit replaces it with the per-request bind and handler dispatch;
-// tests inject a stub to prove which requests reach the execution boundary.
+// machineExec runs an authorized machine request: production uses
+// machineExecutor.run (per-request bind, deadline, slot); tests inject a stub
+// to prove which requests reach the execution boundary.
 type machineExec func(c echo.Context, p *machineauth.Principal, op machineOp, next echo.HandlerFunc) error
-
-func execNotConfigured(echo.Context, *machineauth.Principal, machineOp, echo.HandlerFunc) error {
-	return apiErr(http.StatusServiceUnavailable, codeUnavailable, machineExecNotConfigured)
-}
 
 // machineDeps are the injection points tests use: the HTTP fetcher, the clock
 // and the execution step. Production leaves them nil.
@@ -54,6 +46,7 @@ type machineAuth struct {
 	verifier *machineauth.Verifier
 	keys     *machineauth.KeySet
 	ceilings map[string]map[string]bool
+	baseDN   string
 	exec     machineExec
 	cancel   context.CancelFunc
 }
@@ -61,9 +54,10 @@ type machineAuth struct {
 // newMachineAuth builds the verifier and starts the JWKS source. A discovery
 // failure at startup is logged and retried in the background (D8); only a
 // discovery document naming a different issuer fails startup.
-func newMachineAuth(cfg config.Config, d *machineDeps) (*machineAuth, error) {
+func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer) (*machineAuth, error) {
 	m := cfg.Machine
-	fetcher, now, exec := machineauth.Fetcher(nil), time.Now, machineExec(execNotConfigured)
+	fetcher, now := machineauth.Fetcher(nil), time.Now
+	exec := machineExec(newMachineExecutor(m, dialer).run)
 	if d != nil {
 		if d.fetcher != nil {
 			fetcher = d.fetcher
@@ -109,6 +103,7 @@ func newMachineAuth(cfg config.Config, d *machineDeps) (*machineAuth, error) {
 	ma := &machineAuth{
 		keys:     keys,
 		ceilings: machineCeilings(m.Clients),
+		baseDN:   cfg.BaseDN,
 		exec:     exec,
 		verifier: &machineauth.Verifier{
 			Policy: machineauth.Policy{
@@ -145,12 +140,29 @@ func (s *Server) machineMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			req := c.Request()
+			class := classifyRoute(req.URL.Path, c.Path())
 			dec := selectAuth(selectInput{
 				Enabled:          true,
-				Class:            classifyRoute(req.URL.Path, c.Path()),
+				Class:            class,
 				AuthHeaders:      req.Header.Values("Authorization"),
 				HasSessionCookie: hasCookieNamed(req.Header.Values("Cookie"), sessionCookieName),
 			})
+			// What the audit wrapper reports for this request. The operation is the
+			// method and route pattern (server-defined, never client text) until the
+			// allowlist lookup names it.
+			st := auditStateOf(c)
+			sent := req.Method
+			if orig, _ := c.Get(origMethodKey).(string); orig != "" {
+				sent = orig
+			}
+			st.setOperation(sent + " " + c.Path())
+			if op, ok := machineOpFor(sent, c.Path()); ok {
+				st.setOperation(op.ID)
+			}
+			st.setReason(dec.Reason)
+			if class == classN && !isAPIPath(req.URL.Path) {
+				st.setReason(reasonNotAPI)
+			}
 			switch dec.Action {
 			case actReject:
 				return apiErr(dec.Status, dec.Code, dec.Message)
@@ -167,10 +179,14 @@ func (s *Server) machineMiddleware() echo.MiddlewareFunc {
 // not-allowlisted rejection, per the matrix. It never touches the session
 // store and never sets a cookie.
 func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc) error {
+	st := auditStateOf(c)
 	p, fail := m.verifier.Verify(c.Request().Context(), token)
 	if fail != nil {
+		st.setReason(string(fail.Reason))
 		return machineFailure(c, fail)
 	}
+	// From here on the identity is verified, so it is what the audit line names.
+	st.setActor(p)
 	// HEAD is rewritten to GET before routing; the machine path judges the
 	// method the client sent, so HEAD is refused like any non-GET (D17).
 	method := c.Request().Method
@@ -179,12 +195,26 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	}
 	op, ok := machineOpFor(method, c.Path())
 	if !ok {
+		st.setReason(reasonScope)
 		return apiErr(http.StatusForbidden, codeScopeDenied, "operation not permitted for machine clients")
 	}
+	st.setOperation(op.ID)
 	if !scopeAllows(m.ceilings[p.ClientID], p.Scopes, op.Scope) {
+		st.setReason(reasonScope)
 		return apiErr(http.StatusForbidden, codeScopeDenied, "insufficient scope")
 	}
+	// A DN outside BASE_DN is refused before the execution step, so it costs no
+	// LDAP connection either. The handlers repeat the check (machineDNGuard) so
+	// the boundary also holds for a route reached any other way.
+	if op.ID == "getEntry" || op.ID == "listTree" {
+		if dn := c.QueryParam("dn"); dn != "" && validate.DN(dn) == nil && !dnWithinBase(m.baseDN, dn) {
+			st.setReason(reasonScope)
+			return apiErr(http.StatusForbidden, codeScopeDenied, msgDNOutsideBase)
+		}
+	}
 	c.Set(machinePrincipalKey, p)
+	// Whether getMonitor may read cn=accesslog is its own opt-in scope (D14 b).
+	c.Set(machineAuditReadKey, scopeAllows(m.ceilings[p.ClientID], p.Scopes, "audit.read"))
 	return m.exec(c, p, op, next)
 }
 

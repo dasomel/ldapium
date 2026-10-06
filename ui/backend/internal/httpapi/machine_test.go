@@ -191,8 +191,9 @@ func TestMachine_ValidTokenReachesOnlyTheExecutionBoundary(t *testing.T) {
 	}
 }
 
-// Production default: no execution identity in this build, so even a fully
-// authorized request fails closed with 503 and nothing touches LDAP.
+// Production default execution: the harness dialer refuses every bind, so an
+// authorized request fails closed with 503 after one bind attempt, and no
+// directory payload leaves the process.
 func TestMachine_DefaultExecutionFailsClosed(t *testing.T) {
 	h := newHarness(t, harnessOpt{defaultEx: true})
 	rec := h.do("GET", "/api/users", bearer(h.fullToken()))
@@ -203,8 +204,8 @@ func TestMachine_DefaultExecutionFailsClosed(t *testing.T) {
 	if e.Code != codeUnavailable || !e.Retryable {
 		t.Errorf("envelope = %+v", e)
 	}
-	if h.dialer.binds.Load() != 0 || h.dialer.pings.Load() != 0 {
-		t.Error("LDAP touched")
+	if h.dialer.binds.Load() != 1 || h.dialer.pings.Load() != 0 {
+		t.Errorf("binds=%d pings=%d, want exactly one bind (the machine identity's) and no ping", h.dialer.binds.Load(), h.dialer.pings.Load())
 	}
 	if len(rec.Header().Values("Set-Cookie")) != 0 {
 		t.Error("Set-Cookie on a machine response")

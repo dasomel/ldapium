@@ -377,6 +377,9 @@ func respondErr(c echo.Context, err error) error {
 		}
 		return writeAPIError(c, status, code, msg, err)
 	}
+	if panicked, _ := c.Get(machinePanickedKey).(bool); isMachineRequest(c) && !panicked {
+		return machineDirectoryFailure(c, err)
+	}
 	if isOutcomeUnknown(err) {
 		markOutcomeUnknown(c)
 	} else {

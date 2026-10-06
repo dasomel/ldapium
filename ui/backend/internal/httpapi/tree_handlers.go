@@ -22,9 +22,18 @@ func (s *Server) handleTreeChildren(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
+	if err := s.machineDNGuard(c, dn); err != nil {
+		return err
+	}
+
 	nodes, err := currentSession(c).Bound.Tree(c.Request().Context(), dn)
 	if err != nil {
 		return respondErr(c, err)
+	}
+	if isMachineRequest(c) && len(nodes) > machineMaxTreeChildren {
+		// The body is a bare array with no room for a truncation flag, and
+		// silently cutting a listing would be wrong; a machine caller is told.
+		return writeAPIError(c, http.StatusUnprocessableEntity, codeSizeLimitExceeded, msgTreeTooLarge, nil)
 	}
 	return c.JSON(http.StatusOK, nodes)
 }
@@ -37,6 +46,10 @@ func (s *Server) handleGetEntry(c echo.Context) error {
 	}
 	if err := validate.DN(dn); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	if err := s.machineDNGuard(c, dn); err != nil {
+		return err
 	}
 
 	entry, err := currentSession(c).Bound.GetEntry(c.Request().Context(), dn)
