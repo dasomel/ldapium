@@ -71,14 +71,14 @@ Contract: `docs/api.md`. Operator procedures: `docs/ui-operations.md`. Decisions
 - cursor pagination for `GET /api/users` and `/api/groups` (`limit`, `cursor`, `q`, `sort`; legacy response byte-for-byte unchanged), with the opt-in image setting `LDAP_PAGED_TOTAL_LIMIT` (chart `ldap.limits.pagedTotal`) for non-root enumeration past `LDAP_SIZE_LIMIT` (#215; PRs #237, #243, #244, #256)
 - conditional writes: `etag`/`ETag` from `entryCSN`, `If-Match` enforced by slapd through the RFC 4528 assertion control, `PATCH` for users and groups, identity-bound compensation for a user create whose password step fails (#216 part A, PR #235)
 - opt-in `Idempotency-Key` for core writes and backup start (#216 part B, PR #241)
-- backup job IDs, `GET`/`cancel` job endpoints, durable job records, orphan-aware restart recovery, per-kind deadline (#217, PR #236)
+- backup job IDs, `GET`/`cancel` job endpoints, durable job records, orphan-aware restart recovery, per-kind deadline (#217, PR #236; live runs for remotes/SIGKILL/deadline: #255)
 
 Boundaries:
 
 - `If-Match` is evaluated on the receiving node only; against multi-provider replication it is optimistic protection, not consensus.
 - Core-write idempotency records live in process memory and are lost on restart, so the chart enables them for a single UI replica only. Backup-start keys are the exception: they are stored in the durable job record.
 - The web UI does not send `If-Match` or `Idempotency-Key` and still pages Users and Groups on the client (#216 REQ-013 and #215 AC-010 are open).
-- Remote backup destinations (S3/FTP/SFTP), the SIGKILL-after-grace path and the job deadline path are covered by unit tests only; they have not been run live (#255 stays open for that).
+- Remote backup destinations (S3/FTP/SFTP), the SIGKILL-after-grace path, and the job deadline path are verified live against disposable containers (#255; `scripts/test/test-backup-jobs-remotes-live.py`).
 - Live evidence for these features is in the packages' `EVIDENCE*.md` files (local Docker runs); the CI workflows named there were not re-run for this section.
 
 ## Operations / resilience

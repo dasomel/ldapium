@@ -34,7 +34,38 @@ orphan, cancel is 409 `job_not_cancellable`, then settled `succeeded` from the r
 `scripts/test/test-backup-ui-local.py` (Playwright `backups.spec.ts` + `backup-jobs.spec.ts`
 against the same image): 4 passed.
 
+## Live remotes and termination paths (`scripts/test/test-backup-jobs-remotes-live.py`, #255)
+
+Date: 2026-10-06. Environment: macOS (arm64), docker context `colima`.
+Images:
+- LDAP: `ldapium:lane-255`
+- UI: `ldapium-ui:lane-255` (built with target `backup-runtime`)
+- MinIO (S3): `alpine/minio:latest-release` (digest `sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4`)
+- FTP: `delfer/alpine-ftp-server:latest` (digest `sha256:60bb774d8408d9d4d5c74d05d1c086a34ce192c6c1a142ffac268cac0dbc6fac`)
+- SFTP: `atmoz/sftp:alpine` (digest `sha256:6d41b9200f8115ce925bbd295376cb3c6b72634a267f41946e5aee4efe482186`)
+
+Command: `python3 scripts/test/test-backup-jobs-remotes-live.py`
+
+Observed results:
+1. **Remote destinations (S3, FTP, SFTP)**:
+   - S3 (MinIO): job `POST /api/v1/backups/jobs/logs` returned 202; job settled `status=succeeded`, `local.verified=true`, destination `s3-dest` status `succeeded`; result file `.results/<job_id>.json` landed with mode 0600; MinIO object storage verified with `complete.json`.
+   - FTP: job returned 202; settled `status=succeeded`, `local.verified=true`, destination `ftp-dest` status `succeeded`; result file landed mode 0600; FTP server storage verified with `complete.json`.
+   - SFTP: job returned 202; settled `status=succeeded`, `local.verified=true`, destination `sftp-dest` status `succeeded`; result file landed mode 0600; SFTP server storage verified with `complete.json`.
+   - Combined: job specifying all 4 destinations (`local`, `s3-dest`, `ftp-dest`, `sftp-dest`) succeeded across all 4 destinations simultaneously.
+2. **SIGKILL-after-grace path**:
+   - Job started with worker configured to ignore `SIGTERM`.
+   - `POST .../jobs/{id}/cancel` issued; 202 accepted with `cancel_requested_at`.
+   - Controller waited out the 10-second grace period (`defaultKillGrace = 10s`, elapsed 10.1s) before sending `SIGKILL`.
+   - Job settled `status=cancelled`, `staging_cleanup=pending` (honestly reflects that SIGKILL prevented worker `finally` cleanup).
+   - Worker process confirmed terminated by SIGKILL.
+   - Leftover staging directory removed; subsequent query dynamically computed and reported `staging_cleanup=done`.
+3. **Deadline path (`BACKUP_JOB_TIMEOUT_LOGS=1m`)**:
+   - Job started with `BACKUP_JOB_TIMEOUT_LOGS=1m`; record carries `deadline_at` = `started_at + 1m`.
+   - Worker ran past 60s; context deadline expired at 60.3s; SIGTERM sent to process group.
+   - Job settled `status=failed`, `error.code=deadline_exceeded`, `error.message="backup job deadline exceeded"`, `staging_cleanup=done`.
+   - Worker process confirmed terminated; `GET /api/v1/backups` reflects `states.logs.status="failed"`.
+   - Follow-up job started and succeeded normally.
+
 ## Not verified
 
-Remote (S3/FTP/SFTP) destinations live; the SIGKILL-after-grace path live (unit test only);
-deadline live (unit test only); Idempotency-Key (#216 part B, not implemented).
+All scopes of #217 / #255 are verified live. Idempotency-Key (#216 part B) was verified live in `test-api-idempotency-local.py` (#241).
