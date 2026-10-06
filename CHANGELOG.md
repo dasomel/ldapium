@@ -48,7 +48,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   that also carries `state` and `dn`) with the entry to check. The
   `ETag` also changes on directory bookkeeping writes (password-policy
   failure records), which can cause a harmless 412 and a re-read, and the
-  condition is node-local on multi-provider replication. Idempotency keys
+  condition is node-local on multi-provider replication. The ETag only
+  reflects attributes written directly to the entry: `memberOf` and refint's
+  removal of a deleted member from a group do not change it. Before setting
+  the password the new entry is verified as created by this request and
+  untouched; otherwise the password is not set and nothing is deleted
+  (`state: identity_changed`), and a compensating delete whose outcome is
+  not observed is `state: unknown`. Idempotency keys
   are not part of this change.
 
 ### CI

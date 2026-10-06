@@ -201,6 +201,20 @@ dropped by last-write-wins after the heal. Route writes to a single node to keep
   delete rights (both need write on the parent's children), so a refused delete cannot be staged here.
 - Browser UI (no frontend change in Part A), ppolicy `lastbind` + If-Match end to end, SSO mode.
 
+## Review follow-up (identity guard)
+
+- Verified in the module source: `ldap.PasswordModifyRequest` has only `UserIdentity`, `OldPassword`,
+  `NewPassword`; `appendTo` writes no controls (`passwdmodify.go:13-55`), so the password step cannot be made
+  conditional. The window between the identity check and the Password Modify is residual.
+- Decision-function tests cover each mismatch: other modifier, same-second modify by another administrator,
+  later-second modify, unreadable modifier/timestamps, other creator, replaced entry, read failure; plus
+  lost delete response (`unknown`) versus a server refusal (`partial`). A real second-administrator edit
+  between Add and the read was NOT staged live (no seam in the production path; no new hook was added for
+  it). The positive path is live: the unchanged entry's attributes satisfy the check on real slapd
+  (the forced-failure create still rolls back after this change).
+- The refint limitation is pinned by the live script (section 6b): the group's ETag does not move when refint
+  removes a deleted member.
+
 ## Where Part A differs from the package text
 
 - Scope: only the conditional-write half (revision/ETag, If-Match, PATCH, create compensation, docs, tests).

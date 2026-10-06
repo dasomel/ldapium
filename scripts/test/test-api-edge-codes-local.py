@@ -384,6 +384,17 @@ def conditional_writes(url, login):
   attrs, _ = entry(dn)
   check('mail' not in attrs and 'departmentNumber' not in attrs and 'o' not in attrs, 'PUT no longer erases omitted fields: %s' % attrs)
 
+  # 6b. Pinned limitation (docs/api.md): the ETag is the entry's entryCSN, which only moves on writes made TO that
+  # entry. refint removing a deleted user from a group's `member` does not move the group's ETag. If a future
+  # change makes this bump the CSN, this check fails so docs and tests are updated deliberately.
+  victim = mk_user('cw-refint')
+  refint_group = mk_group('cw-refint-g')
+  expect(204, 'POST', '/api/groups/members', {'groupDn': refint_group, 'memberDn': victim}, 'add soon-deleted member')
+  group_tag = etag_of(refint_group)
+  expect(204, 'DELETE', '/api/users?' + urllib.parse.urlencode({'dn': victim}), None, 'delete the member user')
+  check(victim not in listed('groups', refint_group)['members'], 'refint did not remove the deleted member from the group')
+  check(etag_of(refint_group) == group_tag, 'refint now bumps the group ETag: update docs/api.md, llms.txt, CHANGELOG and CHANGE.md deliberately')
+
   # 7. create compensation: a failed password step leaves no orphan -------------------------------------
   # As a non-root bind, the image's pwdSafeModify refuses an initial password, so the
   # password step fails after the Add succeeded (the rootDN bypasses ppolicy and cannot be made to fail this way).
