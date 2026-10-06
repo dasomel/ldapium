@@ -40,8 +40,11 @@ type KeySetConfig struct {
 	MaxStale     time.Duration
 	Min          time.Duration
 	Fetcher      Fetcher
-	Now          func() time.Time
-	Logf         func(format string, args ...any)
+	// RefreshTimeout bounds one whole refresh (discovery plus JWKS together);
+	// zero is FetchTimeout (5 s).
+	RefreshTimeout time.Duration
+	Now            func() time.Time
+	Logf           func(format string, args ...any)
 	// After schedules the discovery-retry timer (Run); nil is time.After.
 	After func(time.Duration) <-chan time.Time
 }
@@ -77,6 +80,9 @@ type flight struct {
 func NewKeySet(cfg KeySetConfig) *KeySet {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.RefreshTimeout <= 0 {
+		cfg.RefreshTimeout = FetchTimeout
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
@@ -262,7 +268,9 @@ func (k *KeySet) fetchAll() (string, map[string]*jose.JSONWebKey, error) {
 	uri, discovered := k.jwksURI, k.discovered
 	k.mu.Unlock()
 
-	ctx := context.Background()
+	// One deadline for the whole refresh: discovery and JWKS share the budget.
+	ctx, cancel := context.WithTimeout(context.Background(), k.cfg.RefreshTimeout)
+	defer cancel()
 	if !discovered {
 		doc, err := k.cfg.Fetcher.Fetch(ctx, strings.TrimSuffix(k.cfg.Issuer, "/")+"/.well-known/openid-configuration")
 		if err != nil {

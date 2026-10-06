@@ -114,6 +114,12 @@ func loadMachine(getenv func(string) string, cfg *Config) error {
 		return err
 	}
 	m.Audience = strings.TrimSpace(getenv("MACHINE_OIDC_AUDIENCE"))
+	// D5: Keycloak puts "account" in every access token's aud by default, so
+	// accepting it as the audience would accept tokens that never went through
+	// an audience mapper.
+	if strings.EqualFold(m.Audience, "account") {
+		return fmt.Errorf("MACHINE_OIDC_AUDIENCE must not be \"account\" (the Keycloak default audience); configure an audience mapper for a dedicated API audience")
+	}
 	m.BindDN = strings.TrimSpace(getenv("MACHINE_LDAP_BIND_DN"))
 	m.BindPassword = getenv("MACHINE_LDAP_BIND_PASSWORD")
 	rootDNs := splitEntries(getenv("MACHINE_LDAP_ROOT_DNS"))
@@ -309,6 +315,20 @@ func checkMachineBindDN(bindDN string, cfg Config, rootDNs []string) error {
 	for _, other := range privileged {
 		if dnEqual(bind, bindDN, other) {
 			return fmt.Errorf("MACHINE_LDAP_BIND_DN must not be an administrator, service-account or rootdn DN")
+		}
+	}
+	// An operator who separated entries with commas instead of ';' produces one
+	// long, valid-looking DN whose leading RDNs are the real DNs. Refuse when the
+	// bind DN equals any leading-RDN prefix of an entry. (A repeated-suffix check
+	// was considered and rejected: legitimate DNs such as
+	// cn=a,ou=x,dc=example,dc=org can look the same, so it would false-positive.)
+	for _, other := range privileged {
+		if d, err := ldap.ParseDN(other); err == nil {
+			for k := 1; k < len(d.RDNs); k++ {
+				if bind.EqualFold(&ldap.DN{RDNs: d.RDNs[:k]}) {
+					return fmt.Errorf("MACHINE_LDAP_BIND_DN matches the start of a configured DN entry; separate DN list entries with ';', not ','")
+				}
+			}
 		}
 	}
 	return nil

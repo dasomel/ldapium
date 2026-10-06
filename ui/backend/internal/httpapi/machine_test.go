@@ -619,14 +619,36 @@ func TestMachine_NewProtectedGetWithoutAllowlistIsDenied(t *testing.T) {
 	}
 }
 
-// HEAD is rewritten to GET before routing, so it follows the GET rules.
-func TestMachine_HeadFollowsGet(t *testing.T) {
+// D17: HEAD is rewritten to GET before routing, but the machine path judges
+// the method the client sent: HEAD is refused like any non-GET (403
+// scope_denied, after verification), never executed. A cookie session's HEAD
+// is unchanged, and OPTIONS (not rewritten) ignores Authorization.
+func TestMachine_HeadRefusedOnMachinePath(t *testing.T) {
 	h := newHarness(t, harnessOpt{})
-	if rec := h.do("HEAD", "/api/users", bearer(h.fullToken())); rec.Code != 200 {
-		t.Errorf("HEAD allowed op: %d", rec.Code)
+	for _, path := range []string{"/api/users", "/api/me"} {
+		rec := h.do("HEAD", path, bearer(h.fullToken()))
+		if rec.Code != 403 {
+			t.Errorf("HEAD %s with bearer: %d, want 403", path, rec.Code)
+		}
 	}
-	if rec := h.do("HEAD", "/api/me", bearer(h.fullToken())); rec.Code != 403 {
-		t.Errorf("HEAD denied op: %d", rec.Code)
+	if rec := h.do("HEAD", "/api/users", bearer("a.b.c")); rec.Code != 401 {
+		t.Errorf("HEAD with a bad token: %d, want 401 (verification first)", rec.Code)
+	}
+	if len(h.reached()) != 0 {
+		t.Errorf("HEAD reached execution: %v", h.reached())
+	}
+	if rec := h.do("GET", "/api/users", bearer(h.fullToken())); rec.Code != 200 {
+		t.Errorf("GET control: %d", rec.Code)
+	}
+	good := h.sessionCookie()
+	if rec := h.do("HEAD", "/api/me", map[string][]string{"Cookie": {"ldapium_session=" + good}}); rec.Code != 200 {
+		t.Errorf("HEAD with a cookie session: %d, want 200", rec.Code)
+	}
+	if rec := h.do("OPTIONS", "/api/users", bearer(h.fullToken())); rec.Code != 204 {
+		t.Errorf("OPTIONS: %d, want 204", rec.Code)
+	}
+	if len(h.reached()) != 1 {
+		t.Errorf("reached = %v, want only the GET control", h.reached())
 	}
 }
 

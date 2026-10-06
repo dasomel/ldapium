@@ -171,7 +171,13 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	if fail != nil {
 		return machineFailure(c, fail)
 	}
-	op, ok := machineOpFor(c.Request().Method, c.Path())
+	// HEAD is rewritten to GET before routing; the machine path judges the
+	// method the client sent, so HEAD is refused like any non-GET (D17).
+	method := c.Request().Method
+	if orig, _ := c.Get(origMethodKey).(string); orig != "" {
+		method = orig
+	}
+	op, ok := machineOpFor(method, c.Path())
 	if !ok {
 		return apiErr(http.StatusForbidden, codeScopeDenied, "operation not permitted for machine clients")
 	}

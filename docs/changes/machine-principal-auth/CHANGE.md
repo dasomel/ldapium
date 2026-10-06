@@ -692,3 +692,10 @@ T-005 재검토 4라운드(Codex): 설계 차단 없음, 정밀도·일관성 �
 ### Acceptance (2026-10-07)
 
 T-005 재검토 5라운드(Codex): 4라운드는 정밀도 5건을 남겼고(JWKS 시험 모델·예산 구간 정의·응답 분리, selectAuth 문장 범위, ACL 검증표 동기화) Revision 5가 처리했다. 5라운드는 새 모순 1건(`CHANGE.md` 테스트 모델의 "응답은 조회 완료 뒤" 문장이 행 3의 즉시 응답과 충돌)만 남겼고, 조회를 기다리는 요청으로 한정해 해소했다. 최종 확인은 **PASS**. 유지보수자(사용자) 지시에 따라 상태를 `Accepted`로 바꾸고 구현을 TASKS.md 순서로 단계 병합한다(기본 꺼짐, 단계마다 독립 검토).
+
+### Implementation notes (unit 1 fix round, 2026-10-07; clarifications, no design change)
+
+- D17: **HEAD on the machine path.** The matrix is silent on HEAD. `headPreMiddleware` rewrites HEAD to GET before routing, so the machine path judges the method the client *sent*: HEAD is refused exactly like any non-GET (after verification: 401 before 403, then 403 `scope_denied`, no bind, no handler). A cookie session's HEAD is unchanged. OPTIONS is not rewritten and stays class N (204/404, `Authorization` ignored).
+- D18: **Audience `account`.** `MACHINE_OIDC_AUDIENCE` equal (case-insensitive, trimmed) to `account` is a startup failure, and the verifier rejects `account` as an audience regardless of configuration (Keycloak's default `aud`, D5).
+- D19: **Comma-joined DN lists.** Besides ParseDN equality, startup fails when the machine bind DN equals any leading-RDN prefix of a configured admin/service-account/rootdn entry (a comma-joined list is one long valid DN whose prefixes are the real DNs). A "repeated suffix" check was rejected: legitimate DNs can look the same.
+- D20: **One deadline per refresh.** Discovery and JWKS share one 5 s context deadline (`RefreshTimeout`), per the "one refresh" accounting.

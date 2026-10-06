@@ -167,7 +167,9 @@ func stringClaim(c map[string]json.RawMessage, name string) (string, bool) {
 // is a string or an array of strings. Missing, null, empty, non-string
 // elements and the Keycloak default "account" alone all fail.
 func audienceHas(raw json.RawMessage, want string) bool {
-	if len(raw) == 0 || want == "" {
+	// "account" is Keycloak's default audience on every access token; it is
+	// never a valid API audience, whatever the configuration says (D5).
+	if len(raw) == 0 || want == "" || strings.EqualFold(strings.TrimSpace(want), "account") {
 		return false
 	}
 	var one string
