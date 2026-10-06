@@ -663,7 +663,8 @@ member: {seed_user_dn}
   res = config_tool('ldapsearch', ['-LLL', '-b', main_db, '-s', 'base', 'olcAccess'])
   rules = re.findall(r'^olcAccess: (\{\d+\}.*)$', res.stdout.replace('\n ', ''), re.M)
   check(len(rules) >= 5 and f'by dn.exact="{over_dn}" read' in rules[0] and
-        rules[1].startswith('{1}to attrs=userPassword,shadowLastChange by dn.exact="' + machine_dn + '" none') and
+        rules[1].startswith('{1}to attrs=userPassword,shadowLastChange,') and
+        rules[1].endswith('by dn.exact="' + machine_dn + '" none by * break') and
         rules[2].startswith('{2}to dn.subtree="' + base_dn + '" by dn.exact="' + machine_dn + '" read') and
         rules[3].startswith('{3}to * by dn.exact="' + machine_dn + '" none'),
         'olcAccess read back: the machine rules sit in front of the existing rules: ' + ' | '.join(r[:60] for r in rules[:4]))

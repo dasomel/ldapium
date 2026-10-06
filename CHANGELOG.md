@@ -58,6 +58,23 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `includeAccessLog` parameter (human sessions pass `true`; unchanged behaviour).
   With `MACHINE_AUTH_ENABLED` unset nothing changes. Still later units: the
   operator ACL guide, the rate/concurrency limiters, Helm values and the Keycloak e2e.
+- Machine bearer authentication, unit 3 (#214, documentation and proof only, **default
+  off**): the operator guide `docs/machine-ldap-account.md` for the dedicated read-only
+  LDAP account (strong password, the final `olcAccess` LDIF with the machine rules at
+  `{0}`-`{2}` ahead of every existing allow, apply/verify/rotate/rollback commands, the
+  derived secret-attribute list, per-node and replication caveats), and the live proof
+  `scripts/test/test-machine-acl-readonly-live.py` run in `api-credentials-e2e`: three
+  freshly initialised slapd containers (anonymous read base unset, set, operator leading
+  allow), `olcAccess` read back in order, the account reads inside its subtree only, never
+  sees secrets, cannot write or change its own password, other identities are unchanged,
+  and the documented rollback restores the original `olcAccess` byte for byte; three
+  deliberately broken variants (including each secret attribute dropped from the deny on its
+  own, every one of them seeded with a recognizable value) must fail their expected checks. The committed LDIF's rule `{0}` now also covers
+  `pwdHistory`, `pKCS8PrivateKey`, `userPKCS12`, `oathSecret`, `oathEncKey` and
+  `oathTokenPIN`. No image, chart or backend change. Known and documented: ACLs are per
+  node, the default policy locks the account after 5 bad binds, and the machine rules
+  conflict with `LDAP_REPLICATION_IDENTITY=prepare` (do not combine until the combined
+  order is implemented, D30 / T-034).
 - Machine bearer authentication, unit 4 (#214, **default off**): the limits and the
   Helm values. Order per request: `Authorization` grammar, then a per-source **IP
   failure throttle before any signature or JWKS work** (10 failures per sliding 60 s,

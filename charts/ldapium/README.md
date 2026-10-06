@@ -431,6 +431,15 @@ LDAP client (SSSD gateways, Keycloak).
 | `sssvlvMainEnabled` | `false` | `LDAP_SSSVLV_MAIN_ENABLED` | Server-side sort / virtual list view; costs memory per sorted search, enable only for clients that need it. |
 | `otpEnabled` | `false` | `LDAP_OTP_ENABLED` | OTP overlay; needs its schema and per-user OTP data provisioned. |
 
+## Machine bearer authentication: LDAP account and ACL
+
+The chart has no `ui.machineAuth.*` values yet (staged rollout, #214). A deployment
+that sets `MACHINE_AUTH_ENABLED` on the UI by hand needs a dedicated read-only LDAP
+account and three `olcAccess` rules on the main database of **every** LDAP pod
+(`cn=config` ACLs are per node and are lost with a fresh `config` volume): follow
+[`docs/machine-ldap-account.md`](../../docs/machine-ldap-account.md) and verify the
+rule order before enabling it.
+
 ## Keycloak SSO
 
 `ui.sso.enabled=false` is the default and keeps the original LDAP password
