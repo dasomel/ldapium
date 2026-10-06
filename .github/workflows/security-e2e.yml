@@ -489,8 +489,8 @@ jobs:
           echo "::group::export-audit-log.sh output"
           echo "$out"
           echo "::endgroup::"
-          echo "$out" | grep -q '"source":"auditlog"'
-          echo "$out" | grep -q '"source":"accesslog"'
+          grep -q '"source":"auditlog"' <<<"$out"
+          grep -q '"source":"accesslog"' <<<"$out"
           echo "PASS: export-audit-log.sh produced both sources"
 
           # Every line has to parse as JSON and carry the identity-audit
@@ -523,8 +523,8 @@ jobs:
           # happened earlier in this job — the seed and modify steps bound as
           # the rootdn, the self-service step bound as bob — so both must show
           # up as distinct auditlog modify records with the right classification.
-          echo "$out" | grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"cn=admin,dc=example,dc=org",.*"op":"modify".*"privileged":true'
-          echo "$out" | grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"uid=bob,ou=people,dc=example,dc=org",.*"op":"modify".*"privileged":false'
+          grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"cn=admin,dc=example,dc=org",.*"op":"modify".*"privileged":true' <<<"$out"
+          grep -q '"source":"auditlog","seq":[0-9]*,"time":"[^"]*","actor":"uid=bob,ou=people,dc=example,dc=org",.*"op":"modify".*"privileged":false' <<<"$out"
           echo "PASS: rootdn and self-service writes are attributed to distinct actors, correctly classified privileged"
 
       - name: Verify chart security context
