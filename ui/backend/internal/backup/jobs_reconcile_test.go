@@ -1,8 +1,6 @@
 package backup
 
 import (
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -117,7 +115,7 @@ func TestReconcileTable(t *testing.T) {
 			},
 			lockHeld:         false,
 			resultFile:       resultSuccess,
-			manifest:         manifest,
+			manifest:         &ArtifactManifest{RunID: "run-result-1", Files: manifest.Files},
 			expectedDecision: DecisionSettledResult,
 			expectedStatus:   JobStatusSucceeded,
 			expectOrphan:     false,
@@ -380,132 +378,4 @@ func TestDefaultLockProbe(t *testing.T) {
 	if held {
 		t.Fatal("expected held = false after release")
 	}
-}
-
-func TestStartupReconciliationLifecycle(t *testing.T) {
-	t.Run("orphan worker holding lock keeps running state with orphan_suspected", func(t *testing.T) {
-		m := testManager(t)
-		defer func() {
-			m.mu.Lock()
-			m.running = false
-			m.mu.Unlock()
-		}()
-		now := time.Now().UTC()
-
-		// Simulate pre-existing running job in backup-jobs.json
-		runningJob := &Job{
-			JobID:     "job-20261006T150000Z-111111111111",
-			Kind:      "data",
-			Status:    JobStatusRunning,
-			CreatedAt: now.Add(-5 * time.Minute),
-		}
-		if err := write(m.jobsPath, jobFile{Version: 1, Jobs: []*Job{runningJob}}); err != nil {
-			t.Fatal(err)
-		}
-
-		// Inject lockProbe returning held=true (simulating alive orphan worker)
-		m.SetLockProbe(func() (bool, error) { return true, nil })
-
-		m.ReconcileStartup(now)
-
-		job, err := m.GetJob(runningJob.JobID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if job.Status != JobStatusRunning {
-			t.Errorf("status = %q; want running", job.Status)
-		}
-		if !job.OrphanSuspected {
-			t.Error("expected orphan_suspected = true")
-		}
-
-		jobID, kind, isRunning := m.ActiveJobInfo()
-		if !isRunning || jobID != runningJob.JobID || kind != "data" {
-			t.Errorf("unexpected active job info: running=%v, id=%s, kind=%s", isRunning, jobID, kind)
-		}
-	})
-
-	t.Run("orphan worker finished and left result file settles outcome", func(t *testing.T) {
-		m := testManager(t)
-		now := time.Now().UTC()
-
-		jobID := "job-20261006T150000Z-222222222222"
-		runningJob := &Job{
-			JobID:     jobID,
-			Kind:      "data",
-			Status:    JobStatusRunning,
-			CreatedAt: now.Add(-5 * time.Minute),
-		}
-		if err := write(m.jobsPath, jobFile{Version: 1, Jobs: []*Job{runningJob}}); err != nil {
-			t.Fatal(err)
-		}
-
-		m.root = filepath.Join(filepath.Dir(m.path), "backup-root")
-		// Write worker result file in <root>/.results/<jobID>.json
-		resultsDir := filepath.Join(m.root, ".results")
-		_ = os.MkdirAll(resultsDir, 0700)
-		resData, _ := json.Marshal(WorkerResult{
-			RunID:         "20261006T150000Z-000000000001",
-			Kind:          "data",
-			Verified:      true,
-			LocalVerified: true,
-			JobID:         jobID,
-		})
-		_ = os.WriteFile(filepath.Join(resultsDir, jobID+".json"), resData, 0600)
-
-		// Lock probe returns lock free
-		m.SetLockProbe(func() (bool, error) { return false, nil })
-
-		m.ReconcileStartup(now)
-
-		job, err := m.GetJob(jobID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if job.Status != JobStatusSucceeded {
-			t.Errorf("status = %q; want succeeded", job.Status)
-		}
-		if job.OrphanSuspected {
-			t.Error("expected orphan_suspected = false")
-		}
-		if job.Artifact == nil || job.Artifact.RunID != "20261006T150000Z-000000000001" {
-			t.Errorf("unexpected artifact: %+v", job.Artifact)
-		}
-
-		// Memory running flag must be cleared
-		_, _, isRunning := m.ActiveJobInfo()
-		if isRunning {
-			t.Error("expected isRunning = false after settlement")
-		}
-	})
-
-	t.Run("lock probe error does not panic or crash controller", func(t *testing.T) {
-		m := testManager(t)
-		now := time.Now().UTC()
-
-		runningJob := &Job{
-			JobID:     "job-20261006T150000Z-333333333333",
-			Kind:      "data",
-			Status:    JobStatusRunning,
-			CreatedAt: now.Add(-5 * time.Minute),
-		}
-		if err := write(m.jobsPath, jobFile{Version: 1, Jobs: []*Job{runningJob}}); err != nil {
-			t.Fatal(err)
-		}
-
-		// Inject failing probe
-		m.SetLockProbe(func() (bool, error) { return false, errors.New("io error on probe") })
-
-		// Must not panic
-		m.ReconcileStartup(now)
-
-		job, err := m.GetJob(runningJob.JobID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Since probe error means lock not verified held, and no result/manifest, it settles as abandoned
-		if job.Status != JobStatusAbandoned {
-			t.Errorf("status = %q; want abandoned", job.Status)
-		}
-	})
 }

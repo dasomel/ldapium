@@ -52,6 +52,7 @@ const (
 	DecisionSettledResult   ReconcileDecision = "settled_result"
 	DecisionSettledManifest ReconcileDecision = "settled_manifest"
 	DecisionSettledNone     ReconcileDecision = "settled_none"
+	DecisionSettledInvalid  ReconcileDecision = "settled_invalid"
 )
 
 func cloneJob(j *Job) *Job {
@@ -93,6 +94,22 @@ func convertManifestFiles(in []ArtifactManifestFile) []JobArtifactFile {
 	return out
 }
 
+// ReconcileEvidence is everything reconcile may base a decision on.
+type ReconcileEvidence struct {
+	// LockHeld: the worker lock is held (a live worker, possibly an orphan).
+	LockHeld bool
+	// ProbeError: the lock could not be probed. Treated like LockHeld, because an
+	// unknown lock state must never abandon a live worker.
+	ProbeError bool
+	// Result is a worker result file that passed validateWorkerResult.
+	Result *WorkerResult
+	// ResultInvalid: a result file exists but failed validation (wrong job,
+	// symlink, oversized, malformed...). It is unverifiable and never settles
+	// the job as succeeded or failed.
+	ResultInvalid bool
+	Manifest      *ArtifactManifest
+}
+
 // Reconcile evaluates a running job record against the current lock state,
 // worker result file, and archive manifest as a pure function.
 func Reconcile(record *Job, lockHeld bool, resultFile *WorkerResult, manifest *ArtifactManifest) (*Job, ReconcileDecision) {
@@ -101,6 +118,11 @@ func Reconcile(record *Job, lockHeld bool, resultFile *WorkerResult, manifest *A
 
 // ReconcileWithTime evaluates reconciliation with an explicit current time.
 func ReconcileWithTime(record *Job, lockHeld bool, resultFile *WorkerResult, manifest *ArtifactManifest, now time.Time) (*Job, ReconcileDecision) {
+	return ReconcileEvidenceWithTime(record, ReconcileEvidence{LockHeld: lockHeld, Result: resultFile, Manifest: manifest}, now)
+}
+
+// ReconcileEvidenceWithTime is the pure reconcile state machine (D217-7/16).
+func ReconcileEvidenceWithTime(record *Job, ev ReconcileEvidence, now time.Time) (*Job, ReconcileDecision) {
 	if record == nil {
 		return nil, DecisionUnchanged
 	}
@@ -110,25 +132,37 @@ func ReconcileWithTime(record *Job, lockHeld bool, resultFile *WorkerResult, man
 
 	j := cloneJob(record)
 
-	// Row 1: Worker lock is still held by an active orphan process.
+	// Row 1: Worker lock is held (or could not be probed) - an active orphan.
 	// Invariant: Do NOT settle as abandoned; retain running state with orphan_suspected.
-	if lockHeld {
+	if ev.LockHeld || ev.ProbeError {
 		j.OrphanSuspected = true
+		j.OrphanReason = OrphanReasonLockHeld
+		if ev.ProbeError && !ev.LockHeld {
+			j.OrphanReason = OrphanReasonProbeError
+		}
 		return j, DecisionOrphanSuspected
 	}
 
 	j.OrphanSuspected = false
+	j.OrphanReason = ""
 	if j.FinishedAt.IsZero() {
 		j.FinishedAt = now
 	}
 
-	// Row 2 & 3: Worker finished and left a durable result file in .results/<job_id>.json.
+	// A result whose run disagrees with the manifest that carries this job's ID
+	// cannot be trusted either.
+	resultFile, invalid := ev.Result, ev.ResultInvalid
+	if resultFile != nil && ev.Manifest != nil && resultFile.RunID != "" && resultFile.RunID != ev.Manifest.RunID {
+		resultFile, invalid = nil, true
+	}
+
+	// Row 2 & 3: Worker finished and left a validated result file.
 	if resultFile != nil {
 		j.Local = &JobLocal{Verified: resultFile.LocalVerified}
 		if resultFile.RunID != "" {
 			j.Artifact = &JobArtifact{RunID: resultFile.RunID}
-			if manifest != nil && len(manifest.Files) > 0 {
-				j.Artifact.Files = convertManifestFiles(manifest.Files)
+			if ev.Manifest != nil && len(ev.Manifest.Files) > 0 {
+				j.Artifact.Files = convertManifestFiles(ev.Manifest.Files)
 			}
 		}
 		if len(resultFile.Destinations) > 0 {
@@ -156,38 +190,72 @@ func ReconcileWithTime(record *Job, lockHeld bool, resultFile *WorkerResult, man
 		return j, DecisionSettledResult
 	}
 
-	// Row 4: No result file, but complete.json manifest exists matching the run/job.
-	if manifest != nil {
-		j.Status = JobStatusAbandoned
-		j.Error = &JobError{
-			Code:    ErrCodeAbandoned,
-			Message: ErrorMessage(ErrCodeAbandoned),
-		}
-		j.Local = &JobLocal{Verified: true}
-		j.Artifact = &JobArtifact{
-			RunID: manifest.RunID,
-			Files: convertManifestFiles(manifest.Files),
-		}
-		if len(j.Destinations) > 0 {
-			for i := range j.Destinations {
-				j.Destinations[i].Status = DestStatusUnknown
-			}
-		}
-		return j, DecisionSettledManifest
+	code, decision := ErrCodeAbandoned, DecisionSettledNone
+	if invalid {
+		code, decision = ErrCodeResultInvalid, DecisionSettledInvalid
 	}
 
-	// Row 5: Lock is free, no result file, no manifest: process was killed abruptly.
-	j.Status = JobStatusAbandoned
-	j.Error = &JobError{
-		Code:    ErrCodeAbandoned,
-		Message: ErrorMessage(ErrCodeAbandoned),
-	}
-	if len(j.Destinations) > 0 {
+	// Row 4 (and the invalid-result variant): no usable result, but an owned
+	// complete.json carries this job's ID.
+	if ev.Manifest != nil {
+		j.Status = JobStatusAbandoned
+		j.Error = &JobError{Code: code, Message: ErrorMessage(code)}
+		j.Local = &JobLocal{Verified: true}
+		j.Artifact = &JobArtifact{
+			RunID: ev.Manifest.RunID,
+			Files: convertManifestFiles(ev.Manifest.Files),
+		}
 		for i := range j.Destinations {
 			j.Destinations[i].Status = DestStatusUnknown
 		}
+		if !invalid {
+			decision = DecisionSettledManifest
+		}
+		return j, decision
 	}
-	return j, DecisionSettledNone
+
+	// Row 5: Lock is free, no usable result file, no manifest: process was killed abruptly.
+	j.Status = JobStatusAbandoned
+	j.Error = &JobError{Code: code, Message: ErrorMessage(code)}
+	for i := range j.Destinations {
+		j.Destinations[i].Status = DestStatusUnknown
+	}
+	return j, decision
+}
+
+// validateWorkerResult is the schema gate for <root>/.results/<job_id>.json.
+// The file is evidence left by a process the controller did not supervise, so
+// it must belong to this job and carry only enumerated, bounded values. Unknown
+// keys are ignored because they are never copied into the job record.
+func validateWorkerResult(wr *WorkerResult, j *Job) error {
+	switch {
+	case wr.JobID != j.JobID:
+		return errors.New("job_id mismatch")
+	case wr.Kind != j.Kind:
+		return errors.New("kind mismatch")
+	case wr.RunID != "" && !runName.MatchString(wr.RunID):
+		return errors.New("invalid run_id")
+	case (wr.Verified || wr.LocalVerified) && wr.RunID == "":
+		return errors.New("verified result without run_id")
+	case wr.Verified && !wr.LocalVerified:
+		return errors.New("verified without local_verified")
+	case len(wr.Destinations) > maxJobDests:
+		return errors.New("too many destinations")
+	}
+	seen := map[string]bool{}
+	for _, d := range wr.Destinations {
+		if !safeID.MatchString(d.ID) || seen[d.ID] {
+			return errors.New("invalid destination id")
+		}
+		seen[d.ID] = true
+		if !validDestStatus(d.Status) || !validDestErrCode(d.ErrorCode) {
+			return errors.New("invalid destination status")
+		}
+		if wr.Verified && d.Status != DestStatusSucceeded {
+			return errors.New("verified result with unsuccessful destination")
+		}
+	}
+	return nil
 }
 
 // ShouldCatchUp implements the crash-loop guard of D217-8:

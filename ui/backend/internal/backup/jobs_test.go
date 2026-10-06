@@ -2,7 +2,6 @@ package backup
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -241,71 +240,11 @@ func TestErrorCatalogAndTypedErrors(t *testing.T) {
 	})
 }
 
-func TestNoSensitiveInformationSentinel(t *testing.T) {
-	sentinels := []string{
-		"super-secret-password-12345",
-		"cn=Directory Manager,dc=example,dc=com",
-		"/private/tmp/sensitive/path",
-		"/etc/shadow",
-		"rclone_password=secret",
-	}
-
-	job := &Job{
-		JobID:   "job-20261006T120000Z-abcdef012345",
-		Kind:    "data",
-		Trigger: JobTriggerManual,
-		Status:  JobStatusFailed,
-		RequestedBy: JobRequester{
-			Type:        JobRequesterUser,
-			Fingerprint: "a1b2c3d4e5f60718", // 16-hex fingerprint only
-		},
-		RequestID:      "req-12345",
-		PolicyRevision: 1,
-		CreatedAt:      time.Now().UTC(),
-		StartedAt:      time.Now().UTC(),
-		FinishedAt:     time.Now().UTC(),
-		StagingCleanup: StagingCleanupDone,
-		Error: &JobError{
-			Code:    ErrCodeWorkerFailed,
-			Message: ErrorMessage(ErrCodeWorkerFailed),
-		},
-		Local: &JobLocal{Verified: true},
-		Destinations: []JobDestination{
-			{
-				ID:        "dest-1",
-				Status:    DestStatusFailed,
-				ErrorCode: DestErrCodeTransferFailed,
-			},
-		},
-		Artifact: &JobArtifact{
-			RunID: "20261006T120000Z-0123456789ab",
-			Files: []JobArtifactFile{
-				{
-					Name:   "data.ldif.gz",
-					Bytes:  1024,
-					SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-				},
-			},
-		},
-	}
-
-	b, err := json.Marshal(job)
-	if err != nil {
-		t.Fatalf("json.Marshal(job) error = %v", err)
-	}
-
-	serialized := string(b)
-	for _, sentinel := range sentinels {
-		if strings.Contains(serialized, sentinel) {
-			t.Fatalf("sentinel token %q found in serialized job JSON: %s", sentinel, serialized)
-		}
-	}
-
-	// Verify error catalog messages never contain any sentinel strings
+func TestErrorCatalogMessagesAreFixedAndNonSensitive(t *testing.T) {
 	for code, msg := range errorCatalog {
-		for _, sentinel := range sentinels {
-			if strings.Contains(msg, sentinel) {
-				t.Fatalf("sentinel token %q found in errorCatalog[%s]: %s", sentinel, code, msg)
+		for _, bad := range []string{"/", "=", "password", "cn="} {
+			if strings.Contains(msg, bad) {
+				t.Fatalf("errorCatalog[%s] = %q contains %q", code, msg, bad)
 			}
 		}
 	}

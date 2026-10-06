@@ -2,10 +2,12 @@ package backup
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"time"
 )
@@ -26,11 +28,13 @@ type jobFile struct {
 // 2. Keep the most recent "succeeded" job for each kind regardless of age or count limit.
 // 3. Remove non-protected terminal jobs older than MaxJobAge (90 days).
 // 4. If remaining jobs exceed MaxJobHistory (200), remove the oldest non-protected terminal jobs.
-// 5. Clean up associated worker result files (<resultsDir>/<job_id>.json) for pruned jobs.
+// It only decides; the caller deletes the pruned records' result files with
+// removeResultFiles AFTER the pruned job file is durably written, so a failed
+// write can never leave a record whose evidence is already gone.
 // Invariant: Pruning NEVER modifies or removes backup archives under <root>/<kind>.
-func pruneJobs(jobs []*Job, now time.Time, resultsDir string) ([]*Job, []string, error) {
+func pruneJobs(jobs []*Job, now time.Time) ([]*Job, []string) {
 	if len(jobs) == 0 {
-		return jobs, nil, nil
+		return jobs, nil
 	}
 
 	// Identify protected jobs: running jobs and most recent succeeded per kind.
@@ -128,62 +132,172 @@ func pruneJobs(jobs []*Job, now time.Time, resultsDir string) ([]*Job, []string,
 		retained = finalRetained
 	}
 
-	// Prune accompanying .results/<job_id>.json files if resultsDir is specified
-	if resultsDir != "" {
-		for _, id := range prunedIDs {
-			resultFile := filepath.Join(resultsDir, id+".json")
-			if err := os.Remove(resultFile); err != nil && !os.IsNotExist(err) {
-				log.Printf("warning: failed to delete pruned job result file %s: %v", resultFile, err)
-			}
-		}
-	}
-
-	return retained, prunedIDs, nil
+	return retained, prunedIDs
 }
 
-// quarantineCorruptFile renames an unparseable job file to .corrupt-<timestamp>
+// removeResultFiles deletes <resultsDir>/<job_id>.json for already-pruned jobs.
+// IDs are re-validated because they become path components.
+func removeResultFiles(resultsDir string, ids []string) {
+	if resultsDir == "" {
+		return
+	}
+	for _, id := range ids {
+		if !IsValidJobID(id) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(resultsDir, id+".json")); err != nil && !os.IsNotExist(err) {
+			log.Printf("backup_result_file_remove_failed job_id=%s", id)
+		}
+	}
+}
+
+// quarantineCorruptFile renames an unusable job file to .corrupt-<timestamp>
 // so controller startup is never blocked by diagnostic history corruption.
 func quarantineCorruptFile(path string) (string, error) {
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	target := filepath.Join(filepath.Dir(path), fmt.Sprintf(".corrupt-%s", ts))
 	if err := os.Rename(path, target); err != nil {
-		return "", fmt.Errorf("quarantining corrupt job file %s to %s: %w", path, target, err)
+		return "", err
 	}
 	return target, nil
 }
 
-// loadJobFile reads backup-jobs.json. If the file is corrupt, it is quarantined
-// and an empty job slice is returned without blocking controller startup.
-func loadJobFile(path string) ([]*Job, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []*Job{}, nil
+// quarantine moves the file aside and logs a fixed reason (never file content
+// or filesystem error text, which can carry paths).
+func quarantine(path, reason string) {
+	if target, err := quarantineCorruptFile(path); err != nil {
+		log.Printf("backup_jobs_quarantine_failed reason=%s", reason)
+	} else {
+		log.Printf("backup_jobs_quarantined reason=%s file=%s", reason, filepath.Base(target))
+	}
+}
+
+const (
+	maxJobRecords = 10000
+	maxJobDests   = 32
+	maxTextLen    = 256
+)
+
+var (
+	jobFingerprintRe = regexp.MustCompile(`^[a-f0-9]{1,64}$`)
+	jobRequestIDRe   = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+)
+
+func inSet(v string, set ...string) bool {
+	for _, s := range set {
+		if v == s {
+			return true
 		}
-		return nil, err
+	}
+	return false
+}
+
+func validDestStatus(v string) bool {
+	return inSet(v, DestStatusSucceeded, DestStatusFailed, DestStatusSkipped, DestStatusUnknown)
+}
+
+func validDestErrCode(v string) bool {
+	return v == "" || inSet(v, DestErrCodeTransferFailed, DestErrCodeVerifyFailed, DestErrCodeConfigInvalid, DestErrCodePrevDestinationFailed)
+}
+
+// validateJob checks one persisted record. The job file is a trust boundary: a
+// well-formed JSON file can still carry nulls, path-shaped IDs or huge strings,
+// and the ID is later used to build result-file paths.
+func validateJob(j *Job) error {
+	if j == nil {
+		return errors.New("null record")
+	}
+	switch {
+	case !IsValidJobID(j.JobID):
+		return errors.New("invalid job id")
+	case !inSet(j.Kind, "data", "logs"):
+		return errors.New("invalid kind")
+	case !inSet(j.Trigger, JobTriggerManual, JobTriggerSchedule):
+		return errors.New("invalid trigger")
+	case !inSet(j.Status, JobStatusRunning, JobStatusSucceeded, JobStatusFailed, JobStatusCancelled, JobStatusAbandoned):
+		return errors.New("invalid status")
+	case !inSet(j.RequestedBy.Type, JobRequesterUser, JobRequesterScheduler):
+		return errors.New("invalid requester type")
+	case j.RequestedBy.Fingerprint != "" && !jobFingerprintRe.MatchString(j.RequestedBy.Fingerprint):
+		return errors.New("invalid requester fingerprint")
+	case j.RequestID != "" && !jobRequestIDRe.MatchString(j.RequestID):
+		return errors.New("invalid request id")
+	case j.StagingCleanup != "" && !inSet(j.StagingCleanup, StagingCleanupDone, StagingCleanupPending, StagingCleanupNotApplicable):
+		return errors.New("invalid staging cleanup")
+	case j.OrphanReason != "" && !inSet(j.OrphanReason, OrphanReasonLockHeld, OrphanReasonProbeError):
+		return errors.New("invalid orphan reason")
+	case len(j.Destinations) > maxJobDests:
+		return errors.New("too many destinations")
+	}
+	if j.Error != nil {
+		if _, ok := errorCatalog[j.Error.Code]; !ok || len(j.Error.Message) > maxTextLen {
+			return errors.New("invalid error")
+		}
+	}
+	for _, d := range j.Destinations {
+		if !safeID.MatchString(d.ID) || !validDestStatus(d.Status) || !validDestErrCode(d.ErrorCode) {
+			return errors.New("invalid destination")
+		}
+	}
+	if a := j.Artifact; a != nil {
+		if (a.RunID != "" && !runName.MatchString(a.RunID)) || len(a.Files) > maxArtifactFiles {
+			return errors.New("invalid artifact")
+		}
+		for _, f := range a.Files {
+			if !artifactNameRe.MatchString(f.Name) || f.Bytes < 0 || !sha256HexRe.MatchString(f.SHA256) {
+				return errors.New("invalid artifact file")
+			}
+		}
+	}
+	return nil
+}
+
+func validateJobs(jobs []*Job) error {
+	if len(jobs) > maxJobRecords {
+		return errors.New("too many records")
+	}
+	seen := make(map[string]bool, len(jobs))
+	for _, j := range jobs {
+		if err := validateJob(j); err != nil {
+			return err
+		}
+		if seen[j.JobID] {
+			return errors.New("duplicate job id")
+		}
+		seen[j.JobID] = true
+	}
+	return nil
+}
+
+// loadJobFile reads backup-jobs.json. Per the change package's corruption
+// policy (diagnostic history, not policy), an unreadable, oversized, unparseable,
+// wrong-version or invalid-record file is quarantined and startup continues with
+// an empty history; only a plain I/O failure is returned.
+func loadJobFile(path string) ([]*Job, error) {
+	b, err := readRegularFile(path, maxJobFileBytes)
+	switch {
+	case os.IsNotExist(err):
+		return []*Job{}, nil
+	case errors.Is(err, errNotRegular), errors.Is(err, errTooLarge):
+		quarantine(path, "unusable_file")
+		return []*Job{}, nil
+	case err != nil:
+		return nil, errors.New("reading backup job file")
 	}
 
 	var file jobFile
 	if err := json.Unmarshal(b, &file); err != nil {
-		quarantined, qErr := quarantineCorruptFile(path)
-		if qErr != nil {
-			log.Printf("error quarantining corrupt job file: %v", qErr)
-		} else {
-			log.Printf("backup-jobs.json was corrupt, quarantined to %s: %v", quarantined, err)
-		}
+		quarantine(path, "invalid_json")
 		return []*Job{}, nil
 	}
-
-	if file.Version > 1 {
-		quarantined, qErr := quarantineCorruptFile(path)
-		if qErr != nil {
-			log.Printf("error quarantining unsupported job file: %v", qErr)
-		} else {
-			log.Printf("backup-jobs.json has unsupported version %d, quarantined to %s", file.Version, quarantined)
-		}
+	if file.Version != 1 {
+		quarantine(path, "unsupported_version")
 		return []*Job{}, nil
 	}
-
+	if err := validateJobs(file.Jobs); err != nil {
+		quarantine(path, "invalid_record")
+		return []*Job{}, nil
+	}
 	if file.Jobs == nil {
 		file.Jobs = []*Job{}
 	}

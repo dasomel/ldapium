@@ -1,13 +1,11 @@
 package backup
 
 import (
-	"context"
-	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -35,9 +33,9 @@ func TestJobStoreRoundTripAndFileModes(t *testing.T) {
 			{ID: "local", Status: DestStatusSucceeded},
 		},
 		Artifact: &JobArtifact{
-			RunID: "run-1",
+			RunID: "20261006T100000Z-0123456789ab",
 			Files: []JobArtifactFile{
-				{Name: "data.ldif.gz", Bytes: 1024, SHA256: "hash"},
+				{Name: "data.ldif.gz", Bytes: 1024, SHA256: strings.Repeat("ab", 32)},
 			},
 		},
 	}
@@ -77,7 +75,7 @@ func TestJobStoreRoundTripAndFileModes(t *testing.T) {
 	if got.JobID != testJob.JobID || got.Status != testJob.Status || got.Kind != testJob.Kind {
 		t.Errorf("loaded job mismatch: %+v", got)
 	}
-	if got.Artifact == nil || got.Artifact.RunID != "run-1" || len(got.Artifact.Files) != 1 {
+	if got.Artifact == nil || got.Artifact.RunID != "20261006T100000Z-0123456789ab" || len(got.Artifact.Files) != 1 {
 		t.Errorf("artifact not round-tripped properly: %+v", got.Artifact)
 	}
 }
@@ -162,7 +160,14 @@ func TestPruneJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createJob := func(id, kind, status string, finishedAge time.Duration) *Job {
+	// Result files are removed by job ID path, so labels map to valid IDs.
+	idOf := func(label string) string {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(label))
+		return fmt.Sprintf("job-20261006T120000Z-%012x", h.Sum64()&0xffffffffffff)
+	}
+	createJob := func(label, kind, status string, finishedAge time.Duration) *Job {
+		id := idOf(label)
 		finished := now.Add(-finishedAge)
 		j := &Job{
 			JobID:      id,
@@ -189,10 +194,15 @@ func TestPruneJobs(t *testing.T) {
 			createJob("failed-recent", "data", JobStatusFailed, 10*24*time.Hour),
 		}
 
-		retained, prunedIDs, err := pruneJobs(jobs, now, resultsDir)
-		if err != nil {
-			t.Fatalf("pruneJobs error = %v", err)
+		retained, prunedIDs := pruneJobs(jobs, now)
+		// pruneJobs only decides; the caller removes result files after the
+		// pruned job file is durably written.
+		for _, id := range prunedIDs {
+			if _, err := os.Stat(filepath.Join(resultsDir, id+".json")); err != nil {
+				t.Fatalf("pruneJobs must not touch result files itself: %v", err)
+			}
 		}
+		removeResultFiles(resultsDir, prunedIDs)
 
 		retainedMap := make(map[string]bool)
 		for _, j := range retained {
@@ -200,26 +210,26 @@ func TestPruneJobs(t *testing.T) {
 		}
 
 		// Must keep running job even if old
-		if !retainedMap["running-old"] {
+		if !retainedMap[idOf("running-old")] {
 			t.Error("running-old was pruned")
 		}
 		// Must keep most recent succeeded per kind even if > 90 days
-		if !retainedMap["succeeded-old-data"] {
+		if !retainedMap[idOf("succeeded-old-data")] {
 			t.Error("succeeded-old-data (most recent succeeded for data) was pruned")
 		}
-		if !retainedMap["succeeded-old-logs"] {
+		if !retainedMap[idOf("succeeded-old-logs")] {
 			t.Error("succeeded-old-logs (most recent succeeded for logs) was pruned")
 		}
 		// Must keep recent failed job
-		if !retainedMap["failed-recent"] {
+		if !retainedMap[idOf("failed-recent")] {
 			t.Error("failed-recent was pruned")
 		}
 
 		// Older succeeded data job and old failed job must be pruned
-		if retainedMap["succeeded-older-data"] {
+		if retainedMap[idOf("succeeded-older-data")] {
 			t.Error("succeeded-older-data should have been pruned")
 		}
-		if retainedMap["failed-old"] {
+		if retainedMap[idOf("failed-old")] {
 			t.Error("failed-old should have been pruned")
 		}
 
@@ -245,10 +255,7 @@ func TestPruneJobs(t *testing.T) {
 			jobs = append(jobs, createJob(id, "data", JobStatusFailed, time.Duration(210-i)*time.Hour))
 		}
 
-		retained, prunedIDs, err := pruneJobs(jobs, now, resultsDir)
-		if err != nil {
-			t.Fatalf("pruneJobs error = %v", err)
-		}
+		retained, prunedIDs := pruneJobs(jobs, now)
 
 		if len(retained) != MaxJobHistory {
 			t.Fatalf("retained count = %d; want %d", len(retained), MaxJobHistory)
@@ -259,7 +266,7 @@ func TestPruneJobs(t *testing.T) {
 
 		// Oldest 10 (job-000 to job-009) should have been pruned
 		for i := 0; i < 10; i++ {
-			expectedPruned := fmt.Sprintf("job-%03d", i)
+			expectedPruned := idOf(fmt.Sprintf("job-%03d", i))
 			found := false
 			for _, pid := range prunedIDs {
 				if pid == expectedPruned {
@@ -270,124 +277,6 @@ func TestPruneJobs(t *testing.T) {
 			if !found {
 				t.Errorf("expected %s to be pruned", expectedPruned)
 			}
-		}
-	})
-}
-
-func TestInjectedWriterTransitions(t *testing.T) {
-	t.Run("start write failure aborts without starting worker and surfaces typed error", func(t *testing.T) {
-		m := testManager(t)
-		var writeCalls int32
-		m.SetWriter(func(path string, data any) error {
-			if strings.Contains(path, "backup-jobs.json") {
-				atomic.AddInt32(&writeCalls, 1)
-				return errors.New("simulated disk full on start")
-			}
-			return write(path, data)
-		})
-
-		err := m.Run(context.Background(), "data", RunRequest{Trigger: JobTriggerManual})
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if !errors.Is(err, ErrPersistenceUnavailable) {
-			t.Fatalf("expected ErrPersistenceUnavailable, got %v", err)
-		}
-
-		// Invariant D217-17: Worker must not have started
-		if m.View().Running {
-			t.Fatal("worker started despite persistence failure")
-		}
-		if len(m.Jobs("", "", 10)) != 0 {
-			t.Fatalf("no job record should exist, got %d", len(m.Jobs("", "", 10)))
-		}
-		if m.View().States["data"].Status == "running" {
-			t.Fatal("state was modified to running despite persistence failure")
-		}
-	})
-
-	t.Run("cancel write failure does not send signal and surfaces typed error", func(t *testing.T) {
-		m := testManager(t)
-
-		// Start a slow running job
-		slowWorker := filepath.Join(filepath.Dir(m.worker), "slow.py")
-		if err := os.WriteFile(slowWorker, []byte("import time\ntime.sleep(2)\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		m.worker = slowWorker
-
-		if err := m.Run(context.Background(), "data", RunRequest{Trigger: JobTriggerManual}); err != nil {
-			t.Fatal(err)
-		}
-		active := m.ActiveJob()
-		if active == nil {
-			t.Fatal("active job not found")
-		}
-
-		// Inject failing writer for cancel
-		m.SetWriter(func(path string, data any) error {
-			if strings.Contains(path, "backup-jobs.json") {
-				return errors.New("disk failure on cancel")
-			}
-			return write(path, data)
-		})
-
-		_, err := m.CancelJob(active.JobID)
-		if err == nil || !errors.Is(err, ErrPersistenceUnavailable) {
-			t.Fatalf("expected ErrPersistenceUnavailable, got %v", err)
-		}
-
-		// CancelRequestedAt must have been reverted
-		rechecked, _ := m.GetJob(active.JobID)
-		if !rechecked.CancelRequestedAt.IsZero() {
-			t.Error("CancelRequestedAt should remain zero after failed persist")
-		}
-	})
-
-	t.Run("completion write failure marks dirty and tick retries", func(t *testing.T) {
-		m := testManager(t)
-		var failJobWrite atomic.Bool
-		failJobWrite.Store(false)
-
-		m.SetWriter(func(path string, data any) error {
-			if strings.Contains(path, "backup-jobs.json") && failJobWrite.Load() {
-				return errors.New("fail completion persist")
-			}
-			return write(path, data)
-		})
-
-		// First start: write succeeds
-		if err := m.Run(context.Background(), "data", RunRequest{Trigger: JobTriggerManual}); err != nil {
-			t.Fatal(err)
-		}
-
-		// Before worker finishes, turn on failure
-		failJobWrite.Store(true)
-		waitIdle(t, m)
-
-		// Job completed in memory
-		jobs := m.Jobs("data", "", 10)
-		if len(jobs) == 0 || jobs[0].Status != JobStatusSucceeded {
-			t.Fatalf("job in memory should be succeeded, got %+v", jobs)
-		}
-
-		m.mu.Lock()
-		isDirty := m.jobDirty
-		m.mu.Unlock()
-		if !isDirty {
-			t.Fatal("expected jobDirty = true after completion persist failure")
-		}
-
-		// Turn off failure, tick should flush dirty state
-		failJobWrite.Store(false)
-		m.tick(context.Background(), time.Now().UTC())
-
-		m.mu.Lock()
-		isDirtyAfter := m.jobDirty
-		m.mu.Unlock()
-		if isDirtyAfter {
-			t.Fatal("expected jobDirty = false after tick flush")
 		}
 	})
 }

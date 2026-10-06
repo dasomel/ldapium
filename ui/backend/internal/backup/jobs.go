@@ -39,6 +39,13 @@ const (
 	StagingCleanupNotApplicable = "not_applicable"
 )
 
+// Why a running job is held as orphan_suspected (D217-16): the worker lock is
+// held, or it could not be probed (a probe error must never abandon a live worker).
+const (
+	OrphanReasonLockHeld   = "worker_lock_held"
+	OrphanReasonProbeError = "lock_probe_error"
+)
+
 // Destination status enum per D217-11.
 const (
 	DestStatusSucceeded = "succeeded"
@@ -59,6 +66,7 @@ const (
 	ErrCodeWorkerFailed     = "worker_failed"
 	ErrCodeWorkerBusy       = "worker_busy"
 	ErrCodeUnverifiedResult = "unverified_result"
+	ErrCodeResultInvalid    = "result_invalid"
 
 	DestErrCodeTransferFailed        = "transfer_failed"
 	DestErrCodeVerifyFailed          = "verify_failed"
@@ -79,6 +87,7 @@ var errorCatalog = map[string]string{
 	ErrCodeWorkerFailed:              "backup worker process failed",
 	ErrCodeWorkerBusy:                "backup worker busy",
 	ErrCodeUnverifiedResult:          "unverified worker result",
+	ErrCodeResultInvalid:             "worker result could not be validated",
 	DestErrCodeTransferFailed:        "remote transfer command failed",
 	DestErrCodeVerifyFailed:          "checksum verification failed",
 	DestErrCodeConfigInvalid:         "destination configuration rejected",
@@ -212,6 +221,7 @@ type Job struct {
 	DeadlineAt        time.Time        `json:"deadline_at,omitempty"`
 	CancelRequestedAt time.Time        `json:"cancel_requested_at,omitempty"`
 	OrphanSuspected   bool             `json:"orphan_suspected,omitempty"`
+	OrphanReason      string           `json:"orphan_reason,omitempty"`
 	StagingCleanup    string           `json:"staging_cleanup,omitempty"`
 	Error             *JobError        `json:"error,omitempty"`
 	Local             *JobLocal        `json:"local,omitempty"`
@@ -291,7 +301,7 @@ func (g *JobIDGenerator) Generate() (string, error) {
 	return "", fmt.Errorf("job ID collision retry limit exceeded")
 }
 
-// RunRequest carries caller metadata into Manager.Run per D217-12 / REQ-001.
+// RunRequest carries caller metadata into Manager.StartJob per D217-12 / REQ-001.
 type RunRequest struct {
 	Kind             string
 	Trigger          string
