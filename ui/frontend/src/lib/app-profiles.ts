@@ -1,4 +1,5 @@
 import { ApiError } from './api'
+import type { ApiErrorBody } from './types'
 
 export interface ApplicationProfile {
   integration_type?: string
@@ -19,8 +20,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1/applications${path}`, {
     ...init, credentials: 'same-origin',
   })
-  const body = await response.json()
-  if (!response.ok) throw new ApiError(response.status, body.message ?? 'Application profile request failed')
+  const body: unknown = await response.json()
+  if (!response.ok) {
+    const err = body as ApiErrorBody
+    throw new ApiError(response.status, err.error ?? err.message ?? 'Application profile request failed')
+  }
   return body as T
 }
 
@@ -64,7 +68,10 @@ export const integration = {
     const res = await fetch(`/api/v1/applications/${encodeURIComponent(id)}/integration-profile`, {
       method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'If-Match': `"${revision}"` },
     })
-    if (!res.ok) throw new ApiError(res.status, (await res.json()).message ?? 'Delete failed')
+    if (!res.ok) {
+      const body = (await res.json()) as ApiErrorBody
+      throw new ApiError(res.status, body.error ?? body.message ?? 'Delete failed')
+    }
   },
   export: (id: string, adapter: string) => call<{ content: string; filename: string; warnings: string[]; status: string }>(`/${encodeURIComponent(id)}/configuration-export?adapter=${encodeURIComponent(adapter)}`),
   preview: (id: string, values: string[]) => call<{ native_roles: string[]; unmapped_values: string[] }>(`/${encodeURIComponent(id)}/mapping-preview`, {

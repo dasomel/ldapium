@@ -7,7 +7,7 @@ export type BackupView = { connections: BackupConnection[]; storage: Record<stri
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1/backups${path}`, { credentials: 'same-origin', ...init })
   const body = await response.json()
-  if (!response.ok) throw new Error(body.message ?? body.error ?? 'Backup request failed')
+  if (!response.ok) throw new Error(body.error ?? body.message ?? 'Backup request failed')
   return body as T
 }
 export const backups = {
