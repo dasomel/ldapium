@@ -386,6 +386,8 @@ LDAP 와이어 코드는 AGENTS.md 원칙에 따라 단위 테스트하지 않�
 
 **검증하지 못한 사실(모두 구현 전 T-002에서 확인)**
 
+> 갱신(Part A 스파이크·구현, 2026-10-06): 1·2·5는 확인됨, 3은 부분 확인(실패/성공 바인드·lastbind·memberOf·refint), 7·8은 구현으로 확인, 6은 2노드 실측으로 D216-1a 서술과 일치. 4·9·10·11은 미확인. 결과와 명령은 [EVIDENCE.md](EVIDENCE.md).
+
 1. 이 이미지의 slapd가 assertion control(`1.3.6.1.1.12`)을 Modify/Delete/ModifyDN에서 지원하는지(rootDSE `supportedControl`, 실제 거동). 작성 시 Docker를 쓰지 않아 미확인.
 2. 비루트 일반 바인드(및 SSO 서비스 계정)가 `entryCSN`·`entryUUID`·`creatorsName`을 읽고 필터 평가에 쓸 수 있는지(못 읽으면 보상은 항상 `partial`로 수렴). 저장소에서 이 속성들에 대한 별도 ACL은 찾지 못했다(`01-cn-config.ldif:90`은 `userPassword,shadowLastChange`만 다룸).
 3. `memberof` 오버레이의 `memberOf` 갱신, ppolicy의 `pwdFailureTime`·`pwdChangedTime` 쓰기가 사용자 `entryCSN`을 바꾸는지(가짜 412 빈도).

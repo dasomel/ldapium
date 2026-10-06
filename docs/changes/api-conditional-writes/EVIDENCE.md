@@ -117,3 +117,106 @@ the same delete right the Add needed (the UI's admin bind); where that is missin
 
 Not run in this spike: single Add carrying `userPassword` (T-002 item 4, deferred by Q2), multi-provider
 two-node behaviour (see the final live section).
+
+## Part A implementation: live run through the real stack
+
+Images built from this tree: `l2-ldap:1` (`docker build -t l2-ldap:1 -f image/Dockerfile ./image`) and
+`l2-ui:1` (`docker build -t l2-ui:1 -f ui/Dockerfile ui`).
+
+```
+LDAPIUM_IMAGE=l2-ldap:1 LDAPIUM_UI_IMAGE=l2-ui:1 LDAPIUM_EDGE_PREFIX=l2-edge- \
+  python3 scripts/test/test-api-edge-codes-local.py
+ok: admin password absent from every /proc/*/environ and /proc/*/cmdline (names=0 hits=0 seen=2)
+ok: conditional writes (ETag/If-Match on every protected route, stale 412 with no write,
+    concurrent writers 1x204+1x412 x15, PATCH merge, create rollback, identity-bound delete 122)
+PASS: unlock idempotent (204/404), ... conditional writes (If-Match/ETag/PATCH/create rollback)
+```
+
+The conditional section runs as a NON-root operator (`uid=ops,ou=admins`, `olcAccess {0}` write on the
+tree with `by * break`), so the assertion is evaluated under ordinary ACLs, not the rootDN bypass.
+It checks, through the UI backend: `etag` on list items and the `ETag` header of `GET /api/entry`
+(no `entryCSN` or `etag` in the entry body); stale `If-Match` is 412 `revision_conflict` with no DN,
+filter or `assert` text and the entry's ETag unchanged, for user PUT/PATCH/DELETE/lock/unlock, group
+PUT/PATCH/DELETE, member add/remove and entry move (each also checked to have written nothing);
+matching `If-Match` applies and moves the ETag on the same routes; malformed tags are 400 and `*` is
+unconditional; two sessions racing the same ETag give exactly one 204 and one 412 in each of 15
+rounds, and the stored value is the 204 winner's; PATCH keeps unmentioned fields while PUT still erases
+them; a user create whose password step fails (see below) returns `state: rolled_back`, leaves no
+entry (`GET /api/entry` 404) and the same uid can then be created; 10 rounds of delete + re-create of
+the same DN each defeat the old `(&(entryUUID=..)(entryCSN=..))` assertion delete with LDAP 122 and the
+re-created entry survives; an unknown critical control (`ldapmodify -e '!1.2.3.4.5.6.7.8'`) is refused
+with 12 and writes nothing.
+
+How the password step is forced to fail: the rootDN bypasses ppolicy and ppm, so a weak password for a
+root-bound create is simply accepted (`ldappasswd -s Ab1` as `cn=admin` succeeded). For a non-root bind
+this image's default policy (`pwdSafeModify: TRUE`) refuses to set an initial password at all:
+`Insufficient access (50) Additional info: Must supply old password to be changed as well as new one`
+(any password, including a strong one). That is the forced failure: Add succeeds, the Password Modify
+fails (403), the identity-bound delete removes the entry, response `state: rolled_back`.
+Consequence worth knowing: with this default policy only a root-bound administrator can create users
+with an initial password.
+
+Non-vacuity (implementation deliberately broken, live and unit tests then fail; code restored after):
+
+- `revisionControls` returning no controls (If-Match silently ignored), image `l2-ui:broken1`:
+  `FAIL: AssertionError: user PUT with a stale If-Match: PUT /api/users expected 412, got 204`.
+  Unit tests with the same break: `TestRevisionControlsEncoding`, `TestControlsRefuseMalformedValues`,
+  `TestPatchModifyCarriesControls`, `FuzzRevisionControls` fail.
+- compensation never deleting, image `l2-ui:broken2`: the forced-failure create returned a real
+  `500 {"code":"partial_failure","state":"partial","dn":"uid=cw-new,...","retryable":false,...}` and the
+  run failed at `forced password failure`, i.e. the orphan assertion is not vacuous.
+- compensating delete without the assertion control (unit): `TestCreateOutcome/*` ("compensating delete
+  must carry exactly the assertion control") and `TestCompensationAssertionBindsUUIDAndCSN` fail.
+
+## Multi-provider (2 nodes, real run)
+
+Two replicated nodes (`l2-r1`, `l2-r2`, `LDAP_REPLICATION_ENABLED=true`, same image), entry `uid=zoe`:
+
+```
+n1 tag after create: 20261006015308.274046Z#000000#001#000000
+n2 holds the SAME entryCSN after replication: 20261006015308.274046Z#000000#001#000000
+(1) tag read on n1, conditional write sent to n2: rc=0   -> new tag ...508088Z#000000#002#000000
+    immediately write n1 with the OLD tag: rc=0           (replication lag: a stale tag passed)
+(2) partition (docker network disconnect), both nodes hold Tx, conditional write on BOTH with Tx:
+    n1 write rc=0, n2 write rc=0
+    diverged: n1 desc='written-on-n1' csn=...150015Z#000000#001#000000
+              n2 desc='written-on-n2' csn=...213167Z#000000#002#000000
+    after heal (network reconnect): both nodes: desc='written-on-n2' csn=...213167Z#000000#002#000000
+```
+
+So the caveat of D216-1a is real: `entryCSN` replicates verbatim (a tag is valid on any node once
+replicated), but the condition is node-local: inside the replication lag, or under a partition, two
+writers holding the same tag both pass, and the earlier-timestamped write (`written-on-n1`) is silently
+dropped by last-write-wins after the heal. Route writes to a single node to keep the guarantee.
+
+## Not verified
+
+- Wire-level proof that a stale IDENTITY assertion through go-ldap (the compensation's
+  `(&(entryUUID=..)(entryCSN=..))` delete) answers 122: the `ldapdelete` primitive (above and live script)
+  proves slapd's side, and the match path through go-ldap is proven live by the `rolled_back` runs; the
+  mismatch path through go-ldap is covered by the decision-function unit tests, not by a real go-ldap
+  Delete against a mismatching entry.
+- `partial_failure` produced by the product code path with a genuinely refused or stale compensation
+  (only the deliberately broken `broken2` image reached it live); the ACL cannot distinguish add from
+  delete rights (both need write on the parent's children), so a refused delete cannot be staged here.
+- Browser UI (no frontend change in Part A), ppolicy `lastbind` + If-Match end to end, SSO mode.
+
+## Where Part A differs from the package text
+
+- Scope: only the conditional-write half (revision/ETag, If-Match, PATCH, create compensation, docs, tests).
+  Idempotency keys, their switch, the persisted fingerprint key, `idempotency_*` codes, the chart changes
+  and the frontend (T-014, T-016, T-018, T-019, T-024) are Part B / follow-ups.
+- The revision condition travels as a trailing `ifMatch string` argument (bare CSN, "" = unconditional) on
+  the `ldapclient.Client` write methods; `PatchUser`/`PatchGroup` are new methods.
+- Error bodies still use the pre-envelope `{"error": ...}` shape; only the new outcomes add `code`
+  (`revision_conflict`, `partial_failure`), `retryable`, `state`, `dn`. They are built in
+  `httpapi/conditional.go` (`respondRevisionConflict`, `respondCreateFailure`) so the envelope change can
+  absorb them in one place.
+- Spike corrections to D216-1: a successful bind that clears earlier `pwdFailureTime` values also bumps
+  `entryCSN` (not only the failed bind), and `LDAP_LASTBIND_ENABLED=true` bumps it on every successful
+  bind; memberOf maintenance and refint's removal of a deleted member do NOT bump the affected entries'
+  `entryCSN`.
+- AC-007 cannot use a ppm-rejected password: the rootDN bypasses ppolicy/ppm. The failure is forced with a
+  non-root bind (`pwdSafeModify` refuses an initial password), see above.
+- go-ldap encodes criticality TRUE as `0x01` (BER allows any non-zero); slapd honours it (unknown critical
+  control gives 12).
