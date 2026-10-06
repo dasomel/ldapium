@@ -69,6 +69,8 @@ export function GroupsPage() {
   const [deleting, setDeleting] = useState<Group | null>(null)
 
   const requestGenRef = useRef(0)
+  // False while unmounted: late write/retry callbacks must not start new requests.
+  const aliveRef = useRef(true)
   const lastRequestRef = useRef<{
     cursorParam?: string
     stackParam: Array<string | undefined>
@@ -93,6 +95,7 @@ export function GroupsPage() {
     sizeParam = pageSize,
     advances = 0,
   ) {
+    if (!aliveRef.current) return
     const gen = ++requestGenRef.current
     lastRequestRef.current = { cursorParam, stackParam, qParam, sizeParam }
     setError(null)
@@ -143,12 +146,13 @@ export function GroupsPage() {
     if (r) loadPage(r.cursorParam, r.stackParam, r.qParam, r.sizeParam)
   }
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
       requestGenRef.current++
-    },
-    [],
-  )
+    }
+  }, [])
 
   useEffect(() => {
     const trimmed = query.trim()
@@ -180,6 +184,7 @@ export function GroupsPage() {
 
   // Re-read after a conflict or a lost response (keeps the current page).
   async function reread() {
+    if (!aliveRef.current) return []
     const gen = requestGenRef.current
     const startQ = viewRef.current.q
     const v = viewRef.current

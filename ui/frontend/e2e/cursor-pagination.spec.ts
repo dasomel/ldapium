@@ -555,4 +555,92 @@ test.describe('Cursor pagination and error recovery', () => {
     // Dev StrictMode may double the initial load; nothing may follow the 'new' search.
     expect(qs.slice(qs.indexOf('new'))).toEqual(['new'])
   })
+
+  test('a users write that completes after leaving the page issues no further list request', async ({ page }) => {
+    await mockSession(page)
+    let listCalls = 0
+    let lockSeen = false
+    let releaseLock: () => void = () => undefined
+    const lockGate = new Promise<void>((resolve) => (releaseLock = resolve))
+    const user = (uid: string) => ({ dn: `uid=${uid},dc=example,dc=org`, uid, cn: uid, sn: 'T', locked: false })
+
+    await page.route('**/api/users/lock', async (r) => {
+      lockSeen = true
+      await lockGate
+      await r.fulfill({ status: 204 })
+    })
+    // Before leaving: one row to click. After leaving: empty + hasMore, so any late refresh would auto-advance.
+    let left = false
+    await page.route('**/api/users?*', (r) => {
+      listCalls++
+      if (!left) return r.fulfill({ json: { users: [user('row-1')], truncated: false, hasMore: false } })
+      return r.fulfill({ json: { users: [], truncated: false, hasMore: true, nextCursor: 'cur-more' } })
+    })
+
+    await page.goto('/users')
+    const rows = page.locator('tbody tr')
+    await expect(rows).toHaveCount(1)
+    await rows.first().getByRole('button', { name: 'Disable account' }).click()
+    await expect.poll(() => lockSeen).toBe(true)
+
+    await page.getByRole('link', { name: 'Groups' }).first().click()
+    await expect(page.getByPlaceholder('Filter groups…')).toBeVisible()
+    await expect(page.getByPlaceholder('Filter users…')).toHaveCount(0)
+    left = true
+    const before = listCalls
+
+    releaseLock()
+    await expect(async () => {
+      await page.waitForTimeout(100)
+      expect(listCalls).toBe(before)
+    }).toPass({ timeout: 2000 })
+  })
+
+  test('a groups write that completes after leaving the page issues no further list request', async ({ page }) => {
+    await mockSession(page)
+    let listCalls = 0
+    let deleteSeen = false
+    let releaseDelete: () => void = () => undefined
+    const deleteGate = new Promise<void>((resolve) => (releaseDelete = resolve))
+    let left = false
+
+    await page.route('**/api/users*', (r) => r.fulfill({ json: { users: [], truncated: false, hasMore: false } }))
+    await page.route('**/api/groups*', async (r) => {
+      if (r.request().method() === 'DELETE') {
+        deleteSeen = true
+        await deleteGate
+        return r.fulfill({ status: 204 })
+      }
+      listCalls++
+      if (!left) {
+        return r.fulfill({
+          json: {
+            groups: [{ dn: 'cn=devs,ou=groups,dc=example,dc=org', cn: 'devs', description: '', members: [] }],
+            truncated: false,
+            hasMore: false,
+          },
+        })
+      }
+      return r.fulfill({ json: { groups: [], truncated: false, hasMore: true, nextCursor: 'cur-more' } })
+    })
+
+    await page.goto('/groups')
+    await page.getByRole('button', { name: 'Delete', exact: true }).first().click()
+    await page.locator('#confirm-text').fill('devs')
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect.poll(() => deleteSeen).toBe(true)
+
+    // The confirm dialog is modal while the delete is pending, so click the nav link programmatically.
+    await page.locator('a[href="/users"]').first().dispatchEvent('click')
+    await expect(page.getByPlaceholder('Filter users…')).toBeVisible()
+    await expect(page.getByPlaceholder('Filter groups…')).toHaveCount(0)
+    left = true
+    const before = listCalls
+
+    releaseDelete()
+    await expect(async () => {
+      await page.waitForTimeout(100)
+      expect(listCalls).toBe(before)
+    }).toPass({ timeout: 2000 })
+  })
 })
