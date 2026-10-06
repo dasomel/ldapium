@@ -158,7 +158,7 @@
 - Covers: `REQ-014`
 - Given `LDAP_PAGED_TOTAL_LIMIT` 미설정 / `50000` / `unlimited` / `abc`
 - When 이미지 부트스트랩과 `helm template`
-- Then 미설정이면 `cn=config`에 `olcLimits` 없음(기존과 동일), 값 설정 시 `olcLimits: {0}users size.prtotal=<값>`, `abc`는 기동 거부(`LDAP_SIZE_LIMIT`와 같은 검증), 차트는 `ldap.limits.pagedTotal` 미설정 시 env를 렌더하지 않는다. 설정은 새 데이터 볼륨에서만 적용(bootstrap-only)이며 기존 볼륨 절차가 문서화된다.
+- Then 미설정이면 `cn=config`에 `olcLimits` 없음(기존과 동일), 값 설정 시 `olcLimits: {0}users size.prtotal=<값>`, `abc`는 기동 거부(`LDAP_SIZE_LIMIT`와 같은 검증), 차트는 `ldap.limits.pagedTotal` 미설정 시 env를 렌더하지 않는다. 설정은 **매 시작 시 `cn=config`에 반영**(reconcile, D215-15)되어 기존 볼륨에서도 적용되고, 변수를 비우면 이미지가 쓴 값만 제거된다.
 
 ### `AC-013` — 두 단계 사이 변경
 
@@ -232,6 +232,7 @@
   - 위험·비용: 값을 올리면 인증된 모든 사용자가 paged 검색으로 디렉터리 전체를 열거할 수 있다(비 paged 단일 질의의 `olcSizeLimit`는 그대로, ACL은 계속 적용, `entrypoint.sh:161-163`의 "마지막 방어선" 논리 약화). 그래서 기본값은 불변이고 운영자가 명시적으로 켠다.
   - (c) 기본 설정에서 제한에 걸리면 **절대 조용히 자르지 않는다**: `sizeLimitExceeded`(`ldap.LDAPResultSizeLimitExceeded`, 선례 `audit_client.go:61`, `tree.go:83`)를 새 도메인 오류 `domain.ErrSizeLimitExceeded`로 매핑(`errors.go:15-55`에 case 추가; 현재는 500으로 떨어짐)하고 핸들러가 422 `size_limit_exceeded`(retryable=false)로 응답. 메시지는 해결책을 명시한다: "directory size limit reached; narrow with `q`, use an identity exempt from the limit, or ask the operator to set LDAP_PAGED_TOTAL_LIMIT (ldap.limits.pagedTotal)". 부분 페이지는 반환하지 않는다.
   - (d) AC-002(허용되는 신원)와 AC-011(기본 일반 사용자: 명시적 오류)로 분리. 키셋 스캔은 매 페이지 전체 후보를 읽으므로 기본 설정에서 후보 >10000이면 **첫 페이지부터** 오류다(`q`로 좁히면 성공).
+- `D215-15` 구현 개정(T-015, 유지보수자 지시): `LDAP_PAGED_TOTAL_LIMIT`는 위 (b)의 `01-cn-config.ldif` 렌더(bootstrap-only)가 아니라 **하드닝 설정과 같은 방식으로 매 시작 시 reconcile**한다(`entrypoint.sh` 3b, 오프라인 `slapmodify -n 0`). 이유: 기존 볼륨에 재부트스트랩 없이 적용되고 변수를 비우면 완화가 되돌려진다(보안을 푸는 설정은 기본값 쪽으로 복귀해야 한다). 소유 규칙: 이미지는 정확히 `{N}users size.prtotal=<단어>` 형태의 `olcLimits` 값만 소유하고(설정 시 다르면 delete+add 한 번의 modify로 교체, 같으면 무변경) 운영자가 넣은 다른 형태의 `olcLimits`는 어느 방향으로도 건드리지 않는다. 값 검증은 양의 정수(선행 0 금지)·`unlimited`만 허용하며 `0`은 거부한다(슬랩드 한도 키워드마다 0의 의미가 다름). `size.pr`는 쓰지 않는다(T-002: 클라이언트가 `size.pr`보다 큰 페이지를 요청하면 `adminLimitExceeded`). 근거 증거는 [EVIDENCE.md](EVIDENCE.md).
   - T-002는 이제 설계를 막는 게이트가 아니라 위 `size.prtotal` 의미를 실제 이미지에서 **확인**하는 작업이다.
 
 ### Error codes introduced
@@ -278,7 +279,7 @@
 |---|---|
 | Source / API / command | `GET /api/users`·`/api/groups`에 선택 파라미터·응답 필드. `domain.ErrSizeLimitExceeded` 추가. 신규 엔드포인트 없음. 무파라미터 불변(AC-001) |
 | Dependencies / lockfiles | N/A — 표준 라이브러리와 기존 `go-ldap`(`SearchAsync`는 현재 버전 v3.4.14에 존재, `ui/backend/go.mod:7`) |
-| Runtime / toolchain | **이미지**: `LDAP_PAGED_TOTAL_LIMIT`(opt-in, 기본 불변, bootstrap-only), **차트**: `ldap.limits.pagedTotal`. 요청당 LDAP 호출·청크 증가는 AC-009로 측정 |
+| Runtime / toolchain | **이미지**: `LDAP_PAGED_TOTAL_LIMIT`(opt-in, 기본 불변, 매 시작 reconcile — D215-15), **차트**: `ldap.limits.pagedTotal`. 요청당 LDAP 호출·청크 증가는 AC-009로 측정 |
 | CI / CD | 라이브 순회·크기 제한 스크립트를 워크플로에 연결(대규모 적재가 길면 `workflow_dispatch`/야간 분리 — T-023) |
 | Release / packaging | 이미지 태그 변경이 필요한 opt-in 설정이므로 릴리스 노트에 이미지·차트·API 각 1줄. 별도 커밋 |
 | Generated output | `openapi.json`·`llms.txt` 갱신, 차트 README EN/KO |
