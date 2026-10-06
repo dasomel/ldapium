@@ -126,6 +126,12 @@ func (f *fakeLoginClient) Lock(context.Context, string, string) error   { return
 func (f *fakeLoginClient) ListGroups(context.Context, string) ([]domain.Group, bool, error) {
 	return nil, false, nil
 }
+func (f *fakeLoginClient) ListUsersPage(context.Context, string, domain.PageQuery) (domain.UserPage, error) {
+	return domain.UserPage{}, nil
+}
+func (f *fakeLoginClient) ListGroupsPage(context.Context, string, domain.PageQuery) (domain.GroupPage, error) {
+	return domain.GroupPage{}, nil
+}
 func (f *fakeLoginClient) CreateGroup(context.Context, string, domain.GroupInput) (string, error) {
 	return "", nil
 }

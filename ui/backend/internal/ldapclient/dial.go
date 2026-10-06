@@ -77,7 +77,7 @@ func (d *dialer) bind(identity, password string) (Client, error) {
 		return nil, mapErr("bind", err)
 	}
 
-	return &client{conn: oc, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}}, nil
+	return &client{conn: oc, dn: dn, cfg: d.cfg, mu: &sync.Mutex{}, scanSem: make(chan struct{}, 1)}, nil
 }
 
 // Ping is the unauthenticated counterpart to Bind: it proves the LDAP

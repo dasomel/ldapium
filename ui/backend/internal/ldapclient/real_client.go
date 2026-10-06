@@ -2,6 +2,7 @@ package ldapclient
 
 import (
 	"sync"
+	"time"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 )
@@ -15,6 +16,19 @@ type client struct {
 	dn   string
 	cfg  config.Config
 	mu   *sync.Mutex
+
+	// scanSem is the session's single paged-search slot (see acquireScan):
+	// slapd keeps one paged-search state per connection, so concurrent
+	// listings would invalidate each other's cookie.
+	scanSem chan struct{}
+
+	// Test seams, all zero in production: a fake search function instead of
+	// the live connection, shortened limits, and a hook that runs between the
+	// two phases of a page so a test can change the directory there.
+	rawSearch            rawSearchFunc
+	chunkTimeoutOverride time.Duration
+	maxScanOverride      int
+	betweenPhases        func()
 }
 
 func (c *client) WhoAmI() string { return c.dn }
