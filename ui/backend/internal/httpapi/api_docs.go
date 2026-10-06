@@ -69,11 +69,13 @@ func serveEmbedded(name, contentType string) echo.HandlerFunc {
 // such as /apiary that the SPA may legitimately serve.
 func isAPIPath(p string) bool { return p == "/api" || strings.HasPrefix(p, "/api/") }
 
-// apiErrorHandler gives the router's own 404/405 on /api paths the same
-// {"error": ...} body respondErr uses. Only the router's sentinel errors
-// are rewritten (pointer identity): handlers that deliberately return
-// echo.NewHTTPError keep their {"message": ...} body, which the OpenAPI
-// document describes as a separate shape.
+// apiErrorHandler turns every error on an /api path into the error envelope
+// (see errors.go): the router's own 404/405 sentinels (matched by pointer
+// identity), any *echo.HTTPError a handler or middleware returned, and a plain
+// error (a domain sentinel, or the panic Recover reports). This is the single
+// conversion point (D218-2), so handlers that still return a bare
+// echo.NewHTTPError need no change. Paths outside /api keep Echo's default
+// body.
 func apiErrorHandler(fallback echo.HTTPErrorHandler) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed || !isAPIPath(c.Request().URL.Path) {
@@ -82,12 +84,11 @@ func apiErrorHandler(fallback echo.HTTPErrorHandler) echo.HTTPErrorHandler {
 		}
 		switch err {
 		case echo.ErrNotFound:
-			_ = c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+			err = apiErr(http.StatusNotFound, codeNotFound, "not found")
 		case echo.ErrMethodNotAllowed:
-			_ = c.JSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		default:
-			fallback(err, c)
+			err = apiErr(http.StatusMethodNotAllowed, codeMethodNotAllowed, "method not allowed")
 		}
+		_ = writeFromError(c, err)
 	}
 }
 

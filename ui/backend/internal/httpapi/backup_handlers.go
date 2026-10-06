@@ -34,7 +34,7 @@ func (s *Server) backupRoutes(api *echo.Group) {
 func (s *Server) requireBackupAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		if s.backups == nil {
-			return echo.NewHTTPError(404, "backups disabled")
+			return apiErr(404, codeFeatureDisabled, "backups disabled")
 		}
 		sess := currentSession(c)
 		if sess != nil {
@@ -44,7 +44,7 @@ func (s *Server) requireBackupAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 				}
 			}
 		}
-		return echo.NewHTTPError(403, "backup administrator required")
+		return apiErr(403, codeAdminRequired, "backup administrator required")
 	}
 }
 func (s *Server) handleBackupPolicies(c echo.Context) error {
@@ -71,7 +71,7 @@ func (s *Server) handleBackupPolicies(c echo.Context) error {
 		return echo.NewHTTPError(412, "backup policies changed; reload")
 	}
 	if errors.Is(err, backup.ErrBusy) {
-		return echo.NewHTTPError(409, "backup already running")
+		return apiErr(409, codeBackupBusy, "backup already running")
 	}
 	if err != nil {
 		return echo.NewHTTPError(422, "invalid policy or persistence unavailable; reload and check configuration")
@@ -91,7 +91,7 @@ func (s *Server) handleBackupRun(c echo.Context) error {
 	}
 	if err := s.backups.Run(context.Background(), c.Param("kind")); err != nil {
 		if errors.Is(err, backup.ErrBusy) {
-			return echo.NewHTTPError(409, "backup already running")
+			return apiErr(409, codeBackupBusy, "backup already running")
 		}
 		return echo.NewHTTPError(422, "kind/source unavailable or status persistence failed")
 	}
@@ -127,7 +127,7 @@ func (s *Server) handleBackupConnection(c echo.Context) error {
 		return echo.NewHTTPError(412, "backup settings changed; reload")
 	}
 	if errors.Is(err, backup.ErrBusy) {
-		return echo.NewHTTPError(409, "backup already running")
+		return apiErr(409, codeBackupBusy, "backup already running")
 	}
 	if err != nil {
 		return echo.NewHTTPError(422, err.Error())

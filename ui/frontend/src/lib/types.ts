@@ -187,9 +187,16 @@ export interface PasswordPolicy {
   pwdSafeModify?: boolean
 }
 
+/** The one error body every /api error uses (docs/api.md, "Error format"):
+ * `error` is primary, `message` an identical deprecated alias. Read `error`
+ * first. `code` is the stable machine-readable name; `retryable` says whether
+ * resending the same request may succeed. */
 export interface ApiErrorBody {
   error?: string
   message?: string
+  code?: string
+  requestId?: string
+  retryable?: boolean
 }
 
 /** Response shape for list endpoints that may cut results off at the

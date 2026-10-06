@@ -32,7 +32,7 @@ func serve(s *Server, method, path string) *httptest.ResponseRecorder {
 }
 
 // Unknown /api paths must never fall through to the SPA's index.html, and
-// must use the same {"error": ...} body respondErr produces.
+// must use the same error envelope respondErr produces.
 func TestUnknownAPIPathsReturnJSONError(t *testing.T) {
 	s := newDocsTestServer(t, config.Config{})
 	cases := []struct {
@@ -57,10 +57,7 @@ func TestUnknownAPIPathsReturnJSONError(t *testing.T) {
 			if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 				t.Fatalf("Content-Type = %q, want application/json", ct)
 			}
-			var body map[string]string
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
-				t.Fatalf("body %q is not {\"error\": ...}: %v", rec.Body.String(), err)
-			}
+			requireEnvelope(t, tc.method+" "+tc.path, rec)
 		})
 	}
 }
@@ -354,6 +351,7 @@ func TestAccessLogRecordsHEADMethod(t *testing.T) {
 	}
 	orig := os.Stdout
 	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = orig })
 	s := newDocsTestServer(t, config.Config{})
 	os.Stdout = orig
 
@@ -401,9 +399,6 @@ func TestOPTIONSBehaviour(t *testing.T) {
 		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 			t.Errorf("Content-Type = %q, want application/json", ct)
 		}
-		var body map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
-			t.Errorf("body %q is not {\"error\": ...}", rec.Body.String())
-		}
+		requireEnvelope(t, "OPTIONS /api/nope", rec)
 	})
 }

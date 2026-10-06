@@ -29,19 +29,19 @@ func (s *Server) requireSession(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		cookie, err := c.Cookie(sessionCookieName)
 		if err != nil || cookie.Value == "" {
-			return echo.NewHTTPError(http.StatusUnauthorized, "not logged in")
+			return apiErr(http.StatusUnauthorized, codeUnauthenticated, "not logged in")
 		}
 
 		id, err := session.Verify([]byte(s.cfg.SessionSecret), cookie.Value)
 		if err != nil {
 			s.clearSessionCookie(c)
-			return echo.NewHTTPError(http.StatusUnauthorized, "session invalid")
+			return apiErr(http.StatusUnauthorized, codeUnauthenticated, "session invalid")
 		}
 
 		sess, ok := s.sessions.Get(id)
 		if !ok {
 			s.clearSessionCookie(c)
-			return echo.NewHTTPError(http.StatusUnauthorized, "session expired")
+			return apiErr(http.StatusUnauthorized, codeSessionExpired, "session expired")
 		}
 
 		c.Set(sessionContextKey, sess)

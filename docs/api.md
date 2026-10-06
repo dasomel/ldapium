@@ -58,14 +58,60 @@ curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/logout"
 
 ## 오류 형식
 
-두 가지 형태가 공존하며 둘 다 명세에 정의되어 있습니다. 클라이언트는 `error`를 먼저, 없으면 `message`를 읽으세요.
+모든 `/api` 오류(4xx/5xx, 알 수 없는 경로, 허용되지 않는 메서드, 패닉 포함)는 하나의 JSON 본문입니다.
 
-| 형태 | 사용처 |
+```json
+{
+  "error": "profile changed; reload before saving",
+  "message": "profile changed; reload before saving",
+  "code": "revision_conflict",
+  "requestId": "5nQe3kXyZpLwTqA0vB9cJmRdUsHf2GoE",
+  "retryable": false
+}
+```
+
+| 필드 | 의미 |
 |---|---|
-| `{"error": "..."}` | 디렉터리/인증 핸들러(`respondErr`). 500은 `requestId` 포함, 상세 메시지는 서버 로그에만 기록 |
-| `{"message": "..."}` | 입력 검증, 세션(401), 관리자 게이트, 프로필, 백업, Keycloak, 로그인 429 |
+| `error` | 사람이 읽는 문구(주 필드). 4xx는 핸들러의 문구, 5xx는 `code`별 고정 문구이며 내부 오류 내용은 담지 않습니다 |
+| `message` | `error`와 동일한 값의 사본. **deprecated alias**이며 `/api/v1`에서는 유지하되 새 클라이언트는 `error`를 읽으세요 |
+| `code` | 안정적인 snake_case 코드. 아래 표의 닫힌 집합이며 이름은 바뀌지 않고 새 코드는 추가만 됩니다. 모르는 코드는 상태 코드로 처리하세요 |
+| `requestId` | `X-Request-Id` 응답 헤더와 같은 값. 서버 로그에서 원인을 찾을 때 사용합니다 |
+| `retryable` | 같은 요청을 그대로 다시 보내면 성공할 수 있는지 |
 
-존재하지 않는 `/api` 경로는 404, 허용되지 않는 메서드는 405 (`Allow` 헤더 포함)이며 둘 다 `{"error": "..."}` 형태입니다.
+예외(봉투가 아닌 것): 성공·리다이렉트(`/api/sso/*`), `GET /api/health/ldap`의 프로브 본문 `{"reachable": bool}`(200/503), 본문이 없는 응답(OPTIONS 204, HEAD). 이들도 `X-Request-Id` 헤더는 가집니다.
+
+`retryable`이 `true`인 429와 일시적 503에는 `Retry-After`(정수 초)가 항상 있고, 그 외 응답에는 없습니다. `412`/`428`은 다시 읽은 뒤 새 요청이 필요하므로 `false`, `500`은 일부만 적용됐을 수 있으므로 `false`입니다. `502 upstream_failed`는 GET/HEAD에서만 `true`입니다.
+
+| `code` | 상태 | 발생 |
+|---|---|---|
+| `invalid_request` | 400 | 본문 파싱 실패, 필수 값 누락, 입력 검증, 표에 없는 4xx |
+| `invalid_credentials` | 401 | 로그인/비밀번호 확인 실패 |
+| `unauthenticated` | 401 | 세션 쿠키 없음 또는 서명 불일치 |
+| `session_expired` | 401 | 세션 만료 |
+| `forbidden` | 403 | 디렉터리 ACL 거부, Keycloak 경계 |
+| `admin_required` | 403 | 프로필/백업 관리자 DN이 아님 |
+| `origin_mismatch` | 403 | 쓰기 요청의 `Origin`이 서버 origin과 다름 |
+| `not_found` | 404 | 대상 없음, 알 수 없는 경로 |
+| `feature_disabled` | 404 | 기능이 꺼져 있음(프로필, 백업, SSO, 비밀번호 로그인) |
+| `method_not_allowed` | 405 | 허용되지 않는 메서드(`Allow` 헤더) |
+| `conflict` | 409 | 디렉터리 상태와 충돌 |
+| `already_exists` | 409 | 이미 있음 |
+| `backup_busy` | 409 | 백업이 실행 중(`retryable: true`) |
+| `revision_conflict` | 412 | `If-Match` 불일치 |
+| `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
+| `validation_failed` | 422 | 형식은 맞지만 검증 실패 |
+| `if_match_required` | 428 | `If-Match` 필요 |
+| `login_rate_limited` | 429 | 로그인 실패 제한(`retryable: true`, `Retry-After`) |
+| `internal` | 500 | 예상 못 한 실패(문구 고정, `requestId`로 로그 조회) |
+| `upstream_failed` | 502 | Keycloak 작업 실패 |
+| `keycloak_disabled` | 503 | Keycloak 관리자 연결 비활성(`retryable: false`) |
+| `unavailable` | 503 | 일시적 의존성 장애(`retryable: true`, `Retry-After`) |
+
+후속 변경(#214–#217)이 쓸 이름(`token_invalid`, `token_expired`, `scope_denied`, `cursor_invalid`, `size_limit_exceeded`, `job_not_found`, `job_not_cancellable`, `persistence_unavailable`, `idempotency_*`)은 예약되어 있으며, 처음 방출하는 변경이 이 표·OpenAPI `Error.code` enum·코드 골든 목록을 함께 갱신합니다. 새 오류 조건은 코드 한 줄을 추가하고, 5xx 문구는 고정 표에 추가합니다.
+
+4xx 문구에는 DN·비밀이 없습니다. LDAP 서버가 돌려준 진단 문구는 해당 코드의 고정 문구(예: `invalid input`)로 대체되고 원문은 `requestId`와 함께 서버 로그에만 남습니다. 단 비밀번호 변경 화면이 사용자에게 보여 주는 알려진 비밀번호 정책 문구(ppolicy·ppm의 고정 문구, 예: `Password fails quality checking policy`)는 DN을 제거한 형태로 그대로 전달됩니다. 목록에 없는 새 문구는 검토 후 추가될 때까지 가려집니다.
+
+존재하지 않는 `/api` 경로는 404, 허용되지 않는 메서드는 405 (`Allow` 헤더 포함)입니다.
 HEAD는 GET 핸들러가 있는 모든 경로에서 본문 없이 GET과 동일하게 동작하며, OPTIONS는 등록된 `/api` 경로에서 204 No Content와 `Allow` 헤더를 반환합니다.
 
 ## ETag / If-Match
@@ -108,7 +154,7 @@ curl -sS -b jar.txt -X PUT \
 | 401 / 403 | 세션 없음·만료 / 권한 없음(ACL, 관리자 DN, Origin) |
 | 404 / 405 | 대상 없음·기능 비활성·알 수 없는 경로 / 허용되지 않는 메서드 |
 | 409 / 412 / 428 | 충돌 / revision 불일치 / If-Match 필요 |
-| 429 / 502 / 503 | 로그인 제한 / Keycloak 실패 / Keycloak 연결 비활성 |
+| 429 / 502 / 503 | 로그인 제한(`Retry-After`) / Keycloak 실패 / Keycloak 연결 비활성 |
 
 ## 안전 규칙
 
