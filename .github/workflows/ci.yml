@@ -240,6 +240,9 @@ jobs:
       - name: UI metrics chart assertions
         run: ./scripts/test/test-chart-ui-metrics.sh
 
+      - name: UI CORS chart assertions
+        run: ./scripts/test/test-chart-ui-cors.sh
+
       # The chart deliberately refuses to render without an admin password
       # (the image refuses to start without one), so every template call must
       # supply a throwaway value. This is a CI fixture, not a credential.

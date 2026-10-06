@@ -38,8 +38,8 @@ type Server struct {
 	sso          *oidcAuthenticator
 	loginLimiter *loginLimiter
 	// writeOrigins are the extra origins the write Origin gate accepts
-	// besides the request's own (see originGate). Empty until the CORS
-	// allow-list is wired in; the gate is on regardless.
+	// besides the request's own (see originGate): the CORS allow-list, empty
+	// by default. The gate is on regardless.
 	writeOrigins []string
 	// metrics is a no-op until EnableMetrics replaces it (see metrics.go).
 	metrics metrics.Recorder
@@ -116,6 +116,13 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 	}))
 	s.echo.Use(s.restoreMethodMiddleware())
 	s.echo.Use(middleware.Secure())
+	// CORS exists only when origins are configured (D218-12); the same list is the
+	// extra the write Origin gate accepts (D218-16). After RequestID and the
+	// logger so a preflight answered here still carries X-Request-Id and is logged.
+	if len(cfg.CORSAllowedOrigins) > 0 {
+		s.writeOrigins = cfg.CORSAllowedOrigins
+		s.echo.Use(corsMiddleware(cfg.CORSAllowedOrigins))
+	}
 	s.echo.Use(s.originGate())
 
 	if cfg.BackupOperatorConfig != "" {

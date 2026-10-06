@@ -166,6 +166,13 @@ type Config struct {
 	// ListenAddr never serves /metrics. Unauthenticated by Prometheus
 	// convention, so reachability is the operator's boundary (D218-10).
 	MetricsAddr string
+
+	// CORSAllowedOrigins (CORS_ALLOWED_ORIGINS, comma separated) are the exact
+	// scheme://host[:port] origins whose browsers may read /api GET/HEAD
+	// responses cross-origin, and the extra origins the write Origin gate
+	// accepts (D218-12, D218-16). Empty (the default) means no CORS headers on
+	// any response. Values are validated and lower-cased at load time.
+	CORSAllowedOrigins []string
 }
 
 // SSOConfig is the configuration required to use a confidential OIDC client
@@ -308,6 +315,11 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	if err := loadIdempotency(getenv, &cfg); err != nil {
+		return Config{}, err
+	}
+
+	cfg.CORSAllowedOrigins, err = parseCORSOrigins(getenv("CORS_ALLOWED_ORIGINS"))
+	if err != nil {
 		return Config{}, err
 	}
 
@@ -473,6 +485,40 @@ func validateMetricsAddr(raw, listenAddr string) (string, error) {
 		}
 	}
 	return v, nil
+}
+
+// parseCORSOrigins validates CORS_ALLOWED_ORIGINS: a comma separated list of
+// exact http(s)://host[:port] origins. Wildcards, "null", paths, queries,
+// fragments, user info and empty elements are refused rather than interpreted,
+// because each would either widen the policy (a wildcard with credentials) or
+// silently never match a browser's Origin header. Entries are lower-cased (a
+// browser sends them that way) and de-duplicated.
+func parseCORSOrigins(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS %q: empty element", raw)
+		}
+		if strings.EqualFold(entry, "null") || strings.Contains(entry, "*") {
+			return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: wildcards and null are not allowed", entry)
+		}
+		u, err := url.Parse(entry)
+		if err != nil || strings.ContainsAny(entry, "?#") || u.Opaque != "" || u.User != nil || u.Path != "" || u.Hostname() == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return nil, fmt.Errorf("invalid CORS_ALLOWED_ORIGINS entry %q: want exactly http(s)://host[:port]", entry)
+		}
+		origin := strings.ToLower(u.Scheme + "://" + u.Host)
+		if !seen[origin] {
+			seen[origin] = true
+			out = append(out, origin)
+		}
+	}
+	return out, nil
 }
 
 // parseHTTPURL applies the checks every SSO URL setting shares: absolute,

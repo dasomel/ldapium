@@ -63,10 +63,10 @@
 
 ### Phase 3 — CORS (기본 꺼짐)
 
-- [ ] `T-030` (`REQ-011`) 설정 검증: `internal/config`에 `CORS_ALLOWED_ORIGINS` 파싱(쉼표, 정확한 `scheme://host[:port]`만; `*`·`null`·경로/쿼리/사용자 정보·빈 요소는 기동 실패). 단위 테스트.
-- [ ] `T-031` (`REQ-011`, `REQ-012`) CORS 미들웨어(자체 구현 또는 Echo `middleware.CORSWithConfig`): 활성 시 **모든** 응답(일치·불일치·Origin 없음·`OPTIONS`)에 `Vary: Origin`, 일치 Origin에만 `Allow-Origin`(반영값)·`Allow-Credentials`, 프리플라이트는 핸들러(`api_docs.go:151-153`의 #230 `OPTIONS` 204) 앞에서 가로채 응답, 프리플라이트(`OPTIONS`+`Access-Control-Request-Method`)는 `GET, HEAD, OPTIONS`·`Content-Type, Accept`·`Max-Age 600`, 노출 `X-Request-Id, Retry-After, ETag`. 쓰기 메서드·불일치·`null` Origin은 헤더 없음. 미설정 시 미들웨어 비등록. 쿠키 속성(`middleware.go:64`)은 건드리지 않는다. 단위 테스트(AC-011~013 케이스 표, `Vary` 전 응답 단언). 허용 목록은 T-034 게이트의 허용 목록과 같은 설정값을 공유한다.
+- [x] `T-030` (`REQ-011`) 설정 검증: `internal/config`에 `CORS_ALLOWED_ORIGINS` 파싱(쉼표, 정확한 `scheme://host[:port]`만; `*`·`null`·경로/쿼리/사용자 정보·빈 요소는 기동 실패). 단위 테스트.
+- [x] `T-031` (`REQ-011`, `REQ-012`) CORS 미들웨어(자체 구현 또는 Echo `middleware.CORSWithConfig`): 활성 시 **모든** 응답(일치·불일치·Origin 없음·`OPTIONS`)에 `Vary: Origin`, 일치 Origin에만 `Allow-Origin`(반영값)·`Allow-Credentials`, 프리플라이트는 핸들러(`api_docs.go:151-153`의 #230 `OPTIONS` 204) 앞에서 가로채 응답, 프리플라이트(`OPTIONS`+`Access-Control-Request-Method`)는 `GET, HEAD, OPTIONS`·`Content-Type, Accept`·`Max-Age 600`, 노출 `X-Request-Id, Retry-After, ETag`. 쓰기 메서드·불일치·`null` Origin은 헤더 없음. 미설정 시 미들웨어 비등록. 쿠키 속성(`middleware.go:64`)은 건드리지 않는다. 단위 테스트(AC-011~013 케이스 표, `Vary` 전 응답 단언). 허용 목록은 T-034 게이트의 허용 목록과 같은 설정값을 공유한다.
       파일: `BE/cors.go`(신규), `BE/server.go`, `BE/cors_test.go`.
-- [ ] `T-032` (`REQ-013`) 차트 `ui.cors.allowedOrigins`(기본 빈 목록 → env 미설정)와 `docs/api.md`·`llms.txt`의 CORS 절(“같은 사이트 읽기 전용, `SameSite=Lax`상 다른 사이트는 쿠키 미전송, 머신 클라이언트는 CORS 불필요”). Q2 결과를 반영.
+- [x] `T-032` (`REQ-013`) 차트 `ui.cors.allowedOrigins`(기본 빈 목록 → env 미설정)와 `docs/api.md`·`llms.txt`의 CORS 절(“같은 사이트 읽기 전용, `SameSite=Lax`상 다른 사이트는 쿠키 미전송, 머신 클라이언트는 CORS 불필요”). Q2 결과를 반영.
 
 ## Verify
 
