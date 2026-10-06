@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -46,6 +47,10 @@ func (s *Server) handleCreateUser(c echo.Context) error {
 		OrganizationalUnit: req.OrganizationalUnit,
 	})
 	if err != nil {
+		var ce *domain.CreateError
+		if errors.As(err, &ce) {
+			return respondCreateFailure(c, ce, req.UID)
+		}
 		return respondErr(c, err)
 	}
 	return c.JSON(http.StatusCreated, createdResponse{DN: dn})

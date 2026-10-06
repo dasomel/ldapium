@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -18,8 +19,6 @@ import (
 //
 // Errors go through the single envelope (errors.go): a stale tag is
 // domain.ErrRevisionConflict, mapped by domainStatus to 412 revision_conflict.
-
-const codePartialFailure = "partial_failure"
 
 // ifMatchCSN extracts the revision condition of a write. It returns "" for
 // "no condition": the header is absent, or it is "*" (RFC 9110: the entry
@@ -56,4 +55,33 @@ func rejectIfMatch(c echo.Context) error {
 
 func errInvalidIfMatch() error {
 	return echo.NewHTTPError(http.StatusBadRequest, "invalid If-Match: expected one strong entity-tag as returned in etag/ETag, or *")
+}
+
+// respondCreateFailure reports a user creation whose password step did not
+// complete (see ldapclient/create_compensation.go for what each state
+// guarantees), through the single envelope.
+//
+// rolled_back: the entry is gone and a retry is safe. It is a plain envelope
+// (the status/code follow the password-step cause: invalid_request for a
+// policy rejection, forbidden, else internal) whose text starts "user not
+// created"; the directory's own text passes the same allowlist filter as every
+// other 4xx (publicDomainMessage), so a ppm "Password for dn=..." diagnostic
+// never reaches the response. Every other state is 500 partial_failure with
+// the entry's dn (what a 201 would have carried: the one deliberate DN in an
+// error body, the caller needs it to clean up), a state, and the static text.
+// Directory text only goes to the log, escaped and bounded.
+func respondCreateFailure(c echo.Context, ce *domain.CreateError, uid string) error {
+	reqID := requestIDOf(c)
+	fp := fingerprintIdentity(uid)
+	if ce.State == domain.CreatePartial {
+		log.Printf("user_create_partial request_id=%s uid_fp=%s cause=%s", logQuote(reqID), fp, logDetail(ce.Err))
+		return writeAPIErrorExt(c, http.StatusInternalServerError, codePartialFailure, "", ce, string(ce.State), ce.DN)
+	}
+
+	log.Printf("user_create_rolled_back request_id=%s uid_fp=%s cause=%s", logQuote(reqID), fp, logDetail(ce.Err))
+	if status, code, sentinel, ok := domainStatus(ce.Err); ok {
+		msg, _ := publicDomainMessage(sentinel, ce.Err)
+		return writeAPIError(c, status, code, "user not created: "+msg, ce.Err)
+	}
+	return writeAPIError(c, http.StatusInternalServerError, codeInternal, "", ce.Err)
 }

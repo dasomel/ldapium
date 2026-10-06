@@ -5570,7 +5570,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text.",
+        "description": "The one error body every /api error uses (except the GET /api/health/ldap probe, redirects and bodiless OPTIONS/HEAD responses). `error` is the primary field; `message` is an identical, deprecated alias kept for older clients. Branch on `code`, not on the text. Exception: `partial_failure` (500, POST /api/users) additionally carries `state` and `dn`.",
         "required": [
           "error",
           "message",
@@ -5606,6 +5606,7 @@
               "method_not_allowed",
               "not_found",
               "origin_mismatch",
+              "partial_failure",
               "revision_conflict",
               "session_expired",
               "unauthenticated",
@@ -5623,6 +5624,19 @@
           "retryable": {
             "type": "boolean",
             "description": "Whether sending the same request again, unchanged, may succeed. False for 412/428 (reload first) and 500 (partial effects possible)."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "partial",
+              "unknown",
+              "identity_changed"
+            ],
+            "description": "Only with `code: partial_failure` (a user creation whose password step did not complete): `partial` the verified delete was refused and the entry remains; `unknown` the delete's outcome was not observed; `identity_changed` the new entry could not be verified as created by this request and untouched, the password was NOT set and nothing was deleted. This and `dn` are the documented exception to the five-key envelope."
+          },
+          "dn": {
+            "type": "string",
+            "description": "Only with `code: partial_failure`: the DN of the entry to check (the value a 201 would have returned). The one DN an error body carries."
           }
         },
         "example": {

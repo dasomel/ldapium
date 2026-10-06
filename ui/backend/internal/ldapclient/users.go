@@ -83,7 +83,10 @@ func entryToUser(e *ldap.Entry) domain.User {
 // CreateUser adds a new inetOrgPerson entry under base and, if in.Password
 // is set, immediately sets its password via the RFC 3062 Password Modify
 // extended operation rather than writing userPassword directly (so the
-// server's configured password hashing/policy is honored).
+// server's configured password hashing/policy is honored). If the password
+// step fails the entry is removed again when it provably is this request's
+// (*domain.CreateError, state rolled_back) and otherwise left in place and
+// reported as state partial; see create_compensation.go.
 func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInput) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -125,11 +128,15 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 	}
 
 	if in.Password != "" {
+		// Pin down which entry this request created before the second
+		// step can fail (see create_compensation.go). A failed read is not
+		// fatal here: it only disables the compensating delete.
+		id, readErr := c.readIdentity(dn)
 		// No old password: this is the initial password on a brand new
 		// entry, set by whoever is authorized to create users, not a
 		// self-service change.
 		if _, err := c.SetPassword(ctx, dn, "", in.Password); err != nil {
-			return dn, fmt.Errorf("user created but setting password failed: %w", err)
+			return dn, c.compensateCreate(dn, id, readErr, err)
 		}
 	}
 	return dn, nil

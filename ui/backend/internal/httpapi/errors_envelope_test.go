@@ -21,7 +21,7 @@ var goldenCodes = []string{
 	"admin_required", "already_exists", "backup_busy", "conflict", "feature_disabled",
 	"forbidden", "if_match_required", "internal", "invalid_credentials", "invalid_request",
 	"keycloak_disabled", "login_rate_limited", "method_not_allowed", "not_found",
-	"origin_mismatch", "revision_conflict", "session_expired", "unauthenticated",
+	"origin_mismatch", "partial_failure", "revision_conflict", "session_expired", "unauthenticated",
 	"unavailable", "unsupported_media_type", "upstream_failed", "validation_failed",
 }
 
