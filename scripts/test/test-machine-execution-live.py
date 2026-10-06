@@ -75,6 +75,7 @@ ui_main = name_prefix + '-ui'
 ui_over = name_prefix + '-uiover'
 ui_off = name_prefix + '-uioff'
 ui_tls = name_prefix + '-uitls'
+ui_lim = name_prefix + '-uilim'
 
 base_dn = 'dc=example,dc=org'
 admin_dn = 'cn=admin,' + base_dn
@@ -511,8 +512,14 @@ def start_ui(name, ldap_url, env, hold_secrets):
   return Api(base)
 
 
-def machine_env(bind_dn, clients):
-  return {
+def machine_env(bind_dn, clients, limits=None):
+  # The limiters (T-018) are on in every machine container. This script sends
+  # hundreds of requests from ONE client and ONE source IP, including probes
+  # that are denied (403) or invalid (401) on purpose, so the defaults (5 rps,
+  # 10 failures per minute) would turn those probes into 429s and test the
+  # wrong thing. The generous values keep the probes out of the limiters; the
+  # "limiters" phase passes `limits` for its own small-limit container.
+  env = {
       'LDAP_BASE_DN': base_dn, 'LDAP_USER_CREATE_BASE': 'ou=people,' + base_dn,
       'LDAP_GROUP_CREATE_BASE': 'ou=groups,' + base_dn, 'COOKIE_SECURE': 'false',
       'UI_TRUSTED_PROXIES': 'none',
@@ -521,6 +528,11 @@ def machine_env(bind_dn, clients):
       'MACHINE_LDAP_BIND_DN': bind_dn, 'MACHINE_LDAP_ROOT_DNS': admin_dn,
       'MACHINE_REQUEST_TIMEOUT': '3s', 'MACHINE_MAX_CONCURRENCY': '2',
   }
+  env.update(limits or {
+      'MACHINE_AUTH_FAILURE_LIMIT': '1000', 'MACHINE_RATE_LIMIT_RPS': '10000', 'MACHINE_RATE_LIMIT_BURST': '10000',
+      'MACHINE_CLIENT_CONCURRENCY': '1000', 'MACHINE_MAX_AUTH_CONCURRENCY': '1000',
+  })
+  return env
 
 
 READER = ['directory.users.read', 'directory.groups.read', 'directory.tree.read', 'directory.entry.read',
@@ -971,9 +983,69 @@ member: {seed_user_dn}
   check(codes == [200] * 4 and proxy.open <= 1, 'after slapd came back the machine path recovered without restarting the UI; no leaked slot or connection')
   settled()
 
+  # ---- limiters (T-018, AC-011): a small-limit container against the real stack ----
+  # Own container so the small budget cannot disturb the probes above. Source IP
+  # is the docker gateway for every request here (UI_TRUSTED_PROXIES=none), and
+  # the failure window is the 1s minimum x5 so recovery is observable quickly.
+  lim_window = 5
+  lim_api = start_ui(ui_lim, f'ldap://{ldap_container}:389',
+                     machine_env(machine_dn, CLIENTS, {
+                         'MACHINE_AUTH_FAILURE_LIMIT': '3', 'MACHINE_AUTH_FAILURE_WINDOW': f'{lim_window}s',
+                         'MACHINE_RATE_LIMIT_RPS': '1', 'MACHINE_RATE_LIMIT_BURST': '2',
+                         'MACHINE_CLIENT_CONCURRENCY': '4', 'MACHINE_MAX_AUTH_CONCURRENCY': '16'}),
+                     {'SESSION_SECRET': session_secret, 'MACHINE_LDAP_BIND_PASSWORD': machine_password})
+  limiter_tokens = []
+
+  def lim_tok(client):
+    t = tok(client)
+    limiter_tokens.append(t)
+    return t
+
+  # client budget: burst 2 at 1 rps; another client keeps working
+  codes = [lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] for _ in range(2)]
+  st, hdrs, body = lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')
+  check(codes == [200, 200] and st == 429 and jbody(body).get('code') == 'machine_rate_limited' and jbody(body).get('retryable') is True,
+        f'client budget: burst of 2 passes, the 3rd is 429 machine_rate_limited (got {codes} then {st})')
+  retry = hdrs.get('Retry-After', '')
+  check(retry.isdigit() and int(retry) >= 1, f'the budget 429 carries an integer Retry-After ({retry!r})')
+  st2, _, _ = lim_api.machine(lim_tok('svc-reader2'), '/api/users?limit=1')
+  check(st2 == 200, 'budget isolation: another client is still served while svc-reader is exhausted')
+  time.sleep(int(retry) + 0.5)
+  check(lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] == 200, 'the exhausted client recovers after Retry-After')
+  # a refused request is not an authentication failure of the source
+  time.sleep(lim_window + 1)  # drain the bucket and any window state
+
+  # IP failure throttle: malformed headers count, the 4th attempt is refused
+  def raw_get(headers):
+    return lim_api.call('GET', '/api/users?limit=1', headers)
+
+  odd = [raw_get({'Authorization': 'Bearer  two-spaces'})[0] for _ in range(3)]
+  st, hdrs, body = raw_get({'Authorization': 'Bearer  two-spaces'})
+  check(odd == [401, 401, 401] and st == 429 and jbody(body).get('code') == 'machine_rate_limited',
+        f'IP throttle: 3 malformed Authorization headers are 401, the 4th is 429 (got {odd} then {st})')
+  ra = hdrs.get('Retry-After', '')
+  check(ra.isdigit() and 1 <= int(ra) <= lim_window, f'the IP 429 Retry-After is within the window ({ra!r})')
+  # before any signature work: even a perfectly valid token is refused, and the issuer is never asked again
+  jwks_before = mock_idp.jwks_hits
+  st, _, body = lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')
+  check(st == 429 and jbody(body).get('code') == 'machine_rate_limited' and mock_idp.jwks_hits == jwks_before,
+        'a VALID token from the throttled IP is refused with 429 before verification')
+  time.sleep(int(ra) + 1)
+  check(lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] == 200, 'recovery: the same source is served again after the window')
+  # invalid signatures count as well
+  bad_sigs = [lim_api.machine(tamper(lim_tok('svc-reader')), '/api/users?limit=1')[0] for _ in range(3)]
+  st, _, _ = lim_api.machine(tamper(lim_tok('svc-reader')), '/api/users?limit=1')
+  check(bad_sigs == [401, 401, 401] and st == 429, f'IP throttle: 3 bad signatures are 401, the 4th is 429 (got {bad_sigs} then {st})')
+  time.sleep(lim_window + 1)
+  check(lim_api.machine(lim_tok('svc-reader'), '/api/users?limit=1')[0] == 200, 'recovery after the window again')
+  lim_lines = audit_lines(ui_lim)
+  check(any('"reason":"rate"' in l and '"actor":"svc-reader"' in l for l in lim_lines) and
+        any('"reason":"rate"' in l and '"actor":"unknown"' in l and '"token_fingerprint"' in l for l in lim_lines),
+        'audit: the budget 429 names the client, the IP 429 is actor unknown with a fingerprint, both reason=rate')
+
   # ---- AC-010: one audit line per request, no token material in any log -------
   rids = []
-  tokens_used = []
+  tokens_used = list(limiter_tokens)
   for i in range(6):
     t = tok('svc-reader')
     tokens_used.append(t)
@@ -997,7 +1069,7 @@ member: {seed_user_dn}
   check('"actor":"unknown"' in bad_line and '"token_fingerprint"' in bad_line, 'a bad signature is logged with actor unknown plus a token fingerprint')
   check(any('"actor":"svc-groups"' in l and '"reason":"scope"' in l for l in lines), 'a scope denial after verification names the verified client as actor')
   scan = ''
-  for c in (ui_main, ui_over, ui_off, ui_tls, ldap_container):
+  for c in (ui_main, ui_over, ui_off, ui_tls, ui_lim, ldap_container):
     out = run(['docker', 'logs', c])
     scan += out.stdout + out.stderr
   leaks = []

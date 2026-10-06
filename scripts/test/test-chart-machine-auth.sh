@@ -14,6 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 fail=0
+# HELM=/path/to/helm runs the script against a specific Helm (CI pins 3.17.3).
+helm() { command "${HELM:-helm}" "$@"; }
 ok() { printf 'PASS: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 
@@ -29,10 +31,14 @@ refuses() {
 	local desc=$1 want=$2
 	shift 2
 	local out
+	# Schema errors name the property as a dotted path in Helm 3 (ui.machineAuth.
+	# rateLimit.rps) and as a slash path in Helm 4 ('/ui/machineAuth/rateLimit/rps'),
+	# with different wording for the reason. Only the property path is asserted, in
+	# dotted form: '/' in the output is normalised to '.' before matching.
 	if out=$(render "$@" 2>&1); then
 		bad "$desc (rendered, expected a failure)"
-	elif has "$out" "$want"; then
-		ok "$desc"; [ -z "${VERBOSE:-}" ] || printf "      %s\n" "$(printf "%s" "$out" | tail -n 2)"
+	elif out=$(printf '%s' "$out" | tr '/' '.'); has "$out" "$want"; then
+		ok "$desc"
 	else
 		bad "$desc (failed without \"$want\": $(printf '%s' "$out" | tail -n 3))"
 	fi
@@ -143,12 +149,12 @@ refuses "all missing values are listed in one message" "audience, ui.machineAuth
 refuses "an http issuer fails" "https" "${on[@]}" --set-string ui.machineAuth.issuerURL=http://sso.example.com/realms/example
 refuses "trustedProxies=private (the default) fails" "ui.trustedProxies" "${on[@]}" --set-string ui.trustedProxies=private
 refuses "an empty trustedProxies fails" "ui.trustedProxies" "${on[@]}" --set-string ui.trustedProxies=
-refuses "a client without scopes fails" "allowedClients/0/scopes" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":[]}]'
-refuses "an unknown scope fails the schema" "allowedClients/0/scopes/0" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":["directory.users.write"]}]'
-refuses "a client id with a separator fails" "allowedClients/0/id" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"a;b","scopes":["audit.read"]}]'
-refuses "the account audience fails" "machineAuth/audience" "${on[@]}" --set-string ui.machineAuth.audience=account
+refuses "a client without scopes fails" "allowedClients.0.scopes" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":[]}]'
+refuses "an unknown scope fails the schema" "allowedClients.0.scopes.0" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":["directory.users.write"]}]'
+refuses "a client id with a separator fails" "allowedClients.0.id" "${on[@]}" --set-json 'ui.machineAuth.allowedClients=[{"id":"a;b","scopes":["audit.read"]}]'
+refuses "the account audience fails" "machineAuth.audience" "${on[@]}" --set-string ui.machineAuth.audience=account
 refuses "an insecure http switch is not a value (unknown key)" "insecureHTTP" "${on[@]}" --set ui.machineAuth.insecureHTTP=true
-refuses "a limit of zero fails the schema" "rateLimit/rps" "${on[@]}" --set ui.machineAuth.rateLimit.rps=0
-refuses "a timeout over 300 s fails the schema" "machineAuth/requestTimeoutSeconds" "${on[@]}" --set ui.machineAuth.requestTimeoutSeconds=301
+refuses "a limit of zero fails the schema" "rateLimit.rps" "${on[@]}" --set ui.machineAuth.rateLimit.rps=0
+refuses "a timeout over 300 s fails the schema" "machineAuth.requestTimeoutSeconds" "${on[@]}" --set ui.machineAuth.requestTimeoutSeconds=301
 
 exit "$fail"

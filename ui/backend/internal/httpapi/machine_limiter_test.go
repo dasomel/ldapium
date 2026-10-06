@@ -49,10 +49,15 @@ type gateKeys struct {
 	entered chan struct{}
 	gate    chan struct{}
 	err     error
+	// panicOn makes the key source panic (a bug in verification, stage test).
+	panicOn atomic.Bool
 }
 
 func (g *gateKeys) VerifySignature(ctx context.Context, jws string) ([]byte, error) {
 	g.calls.Add(1)
+	if g.panicOn.Load() {
+		panic("key source bug")
+	}
 	if g.entered != nil {
 		g.entered <- struct{}{}
 	}

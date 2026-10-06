@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -237,7 +238,10 @@ func (m *machineAuth) acquireAuthSlot() (func(), bool) {
 	}
 	select {
 	case m.authSlots <- struct{}{}:
-		return func() { <-m.authSlots }, true
+		// Exactly once: serve returns the slot right after verification and also
+		// defers it, so a panic anywhere in verification cannot leak the slot.
+		var once sync.Once
+		return func() { once.Do(func() { <-m.authSlots }) }, true
 	default:
 		return nil, false
 	}
@@ -262,6 +266,7 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 		c.Response().Header().Set(echo.HeaderRetryAfter, "1")
 		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication concurrency limit reached")
 	}
+	defer release()
 	p, fail := m.verifier.Verify(c.Request().Context(), token)
 	release()
 	if fail != nil {
