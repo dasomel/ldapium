@@ -37,18 +37,23 @@ need npx "install Node"
 # The inventory is the linux build's: CI and the shipped distroless image are
 # linux, and some modules (prometheus/procfs) only compile there, so a run on
 # macOS would otherwise disagree with CI about what is current. The tool itself
-# has to run on the host, so it is installed for the host (once, into a cache
-# dir) and only its package loading is pointed at linux.
+# has to run on the host, so a go-licenses that is not on PATH is installed for
+# the host into a private mktemp -d directory (0700, owned by this user, removed
+# afterwards; go install verifies the module against the checksum database), and
+# only its package loading is pointed at linux. Nothing is ever executed from a
+# predictable shared path such as /tmp/<name>.
 go_licenses() {
-	local bin
+	local bin dir="" rc=0
 	if command -v go-licenses >/dev/null 2>&1; then
 		bin=$(command -v go-licenses)
 	else
-		local dir="${TMPDIR:-/tmp}/ldapium-go-licenses-v1.6.0"
+		dir=$(mktemp -d)
+		GOBIN="$dir" go install github.com/google/go-licenses@v1.6.0
 		bin="$dir/go-licenses"
-		[ -x "$bin" ] || GOBIN="$dir" go install github.com/google/go-licenses@v1.6.0
 	fi
-	GOOS=linux "$bin" "$@"
+	GOOS=linux "$bin" "$@" || rc=$?
+	[ -z "$dir" ] || rm -rf "$dir"
+	return "$rc"
 }
 
 # go-licenses reports this repo's own packages as Unknown (the LICENSE lives at
