@@ -25,6 +25,29 @@
 {{- if not .Values.ui.keycloakAdmin.observeClients }}{{ fail "keycloakAdmin requires observeClients" }}{{ end }}
 {{- if and .Values.ui.keycloakAdmin.delegateClients (not .Values.ui.keycloakAdmin.isolatedRealm) }}{{ fail "delegated writes require an isolated realm" }}{{ end }}
 {{- end }}
+{{- if .Values.ui.machineAuth.enabled }}
+{{- /*
+  Machine bearer auth (#214): every value it cannot run without, checked in one
+  pass (same shape as the SSO block below). The application re-validates all of
+  it at startup; this keeps a bad install from reaching a crash-looping pod.
+*/ -}}
+{{- $ma := .Values.ui.machineAuth -}}
+{{- $missing := list -}}
+{{- if and (not $ma.issuerURL) (not .Values.ui.sso.enabled) }}{{ $missing = append $missing "ui.machineAuth.issuerURL (or ui.sso.enabled=true to inherit the SSO issuer)" }}{{ end -}}
+{{- if not $ma.audience }}{{ $missing = append $missing "ui.machineAuth.audience" }}{{ end -}}
+{{- if not $ma.allowedClients }}{{ $missing = append $missing "ui.machineAuth.allowedClients" }}{{ end -}}
+{{- if not $ma.ldapBindDN }}{{ $missing = append $missing "ui.machineAuth.ldapBindDN" }}{{ end -}}
+{{- if not $ma.existingSecret }}{{ $missing = append $missing "ui.machineAuth.existingSecret (the machine LDAP bind password)" }}{{ end -}}
+{{- if not $ma.existingSecretKey }}{{ $missing = append $missing "ui.machineAuth.existingSecretKey" }}{{ end -}}
+{{- if $missing }}{{ fail (printf "ui.machineAuth.enabled=true requires: %s" (join ", " $missing)) }}{{ end -}}
+{{- if and $ma.issuerURL (not (hasPrefix "https://" $ma.issuerURL)) }}{{ fail "ui.machineAuth.issuerURL must use https" }}{{ end -}}
+{{- if or (eq (trim .Values.ui.trustedProxies) "") (eq (lower (trim .Values.ui.trustedProxies)) "private") }}{{ fail "ui.machineAuth.enabled=true requires ui.trustedProxies to be an explicit CIDR list or \"none\", not \"private\" (a client on the internal network could forge X-Forwarded-For and dodge the per-IP throttle)" }}{{ end -}}
+{{- range $c := $ma.allowedClients }}
+{{- if not $c.id }}{{ fail "ui.machineAuth.allowedClients entries need an id" }}{{ end }}
+{{- if regexMatch "[=;,\\s]" $c.id }}{{ fail (printf "ui.machineAuth.allowedClients id %q must not contain = ; , or whitespace" $c.id) }}{{ end }}
+{{- if not $c.scopes }}{{ fail (printf "ui.machineAuth.allowedClients %q needs at least one scope" $c.id) }}{{ end }}
+{{- end }}
+{{- end }}
 {{- if .Values.ui.sso.enabled }}
 {{- /*
   Every value SSO cannot run without, checked in one pass so a misconfigured
@@ -76,6 +99,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- if .Values.ui.machineAuth.enabled }}
+      {{- /* D7: in-flight machine requests (up to MACHINE_REQUEST_TIMEOUT) must be able to finish when a pod is replaced for an emergency block. */}}
+      terminationGracePeriodSeconds: {{ max 30 (add (int .Values.ui.machineAuth.requestTimeoutSeconds) 5) }}
+      {{- end }}
       serviceAccountName: {{ include "ldapium.ui.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -328,6 +355,62 @@ spec:
             {{- if .Values.ui.metrics.enabled }}
             - name: METRICS_ADDR
               value: {{ printf ":%s" (include "ldapium.ui.metricsPort" .) | quote }}
+            {{- end }}
+            {{- if .Values.ui.machineAuth.enabled }}
+            {{- $ma := .Values.ui.machineAuth }}
+            - name: MACHINE_AUTH_ENABLED
+              value: "true"
+            {{- if $ma.issuerURL }}
+            - name: MACHINE_OIDC_ISSUER_URL
+              value: {{ $ma.issuerURL | quote }}
+            {{- end }}
+            - name: MACHINE_OIDC_AUDIENCE
+              value: {{ $ma.audience | quote }}
+            {{- $clients := list }}
+            {{- range $c := $ma.allowedClients }}
+            {{- $clients = append $clients (printf "%s=%s" $c.id (join "," $c.scopes)) }}
+            {{- end }}
+            - name: MACHINE_ALLOWED_CLIENTS
+              value: {{ join ";" $clients | quote }}
+            - name: MACHINE_TOKEN_MAX_TTL
+              value: {{ $ma.tokenMaxTTL | quote }}
+            - name: MACHINE_CLOCK_SKEW
+              value: {{ $ma.clockSkew | quote }}
+            - name: MACHINE_LDAP_BIND_DN
+              value: {{ $ma.ldapBindDN | quote }}
+            - name: MACHINE_LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ma.existingSecret | quote }}
+                  key: {{ $ma.existingSecretKey | quote }}
+            {{- /* The backend does not know the main database rootdn, so the chart derives it from the value the server itself uses (ldap.adminDN, default cn=admin,<rootDN>). Entries are ";"-separated because a DN contains commas. */}}
+            {{- $rootDNs := prepend $ma.extraRootDNs (.Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN)) }}
+            - name: MACHINE_LDAP_ROOT_DNS
+              value: {{ join ";" $rootDNs | quote }}
+            - name: MACHINE_JWKS_CACHE_TTL
+              value: {{ $ma.jwks.cacheTTL | quote }}
+            - name: MACHINE_JWKS_MAX_STALE
+              value: {{ $ma.jwks.maxStale | quote }}
+            - name: MACHINE_JWKS_MIN_REFRESH
+              value: {{ $ma.jwks.minRefresh | quote }}
+            - name: MACHINE_AUTH_FAILURE_LIMIT
+              value: {{ $ma.authFailureLimit | quote }}
+            - name: MACHINE_AUTH_FAILURE_WINDOW
+              value: {{ $ma.authFailureWindow | quote }}
+            - name: MACHINE_RATE_LIMIT_RPS
+              value: {{ $ma.rateLimit.rps | quote }}
+            - name: MACHINE_RATE_LIMIT_BURST
+              value: {{ $ma.rateLimit.burst | quote }}
+            - name: MACHINE_CLIENT_CONCURRENCY
+              value: {{ $ma.clientConcurrency | quote }}
+            - name: MACHINE_MAX_CONCURRENCY
+              value: {{ $ma.maxConcurrency | quote }}
+            - name: MACHINE_MAX_AUTH_CONCURRENCY
+              value: {{ $ma.maxAuthConcurrency | quote }}
+            - name: MACHINE_IP_LIMITER_MAX
+              value: {{ $ma.ipLimiterMax | quote }}
+            - name: MACHINE_REQUEST_TIMEOUT
+              value: {{ printf "%ds" (int $ma.requestTimeoutSeconds) | quote }}
             {{- end }}
             {{- if .Values.ui.sso.enabled }}
             - name: SSO_ENABLED

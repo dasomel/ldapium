@@ -110,6 +110,10 @@ const (
 	codeTokenInvalid = "token_invalid"
 	codeTokenExpired = "token_expired"
 	codeScopeDenied  = "scope_denied"
+	// codeMachineRateLimited: a machine bearer request refused by the IP
+	// failure throttle or by a verified client's budget (#214, T-018). 429 with
+	// Retry-After; retryable.
+	codeMachineRateLimited = "machine_rate_limited"
 )
 
 // Static 5xx texts (D218-8). The Keycloak ones are the pre-envelope phrases,
@@ -187,6 +191,7 @@ var codeTable = map[string]codeSpec{
 	codeTokenInvalid:              {http.StatusUnauthorized, ""},
 	codeTokenExpired:              {http.StatusUnauthorized, ""},
 	codeScopeDenied:               {http.StatusForbidden, ""},
+	codeMachineRateLimited:        {http.StatusTooManyRequests, ""},
 }
 
 // codeForStatus is the default code for a bare echo.NewHTTPError(status, ...)
@@ -243,7 +248,7 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
+	case codeLoginRateLimited, codeMachineRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
 		codeIdempotencyKeyConflict, codeIdempotencyCapacity:
 		return true
 	case codeUpstreamFailed:

@@ -5319,7 +5319,7 @@
         }
       },
       "TooManyRequests": {
-        "description": "Too many failed login attempts from this IP (`login_rate_limited`).",
+        "description": "Too many failed login attempts from this IP (`login_rate_limited`), or, on the machine bearer path, a refused IP failure throttle or client budget (`machine_rate_limited`).",
         "headers": {
           "Retry-After": {
             "description": "Seconds until another attempt is allowed.",
@@ -6997,6 +6997,7 @@
               "job_not_found",
               "keycloak_disabled",
               "login_rate_limited",
+              "machine_rate_limited",
               "method_not_allowed",
               "not_found",
               "origin_mismatch",
