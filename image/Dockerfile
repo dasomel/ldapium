@@ -99,12 +99,23 @@ RUN make -C contrib/slapd-modules/ppm ppm CRACK=no \
 # `go` directive past the builder's version fails here, and the builder tag is
 # then what has to move.
 #
+# EXPORTER_X_CRYPTO_VERSION overrides the golang.org/x/crypto the exporter
+# resolves. Observed: v2.9.18's go.mod requires x/crypto v0.54.0, and Trivy
+# flags the built binary for CVE-2026-56854 (HIGH), CVE-2026-56855 and
+# CVE-2026-78662 (MEDIUM), all fixed in v0.56.0; upstream has not released a
+# version that requires the fix. `go get` runs against the normal module proxy
+# and checksum database (no GOFLAGS, GONOSUMDB or -insecure), so the new
+# module and whatever it forces up (x/sys, x/net, x/text, ...) are recorded in
+# go.sum only after verification. Remove this override, and the `go get` below,
+# once the upstream exporter's go.mod requires x/crypto >= this version.
+#
 # The upstream go.mod carries a `replace` directive, which `go install pkg@version`
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
 FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.18
+ARG EXPORTER_X_CRYPTO_VERSION=v0.56.0
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
 RUN set -eux; \
@@ -120,6 +131,7 @@ RUN set -eux; \
     cp -r "$(go env GOMODCACHE)/${mod}" /src; \
     chmod -R u+w /src; \
     cd /src; \
+    go get "golang.org/x/crypto@${EXPORTER_X_CRYPTO_VERSION}"; \
     go build -trimpath \
         -ldflags "-s -w -X main.tag=${OPENLDAP_EXPORTER_VERSION}" \
         -o /out/openldap_exporter main.go; \
