@@ -299,4 +299,4 @@ the new check never ran on the SHA: exit 1  ::error::release-critical check "mac
 a job name that does not match exactly: exit 1  (same error)
 ```
 
-`actionlint`는 새 파일에서 기존 워크플로와 같은 `queue` 키 경고 1건만 낸다(이 actionlint 버전이 job concurrency의 `queue`를 아직 모름; 기존 12개 파일 동일). GitHub에서의 첫 실행 결과는 PR의 CI 결과를 따른다.
+`actionlint`는 새 파일에서 기존 워크플로와 같은 `queue` 키 경고 1건만 낸다(이 actionlint 버전이 job concurrency의 `queue`를 아직 모름; 기존 12개 파일 동일). 실제 GitHub Actions: PR #281(커밋 `70f0588`)의 첫 실행에서 `gh pr checks`가 `machine bearer auth (real Keycloak)  pass  10m0s`를 보고했다 — job 이름이 `release_critical`의 문자열과 글자 그대로 같다(check run 이름 일치 확인).
