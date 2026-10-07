@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,5 +172,65 @@ func TestReservationTTL_LeakedReservationExpires(t *testing.T) {
 	clock.Advance(time.Millisecond)
 	if _, _, ok := th.admit(limRemote); !ok {
 		t.Fatal("a leaked reservation was not reclaimed at its expiry")
+	}
+}
+
+func auditReason(t *testing.T, lc *logCapture, id string) string {
+	t.Helper()
+	lines := auditLines(lc, id)
+	if len(lines) != 1 {
+		t.Fatalf("audit lines for %s: %v", id, lines)
+	}
+	r, _ := parseAudit(t, lines[0])["reason"].(string)
+	return r
+}
+
+// The audit reason of an authentication that ran into its deadline during the
+// JWKS wait is `deadline`, not `jwks_unavailable` (D31).
+func TestReservationTTL_DeadlineDuringJWKSWaitIsAuditedAsDeadline(t *testing.T) {
+	sr := newSlowRefresh(t, 150*time.Millisecond, time.Second)
+	lc := captureLog(t)
+	id := nextReqID()
+	rec := sr.h.from(limRemote, "GET", "/api/users", withID(bearer(sr.tok), id))
+	if rec.Code != 503 {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := auditReason(t, lc, id); got != "deadline" {
+		t.Fatalf("audit reason = %q, want deadline", got)
+	}
+}
+
+// A key source that is down without any deadline expiring stays jwks_unavailable.
+func TestReservationTTL_JWKSRefusedIsStillJWKSUnavailable(t *testing.T) {
+	h := newHarness(t, harnessOpt{idpDown: true})
+	lc := captureLog(t)
+	id := nextReqID()
+	rec := h.do("GET", "/api/users", withID(bearer(h.token("machine-a", "profile directory.users.read")), id))
+	if rec.Code != 503 {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := auditReason(t, lc, id); got != "jwks_unavailable" {
+		t.Fatalf("audit reason = %q, want jwks_unavailable", got)
+	}
+}
+
+// A client that goes away during the JWKS wait is not a deadline.
+func TestReservationTTL_ClientCancelDuringJWKSWaitIsNotDeadline(t *testing.T) {
+	sr := newSlowRefresh(t, 0, time.Second)
+	lc := captureLog(t)
+	id := nextReqID()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- sr.h.fromCtx(ctx, limRemote, "GET", "/api/users", withID(bearer(sr.tok), id)).Code }()
+	<-sr.entered
+	cancel()
+	if got := <-done; got != 503 {
+		t.Fatalf("status = %d, want 503", got)
+	}
+	if got := auditReason(t, lc, id); got != "jwks_unavailable" {
+		t.Fatalf("audit reason = %q, want jwks_unavailable (unchanged)", got)
+	}
+	if n := sr.h.s.machine.ip.fails.failureCount(limRemote); n != 0 {
+		t.Errorf("failures = %d, want 0", n)
 	}
 }

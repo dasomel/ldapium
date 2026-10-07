@@ -24,8 +24,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a
   private peer outside the list could forge `X-Forwarded-For` and take a fresh
-  login-limiter/machine-limiter budget per request. The login limiter and the audit
-  line share this extractor. If you set a CIDR list and relied on the implicit
+  login-limiter/machine-limiter budget per request. The extractor is used by the login
+  limiter and the machine limiter only (the machine audit line carries no IP). If you set a CIDR list and relied on the implicit
   private-network trust, list every proxy CIDR explicitly (`private` and `none`
   are unchanged). Related to #214.
 - Machine bearer limits: the per-IP reservation now outlives the longest possible

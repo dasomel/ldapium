@@ -301,7 +301,9 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	// the context) and fails closed.
 	authCtx, cancelAuth := context.WithTimeout(c.Request().Context(), m.authTimeout)
 	p, fail := m.verifier.Verify(authCtx, token)
-	expired := authCtx.Err() != nil
+	// Only the phase's own deadline counts: a client that went away ends the
+	// context with Canceled and keeps its reason.
+	expired := errors.Is(authCtx.Err(), context.DeadlineExceeded)
 	cancelAuth()
 	release()
 	if fail == nil && expired {
@@ -316,7 +318,13 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 		if !fail.Unavailable {
 			tk.fail()
 		}
-		st.setReason(string(fail.Reason))
+		if fail.Unavailable && expired {
+			// The wait for the key source ended at the deadline: audited as
+			// such, not as a key source outage (HTTP behaviour unchanged).
+			st.forceReason(reasonDeadline)
+		} else {
+			st.setReason(string(fail.Reason))
+		}
 		return machineFailure(c, fail)
 	}
 	// From here on the identity is verified, so it is what the audit line names.
