@@ -98,18 +98,7 @@ func main() {
 	<-quit
 
 	stopJanitor()
-	grace := shutdownGrace(cfg.Machine.Enabled, cfg.Machine.RequestTimeout)
-	log.Printf("shutting down, waiting up to %s for in-flight requests", grace)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("graceful shutdown failed: %v", err)
-	}
-	if metricsServer != nil {
-		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("metrics shutdown failed: %v", err)
-		}
-	}
+	gracefulShutdown(httpServer, metricsServer, shutdownGrace(cfg.Machine.Enabled, cfg.Machine.RequestTimeout))
 }
 
 // healthcheck asks the running server the same question the Kubernetes
