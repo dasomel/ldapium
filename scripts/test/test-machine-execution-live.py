@@ -104,7 +104,8 @@ start_monotonic = time.monotonic()
 
 
 def check(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
   print('PASS: ' + message, flush=True)
 
 
@@ -171,7 +172,8 @@ def write_secret_file(name, text):
 def put_password_in_container(path, password):
   # stdin, not argv: the password never appears in a process listing.
   res = run(['docker', 'exec', '-i', ldap_container, 'sh', '-c', f'umask 077; cat > {path}'], input=password)
-  assert res.returncode == 0, res.stderr
+  if not (res.returncode == 0):
+    raise AssertionError(res.stderr)
 
 
 def ldap_tool(tool, args, bind_dn, pw_path, input_data=None, uri='ldap://127.0.0.1'):
@@ -465,9 +467,11 @@ class Api:
     # Same-origin POST like the browser; the cookie jar is a plain header here.
     status, hdrs, body = self.call('POST', '/api/login', {'Origin': self.base_url, 'Content-Type': 'application/json'},
                                    {'identity': human_dn, 'password': human_password})
-    assert status == 200, f'human login failed: {status} {mask(body)}'
+    if not (status == 200):
+      raise AssertionError(f'human login failed: {status} {mask(body)}')
     cookie = hdrs.get('Set-Cookie', '').split(';')[0]
-    assert cookie.startswith('ldapium_session='), 'no session cookie'
+    if not (cookie.startswith('ldapium_session=')):
+      raise AssertionError('no session cookie')
     return {'Cookie': cookie}
 
 
@@ -501,7 +505,8 @@ def start_ui(name, ldap_url, env, hold_secrets):
          '--add-host', 'host.docker.internal:host-gateway', '-p', '127.0.0.1::8080', '--env-file', env_path,
          '-e', 'LDAP_URL=' + ldap_url, ui_image]
   res = run(cmd)
-  assert res.returncode == 0, res.stderr
+  if not (res.returncode == 0):
+    raise AssertionError(res.stderr)
   base = f'http://127.0.0.1:{published_port(name, "8080/tcp")}'
 
   def ready():
@@ -557,7 +562,8 @@ def apply_ldif(template, tokens, tool=config_tool):
   for k, v in tokens.items():
     text = text.replace('@' + k + '@', v)
   res = tool('ldapmodify', [], text)
-  assert res.returncode == 0, f'ldapmodify {template}: {mask(res.stderr)}'
+  if not (res.returncode == 0):
+    raise AssertionError(f'ldapmodify {template}: {mask(res.stderr)}')
 
 
 def main():
@@ -567,7 +573,8 @@ def main():
   mock_idp.start()
 
   networks.append(network)
-  assert run(['docker', 'network', 'create', network]).returncode == 0
+  if not (run(['docker', 'network', 'create', network]).returncode == 0):
+    raise AssertionError("run(['docker', 'network', 'create', network]).returncode == 0")
 
   # ---- slapd with accesslog recording writes, reads and binds -----------------
   containers.append(ldap_container)
@@ -578,7 +585,8 @@ def main():
   res = run(['docker', 'run', '-d', '--name', ldap_container, '--network', network, '-p', f'127.0.0.1:{ldap_port}:389',
              '--env-file', admin_env, '-e', 'LDAP_ROOT_DN=' + base_dn, '-e', 'LDAP_ACCESSLOG_ENABLED=true',
              '-e', 'LDAP_ACCESSLOG_OPS=writes reads bind', ldap_image])
-  assert res.returncode == 0, res.stderr
+  if not (res.returncode == 0):
+    raise AssertionError(res.stderr)
 
   def slapd_ready():
     put = run(['docker', 'exec', '-i', ldap_container, 'sh', '-c', 'umask 077; cat > /tmp/.pw-admin'], input=admin_password)
@@ -777,13 +785,15 @@ member: {seed_user_dn}
                          ('GET', '/api/nope')]:
       st, _, body = main_api.machine(rt, path, method=method)
       expect = 404 if path == '/api/nope' else 403
-      assert st == expect, f'{method} {path}: status {st} body {mask(body)}'
+      if not (st == expect):
+        raise AssertionError(f'{method} {path}: status {st} body {mask(body)}')
     print('PASS: reader token: 12 write/admin/not-granted routes -> 403 scope_denied and an unknown route -> 404', flush=True)
     for dn in ['cn=accesslog', 'reqStart=20260101000000.000000Z,cn=accesslog', 'cn=config', 'cn=Monitor', 'cn=Connections,cn=Monitor',
                'dc=org', 'dc=other,dc=org', 'cn=ACCESSLOG', 'cn=\\61ccesslog', 'uid=u01,dc=notexample,dc=org']:
       for route in ('/api/entry', '/api/tree'):
         st, _, body = main_api.machine(rt, route + '?dn=' + urllib.parse.quote(dn))
-        assert st == 403 and jbody(body).get('code') == 'scope_denied', f'{route} dn={dn}: status {st} body {mask(body)}'
+        if not (st == 403 and jbody(body).get('code') == 'scope_denied'):
+          raise AssertionError(f'{route} dn={dn}: status {st} body {mask(body)}')
     print('PASS: getEntry/listTree refuse accesslog/config/Monitor/out-of-base/escaped variants -> 403 scope_denied', flush=True)
     st, _, body = main_api.machine(tamper(rt), '/api/users')
     check(st == 401, 'a token with a tampered signature -> 401')
@@ -825,7 +835,8 @@ member: {seed_user_dn}
     cursor, pages = '', 0
     while True:
       st, body = over_get(client, f'/api/{resource}?limit=2' + (('&cursor=' + urllib.parse.quote(cursor)) if cursor else ''))
-      assert st == 200, f'{resource}: {st} {mask(body)}'
+      if not (st == 200):
+        raise AssertionError(f'{resource}: {st} {mask(body)}')
       pages += 1
       cursor = jbody(body).get('nextCursor', '')
       if not cursor:
@@ -909,7 +920,8 @@ member: {seed_user_dn}
   wait_until(lambda: proxy.open == 0, 'the UI to close the connection after the deadline', 15)
   for _ in range(4):
     st, _, body = main_api.machine(tok('svc-reader'), '/api/users?limit=2')
-    assert st == 200, f'after the timeouts: {st} {mask(body)}'
+    if not (st == 200):
+      raise AssertionError(f'after the timeouts: {st} {mask(body)}')
   print('PASS: after the timeouts 4 sequential requests succeed (MACHINE_MAX_CONCURRENCY=2: no slot leaked)', flush=True)
 
   # (3b) a directory that accepts StartTLS and then stalls the TLS handshake: the
@@ -936,7 +948,8 @@ member: {seed_user_dn}
     res = ldap_tool('ldapsearch', ['-LLL', '-b', 'cn=Current,cn=Connections,cn=Monitor', '-s', 'base', 'monitorCounter'],
                     'cn=monitoring,cn=Monitor', '/tmp/.pw-admin')
     m = re.search(r'^monitorCounter: (\d+)$', res.stdout, re.M)
-    assert m, 'cn=Monitor unreadable: ' + mask(res.stderr)
+    if not m:
+      raise AssertionError('cn=Monitor unreadable: ' + mask(res.stderr))
     return int(m.group(1))
 
   settled()
@@ -969,7 +982,8 @@ member: {seed_user_dn}
   th = threading.Thread(target=inflight)
   th.start()
   wait_until(lambda: proxy.stalled.is_set(), 'the request to be in flight inside the directory', 10)
-  assert run(['docker', 'stop', '-t', '2', ldap_container]).returncode == 0
+  if not (run(['docker', 'stop', '-t', '2', ldap_container]).returncode == 0):
+    raise AssertionError("run(['docker', 'stop', '-t', '2', ldap_container]).returncode == 0")
   proxy.release()
   th.join(30)
   st = result['r'][0]
@@ -978,7 +992,8 @@ member: {seed_user_dn}
   wait_until(lambda: proxy.open == 0, 'connections to drain after the outage', 15)
   st, _, _ = main_api.machine(tok('svc-reader'), '/api/users?limit=2')
   check(st == 503, 'while slapd is down a new machine request is a 503 as well')
-  assert run(['docker', 'start', ldap_container]).returncode == 0
+  if not (run(['docker', 'start', ldap_container]).returncode == 0):
+    raise AssertionError("run(['docker', 'start', ldap_container]).returncode == 0")
   put = lambda: run(['docker', 'exec', '-i', ldap_container, 'sh', '-c', 'umask 077; cat > /tmp/.pw-admin'], input=admin_password).returncode == 0
   wait_until(lambda: put() and admin_tool('ldapsearch', ['-b', base_dn, '-s', 'base']).returncode == 0, 'slapd to come back', 90)
   wait_until(lambda: main_api.machine(tok('svc-reader'), '/api/users?limit=2')[0] == 200, 'the machine path to recover without a restart', 30)
@@ -1131,7 +1146,8 @@ member: {seed_user_dn}
   lines = audit_lines(ui_main)
   for rid in rids:
     n = sum(1 for l in lines if f'"request_id":"{rid}"' in l)
-    assert n == 1, f'request {rid}: {n} audit lines'
+    if not (n == 1):
+      raise AssertionError(f'request {rid}: {n} audit lines')
   print(f'PASS: each of {len(rids)} Authorization-carrying requests produced exactly one machine_access line', flush=True)
   bad_line = next(l for l in lines if f'"request_id":"{bad_rid}"' in l)
   check('"actor":"unknown"' in bad_line and '"token_fingerprint"' in bad_line, 'a bad signature is logged with actor unknown plus a token fingerprint')

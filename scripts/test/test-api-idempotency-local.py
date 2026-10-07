@@ -70,7 +70,8 @@ def wait(predicate, what, timeout=120, step=0.5):
 
 
 def check(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
   print('PASS: ' + message)
 
 
@@ -92,7 +93,8 @@ class Api:
 
   def login(self):
     status, _, body = self.call('POST', '/api/login', {'identity': admin_dn, 'password': password})
-    assert status == 200, (status, body)
+    if not (status == 200):
+      raise AssertionError((status, body))
 
 
 def idem(key):

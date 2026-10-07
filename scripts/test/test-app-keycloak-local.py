@@ -72,25 +72,37 @@ with tempfile.TemporaryDirectory(prefix='ldapium-kc-role-') as tmp:
             snapshot=ui_call('custom/keycloak-role-operations',dict(action=action,role=role,**kw),'POST',snapshot['fingerprint'])
         change('create','reader');change('create','operator');change('include_add','operator',include='reader')
         try:change('include_add','reader',include='operator');raise AssertionError('role cycle allowed')
-        except urllib.error.HTTPError as e:assert e.code==409
+        except urllib.error.HTTPError as e:
+          if e.code!=409:
+            raise AssertionError('expected HTTP 409, got %s' % e.code)
         change('group_add','operator',group_id=group)
         form=urllib.parse.urlencode({'grant_type':'password','client_id':'custom-client','username':'alice','password':alice_pw}).encode()
         with urllib.request.urlopen(urllib.request.Request(base+'/realms/'+realm+'/protocol/openid-connect/token',form,{'Content-Type':'application/x-www-form-urlencoded'})) as r:token=json.load(r)['access_token']
         import base64
         claims=json.loads(base64.urlsafe_b64decode(token.split('.')[1]+'=='))
-        assert set(['operator','reader']).issubset(claims['resource_access']['custom-client']['roles'])
+        if not (set(['operator','reader']).issubset(claims['resource_access']['custom-client']['roles'])):
+          raise AssertionError("set(['operator','reader']).issubset(claims['resource_access']['custom-client']['roles'])")
         change('group_remove','operator',group_id=group)
         with urllib.request.urlopen(urllib.request.Request(base+'/realms/'+realm+'/protocol/openid-connect/token',form,{'Content-Type':'application/x-www-form-urlencoded'})) as r:token=json.load(r)['access_token']
         claims=json.loads(base64.urlsafe_b64decode(token.split('.')[1]+'=='))
-        assert 'operator' not in claims.get('resource_access',{}).get('custom-client',{}).get('roles',[])
+        if not ('operator' not in claims.get('resource_access',{}).get('custom-client',{}).get('roles',[])):
+          raise AssertionError("'operator' not in claims.get('resource_access',{}).get('custom-client',{}).get('roles',[])")
         stale=snapshot['fingerprint'];request(api+'/clients/'+client+'/roles',{'name':'external-change'},admin)
         try:ui_call('custom/keycloak-role-operations',{'action':'create','role':'stale'},'POST',stale);raise AssertionError('stale write allowed')
-        except urllib.error.HTTPError as e:assert e.code==412
+        except urllib.error.HTTPError as e:
+          if e.code!=412:
+            raise AssertionError('expected HTTP 412, got %s' % e.code)
         profile['id']='other';profile['name']='Other';profile['client_id']='other-client';ui_call('other/integration-profile',profile,'PUT',0)
         try:ui_call('other/keycloak-roles');raise AssertionError('outside client observed')
-        except urllib.error.HTTPError as e:assert e.code==403
-        artifact=ui_call('custom/configuration-export');assert artifact['status']=='exported'
-        preview=ui_call('custom/mapping-preview',{'claim_values':['admin','unknown']},'POST');assert preview['native_roles']==['owner'] and not preview['authoritative']
+        except urllib.error.HTTPError as e:
+          if e.code!=403:
+            raise AssertionError('expected HTTP 403, got %s' % e.code)
+        artifact=ui_call('custom/configuration-export')
+        if not (artifact['status']=='exported'):
+          raise AssertionError("artifact['status']=='exported'")
+        preview=ui_call('custom/mapping-preview',{'claim_values':['admin','unknown']},'POST')
+        if not (preview['native_roles']==['owner'] and not preview['authoritative']):
+          raise AssertionError("preview['native_roles']==['owner'] and not preview['authoritative']")
         browser_env=dict(env,E2E_ADMIN_DN='cn=admin,dc=example,dc=org',E2E_ADMIN_PASSWORD=ldap_pw,E2E_BASE_URL=ui)
         subprocess.run(['npx','playwright','test','e2e/keycloak-apps.spec.ts'],cwd=repo/'ui/frontend',env=browser_env,check=True)
         request(api+'/clients/'+client,{'redirectUris':['http://127.0.0.1:18085/login/generic_oauth'],'webOrigins':['http://127.0.0.1:18085']},admin,method='PUT')
@@ -106,8 +118,10 @@ with tempfile.TemporaryDirectory(prefix='ldapium-kc-role-') as tmp:
         import configparser
         parsed=configparser.ConfigParser(interpolation=None);parsed.read(merged_path)
         settings=dict(parsed['auth.generic_oauth'])
-        assert merged_path.stat().st_mode & 0o777 == 0o600
-        assert source_path.read_text() == '[auth.generic_oauth]\nallow_sign_up = true\n'
+        if not (merged_path.stat().st_mode & 0o777 == 0o600):
+          raise AssertionError('merged_path.stat().st_mode & 0o777 == 0o600')
+        if not (source_path.read_text() == '[auth.generic_oauth]\nallow_sign_up = true\n'):
+          raise AssertionError("source_path.read_text() == '[auth.generic_oauth]\\nallow_sign_up = true\\n'")
         gf_env=Path(tmp)/'grafana.env'
         entries=['GF_SERVER_ROOT_URL=http://127.0.0.1:18085','GF_SECURITY_ADMIN_PASSWORD='+secrets.token_urlsafe(32),'GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true','GF_PLUGINS_PREINSTALL_DISABLED=true']
         for key,value in settings.items():

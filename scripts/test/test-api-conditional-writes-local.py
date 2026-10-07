@@ -63,7 +63,8 @@ created_network = False
 
 
 def check(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
   print('PASS: ' + message)
 
 
@@ -107,7 +108,8 @@ def wait_until(predicate, what, timeout=30.0):
 
 def entry_snapshot(dn):
   res = ldap_admin_tool('ldapsearch', ['-LLL', '-b', dn, '-s', 'base', '*', '+'])
-  assert res.returncode == 0, f'ldapsearch {dn} failed: {res.stderr}'
+  if not (res.returncode == 0):
+    raise AssertionError(f'ldapsearch {dn} failed: {res.stderr}')
   return res.stdout
 
 
@@ -685,7 +687,8 @@ replace: description
 description: bumped-during-create
 """
           res = ldap_admin_tool('ldapmodify', [], bump_ldif)
-          assert res.returncode == 0, 'bumped description successfully'
+          if not (res.returncode == 0):
+            raise AssertionError('bumped description successfully')
       finally:
         # Release the proxy only once the bump is committed (or the wait gave up)
         proxy.bump_done.set()

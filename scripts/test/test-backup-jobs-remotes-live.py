@@ -198,27 +198,32 @@ class Api:
 
   def login(self):
     status, _, body = self.call('POST', '/api/login', {'identity': admin_dn, 'password': ldap_password})
-    assert status == 200, (status, body)
+    if not (status == 200):
+      raise AssertionError((status, body))
 
   def job(self, job_id):
     status, _, body = self.call('GET', '/api/v1/backups/jobs/' + job_id)
-    assert status == 200, (status, body)
+    if not (status == 200):
+      raise AssertionError((status, body))
     return body
 
   def set_destinations(self, kind, destinations):
     status, _, view = self.call('GET', '/api/v1/backups')
-    assert status == 200
+    if not (status == 200):
+      raise AssertionError('status == 200')
     rev = view['policies']['revision']
     policies = view['policies']
     policies[kind]['destinations'] = destinations
     body = {'data': policies['data'], 'logs': policies['logs']}
     status, _, saved = self.call('PUT', '/api/v1/backups/policies', body, headers={'If-Match': f'"{rev}"'})
-    assert status == 200, (status, saved)
+    if not (status == 200):
+      raise AssertionError((status, saved))
     return saved
 
 
 def check(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
   print('PASS: ' + message)
 
 

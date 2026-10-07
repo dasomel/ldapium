@@ -69,11 +69,14 @@ known_hosts_file = {known}
     cfg={'root':str(root/'local'),'instance_id':'transport-test','log_paths':[str(source)],'destinations':destinations,'rclone_config':str(config)}
     policy={'keep_days':7,'keep_count':1,'destinations':['local','s3','ftp','sftp']}
     first=worker.run(cfg,'logs',policy);second=worker.run(cfg,'logs',policy)
-    assert not (root/'local/logs'/first['run_id']).exists()
+    if not (not (root/'local/logs'/first['run_id']).exists()):
+      raise AssertionError("not (root/'local/logs'/first['run_id']).exists()")
     for kind in ports:
       base=(root/kind/('bucket/backups' if kind=='s3' else 'backups')/'transport-test/logs')
-      assert len(list(base.iterdir()))==1,kind
-      assert worker.verify(base/second['run_id'])['run_id']==second['run_id']
+      if not (len(list(base.iterdir()))==1):
+        raise AssertionError(kind)
+      if not (worker.verify(base/second['run_id'])['run_id']==second['run_id']):
+        raise AssertionError("worker.verify(base/second['run_id'])['run_id']==second['run_id']")
     managed = []
     for kind in ports:
       managed.append(dict(id='managed-'+kind, name='Managed '+kind, type=kind, host='127.0.0.1', port=ports[kind], user='backup', password=password, access_key='test', secret_key=password, endpoint='http://127.0.0.1:'+str(ports[kind]), region='us-east-1', bucket='bucket', prefix='managed-backups', known_hosts=known.read_text(), allow_plaintext=kind=='ftp'))
@@ -82,7 +85,8 @@ known_hosts_file = {known}
     for kind in ports:
       base=root/kind/('bucket/managed-backups' if kind=='s3' else 'managed-backups')/'transport-test/logs'/managed_result['run_id']
       worker.verify(base)
-    assert not list((root/'local').glob('.connections-*'))
+    if not (not list((root/'local').glob('.connections-*'))):
+      raise AssertionError("not list((root/'local').glob('.connections-*'))")
     print('PASS: UI-managed S3/FTP/SFTP credentials and pinned keys deliver verified archives; transient secrets cleaned')
     if options.container:
       fixture=root/'container-fixture';fixture.mkdir()
@@ -98,7 +102,8 @@ known_hosts_file = {known}
         subprocess.run(['docker','build','-q','-t',image,str(fixture)],check=True,stdout=subprocess.DEVNULL)
         result=subprocess.run(['docker','run','--rm','-i','--entrypoint','/usr/bin/python3',image,'/fixture/backup_worker.py','--config','/fixture/operator.json','--kind','logs'],input=json.dumps(dict(managed_policy, connections=[dict(c,host='host.docker.internal',endpoint=c['endpoint'].replace('127.0.0.1','host.docker.internal'),known_hosts=c['known_hosts'].replace('127.0.0.1','host.docker.internal')) for c in managed])),capture_output=True,text=True,check=True)
         manifest=json.loads(result.stdout)
-        assert manifest['verified']
+        if not (manifest['verified']):
+          raise AssertionError("manifest['verified']")
         for kind in ports:
           base=root/kind/('bucket/managed-backups' if kind=='s3' else 'managed-backups')/'container-client-test/logs'/manifest['run_id']
           worker.verify(base)
@@ -115,7 +120,8 @@ known_hosts_file = {known}
     try:worker.run(cfg,'logs',policy)
     except subprocess.CalledProcessError:pass
     else:raise AssertionError('failed FTP reported success')
-    assert len(list((root/'local/logs').iterdir()))==1
+    if not (len(list((root/'local/logs').iterdir()))==1):
+      raise AssertionError("len(list((root/'local/logs').iterdir()))==1")
     worker.verify(next((root/'local/logs').iterdir()))
     print('PASS: real S3/FTP/SFTP roundtrip checksums, remote/local independent namespaces, retention and failed transfers preserve local copies and SSH host-key mismatch denied')
   finally:

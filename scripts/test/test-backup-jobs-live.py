@@ -89,16 +89,19 @@ class Api:
 
   def login(self):
     status, _, body = self.call('POST', '/api/login', {'identity': admin_dn, 'password': password})
-    assert status == 200, (status, body)
+    if not (status == 200):
+      raise AssertionError((status, body))
 
   def job(self, job_id):
     status, _, body = self.call('GET', '/api/v1/backups/jobs/' + job_id)
-    assert status == 200, (status, body)
+    if not (status == 200):
+      raise AssertionError((status, body))
     return body
 
 
 def check(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
   print('PASS: ' + message)
 
 

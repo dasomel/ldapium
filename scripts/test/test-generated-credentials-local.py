@@ -34,22 +34,39 @@ try:
   command(['docker','network','create',network])
   for volume in volumes: command(['docker','volume','create',volume])
   start_ldap()
-  password=command(['docker','exec',ldap,'cat','/var/lib/openldap/data/.credentials/ldap-admin-password']);assert len(password)==64
-  assert '600'==command(['docker','exec',ldap,'stat','-c','%a','/var/lib/openldap/data/.credentials/ldap-admin-password'])
-  startup=subprocess.run(['docker','logs',ldap],check=True,capture_output=True,text=True);assert password not in startup.stdout+startup.stderr  # entrypoint logs to stderr too
+  password=command(['docker','exec',ldap,'cat','/var/lib/openldap/data/.credentials/ldap-admin-password'])
+  if not (len(password)==64):
+    raise AssertionError('len(password)==64')
+  if not ('600'==command(['docker','exec',ldap,'stat','-c','%a','/var/lib/openldap/data/.credentials/ldap-admin-password'])):
+    raise AssertionError("'600'==command(['docker','exec',ldap,'stat','-c','%a','/var/lib/openldap/data/.credentials/ldap-admin-password'])")
+  startup=subprocess.run(['docker','logs',ldap],check=True,capture_output=True,text=True)
+  if not (password not in startup.stdout+startup.stderr):  # entrypoint logs to stderr too
+    raise AssertionError('password not in startup.stdout+startup.stderr')
   command(['docker','rm','-f',ldap]);start_ldap()
-  assert password==command(['docker','exec',ldap,'cat','/var/lib/openldap/data/.credentials/ldap-admin-password'])
-  url=start_ui();secret=command(['docker','exec',ui,'/server','-print-session-secret']);assert len(secret)==64
+  if not (password==command(['docker','exec',ldap,'cat','/var/lib/openldap/data/.credentials/ldap-admin-password'])):
+    raise AssertionError("password==command(['docker','exec',ldap,'cat','/var/lib/openldap/data/.credentials/ldap-admin-password'])")
+  url=start_ui();secret=command(['docker','exec',ui,'/server','-print-session-secret'])
+  if not (len(secret)==64):
+    raise AssertionError('len(secret)==64')
   opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
   request=urllib.request.Request(url+'/api/login',json.dumps({'identity':'cn=admin,dc=example,dc=org','password':password}).encode(),{'Content-Type':'application/json','Origin':url})
   opener.open(request).close()
-  settings=opener.open(url+'/api/server-settings').read().decode();assert secret not in settings and password not in settings
-  assert json.loads(settings)['sessionSecretSource']=='generated_file'
+  settings=opener.open(url+'/api/server-settings').read().decode()
+  if not (secret not in settings and password not in settings):
+    raise AssertionError('secret not in settings and password not in settings')
+  if not (json.loads(settings)['sessionSecretSource']=='generated_file'):
+    raise AssertionError("json.loads(settings)['sessionSecretSource']=='generated_file'")
   command(['docker','rm','-f',ui]);start_ui()
-  assert secret==command(['docker','exec',ui,'/server','-print-session-secret'])
+  if not (secret==command(['docker','exec',ui,'/server','-print-session-secret'])):
+    raise AssertionError("secret==command(['docker','exec',ui,'/server','-print-session-secret'])")
   command(['docker','exec',ldap,'rm','/var/lib/openldap/data/.credentials/ldap-admin-password']);command(['docker','rm','-f',ldap])
   command(['docker','run','-d','--name',ldap,'-e','LDAP_ROOT_DN=dc=example,dc=org','-v',volumes[0]+':/etc/openldap/slapd.d','-v',volumes[1]+':/var/lib/openldap/data',ldap_image])
-  code=command(['docker','wait',ldap]);assert code!='0';logs=subprocess.run(['docker','logs',ldap],check=True,capture_output=True,text=True);assert 'original admin password' in logs.stdout+logs.stderr  # entrypoint errors go to stderr
+  code=command(['docker','wait',ldap])
+  if not (code!='0'):
+    raise AssertionError("code!='0'")
+  logs=subprocess.run(['docker','logs',ldap],check=True,capture_output=True,text=True)
+  if not ('original admin password' in logs.stdout+logs.stderr):  # entrypoint errors go to stderr
+    raise AssertionError("'original admin password' in logs.stdout+logs.stderr")
   print('PASS: generated LDAP bind, private mode, no log leaks, LDAP/UI recreation reuse, authenticated safe metadata, missing original credential fails closed')
 finally:
   for container in set(containers+[ldap,ui]): subprocess.run(['docker','rm','-f',container],capture_output=True)
