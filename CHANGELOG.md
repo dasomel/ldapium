@@ -307,9 +307,44 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   DN that cannot be parsed is refused. The identity's `olcLimits` rule is always
   placed FIRST (limits are first-match) and any other stored rule for the identity
   is replaced, so an earlier `size=1` rule cannot cap it.
-  `admin` stays byte-identical; `dedicated` still refuses to start. Rollback: an
-  older image or `admin` leaves the rule in place, which is harmless while no
-  entry exists at the reserved DN.
+  `admin` stays byte-identical; `dedicated` was still refused at this unit
+  (unit 3 below). Rollback: an older image or `admin` leaves the rule in place,
+  which is harmless while no entry exists at the reserved DN.
+- `LDAP_REPLICATION_IDENTITY=dedicated`, unit 3 of the same change (#229, T-012):
+  syncrepl binds as `cn=replicator,<root>` (password from
+  `LDAP_REPLICATION_PASSWORD(_FILE)`) with `tls_reqcert=demand` and
+  `tls_cacert=$LDAP_TLS_CA_FILE`, and EVERY node is consumer-only, serverID 1
+  included: no base DIT is created, no peer is probed or waited for, so a wiped
+  node, a wrong password or a missing peer leaves the node empty (consumer
+  `rc 49` / retry) instead of minting a second tree. It installs the unit-2 ACL
+  and shares its refusals. New fixed-message refusals before anything is written:
+  `LDAP_TLS_ENABLED` off, no readable `LDAP_TLS_CA_FILE`, a peer list that is not exactly
+  `ldaps://<host>[:<port>]` entries (strict grammar: no whitespace, userinfo, path or
+  option text, so a smuggled `provider=ldap://...` cannot send the identity's bind in
+  clear text; re-checked before `olcSyncrepl` is rendered and read back after), a
+  password with a quote or backslash, a retry list or interval outside a strict
+  grammar slapd can always load (`retry=+` used to store a config that no offline
+  tool could read; a `dedicated` start now removes such an unreadable stored
+  `olcSyncrepl` and re-renders it from the corrected environment, only after every
+  stored-config refusal has passed (checks run on a throwaway copy) and with a
+  crash-safe atomic replace of an already verified file (no clear-text rollback copy is
+  ever made); the kept backup is structure only (values withheld, also base64 and
+  folded ones; leftovers of a crash are deleted by the next start). Rewriting the config
+  cannot erase the old file's disk blocks: rotate the admin password after the switch if
+  the old olcSyncrepl held it and the volume may be copied, and encrypt it at rest; the read-back
+  check is quote-aware, so a password containing `provider=` starts normally), a `_FILE` secret that is
+  read once (never twice, never substituted by the admin password),
+  `LDAP_TLS_MUTUAL_AUTH`, a custom `LDAP_REPLICATION_BIND_DN`; stored-config
+  refusals (`olcAuthzRegexp`, `olcAuthIDRewrite`, `olcAuthzPolicy`,
+  `olcTLSVerifyClient`, `authzTo`/`authzFrom`, rootDN = reserved DN, existing
+  entry without the ACL) leave the volume untouched. `admin` and `prepare` stay
+  byte-identical. Not yet a supported mode: the identity entry is created by an
+  administrator by hand (the `ensure`/`rotate`/`retire` commands, restore.sh
+  total-loss, Kubernetes recovery, credential rotation, the checks and the chart
+  are later units). A new cluster cannot start in `dedicated`; migrate
+  `admin` -> `prepare` -> entry -> `dedicated`. Rollback: restart the node in
+  `admin` (re-renders `olcSyncrepl` with the admin DN); `prepare` refuses to start
+  on a volume that still stores the identity as its syncrepl bind DN.
 - `LDAP_PAGED_TOTAL_LIMIT` (#215), opt-in: lifts the total of a paged search
   for authenticated non-root identities, which `LDAP_SIZE_LIMIT` otherwise caps
   at 10000 however small the pages are (the admin DN is already exempt). Unset

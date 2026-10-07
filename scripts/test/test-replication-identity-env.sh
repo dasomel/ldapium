@@ -4,9 +4,10 @@
 #
 # Part 1 (refusals): invalid value, non-admin modes without replication, the
 #   password hygiene check (length / distinct characters / equal to admin
-#   password), reserved-DN = admin DN, prepare + explicit password, and the
-#   staged "not implemented" refusal of dedicated (prepare is T-011, covered by
-#   test-replication-identity-prepare.sh). Every refusal must
+#   password), reserved-DN = admin DN, prepare + explicit password
+#   (prepare is T-011, covered by test-replication-identity-prepare.sh; the
+#   dedicated start-up refusals and runtime are T-012, covered by
+#   test-replication-identity-dedicated.sh). Every refusal must
 #   exit non-zero with a fixed message and must not leak password material.
 # Part 2 (defaults byte-identical, only when a base image is given): a
 #   standalone node and a replicated 2-node pair started in `admin` mode from
@@ -161,7 +162,7 @@ refuse "dedicated password with a space" "only printable ASCII characters" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good:0:16} ${good:16}"
 refuse "dedicated ASCII password with 9 distinct chars" "at least 10 distinct characters" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abcdefghiabcdefghiabcdefghiabcdefghi"
-refuse "dedicated ASCII password with 10 distinct chars is accepted by hygiene" "is not implemented in this image yet" \
+refuse "dedicated ASCII password with 10 distinct chars passes hygiene (next refusal: TLS)" "requires LDAP_TLS_ENABLED=true" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=abcdefghijabcdefghijabcdefghijabcdefghij"
 # Fresh volume and no admin password: the refusal must come before admin-password
 # generation would create .credentials on the data volume.
@@ -172,12 +173,12 @@ refuse "dedicated without replication, no admin password (volume untouched)" "re
   -e LDAP_REPLICATION_IDENTITY=dedicated
 refuse "invalid value, no admin password (volume untouched)" "LDAP_REPLICATION_IDENTITY must be one of" \
   -e LDAP_REPLICATION_IDENTITY=bogus
-refuse "dedicated good password, no admin password (volume untouched)" "is not implemented in this image yet" \
+refuse "dedicated good password without TLS, no admin password (volume untouched)" "requires LDAP_TLS_ENABLED=true" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good}"
 admin_args=(-e LDAP_ADMIN_PASSWORD="$pw")
 refuse "dedicated password equals admin" "must differ from the admin password" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${pw}"
-refuse "dedicated good password -> staged refusal" "is not implemented in this image yet" \
+refuse "dedicated good password without TLS is refused" "requires LDAP_TLS_ENABLED=true" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=dedicated -e "LDAP_REPLICATION_PASSWORD=${good}"
 refuse "prepare with explicit password" "replicates as the admin identity" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=prepare -e "LDAP_REPLICATION_PASSWORD=${good}"
