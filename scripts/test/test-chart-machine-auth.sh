@@ -118,7 +118,7 @@ check "default adminDN follows ldap.rootDN" has "$rd" 'value: "cn=admin,dc=corp,
 # --- grace period follows the timeout ---------------------------------------------
 g=$(render "${on[@]}" --set ui.machineAuth.requestTimeoutSeconds=60)
 check "a 60 s timeout renders MACHINE_REQUEST_TIMEOUT 60s" has "$g" 'value: "60s"'
-check "and a 65 s grace period" has "$g" 'terminationGracePeriodSeconds: 65'
+check "and a 75 s grace period (10 s auth phase + 5 s margin)" has "$g" 'terminationGracePeriodSeconds: 75'
 
 # --- SSO issuer inheritance ---------------------------------------------------------
 cat >"$tmp/sso.yaml" <<'EOF'

@@ -335,7 +335,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ui.machineAuth.extraRootDNs` | `[]` | Added to the derived `MACHINE_LDAP_ROOT_DNS` (`ldap.adminDN`, default `cn=admin,<ldap.rootDN>`, joined with `;`). The monitor/accesslog/config rootdns are built into the application. |
 | `ui.machineAuth.tokenMaxTTL` / `clockSkew` / `jwks.*` | `10m` / `30s` / `10m`,`1h`,`30s` | → `MACHINE_TOKEN_MAX_TTL`, `MACHINE_CLOCK_SKEW`, `MACHINE_JWKS_CACHE_TTL`/`_MAX_STALE`/`_MIN_REFRESH`. |
 | `ui.machineAuth.authFailureLimit` / `authFailureWindow` / `rateLimit.rps` / `rateLimit.burst` / `clientConcurrency` / `maxConcurrency` / `maxAuthConcurrency` / `ipLimiterMax` | `10` / `1m` / `5` / `10` / `4` / `8` / `16` / `10000` | The limits of `docs/api.md` ("Machine bearer authentication"), per UI pod. |
-| `ui.machineAuth.requestTimeoutSeconds` | `10` | → `MACHINE_REQUEST_TIMEOUT` (1-300 s); the pod's `terminationGracePeriodSeconds` becomes `max(30, value+5)` while the feature is on. |
+| `ui.machineAuth.requestTimeoutSeconds` | `10` | → `MACHINE_REQUEST_TIMEOUT` (1-300 s); the pod's `terminationGracePeriodSeconds` becomes `max(30, value+15)` while the feature is on. |
 | `ui.ingress.enabled` | `false` | |
 | `ui.ingress.className` / `annotations` / `hosts` / `tls` | see values.yaml | Standard `networking.k8s.io/v1` Ingress shape. |
 
@@ -385,9 +385,10 @@ application, and in a directly exposed deployment nowhere at all
 (`docs/audit-event-schema.md`, D25). Turn on access logging on the ingress, load
 balancer or proxy in front of the UI if you need that record.
 
-**Pod replacement.** `terminationGracePeriodSeconds` is `max(30, requestTimeoutSeconds+5)`
-while the feature is on. The UI server's own graceful shutdown waits a fixed 10 s for
-in-flight requests, so a `requestTimeoutSeconds` above 10 does not extend that wait.
+**Pod replacement.** `terminationGracePeriodSeconds` is `max(30, requestTimeoutSeconds+15)`
+while the feature is on. The UI server's own graceful shutdown wait is derived from the
+same setting: `max(10 s, 10 s auth phase + MACHINE_REQUEST_TIMEOUT + 5 s)` (capped at 315 s) with machine
+auth on, 10 s with it off, so it never exceeds the pod's grace period.
 Emergency block and rollback procedures, including how to confirm that every old pod
 is gone: [`docs/machine-auth-operations.md`](../../docs/machine-auth-operations.md).
 Keycloak client requirements: [`docs/machine-keycloak-client.md`](../../docs/machine-keycloak-client.md).

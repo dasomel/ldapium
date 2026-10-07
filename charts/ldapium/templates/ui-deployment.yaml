@@ -100,8 +100,8 @@ spec:
       {{- end }}
     spec:
       {{- if .Values.ui.machineAuth.enabled }}
-      {{- /* D7: in-flight machine requests (up to MACHINE_REQUEST_TIMEOUT) must be able to finish when a pod is replaced for an emergency block. */}}
-      terminationGracePeriodSeconds: {{ max 30 (add (int .Values.ui.machineAuth.requestTimeoutSeconds) 5) }}
+      {{- /* D7: in-flight machine requests (up to MACHINE_REQUEST_TIMEOUT) must be able to finish when a pod is replaced for an emergency block. #280: this must stay >= the server's derived shutdown grace, max(10s, 10s auth phase + timeout + 5s) capped at 315s (ui/backend/cmd/server/shutdown.go); max(30, timeout+15) always is, and the schema caps requestTimeoutSeconds at 300. */}}
+      terminationGracePeriodSeconds: {{ max 30 (add (int .Values.ui.machineAuth.requestTimeoutSeconds) 15) }}
       {{- end }}
       serviceAccountName: {{ include "ldapium.ui.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}

@@ -41,9 +41,12 @@ kubectl get pods -n <ns> -l app.kubernetes.io/component=ui -o wide
 kubectl get rs -n <ns> -l app.kubernetes.io/component=ui     # 이전 ReplicaSet의 READY/DESIRED가 0
 ```
 
-그리고 **진행 중이던 요청이 끝났는지**: 차트는 기능이 켜져 있는 동안 `terminationGracePeriodSeconds`를 `max(30, 요청 timeout+5)`초로 둡니다
-(`templates/ui-deployment.yaml`). 다만 서버의 graceful shutdown 대기는 코드에 **10초로 고정**되어 있어(`ui/backend/cmd/server/main.go`), `MACHINE_REQUEST_TIMEOUT`을 10초보다 크게 둔 배포에서는 pod 종료 시 10초를 넘긴 요청이 끊깁니다
-(끊긴 요청은 어차피 응답이 없는 요청이지만, "모든 진행 요청이 정상 종료"를 전제로 하지 마세요. 이 불일치는 후속 과제로 기록했습니다).
+그리고 **진행 중이던 요청이 끝났는지**: 차트는 기능이 켜져 있는 동안 `terminationGracePeriodSeconds`를 `max(30, 요청 timeout+15)`초로 둡니다
+(`templates/ui-deployment.yaml`). 서버의 graceful shutdown 대기는 설정에서 유도됩니다(`ui/backend/cmd/server/shutdown.go`):
+머신 인증이 꺼져 있으면 10초, 켜져 있으면 `max(10초, 인증 단계 10초+MACHINE_REQUEST_TIMEOUT+5초)`이며 상한은 315초(timeout 최대 5분+15초)입니다.
+차트의 `terminationGracePeriodSeconds`(`max(30, 요청 timeout+15)`)는 항상 이 값 이상이라 진행 중 요청은 자기 deadline까지 끝날 수 있습니다.
+차트 없이 직접 배포한다면 오케스트레이터의 종료 유예 시간을 `MACHINE_REQUEST_TIMEOUT+15초` 이상으로 직접 맞추세요(미만이면 유예 시간 도달 시 SIGKILL로 요청이 끊깁니다).
+종료 시 로그 `shutting down, waiting up to <grace> for in-flight requests`로 적용된 값을 확인할 수 있습니다.
 
 **3) 같은 토큰으로 확인**: 차단 대상 client의 (유출된 것으로 보이는) 토큰이 아닌, 같은 client로 **차단 전에 받아 둔 테스트 토큰**을 보냅니다.
 

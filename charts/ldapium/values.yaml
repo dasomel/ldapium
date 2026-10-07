@@ -773,7 +773,7 @@ ui:
     maxAuthConcurrency: 16
     ipLimiterMax: 10000
     # -- MACHINE_REQUEST_TIMEOUT in seconds (1-300). The pod's
-    #    terminationGracePeriodSeconds is raised to cover it (max(30, value+5)).
+    #    terminationGracePeriodSeconds is raised to cover it (max(30, value+15)).
     requestTimeoutSeconds: 10
 
   # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
