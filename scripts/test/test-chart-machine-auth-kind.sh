@@ -26,9 +26,8 @@
 #   ./scripts/test/test-chart-machine-auth-kind.sh
 # Overrides: IMAGE_TAG (default machine-kind), KIND_CLUSTER (default ldapium-mk-<pid>-<random>; an existing cluster of that name is refused, never deleted),
 # KEEP_CLUSTER=1 keeps the cluster, INGRESS_MANIFEST. Uses its own KUBECONFIG file; the
-# caller's kubeconfig and contexts are never touched. Not wired into CI: no existing
-# workflow runs a dedicated kind job for a single feature (e2e.yml carries the generic
-# install), so a new heavy job is left to a follow-up decision.
+# caller's kubeconfig and contexts are never touched. CI: .github/workflows/chart-machine-auth-kind.yml
+# (Helm 4.3.0, the version this script was proven on).
 # has/check helpers are reached indirectly.
 # shellcheck disable=SC2317,SC2329
 set -euo pipefail
