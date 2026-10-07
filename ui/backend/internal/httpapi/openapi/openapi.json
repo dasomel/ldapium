@@ -1610,6 +1610,21 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`password_change_rate_limited`): too many failed `current_password_rejected` attempts from the same session and target DN. Returns a `Retry-After` header. Reset happens on success once not blocked; blocked requests stay 429 until the window passes.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Validation failed (`invalid_request`, with the curated password-policy text where one applies); any `If-Match` header; or `current_password_rejected` (the current password was not accepted, or current-password verification is not enabled; fixed text, `retryable: false`).",
             "content": {
