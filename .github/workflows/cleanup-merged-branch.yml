@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   delete-merged-head:
@@ -18,6 +18,9 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref != github.event.repository.default_branch
     runs-on: ubuntu-latest
+    # DELETE /git/refs/heads/* is the only call; it needs contents: write.
+    permissions:
+      contents: write
     steps:
       - name: Delete merged head ref
         env:
