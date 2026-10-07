@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
 	"time"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
@@ -47,4 +50,21 @@ func shutdownGrace(machineEnabled bool, requestTimeout time.Duration) time.Durat
 		grace = maxShutdownGrace
 	}
 	return grace
+}
+
+// gracefulShutdown stops both servers, waiting up to grace in total for
+// in-flight requests. Extracted from main so the sequence can be tested with a
+// short grace (#280).
+func gracefulShutdown(httpServer, metricsServer *http.Server, grace time.Duration) {
+	log.Printf("shutting down, waiting up to %s for in-flight requests", grace)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("metrics shutdown failed: %v", err)
+		}
+	}
 }
