@@ -4,8 +4,8 @@
 [`machine-keycloak-client.md`](machine-keycloak-client.md), LDAP 쪽은 [`machine-ldap-account.md`](machine-ldap-account.md), 설계는
 [CHANGE.md](changes/machine-principal-auth/CHANGE.md)(D7, REQ-018, AC-019)입니다.
 
-> **이 절차의 라이브 드릴(2 replica, 이전 pod 0개 확인, 같은 토큰 401)은 이 문서와 같은 단계에서 병합되지 않았습니다**(TASKS T-027, 단위 5a, 진행 중).
-> 아래 절차는 코드와 차트를 읽어 확인했고(근거를 각 항목에 적었습니다), 한 번도 클러스터에서 실행해 보지 않았습니다.
+> 이 절차의 라이브 드릴(`scripts/test/test-machine-revocation-drill.py`, 실제 Keycloak·slapd, revision당 UI replica 2개, 이전 컨테이너 0개 확인, 같은 토큰 401, 진행 중 요청 정상 종료)은 CI job `machine bearer auth (real Keycloak)`에서 실행됩니다(TASKS T-027). replica는 docker 컨테이너이며 Helm/pod가 아니고 `terminationGracePeriodSeconds`는 `docker stop -t 15`로 대체했습니다.
+> 아래 절차는 코드와 차트를 읽어 확인했고(근거를 각 항목에 적었습니다), 위 드릴이 docker replica에서 실행했습니다. Kubernetes 클러스터(Helm 롤아웃)에서는 한 번도 실행해 보지 않았습니다(후속 #284).
 
 ## 1. 핵심: 토큰은 즉시 폐기되지 않는다
 

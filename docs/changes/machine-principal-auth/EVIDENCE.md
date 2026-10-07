@@ -300,3 +300,85 @@ a job name that does not match exactly: exit 1  (same error)
 ```
 
 `actionlint`는 새 파일에서 기존 워크플로와 같은 `queue` 키 경고 1건만 낸다(이 actionlint 버전이 job concurrency의 `queue`를 아직 모름; 기존 12개 파일 동일). 실제 GitHub Actions: PR #281(커밋 `70f0588`)의 첫 실행에서 `gh pr checks`가 `machine bearer auth (real Keycloak)  pass  10m0s`를 보고했다 — job 이름이 `release_critical`의 문자열과 글자 그대로 같다(check run 이름 일치 확인).
+
+## 6. 다운스트림·소비자 검토 (T-003, close-out 2026-10-07, 서면 검토)
+
+질문: 이 변경(`openapi.json`에 `securitySchemes.machineBearer`·허용 8개의 `security`/`x-machine-scope` 추가, 새 오류 코드 4개)이 API 소비자·SDK·프런트·문서·포트폴리오에 영향을 주는가. 방법: 저장소 검색과 파일 읽기만(실행 없음).
+
+| 대상 | 확인 | 결과 |
+|---|---|---|
+| SDK·생성 클라이언트 | `git ls-files`에서 `sdk`·`client-gen` 경로 검색 | 없음(T-001의 "다운스트림 SDK 없음"과 일치) |
+| 프런트 `securitySchemes` 의존 | `grep -rn securitySchemes ui/frontend/src ui/frontend/e2e` | 0건 |
+| 프런트의 `security` 사용 | `ui/frontend/src/lib/api-docs.ts:148-153` `operationAuth()` | `security`가 빈 배열이면 `public`, 아니면 `x-required-role`/`x-admin`으로 `admin`/`session`. 머신 허용 8개는 `security`가 `[cookieAuth, machineBearer]`라 비어 있지 않아 **이전과 같이 보호로 분류**됨(동작 불변) |
+| 앱 내 API 문서 화면 | 같은 함수 | `machineBearer`·`x-machine-scope`를 읽지 않아 허용 8개가 세션 전용으로 표시됨 — 표시 문제(동작 영향 없음) → 이슈 #287 |
+| 오류 코드 | `h/machine_contract_test.go` `TestMachineCodesAndSchemeAreDocumented`, `TestEnvelope_CodeTableMatchesGoldenList` | `token_invalid`·`token_expired`·`scope_denied`·`machine_rate_limited`가 표·골든·OpenAPI enum에 동시에 있음(append-only, 소비자는 `error`/`message`를 계속 읽을 수 있음) |
+| `docs/api.md`·`llms.txt` | 5b가 갱신, `llms.txt`에 `machine` 언급 3건 | 일치(단위 4에서 동기화) |
+| 호환 | `jq`·계약 테스트 | 기존 오퍼레이션의 `cookieAuth`·경로·응답 불변, 추가만(additive) |
+| 포트폴리오/OpenForge | T-033 | 외부 게시 한 곳, 소유자 유지보수자, 이 감사 병합 후 |
+
+결론: 호환성 위험 없음. 후속은 표시 개선 #287 하나뿐이다.
+
+## 7. Close-out 감사 실행 기록 (2026-10-07, main `5c74f73`)
+
+판정 표는 [CHANGE.md "Close-out audit"](CHANGE.md). 여기에는 실제로 실행한 명령과 출력만 둔다(macOS arm64, go1.27.1).
+
+### 7.1 직접 실행
+
+```
+$ cd ui/backend && go test ./internal/httpapi ./internal/machineauth ./internal/config ./internal/ldapclient -count=1 -v
+ok  .../internal/httpapi        6.069s
+ok  .../internal/machineauth    8.471s
+ok  .../internal/config         0.172s
+ok  .../internal/ldapclient     3.536s
+top-level PASS=526 FAIL=0 SKIP=0
+
+$ go test ./internal/httpapi ./internal/machineauth ./internal/config ./internal/ldapclient -race -count=1
+ok (네 패키지: 11.7 s / 14.5 s / 1.4 s / 5.0 s)
+
+$ go vet ./internal/...            -> exit 0
+$ go test ./... -count=1           -> cmd/server, web: "pattern all:dist: no matching files found" [setup failed]
+                                      (이 작업 트리에 프런트 빌드 없음; 환경 문제). 나머지 패키지 ok
+
+$ jq (openapi.json): operationId 53 | machineBearer 8, 그중 비-GET 0 | security==[] 8 | securitySchemes cookieAuth, machineBearer
+$ scripts/test/test-chart-machine-auth.sh -> PASS 40줄, 다른 줄 없음
+$ go test ./internal/httpapi -run 'TestMachine_FeatureOffIgnoresBearer|TestMachine_DuplicateCookiesUnchanged|TestMachine_EveryProtectedOperationExercised|TestMachine_NewProtectedGetWithoutAllowlistIsDenied|TestSelectAuth_Matrix|TestOpenAPIMachine|TestOpenAPIDenied|TestOpenAPINoNonGet|TestOpenAPIPublic' -count=1 -v
+--- PASS (10개 최상위)
+$ go test ./machineauth -run TestVerify_NegativeTable -v -> 하위 케이스 48 PASS
+```
+
+### 7.2 T-020 스위트 목록
+
+| 영역 | 파일(`ui/backend/internal/…`) | 대표 테스트 |
+|---|---|---|
+| claim 검증기·시계 | `machineauth/verifier_test.go`, `review_test.go` | `TestVerify_PositiveControl`, `_NegativeTable`, `_TimeBoundaries`, `_SignatureAndAlgorithmAttacks`, `_ExpiredIsReportedOnlyForOtherwiseValidTokens`, `_AccountAudienceNeverAccepted` |
+| JWKS 상태 기계·전송 | `machineauth/keyset_test.go` | `TestKeySet_A…H`, `_F1_*`, `_F2_*`, `_SingleFlight`, `_BudgetBound`, `TestHTTPFetcher_Limits` |
+| 인증 선택·가드·scope | `httpapi/machine_test.go` | `TestSelectAuth_Matrix`, `TestMachine_EveryProtectedOperationExercised`, `_ScopeResolution`, `_NonGetAlwaysDenied` |
+| 계약(OpenAPI) | `httpapi/machine_contract_test.go` | `TestOpenAPIMachineBearerEqualsCodeAllowlist`, `…DeniedOperationsNeverCarryMachineBearer`, `…NoNonGetCarriesMachineBearer`, `…PublicOperationsUnchanged` |
+| 감사 | `httpapi/machine_audit_test.go`, `machine_limits_test.go` | `TestMachineAudit_EarlyReturnsAndFields`, `_NoTokenMaterialInLogsOrResponses`, `_ServerLevelRejectionsAreNotAudited` |
+| 제한 | `httpapi/machine_limiter_test.go`, `_ttl_test.go`, `_exit_test.go`, `_panic_test.go` | `TestMachineIPThrottle_BoundaryN`, `_InclusiveWindowEdge`, `_ReleasedOnEveryExitPath`, `TestMachineOrdering_*`, `TestMachineClientBudget_*`, `TestReservationTTL_*` |
+| 실행 신원·deadline | `httpapi/machine_exec_test.go`, `ldapclient/deadline_test.go`, `handshake_test.go`, `strict_test.go` | `TestMachineExec_SlotIsTakenBeforeBind`, `_DeadlineBoundsBindAndSearch`, `TestStartTLSHandshakeHonoursContextDeadline` |
+| 경계·cursor·비밀 | `httpapi/machine_boundary_test.go`, `ldapclient/secret_boundary_test.go` | `TestDNWithinBase`, `TestMachineMonitor_AccessLogOnlyWithAuditRead`, `TestMachineCursor_Isolation`, `TestAuditDTONeverEmitsReqModValues` |
+| config | `config/machine_test.go` | `TestMachine_StartupFailures`, `_BindDNEquivalence`, `_RootDNsAreSemicolonSeparated`, `_DefaultOffParsesNothing` |
+| 정적 | `scripts/test/test-chart-machine-auth.sh`, `scripts/verify-chart-schema.sh` | 40 PASS; kubeconform 프로파일 `ui-machine-auth`(CI) |
+
+모킹 프레임워크는 없다(`go.mod`에 없음; LDAP wire는 단위 시험 대상이 아니고 라이브가 증명).
+
+### 7.3 T-006 세 확인
+
+답과 코드 위치는 [TASKS.md T-006](TASKS.md)에 있다(SSO 초기화 실패 = 기동 실패 `server.go:91-97`; `ui.sso` Helm `required` 패턴 = `ui-deployment.yaml:51-72`; `listTree` = 머신만 1000개 초과 422, DTO는 맨 배열이라 `truncated` 없음).
+
+### 7.4 CI(라이브 포함, 인용; 이 감사가 재실행하지 않음)
+
+| 항목 | 실행 id | 결과 |
+|---|---|---|
+| `Machine bearer auth E2E (real Keycloak)` — PR 헤드 `d41d338`(마지막 PR 실행) | 37555431534 | success |
+| 같은 workflow — main 병합 커밋 `5c74f73` push | 37557393281 | success |
+| `CI`(go test ./... 포함) — PR 헤드 `d41d338` / main `5c74f73` | 37555431545 / 37557393337 | success / success |
+| `E2E (kind)` — PR 헤드 | 37555431568 | success(main 실행은 감사 시점 pending) |
+| `UI E2E (browser)` — PR 헤드 / main | 37555431582 / 37557393384 | success / success |
+| `UI fixture E2E (docker)` — PR 헤드 | 37555431580 | success(main 실행은 pending) |
+| `API + credentials E2E (docker)` — PR 헤드 / main | 37555431684 / 37557393386 | success / success |
+| `Backup and restore E2E`·`Metrics E2E`·`Security E2E`·`Replication Chaos E2E` — main | 37557393254·37557393241·37557393366·37557393351 | success |
+| `Keycloak LDAP federation E2E`·`SSSD E2E`·`E2E (kind)`·`UI fixture E2E (docker)`·`Upgrade and rollback E2E` — main | 37557393267·37557393349·37557393315·37557393242·37557393464 | 감사 시점 pending/진행 중(결과 미주장) |
+
+감사 시점에 아직 완료되지 않은 워크플로가 있으면 위 표에 `pending`으로 적었고, 그 결과를 이 감사는 주장하지 않는다.

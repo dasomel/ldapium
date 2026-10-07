@@ -83,27 +83,31 @@ Boundaries:
 
 ## Machine bearer authentication (#214, default off)
 
-Change package: `docs/changes/machine-principal-auth/` (CHANGE, TASKS, EVIDENCE, [ADR](changes/machine-principal-auth/ADR.md)), accepted 2026-10-07 (Revision 5), merged in staged units with the feature **off by default**. Contract and operator guides: `docs/api.md`, `docs/machine-keycloak-client.md`, `docs/machine-ldap-account.md`, `docs/machine-auth-operations.md`. Issue #214 stays open (partial).
+Change package: `docs/changes/machine-principal-auth/` (CHANGE, TASKS, EVIDENCE, [ADR](changes/machine-principal-auth/ADR.md)), accepted 2026-10-07 (Revision 5), merged in staged units (#272, #274, #276, #278, #279, #281, fixes #273, #282) with the feature **off by default**. Contract and operator guides: `docs/api.md`, `docs/machine-keycloak-client.md`, `docs/machine-ldap-account.md`, `docs/machine-auth-operations.md`. Close-out audit (2026-10-07, main `5c74f73`): all REQ-001 to REQ-018 and AC-001 to AC-019 are MET with the limits listed below; the audit's verdict is that the acceptance criteria of #214 are met and the issue can be closed (the maintainer decides, after the audit PR merges). See "Close-out audit" in `docs/changes/machine-principal-auth/CHANGE.md`.
 
-Implemented and merged (units 1-4: #272, #274, #276, #278):
+Implemented and merged:
 
 - Keycloak service-account access token as a bearer credential on exactly eight read-only `GET` operations; 37 protected operations always `403 scope_denied`; runtime deny-by-default guard; OpenAPI `machineBearer` additive
 - token verification (alg allowlist, `typ`, `iss`, exact `aud` membership, `azp`==`client_id`, service-account rule, scope, `iat`/`exp`/`nbf`/lifetime cap), JWKS key source with fail-closed 503, per-IP failure throttle before signature work, per-client budgets, bounded state
 - dedicated read-only LDAP execution identity bound per request with a request deadline, base boundary (`LDAP_BASE_DN`, no accesslog/config/Monitor), cursor binding, one `event=machine_access` audit line per request that reaches a handler
-- operator ACL guide with the final `olcAccess` LDIF, Helm `ui.machineAuth.*`
+- operator ACL guide with the final `olcAccess` LDIF, Helm `ui.machineAuth.*`, Keycloak client and operations guides, ADR and release notes
+- the CI workflow `machine-keycloak-e2e.yml` (job `machine bearer auth (real Keycloak)`) and its entry in the `release.yml` `release_critical` list
 
-Live-verified (local Docker against a real slapd stack; recorded in `EVIDENCE.md` and `TASKS.md`; the CI workflow `api-credentials-e2e.yml` runs these scripts but its run result was not re-checked for this section):
+Live-verified (local Docker, real slapd and UI backend; recorded in `EVIDENCE.md` sections 4 and 5; run again by CI, run 37557393281 on the merge commit and 37555431534 on the last PR head, both success):
 
-- read-only proof of the machine LDAP account in three configurations (349 checks, 11 mutation runs that must each be detected) and the execution boundaries (slow/dead LDAP, aborted requests, slot return, limiter 429, audit reasons, secret scan of container logs) with a stand-in issuer
-- Keycloak 26.7.4 token and JWKS behaviour: observed by hand on a real Keycloak (`EVIDENCE.md` section 2), not by an automated run against ldapium
+- real Keycloak 26.7.4 in both UI modes (LDAP mode and SSO mode): the eight allowed operations (71 checks), 40 negative tokens and the 37 denied operations with zero machine-DN binds, cookie plus bearer mixes, Origin, JWKS outage, rate limits, over-privileged bind with no secret value in any response, cursor isolation, secret scan of every container log
+- Keycloak client settings an operator must apply, positive and negative (33 checks, including the legacy token-exchange feature)
+- JWKS key rotation, request floods behind a counting proxy, hostile issuer responses and discovery recovery without restart (34 checks)
+- emergency revocation and rollback drill across two UI replicas (18 checks)
+- read-only proof of the machine LDAP account in three configurations (349 checks, 11 mutation runs that must each be detected) and the execution boundaries (slow/dead LDAP, aborted requests, slot return, limiter 429, audit reasons)
 
 Unit-tested only (no live run):
 
-- claim verifier boundaries against a local JWKS, the `selectAuth` matrix, the JWKS state machine on a fake clock, limiter boundaries, config validation, Helm rendering and kubeconform (`scripts/test/test-chart-machine-auth.sh`; no cluster install)
+- the default-value JWKS stale/expired rows and the exact fetch counts of scenarios a to h (fake clock; live uses shortened TTLs), the full `selectAuth` matrix cell by cell, limiter boundary tables, config validation variants, Helm rendering and kubeconform (`scripts/test/test-chart-machine-auth.sh`; no cluster install), audit lines for early returns other than allowed, verification failure and scope denial
 
-In progress, **not merged** (unit 5a): live e2e against a real Keycloak (positive and negative tokens, key rotation and request storms, JWKS/discovery recovery, rollback and emergency-block drill), the new CI workflow and the `release.yml` release gate. Until it is merged, no live Keycloak result is claimed here.
+Not verified anywhere: installing the chart with machine auth on a cluster, a real ingress in front of `X-Forwarded-For`, Helm pod replacement, the ACL on more than one LDAP node (#284); the combination with `LDAP_REPLICATION_IDENTITY=prepare` is unsupported (#277).
 
-Known limitations and follow-ups: see "Known limitations and follow-ups" in `docs/changes/machine-principal-auth/TASKS.md` (#266, #277/T-034, D25 unaudited server-level rejections, D30, opt-in scopes off by default). Requests the Go HTTP server rejects before any handler are in no log unless the ingress keeps an access log.
+Known limitations and follow-ups: see "Known limitations and follow-ups" in `docs/changes/machine-principal-auth/TASKS.md`: #266 (human current-password attempts), #277/T-034/D30, #280 (fixed 10 s graceful shutdown), #284 (cluster install), #285 (machine write scope, non-goal), #286 (immediate revocation, API key, mTLS, non-goals), #287 (API docs page does not mark machine-callable operations), D25 unaudited server-level rejections, per-replica limits, opt-in scopes off by default. Requests the Go HTTP server rejects before any handler are in no log unless the ingress keeps an access log. Publishing the OpenForge status (T-033) is an external maintainer step after the audit PR merges.
 
 ## Operations / resilience
 
