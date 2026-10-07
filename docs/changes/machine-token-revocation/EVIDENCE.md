@@ -253,7 +253,8 @@ LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-revoca
 ```
 
 Observed on the newly built image: init success, repeated init refusal, jti add,
-repeat-jti idempotency, existing-entry client/case collision refusal, cutoff
+repeat-jti idempotency, existing-entry client/case collision refusal, identifier
+file newline/NUL/JWT rejection, cutoff
 replacement leaving exactly one cutoff; real concurrent sentinel modification
 returns `[0, 16, 0]` (one contender fails with `no such value`, rereads and retries).
 The first two modifications are synchronized by a host barrier; all LDAP replies
@@ -276,3 +277,9 @@ Not verified: actual aging past the 4440-second retention/prune boundary
 (`createTimestamp` is server-owned); Kubernetes CronJob execution; simultaneous
 writers on different multi-provider nodes. The tool is operator-only; API
 revocation enforcement remains absent until T-014/T-015.
+
+Full `make check` completed with exit 0 in this worktree: frontend lint/build,
+Go vet (including live tags)/tests/build, chart lint/schema/contracts, shellcheck,
+version/module checks, incident/tool fixtures, license inventory and govulncheck.
+The scan reported no reachable vulnerabilities. Race check separately passed:
+`go test -race -count=1 ./internal/config ./internal/machineauth ./internal/httpapi`.
