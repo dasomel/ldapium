@@ -23,7 +23,7 @@
 
 ## Implement (수용 이후, 순서대로; 각 단위는 단독으로 검증되고 기능 꺼짐 상태에서 기존 테스트를 통과한다)
 
-- [ ] `T-010` (REQ-005, D12, REQ-007) 설정: `c/machine.go`에 `MACHINE_REVOCATION_ENABLED`(기본 false; false면 하위 값을 읽지 않음), `_REFRESH`(1–60 s, 기본 5 s), `_MAX_STALE`(`REFRESH`–10 m, 기본 3×REFRESH), `_SENTINEL_MAX_AGE`(30 s–1 h, 기본 5 m), `_BASE_DN`(정확히 `ou=revocations,…`, 루트 금지), `_MAX_ENTRIES`(활성 항목 상한; Revision 2: 기본 2000, 범위 1–2500(기동 검증 `MAX_ENTRIES×400 B ≤ 1 MiB`), 서버 `olcSizeLimit` 미만 — T-004 실측), 위치 설정(Q2 결과). 머신 인증이 꺼져 있으면 무시, 범위 위반·`MAX_STALE < REFRESH + 5 s`는 기동 실패. 소비자 없음(값만 파싱·검증).
+- [x] `T-010` (REQ-005, D12, REQ-007) **(구현됨 2026-10-08, PR 참조: #286 T-010; 파싱·검증만, 소비자 없음; 기본 MAX_STALE = max(3×REFRESH, REFRESH+5 s)로 REFRESH=1 s에서도 기동 가능)** 설정: `c/machine.go`에 `MACHINE_REVOCATION_ENABLED`(기본 false; false면 하위 값을 읽지 않음), `_REFRESH`(1–60 s, 기본 5 s), `_MAX_STALE`(`REFRESH`–10 m, 기본 3×REFRESH), `_SENTINEL_MAX_AGE`(30 s–1 h, 기본 5 m), `_BASE_DN`(정확히 `ou=revocations,…`, 루트 금지), `_MAX_ENTRIES`(활성 항목 상한; Revision 2: 기본 2000, 범위 1–2500(기동 검증 `MAX_ENTRIES×400 B ≤ 1 MiB`), 서버 `olcSizeLimit` 미만 — T-004 실측), 위치 설정(Q2 결과). 머신 인증이 꺼져 있으면 무시, 범위 위반·`MAX_STALE < REFRESH + 5 s`는 기동 실패. 소비자 없음(값만 파싱·검증).
       검수: 단위 — 기본 꺼짐에서 새 env 미독출, 범위 경계, 켠 상태 조합 표.
 - [ ] `T-011` (REQ-001, REQ-002, D2, D12) 검증기 claim: `m/claims.go`의 `Principal`에 `IssuedAt`(이미 검증하는 `iat`, `claims.go:121`)와 `JTI`를 추가한다(지금 `Principal`은 둘 다 버린다 — `claims.go:59-64`). `jti`는 정책 플래그 `RequireJTI`가 켜졌을 때만 필수(없음·null·비문자열이면 reason `jti`). 폐기 판정은 하지 않는다.
       검수: 단위 — `RequireJTI` 켬: 누락·null·비문자열 거부, 끔: 기존 표 전 행 결과 불변, 두 필드가 Principal에 실림.

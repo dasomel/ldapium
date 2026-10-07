@@ -24,6 +24,9 @@ type MachineConfig struct {
 	// WriteEnabled is MACHINE_WRITE_ENABLED (machine-write-scope D1). It is
 	// always false in this unit: loadMachineWrite refuses to start with it on.
 	WriteEnabled bool
+	// Revocation is MACHINE_REVOCATION_* (machine-token-revocation T-010):
+	// parsed and validated only, no consumer yet; zero when disabled.
+	Revocation RevocationConfig
 
 	// IssuerURL must be https, except under InsecureHTTP (local test only).
 	IssuerURL    string
@@ -228,6 +231,12 @@ func loadMachine(getenv func(string) string, cfg *Config) error {
 	// X-Forwarded-For and so choose its own IP-throttle key.
 	if cfg.TrustedProxies == "private" {
 		return fmt.Errorf("MACHINE_AUTH_ENABLED requires UI_TRUSTED_PROXIES to be an explicit CIDR list or \"none\", not \"private\"")
+	}
+
+	// machine-token-revocation D12: ignored with machine auth off (returned
+	// above); with its own switch off no sub-value is read.
+	if m.Revocation, err = loadMachineRevocation(getenv, cfg); err != nil {
+		return err
 	}
 
 	cfg.Machine = m
