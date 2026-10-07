@@ -67,7 +67,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$base" ] || die "--base is required"
-[ -n "$pwfile" ] && [ -r "$pwfile" ] || die "--admin-password-file must name a readable file"
+if [ -z "$pwfile" ] || [ ! -r "$pwfile" ]; then die "--admin-password-file must name a readable file"; fi
 case "$base" in *'"'*|*\\*|*$'\n'*) die "--base contains a character this command refuses" ;; esac
 [ -n "$admin_dn" ] || admin_dn="cn=admin,${base}"
 for t in ldapsearch ldapadd ldapdelete ldapwhoami slapdn slapcat; do command -v "$t" >/dev/null 2>&1 || die "$t is required"; done
@@ -119,7 +119,7 @@ done
 
 if [ "$cmd" = ensure ]; then
   [ -n "$out" ] || die "--out is required (the generated password is written there, never printed)"
-  [ ! -e "$out" ] && [ ! -L "$out" ] || die "--out ${out} already exists (or is a symlink); refusing to overwrite a credential file"
+  if [ -e "$out" ] || [ -L "$out" ]; then die "--out ${out} already exists (or is a symlink); refusing to overwrite a credential file"; fi
   if exists "$iddn" || exists "$poldn"; then
     die "${iddn} or ${poldn} already exists (a partial earlier run?); run retire --yes first (rotation is a separate command)"
   fi
