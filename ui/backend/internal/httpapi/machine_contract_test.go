@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -10,27 +11,60 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 )
 
-// deniedOperationIDs is the explicit denylist of CHANGE.md (36 entries) plus
-// getMe. It is the test's expected value only: the runtime guard has no
-// denylist, it denies everything the allowlist does not name.
-var deniedOperationIDs = []string{
-	// users (7)
-	"createUser", "updateUser", "patchUser", "deleteUser", "setPassword", "unlockUser", "lockUser",
-	// groups (6)
-	"createGroup", "updateGroup", "patchGroup", "deleteGroup", "addGroupMember", "removeGroupMember",
-	// entry move (1)
-	"moveEntry",
-	// application profiles x-admin (14)
-	"getProfileCapabilities", "listApplications", "listIntegrationMethods", "putIntegrationMethod",
-	"getApplicationProfile", "putApplicationProfile", "deleteApplicationProfile", "getKeycloakRoles",
-	"getApplicationRoles", "getIntegrationStatus", "verifyIntegration", "applyKeycloakRoleOperation",
-	"exportApplicationConfiguration", "previewMapping",
-	// backups x-admin (8)
-	"getBackups", "putBackupPolicies", "putBackupConnection", "deleteBackupConnection", "runBackup",
-	"getBackupJob", "listBackupJobs", "cancelBackupJob",
-	// session identity
-	"getMe",
-}
+// deniedOp is one entry of the contract deny list (machine-write-scope D13).
+// The list is the test's expected value only: the runtime guard has no
+// denylist, it denies everything the allowlists do not name. Why cites the
+// decision that keeps the operation closed.
+type deniedOp struct{ ID, Why string }
+
+const (
+	// whyD2 is a permanent denial: this package never opens these.
+	whyD2 = "D2"
+	// whyUnopened is a write that is not open yet; T-013 (and the later
+	// stages, D14) open them one by one.
+	whyUnopened = "D13 unopened write"
+)
+
+// deniedOps = D2 permanent denials + writes not opened yet (D13). 36 explicit
+// entries of the v1 contract plus getMe = 37.
+var deniedOps = func() []deniedOp {
+	var out []deniedOp
+	add := func(why string, ids ...string) {
+		for _, id := range ids {
+			out = append(out, deniedOp{id, why})
+		}
+	}
+	// D2 permanent: entry move (1)
+	add(whyD2, "moveEntry")
+	// D2 permanent: application profiles x-admin (14)
+	add(whyD2, "getProfileCapabilities", "listApplications", "listIntegrationMethods", "putIntegrationMethod",
+		"getApplicationProfile", "putApplicationProfile", "deleteApplicationProfile", "getKeycloakRoles",
+		"getApplicationRoles", "getIntegrationStatus", "verifyIntegration", "applyKeycloakRoleOperation",
+		"exportApplicationConfiguration", "previewMapping")
+	// D2 permanent: backups x-admin (8)
+	add(whyD2, "getBackups", "putBackupPolicies", "putBackupConnection", "deleteBackupConnection", "runBackup",
+		"getBackupJob", "listBackupJobs", "cancelBackupJob")
+	// D2 permanent: session identity
+	add(whyD2, "getMe")
+	// D13 unopened writes: users (7) and groups (6)
+	add(whyUnopened, "createUser", "updateUser", "patchUser", "deleteUser", "setPassword", "unlockUser", "lockUser",
+		"createGroup", "updateGroup", "patchGroup", "deleteGroup", "addGroupMember", "removeGroupMember")
+	return out
+}()
+
+// machineWriteOpenedBy is the D13 shrink gate. An operation leaves the deny list
+// only by being registered in machineWriteOps AND recorded here with the D-id
+// of this package that opens it; TestMachineDenyListShrinkNeedsDID enforces
+// both. Empty in T-010 (nothing is open).
+var machineWriteOpenedBy = map[string]string{}
+
+var deniedOperationIDs = func() []string {
+	ids := make([]string, 0, len(deniedOps))
+	for _, d := range deniedOps {
+		ids = append(ids, d.ID)
+	}
+	return ids
+}()
 
 var publicOperationIDs = []string{
 	"getMeta", "getOpenAPI", "getAuthConfig", "getLdapHealth", "login", "logout", "ssoStart", "ssoCallback",
@@ -116,10 +150,11 @@ func TestOpenAPIMachineBearerEqualsCodeAllowlist(t *testing.T) {
 			inSpec[o.ID] = o
 		}
 	}
-	if len(inSpec) != 8 || len(machineOps) != 8 {
-		t.Fatalf("machineBearer operations in spec = %d, code allowlist = %d, want 8 and 8", len(inSpec), len(machineOps))
+	declared := append(append([]machineOp(nil), machineOps...), machineWriteOps...)
+	if len(inSpec) != 8 || len(machineOps) != 8 || len(inSpec) != len(declared) {
+		t.Fatalf("machineBearer operations in spec = %d, code allowlist = %d (+%d write), want 8 and 8 (+0)", len(inSpec), len(machineOps), len(machineWriteOps))
 	}
-	for _, code := range machineOps {
+	for _, code := range declared {
 		spec, ok := inSpec[code.ID]
 		if !ok {
 			t.Errorf("allowlist entry %s has no machineBearer in openapi.json", code.ID)
@@ -138,15 +173,22 @@ func TestOpenAPIMachineBearerEqualsCodeAllowlist(t *testing.T) {
 			t.Errorf("%s: security = %v, want [cookieAuth, machineBearer]", code.ID, spec.Security)
 		}
 	}
-	// The scope vocabulary the config accepts is exactly the allowlist's.
+	// The scope vocabulary the config accepts is exactly the allowlists' plus the
+	// declared-but-unopened write scopes (D7, T-010).
 	want := map[string]bool{}
-	for _, op := range machineOps {
+	for _, op := range declared {
 		want[op.Scope] = true
 	}
-	for _, s := range config.MachineScopes {
+	for _, s := range config.MachineReadScopes {
 		if !want[s] {
-			t.Errorf("config scope %q is not used by any allowlisted operation", s)
+			t.Errorf("config read scope %q is not used by any allowlisted operation", s)
 		}
+		delete(want, s)
+	}
+	for _, msg := range writeOpScopeProblems(machineWriteOps) {
+		t.Error(msg)
+	}
+	for _, s := range config.MachineWriteScopes {
 		delete(want, s)
 	}
 	for s := range want {
@@ -165,6 +207,37 @@ func TestOpenAPIMachineBearerEqualsCodeAllowlist(t *testing.T) {
 	}
 }
 
+// writeOpScopeProblems: an opened write operation must use a scope from the D7
+// vocabulary (config.MachineWriteScopes); anything else (a read scope, a typo, a
+// wildcard) is reported.
+func writeOpScopeProblems(ops []machineOp) []string {
+	vocab := map[string]bool{}
+	for _, s := range config.MachineWriteScopes {
+		vocab[s] = true
+	}
+	var out []string
+	for _, op := range ops {
+		if !vocab[op.Scope] {
+			out = append(out, "write operation "+op.ID+" uses scope "+op.Scope+", which is not in config.MachineWriteScopes (D7)")
+		}
+	}
+	return out
+}
+
+func TestWriteOpScopeCheckRejectsForeignScopes(t *testing.T) {
+	good := machineOp{"createUser", "POST", "/api/users", "directory.users.create"}
+	if got := writeOpScopeProblems([]machineOp{good}); len(got) != 0 {
+		t.Fatalf("valid write scope reported: %v", got)
+	}
+	for _, scope := range []string{"directory.users.read", "directory.users.write", "*", ""} {
+		bad := good
+		bad.Scope = scope
+		if got := writeOpScopeProblems([]machineOp{bad}); len(got) != 1 {
+			t.Errorf("scope %q not reported: %v", scope, got)
+		}
+	}
+}
+
 func routeToSpecPath(route string) string {
 	return echoParam.ReplaceAllString(route, "{$1}")
 }
@@ -178,8 +251,8 @@ func TestOpenAPIDeniedOperationsNeverCarryMachineBearer(t *testing.T) {
 	for _, o := range ops {
 		byID[o.ID] = o
 	}
-	if len(deniedOperationIDs) != 37 {
-		t.Fatalf("denylist = %d, want 36 + getMe", len(deniedOperationIDs))
+	if len(deniedOperationIDs)+len(machineWriteOps) != 37 {
+		t.Fatalf("denylist = %d + opened writes %d, want 37 (36 + getMe)", len(deniedOperationIDs), len(machineWriteOps))
 	}
 	for _, id := range deniedOperationIDs {
 		o, ok := byID[id]
@@ -197,6 +270,9 @@ func TestOpenAPIDeniedOperationsNeverCarryMachineBearer(t *testing.T) {
 	// Completeness: protected = allowlist + denylist, nothing else.
 	allow := map[string]bool{}
 	for _, op := range machineOps {
+		allow[op.ID] = true
+	}
+	for _, op := range machineWriteOps {
 		allow[op.ID] = true
 	}
 	deny := map[string]bool{}
@@ -334,6 +410,95 @@ func TestMachineCodesAndSchemeAreDocumented(t *testing.T) {
 			if !strings.Contains(string(md), c) {
 				t.Errorf("docs/api.md does not mention %s", c)
 			}
+		}
+	}
+}
+
+// deniedGolden pins the 37 contract deny-list entries ("operationId reason").
+// Removing, renaming or re-labelling an entry in deniedOps fails
+// TestMachineDenyListMatchesGolden until this literal is edited too, and
+// shrinking it is only valid for an operation that is then registered in
+// machineWriteOps with a D-id in machineWriteOpenedBy (otherwise the
+// allow/deny completeness checks fail). Reviewers: a diff here is the D13 gate.
+var deniedGolden = []string{
+	"moveEntry D2",
+	"getProfileCapabilities D2", "listApplications D2", "listIntegrationMethods D2", "putIntegrationMethod D2",
+	"getApplicationProfile D2", "putApplicationProfile D2", "deleteApplicationProfile D2", "getKeycloakRoles D2",
+	"getApplicationRoles D2", "getIntegrationStatus D2", "verifyIntegration D2", "applyKeycloakRoleOperation D2",
+	"exportApplicationConfiguration D2", "previewMapping D2",
+	"getBackups D2", "putBackupPolicies D2", "putBackupConnection D2", "deleteBackupConnection D2", "runBackup D2",
+	"getBackupJob D2", "listBackupJobs D2", "cancelBackupJob D2",
+	"getMe D2",
+	"createUser D13", "updateUser D13", "patchUser D13", "deleteUser D13", "setPassword D13", "unlockUser D13", "lockUser D13",
+	"createGroup D13", "updateGroup D13", "patchGroup D13", "deleteGroup D13", "addGroupMember D13", "removeGroupMember D13",
+}
+
+func TestMachineDenyListMatchesGolden(t *testing.T) {
+	did := regexp.MustCompile(`\bD[0-9]+\b`)
+	got := map[string]bool{}
+	for _, d := range deniedOps {
+		// "D13 unopened write" -> "D13"; "D2" -> "D2".
+		got[d.ID+" "+did.FindString(d.Why)] = true
+	}
+	want := map[string]bool{}
+	for _, g := range deniedGolden {
+		if !did.MatchString(g) {
+			t.Errorf("golden entry %q cites no D-id", g)
+		}
+		want[g] = true
+	}
+	if len(deniedGolden) != 37 || len(want) != 37 {
+		t.Errorf("golden has %d entries (%d distinct), want 37", len(deniedGolden), len(want))
+	}
+	for g := range want {
+		if !got[g] {
+			t.Errorf("golden entry %q is missing from deniedOps (removed or re-labelled without the D13 gate)", g)
+		}
+	}
+	for g := range got {
+		if !want[g] {
+			t.Errorf("deniedOps entry %q is not in deniedGolden", g)
+		}
+	}
+}
+
+// D13: the deny list shrinks only with a D-id. Every entry cites why it is
+// closed; every operation in machineWriteOps must have left the deny list and
+// carry a D-id of this package in machineWriteOpenedBy; and nothing marked D2
+// (permanent) may ever be opened.
+func TestMachineDenyListShrinkNeedsDID(t *testing.T) {
+	did := regexp.MustCompile(`\bD[0-9]+\b`)
+	deny := map[string]deniedOp{}
+	for _, d := range deniedOps {
+		if !did.MatchString(d.Why) {
+			t.Errorf("denied operation %s cites no D-id: %q", d.ID, d.Why)
+		}
+		if _, dup := deny[d.ID]; dup {
+			t.Errorf("denied operation %s listed twice", d.ID)
+		}
+		deny[d.ID] = d
+	}
+	for _, op := range machineWriteOps {
+		if _, still := deny[op.ID]; still {
+			t.Errorf("%s is in machineWriteOps but still on the deny list", op.ID)
+		}
+		if !did.MatchString(machineWriteOpenedBy[op.ID]) {
+			t.Errorf("%s is opened without a D-id in machineWriteOpenedBy", op.ID)
+		}
+	}
+	for id := range machineWriteOpenedBy {
+		open := false
+		for _, op := range machineWriteOps {
+			open = open || op.ID == id
+		}
+		if !open {
+			t.Errorf("machineWriteOpenedBy names %s, which is not in machineWriteOps", id)
+		}
+	}
+	// D2 entries are permanent: no write table entry may carry one.
+	for _, op := range machineWriteOps {
+		if d, ok := deny[op.ID]; ok && d.Why == whyD2 {
+			t.Errorf("%s is a D2 permanent denial and cannot be opened", op.ID)
 		}
 	}
 }
