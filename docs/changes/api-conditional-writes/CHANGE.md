@@ -398,7 +398,7 @@ LDAP 와이어 코드는 AGENTS.md 원칙에 따라 단위 테스트하지 않�
 3. `memberof` 오버레이의 `memberOf` 갱신, ppolicy의 `pwdFailureTime`·`pwdChangedTime` 쓰기가 사용자 `entryCSN`을 바꾸는지(가짜 412 빈도).
 4. 이 이미지에서 `userPassword`가 든 Add가 `olcPPolicyHashCleartext`로 해시되고 ppm 검사를 받는지(D216-5 대안의 사실 확인).
 5. assertion 실패의 정확한 결과 코드(122)와 `go-ldap`이 이를 `*ldap.Error`로 돌려주는 형태.
-6. 다중 provider 두 노드에서의 `If-Match` 거동(D216-1a의 서술은 AGENTS.md의 LWW 설명과 코드 읽기에 근거하며 실측하지 않음).
+6. ~~다중 provider 두 노드에서의 `If-Match` 거동~~ — #310(`scripts/test/test-api-conditional-writes-stress-live.py` (h))로 2노드 실측 완료, D216-1a와 일치(복제 단절 중 A의 이미 대체된 옛 태그가 B에서 204, 복구 후 늦은 `entryCSN`이 이김). 3노드 이상·시계 오차는 미시험. [EVIDENCE.md](EVIDENCE.md) Part D.
 7. Echo의 `PATCH` 라우팅과 #230의 `Allow` 목록 자동 반영, 본문 재읽기(미들웨어 버퍼링 후 핸들러 `Bind`) 동작.
 8. slapd의 RFC 4527 Post-Read 지원은 확인하지 않았다(go-ldap `Add`가 응답 제어를 노출하지 않아 어차피 쓸 수 없음, D216-5). 같은 바인드 DN의 동시 삭제·재생성이 Add와 직후 검색 사이에 끼는 경쟁은 설계상 잔여(실측 안 함).
 9. 쓰기 연산 중 연결 유실이 go-ldap에서 항상 `ErrorNetwork`(200)로 나타나는지, 그리고 LDAP 호출에 연산 타임아웃이 없을 때(`dial.go`에 없음) 멈춘 호출의 거동.

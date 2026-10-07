@@ -394,4 +394,41 @@ Run 2026-10-06 (Codex round 2 fixes), `LDAPIUM_IMAGE=ldapium:lane-251b LDAPIUM_U
 - The compensation intercept scans a rolling stream (`OIDScanner`); the startup self-test feeds the OID split at all 33 boundaries and byte-by-byte. Mutant (rolling tail disabled) failed with `OIDScanner missed OID split at byte 10`; reverted.
 - `assertion_live_test.go` post-delete check accepts only `LDAPResultNoSuchObject`; `go vet -tags live ./...` and `go test ./... -count=1` pass.
 
-Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1), delete/recreate stress, assertion-unsupported-server case.
+Not verified in Part C: Browser UI Playwright scenarios (frontend does not send `If-Match` or `Idempotency-Key` headers; tracked as successor issue 1), delete/recreate stress, assertion-unsupported-server case. (Superseded: covered by #296/#308/#310, see Part D.)
+
+## Part D: Close-out of T-021 / issue #268 (PRs #296, #308, #310)
+
+Source of every statement: the merged PR descriptions (`gh pr view <n> --json body`) and `git log`. CI run ids were not collected; see each PR's checks (`gh pr checks <n>`). This section was written without re-running the scripts.
+
+| PR | Merged (UTC) | Merge commit | Covers |
+|---|---|---|---|
+| #296 | 2026-10-07 10:44 | `b0ada28` | part (e) of `scripts/test/test-api-conditional-writes-local.py` |
+| #308 | 2026-10-07 14:25 | `9e2c1ca` | `ui/frontend/e2e/conditional-writes-retry-live.spec.ts` |
+| #310 | 2026-10-07 15:04 | `fe70349` | `scripts/test/test-api-conditional-writes-stress-live.py` (f), (g), (h) |
+
+### Commands
+
+Images default to `ldapium:e2e` and `ldapium-ui:e2e` (rebuild after any `image/entrypoint.sh` change: `docker build -t ldapium:e2e -f image/Dockerfile ./image`).
+
+```sh
+# part (e); the stress script has the same env vars, default prefix ldapium-cw-268-
+LDAPIUM_IMAGE=ldapium:e2e LDAPIUM_UI_IMAGE=ldapium-ui:e2e LDAPIUM_TEST_PREFIX=ldapium-cw-251- \
+  python3 scripts/test/test-api-conditional-writes-local.py
+LDAPIUM_IMAGE=ldapium:e2e LDAPIUM_UI_IMAGE=ldapium-ui:e2e LDAPIUM_TEST_PREFIX=ldapium-cw-268- \
+  python3 scripts/test/test-api-conditional-writes-stress-live.py   # ~3-4 min
+# Playwright: E2E_ADMIN_DN and E2E_ADMIN_PASSWORD required, E2E_BASE_URL defaults to http://127.0.0.1:8080
+# the idempotency-on branch needs a UI started with UI_IDEMPOTENCY_ENABLED=true
+cd ui/frontend && npx playwright test e2e/conditional-writes-retry-live.spec.ts
+```
+
+`api-credentials-e2e.yml` runs both scripts in CI (#296 per its description; #310 wired the stress script in, plus a `docker network ls` leftover check).
+
+### Results (as reported in the PR descriptions)
+
+- #296 (e): full script rc=0 live, reported by the lane (not independently re-run for this section). e1: 6 concurrent writes with the same `If-Match` give `[204, 412 x5]`; the directory holds only the winner's change. This shows the directory assertion decides each write, not that the server's check-then-write is atomic on its own. e2: first keyed `POST /api/users` held at the LDAP proxy, 5 same-key duplicates all 409 `idempotency_key_conflict`; the held create ends 403 `forbidden` (ops identity lacks `manage` on `userPassword`, ldap error 50), is compensated, entry gone, so same-key replay = 201 is NOT covered. e3: `PATCH` keeps other attributes and multi-values (user and group); stale tag gives 412, entry unchanged.
+- #308: against two local live stacks (idempotency on and off), 4 passed each (5.0 s / 3.3 s); eslint clean on the new file. On: dropped create retried with the same key gives 201 + `Idempotent-Replayed: true`, one entry; dropped edit replays 204 although the etag moved. Off (the stock CI chart): create retry 409, edit retry 412 notice, no key sent, one entry. Response drop is done by wrapping `fetch` in the browser; the backend is not mocked.
+- #310: full script rc=0, 39 PASS, three runs by the lane and one by the orchestrator, no docker leftovers. (f) 30 rounds of concurrent DELETE, keyed recreate POST, PUT, PATCH on one DN: documented statuses only, at most one same-tag writer wins per round, no duplicates; old tag on the recreated entry gives 412 `revision_conflict`; replayed keyed DELETE leaves the recreated entry intact. (g) SIMULATED (BER-aware proxy answers the critical control with result 12 per RFC 4511; real slapd lists `1.3.6.1.1.12`): PUT/PATCH/lock/DELETE with `If-Match` give 500 `internal`, entry byte-identical, the same PUT without `If-Match` works; fail closed, no unconditional fallback, no upfront capability check. (h) two multi-provider nodes: `entryCSN`/ETag identical after sync; A's tag on B gives 204; with replication cut A's new tag on B gives 412 and A's superseded old tag on B gives 204 (stale-tag window); after healing the later `entryCSN` wins and the other 204 write is silently overwritten (D216-1a). An earlier (h) run hung 30 s on the partitioned write, fixed with one private access network per UI/node.
+
+### Still not verified
+
+Real slapd without assertion control; same-key replay = 201 live in (e); Groups-screen Playwright scenario; idempotency-on branch of the retry spec in CI; 3+ nodes; clock skew; SIGTERM cleanup of the stress script by an actual signal.
