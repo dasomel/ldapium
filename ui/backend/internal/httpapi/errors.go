@@ -71,10 +71,13 @@ const (
 	codeValidationFailed     = "validation_failed"
 	codeIfMatchRequired      = "if_match_required"
 	codeLoginRateLimited     = "login_rate_limited"
-	codeInternal             = "internal"
-	codeUpstreamFailed       = "upstream_failed"
-	codeKeycloakDisabled     = "keycloak_disabled"
-	codeUnavailable          = "unavailable"
+	// codePasswordChangeRateLimited: too many wrong current passwords for one
+	// session+DN on POST /api/users/password (#266). 429 with Retry-After.
+	codePasswordChangeRateLimited = "password_change_rate_limited"
+	codeInternal                  = "internal"
+	codeUpstreamFailed            = "upstream_failed"
+	codeKeycloakDisabled          = "keycloak_disabled"
+	codeUnavailable               = "unavailable"
 	// Backup jobs (#217): an unknown or malformed job ID, a cancel of a job
 	// that is no longer running, and a start/cancel record that could not be
 	// written (the worker was not started / no signal was sent).
@@ -151,32 +154,33 @@ type codeSpec struct {
 }
 
 var codeTable = map[string]codeSpec{
-	codeInvalidRequest:         {http.StatusBadRequest, ""},
-	codeInvalidCredentials:     {http.StatusUnauthorized, ""},
-	codeUnauthenticated:        {http.StatusUnauthorized, ""},
-	codeSessionExpired:         {http.StatusUnauthorized, ""},
-	codeForbidden:              {http.StatusForbidden, ""},
-	codeAdminRequired:          {http.StatusForbidden, ""},
-	codeOriginMismatch:         {http.StatusForbidden, ""},
-	codeNotFound:               {http.StatusNotFound, ""},
-	codeFeatureDisabled:        {http.StatusNotFound, ""},
-	codeMethodNotAllowed:       {http.StatusMethodNotAllowed, ""},
-	codeConflict:               {http.StatusConflict, ""},
-	codeAlreadyExists:          {http.StatusConflict, ""},
-	codeBackupBusy:             {http.StatusConflict, ""},
-	codeRevisionConflict:       {http.StatusPreconditionFailed, ""},
-	codeUnsupportedMediaType:   {http.StatusUnsupportedMediaType, ""},
-	codeValidationFailed:       {http.StatusUnprocessableEntity, ""},
-	codeIfMatchRequired:        {http.StatusPreconditionRequired, ""},
-	codeLoginRateLimited:       {http.StatusTooManyRequests, ""},
-	codeInternal:               {http.StatusInternalServerError, internalErrorMessage},
-	codeUpstreamFailed:         {http.StatusBadGateway, keycloakUpstreamMessage},
-	codeKeycloakDisabled:       {http.StatusServiceUnavailable, keycloakDisabledMessage},
-	codeUnavailable:            {http.StatusServiceUnavailable, unavailableErrorMessage},
-	codeJobNotFound:            {http.StatusNotFound, ""},
-	codeJobNotCancellable:      {http.StatusConflict, ""},
-	codePersistenceUnavailable: {http.StatusServiceUnavailable, persistenceUnavailableMessage},
-	codePartialFailure:         {http.StatusInternalServerError, partialFailureMessage},
+	codeInvalidRequest:            {http.StatusBadRequest, ""},
+	codeInvalidCredentials:        {http.StatusUnauthorized, ""},
+	codeUnauthenticated:           {http.StatusUnauthorized, ""},
+	codeSessionExpired:            {http.StatusUnauthorized, ""},
+	codeForbidden:                 {http.StatusForbidden, ""},
+	codeAdminRequired:             {http.StatusForbidden, ""},
+	codeOriginMismatch:            {http.StatusForbidden, ""},
+	codeNotFound:                  {http.StatusNotFound, ""},
+	codeFeatureDisabled:           {http.StatusNotFound, ""},
+	codeMethodNotAllowed:          {http.StatusMethodNotAllowed, ""},
+	codeConflict:                  {http.StatusConflict, ""},
+	codeAlreadyExists:             {http.StatusConflict, ""},
+	codeBackupBusy:                {http.StatusConflict, ""},
+	codeRevisionConflict:          {http.StatusPreconditionFailed, ""},
+	codeUnsupportedMediaType:      {http.StatusUnsupportedMediaType, ""},
+	codeValidationFailed:          {http.StatusUnprocessableEntity, ""},
+	codeIfMatchRequired:           {http.StatusPreconditionRequired, ""},
+	codeLoginRateLimited:          {http.StatusTooManyRequests, ""},
+	codePasswordChangeRateLimited: {http.StatusTooManyRequests, ""},
+	codeInternal:                  {http.StatusInternalServerError, internalErrorMessage},
+	codeUpstreamFailed:            {http.StatusBadGateway, keycloakUpstreamMessage},
+	codeKeycloakDisabled:          {http.StatusServiceUnavailable, keycloakDisabledMessage},
+	codeUnavailable:               {http.StatusServiceUnavailable, unavailableErrorMessage},
+	codeJobNotFound:               {http.StatusNotFound, ""},
+	codeJobNotCancellable:         {http.StatusConflict, ""},
+	codePersistenceUnavailable:    {http.StatusServiceUnavailable, persistenceUnavailableMessage},
+	codePartialFailure:            {http.StatusInternalServerError, partialFailureMessage},
 
 	codeIdempotencyKeyConflict:    {http.StatusConflict, ""},
 	codeIdempotencyKeyReused:      {http.StatusUnprocessableEntity, ""},
@@ -248,7 +252,7 @@ func apiErr(status int, code, msg string) *echo.HTTPError {
 // caller must reload first), as is 500 (a partial effect is possible).
 func retryableFor(code, method string) bool {
 	switch code {
-	case codeLoginRateLimited, codeMachineRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
+	case codeLoginRateLimited, codePasswordChangeRateLimited, codeMachineRateLimited, codeUnavailable, codeScanTimeout, codeBackupBusy, codePersistenceUnavailable,
 		codeIdempotencyKeyConflict, codeIdempotencyCapacity:
 		return true
 	case codeUpstreamFailed:
