@@ -28,6 +28,10 @@ import (
 //     on a private/loopback/link-local range can still spoof.
 //   - a comma-separated CIDR list: echo.ExtractIPFromXFFHeader trusting
 //     ONLY the listed CIDRs — deliberately not a superset of "private".
+//     Echo's extractor trusts loopback, link-local and private networks
+//     unless told otherwise, so those three defaults are switched off
+//     explicitly (D32): left on, a private peer outside the list could set
+//     X-Forwarded-For and take a fresh failure budget per request.
 //     Granting loopback/link-local/private-net trust on top would make
 //     this mode no stricter than "private" (a private-origin client could
 //     still spoof exactly as under "private"), defeating the point of an
@@ -47,7 +51,7 @@ func ipExtractorFor(cfg config.Config) echo.IPExtractor {
 	case "private", "":
 		return echo.ExtractIPFromXFFHeader(echo.TrustLoopback(true), echo.TrustLinkLocal(true), echo.TrustPrivateNet(true))
 	default:
-		var opts []echo.TrustOption
+		opts := []echo.TrustOption{echo.TrustLoopback(false), echo.TrustLinkLocal(false), echo.TrustPrivateNet(false)}
 		for _, entry := range strings.Split(cfg.TrustedProxies, ",") {
 			entry = strings.TrimSpace(entry)
 			if entry == "" {

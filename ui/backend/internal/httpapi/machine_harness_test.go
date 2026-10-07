@@ -77,6 +77,10 @@ type harnessOpt struct {
 	// the stub execution step.
 	now  func() time.Time
 	exec machineExec
+	// jwksHook runs inside the JWKS endpoint before it answers (slow key source).
+	jwksHook func()
+	// authTimeout replaces machineAuthTimeout.
+	authTimeout time.Duration
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -100,6 +104,9 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 		_, _ = fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":%q}`, base+"/realms/r", base+"/certs")
 	})
 	mux.HandleFunc("/certs", func(w http.ResponseWriter, _ *http.Request) {
+		if opt.jwksHook != nil {
+			opt.jwksHook()
+		}
 		h.jwksHits.Add(1)
 		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: hKid, Use: "sig", Algorithm: "RS256"}}}
 		b, _ := json.Marshal(set)
@@ -137,6 +144,8 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 	deps := machineDeps{
 		fetcher: machineauth.NewHTTPFetcher(),
 		now:     func() time.Time { return hNow },
+
+		authTimeout: opt.authTimeout,
 	}
 	if opt.now != nil {
 		deps.now = opt.now
