@@ -99,10 +99,11 @@ bind하면 `M`이 잠기고 모든 머신 요청이 503이 된다(13절).
 
 ## 5. ACL 적용
 
-> **경고: `LDAP_REPLICATION_IDENTITY=prepare`를 쓰는 노드에는 이 절을 적용하지 않는다.** prepare는 복제 신원의 규칙이
-> `olcAccess`의 `{0}`에 있어야 하고, 이 절은 머신 규칙을 `{0}`–`{2}`에 넣어 그 규칙을 `{3}`으로 밀어 낸다. 그러면 다음
-> 재시작에서 prepare가 "is not the first olcAccess rule"로 기동을 거부한다(12절). 둘을 함께 쓰는 순서는 아직 구현되지
-> 않았으므로 지원하지 않는다.
+> **`LDAP_REPLICATION_IDENTITY=prepare`/`dedicated` 노드(#277, D30):** 복제 신원 규칙은 항상 `{0}`이고 머신 규칙은 그 바로
+> 뒤 `{1}`–`{3}`이다. 이 절의 명령은 `{0}`–`{2}`용이다. 노드 `olcAccess`의 `{0}`이 복제 규칙(`dn.exact="cn=replicator,…"`)이면
+> 바로 아래 5.1의 `{1}`–`{3}` 명령을 쓴다. **머신 규칙을 먼저 넣고 나중에 prepare를 켜도** 된다: prepare가 자기 규칙을 `{0}`에
+> 넣으면 머신 규칙이 `{1}`–`{3}`으로 밀려 같은 배치가 된다. 머신 규칙을 `{0}`–`{2}`로 둔 채 복제 규칙이 `{3}` 이후에
+> 놓이게 하면(예: 복제 규칙이 이미 `{0}`인데 이 절의 명령을 그대로 적용) prepare가 다음 재시작을 거부한다.
 
 `M` 규칙 3개를 기존 모든 allow 규칙보다 **앞**(`{0}`–`{2}`)에 넣는다. `{n}`을 명시한 삽입은 기존 규칙을 뒤로 민다.
 slapd는 위에서부터 첫 일치 규칙을 쓰고 `by * break`는 `M`이 아닌 신원을 다음 규칙으로 넘긴다.
@@ -137,6 +138,15 @@ olcAccess: {2}to *
 $EXEC env MACHINE_DN="$MACHINE_DN" ALLOWED_DN="$ALLOWED_DN" MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'sed -e "s|@MACHINE_DN@|$MACHINE_DN|g" -e "s|@ALLOWED_DN@|$ALLOWED_DN|g" -e "s|@MAIN_DB_DN@|$MAIN_DB_DN|g" | ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin' < main-database.ldif
 ```
 
+### 5.1 복제 신원 규칙이 `{0}`인 노드: `{1}`–`{3}`에 적용
+
+같은 LDIF 파일을 인덱스만 한 칸씩 밀어(`{2}`→`{3}`, `{1}`→`{2}`, `{0}`→`{1}`) 넣는다. 복제 규칙은 `{0}`에 그대로 남고 머신 규칙은
+그 뒤에서 기존 규칙보다 앞선다. 복제 규칙과 머신 규칙은 서로 다른 DN에만 적용되고 둘 다 `by * break`로 끝나므로 서로 영향이 없다.
+
+```sh
+$EXEC env MACHINE_DN="$MACHINE_DN" ALLOWED_DN="$ALLOWED_DN" MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'sed -e "s|^olcAccess: {2}|olcAccess: {3}|" -e "s|^olcAccess: {1}|olcAccess: {2}|" -e "s|^olcAccess: {0}|olcAccess: {1}|" | sed -e "s|@MACHINE_DN@|$MACHINE_DN|g" -e "s|@ALLOWED_DN@|$ALLOWED_DN|g" -e "s|@MAIN_DB_DN@|$MAIN_DB_DN|g" | ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin' < main-database.ldif
+```
+
 ## 6. 적용 후 확인 (모든 노드)
 
 ### 6.1 `olcAccess`를 읽어 순서 확인 (필수)
@@ -158,7 +168,8 @@ olcAccess: {5}to * by self write by users read by anonymous none
 ```
 
 운영자가 먼저 추가한 allow 규칙이나 `LDAP_ANONYMOUS_READ_BASE` 규칙(`{1}`–`{4}`)이 있어도 같다: 머신 규칙이 `{0}`–`{2}`,
-나머지는 그 뒤. **읽은 순서가 다르면 규칙을 쓰지 말고 11절로 되돌린다.**
+나머지는 그 뒤. 복제 신원 규칙이 있는 노드(5.1)는 `{0}`이 복제 규칙, 머신 규칙이 `{1}`–`{3}`, 나머지는 그 뒤이며 `M`이 들어간
+줄은 여전히 정확히 세 줄이다. **읽은 순서가 다르면 규칙을 쓰지 말고 11절로 되돌린다.**
 
 ### 6.2 `M`으로 부정 확인
 
@@ -302,18 +313,23 @@ printf 'dn: %s\nchangetype: modify\ndelete: pwdAccountLockedTime\n' "$MACHINE_DN
 
 ## 11. 롤백
 
-`{0}`–`{2}`가 이 가이드의 `M` 규칙일 때만 그 세 개를 인덱스로 지운다. 아니면 거부하고 아무것도 바꾸지 않는다
+`{0}`–`{2}`(복제 신원 규칙이 `{0}`이면 `{1}`–`{3}`)가 이 가이드의 `M` 규칙일 때만 그 세 개를 인덱스로 지운다. 아니면 거부하고 아무것도 바꾸지 않는다
 (인덱스가 밀린 상태에서 다른 규칙을 지우는 사고를 막는 가드). 적용 전 `olcAccess`와 **바이트 단위로 같게** 돌아간다
-(시험으로 확인). 롤백하면 `M`은 일반 사용자로 돌아가므로(읽기 전체·자기 쓰기) 먼저 `MACHINE_AUTH_ENABLED=false`로 전
+(시험으로 확인). 복제 신원 규칙은 건드리지 않는다. 반대로 신원 규칙만 걷어내려면(`admin` 모드로 돌아가도 이미지는 이미 저장된 규칙을 지우지 않는다)
+`{0}`이 신원 규칙(`cn=replicator,…`)인지 읽어 확인한 뒤 `delete: olcAccess` `{0}`과 같은 항목의 `olcLimits` 값을 지운다. 머신 규칙은
+`{0}`–`{2}`로 올라오고 이 롤백은 `{0}`–`{2}` 가드로 계속 동작한다(`scripts/test/test-machine-acl-with-identity.sh`가 확인).
+롤백하면 `M`은 일반 사용자로 돌아가므로(읽기 전체·자기 쓰기) 먼저 `MACHINE_AUTH_ENABLED=false`로 전
 replica를 교체한다.
 
 ```sh
-$EXEC env MACHINE_DN="$MACHINE_DN" MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c '
-n=$(ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no \
-      -b "$MAIN_DB_DN" -s base olcAccess \
-    | grep -c "^olcAccess: {[0-2]}.*dn.exact=\"$MACHINE_DN\"")
-if [ "$n" != 3 ]; then echo "refusing: {0}-{2} are not the machine rules" >&2; exit 1; fi
-printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {2}\nolcAccess: {1}\nolcAccess: {0}\n" "$MAIN_DB_DN" \
+$EXEC env MACHINE_DN="$MACHINE_DN" MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" ROOT_DN="$ROOT_DN" sh -c '
+acl=$(ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no \
+        -b "$MAIN_DB_DN" -s base olcAccess)
+o=0
+if printf "%s\n" "$acl" | grep -q "^olcAccess: {0}.*dn.exact=\"cn=replicator,$ROOT_DN\""; then o=1; fi
+n=$(printf "%s\n" "$acl" | grep -c "^olcAccess: {[$o-$((o+2))]}.*dn.exact=\"$MACHINE_DN\"")
+if [ "$n" != 3 ]; then echo "refusing: the three rules after the replication rule (or {0}-{2}) are not the machine rules" >&2; exit 1; fi
+printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {%s}\nolcAccess: {%s}\nolcAccess: {%s}\n" "$MAIN_DB_DN" $((o+2)) $((o+1)) $o \
   | ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin
 '
 ```
@@ -333,16 +349,12 @@ printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {2}\nolcAccess
 - `cn=config`는 설정 볼륨(`/etc/openldap/slapd.d`, 차트는 `config` PVC)에 있고 첫 기동에서만 템플릿으로 만들어진다
   (`.bootstrapped` 표식). 재시작·업그레이드는 규칙을 유지하지만 **설정 볼륨을 새로 만들면 규칙이 사라지고** 이미지 기본
   규칙만 렌더링된다. 재초기화 후에는 `M` 항목(데이터 볼륨)이 있어도 규칙이 없다.
-- **`LDAP_REPLICATION_IDENTITY=prepare`와 함께 쓰지 않는다**(지원하는 유일한 진술: 합성 순서가 구현되기 전까지 함께 쓰지 않는다).
-  > **경고:** 이 가이드의 5절을 prepare 노드에 적용하면 prepare 규칙이 `{3}`으로 밀려 **다음 재시작에서 컨테이너가 뜨지 않는다**.
-  prepare를 쓰는 노드에서는 `MACHINE_AUTH_ENABLED`를 켜지 않는다. `LDAP_REPLICATION_IDENTITY=dedicated`는 이 브랜치의 기반에서
-  아직 구현되지 않았다(시작 거부).
-
-  **실제로 확인된 공존 순서(별도 Codex 라이브 확인, 이 PR의 시험 아님):** 복제 신원 규칙이 `{0}`, 머신 규칙이 `{1}`–`{3}`이면
-  둘이 공존한다(두 규칙 묶음이 모두 다른 DN에 대해 `by * break`로 끝난다). 반대로 복제 규칙을 `{3}`으로 옮기면 prepare가
-  재시작을 거부한다. 이를 지원하려면 코드가 바뀌어야 한다: (1) 이 가이드의 5절 LDIF를 `{1}`–`{3}`으로 삽입하는 변형과, 머신
-  증명의 `{0}`–`{2}` 정확 인덱스 단언·롤백(인덱스 `{3}`,`{2}`,`{1}` 삭제와 가드)의 조정, (2) prepare의 "규칙은 `{0}`" 검사가
-  그대로 맞도록 하는 설치 순서 규칙, (3) 두 설치 순서와 재시작 시험. 추적: CHANGE.md D30, TASKS T-034.
+- **`LDAP_REPLICATION_IDENTITY=prepare`/`dedicated`와 함께 쓸 수 있다(#277, D30).** 정해진 순서: 복제 신원 규칙 `{0}`, 머신 규칙
+  `{1}`–`{3}`, 그 뒤 기존 규칙. 두 설치 순서 모두 같은 결과가 된다 — (a) prepare 후 5.1, (b) 머신 규칙(5절) 후 prepare(prepare가
+  `{0}`에 삽입하면 머신 규칙이 `{1}`–`{3}`으로 밀린다). 재시작은 prepare의 "신원 규칙이 첫 값" 검사를 그대로 통과한다. 머신 규칙을
+  지우는 롤백(11절)은 신원 규칙을 남긴다. 신원 규칙이 이미 `{0}`인 노드에 5절의 `{0}`–`{2}` 삽입을 쓰면 신원 규칙이 `{3}`으로 밀려
+  다음 재시작에서 prepare가 거부하므로 5.1을 쓴다. 시험: `scripts/test/test-machine-acl-with-identity.sh`(실제 이미지, 두 순서·재시작·독립
+  롤백)와 증명 스크립트의 구성 (d).
 
 ## 13. 알려진 제한
 

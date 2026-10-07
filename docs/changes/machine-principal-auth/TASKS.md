@@ -71,8 +71,8 @@
       **구현 단위 2**: `httpapi/machine_guard.go`(`dnWithinBase`: 양쪽 `ldap.ParseDN` 후 `EqualFold`/`AncestorOfFold`, 파싱 불가는 밖으로 간주), 검사는 두 곳 — 실행 단계 이전(`machine.go` `serve`: 거부된 DN은 LDAP 연결도 열지 않음)과 핸들러(`machineDNGuard`, 다른 경로로 도달해도 유지). `Client.MonitorStats(ctx, includeAccessLog bool)`(사람 세션은 `true` = 기존 동작 그대로, 머신은 `audit.read`가 토큰 scope ∩ client 상한에 있을 때만 `true`, 아니면 accesslog 검색 미발행), `ldapclient/secret_boundary_test.go`(감사 DTO가 `reqMod` 값을 내지 않고 속성 **이름**만, `entryRedactedAttrs`는 정확히 `{userpassword}`로 고정). 증거: 단위 `TestDNWithinBase`(대소문자·공백·escape·hex·다중값 RDN·형제 DN·accesslog/config/Monitor 변형)·`TestMachineGuard_*`·`TestMachineMonitor_*` + 라이브(과권한 bind로도 비밀 값 0건, accesslog/config/Monitor DN 403·LDAP 연결 0, `audit.read` 있음/없음 monitor 비교, 머신 DN이 `cn=accesslog`·`cn=config`를 직접 읽지 못함). 대체한 항목: AC-015의 "code 가드를 끈 시험 빌드의 ACL 백스톱"은 가드를 끈 빌드 대신 머신 DN의 직접 ldapsearch 거부로 증명했다.
 - [x] `T-041` (`REQ-017`) cursor 바인딩(D16): `cursorBinding`을 principal 종류별(`sid:`/`machine:`+iss 길이 접두+client)로 분기, 임시 `Session.ID` 미사용. 검수: AC-017 — client 간·사람↔머신 재생 400, 토큰 갱신 후 연속 조회 200, 사람 cursor 기존 테스트 무변경.
       **구현 단위 2**: `cursor.go`(`machineCursorBinding`: `HMAC("machine:"+len(iss)+":"+iss+client_id)`, `requestCursorBinding`이 principal 종류로 분기, 기존 `cursorBinding`은 `sid:` 그대로), `list_page.go`가 분기 함수를 사용. 증거: `machine_boundary_test.go`(`TestMachineCursorBinding` 도메인 분리·길이 접두, `TestMachineCursor_Isolation` users/groups 교차 client·머신↔사람·갱신 후 200) + 라이브(실제 세션·실제 토큰 2개 client). 사람 cursor 기존 테스트 무변경.
-- [ ] `T-034` (`REQ-004`, D30) 머신 ACL과 `LDAP_REPLICATION_IDENTITY=prepare`의 공존: 확인된 순서는 복제 신원 규칙 `{0}` + 머신 규칙 `{1}`–`{3}`(Codex 라이브 확인). 구현할 것 — `{1}`–`{3}` 삽입 변형 LDIF와 증명(정확 인덱스 단언·롤백 `{3}`,`{2}`,`{1}`·가드 조정), 두 변경의 설치 순서 규칙, 두 설치 순서와 재시작 시험(prepare의 "규칙은 `{0}`" 검사 유지). 그 전에는 함께 쓰지 않는다(가이드 12절 경고). 별도 이슈로 추적.
-      **Close-out audit(2026-10-07)**: 열린 채 유지(체크하지 않음). 추적: #277(P2, enhancement). 현재 상태는 "함께 쓰지 않는다"(가이드 12절 경고, ADR D30, CHANGELOG 알려진 제한)이며 이 감사에서 코드·문서 변경 없음.
+- [x] `T-034` (`REQ-004`, D30) **#277에서 구현·라이브 시험**(`scripts/test/test-machine-acl-with-identity.sh`, 증명 구성 (d)); 아래는 원래 계획: 머신 ACL과 `LDAP_REPLICATION_IDENTITY=prepare`의 공존: 확인된 순서는 복제 신원 규칙 `{0}` + 머신 규칙 `{1}`–`{3}`(Codex 라이브 확인). 구현할 것 — `{1}`–`{3}` 삽입 변형 LDIF와 증명(정확 인덱스 단언·롤백 `{3}`,`{2}`,`{1}`·가드 조정), 두 변경의 설치 순서 규칙, 두 설치 순서와 재시작 시험(prepare의 "규칙은 `{0}`" 검사 유지). 그 전에는 함께 쓰지 않는다(가이드 12절 경고). 별도 이슈로 추적.
+      **Close-out audit(2026-10-07)**: 감사 시점(2026-10-07)에는 열려 있었고 "함께 쓰지 않는다"였다. **이후 #277에서 닫음**: 복제 `{0}` + 머신 `{1}`–`{3}`이 정해진 순서이며 함께 쓸 수 있다(가이드 5.1·12절, ADR D30).
 
 ## Verify
 
@@ -119,7 +119,7 @@
 단위 5b 시점(2026-10-07)의 알려진 제한과 후속 과제(같은 날 close-out 감사가 갱신). 각 항목은 무엇이 남았는지와 어디에 적혀 있는지만 적는다.
 
 - **#266** — 사람 세션의 현재 비밀번호 시도가 제한되지 않는다(틀린 현재 비밀번호가 ppolicy 잠금에 집계되지 않음, [api-error-envelope ADR D264-4](../api-error-envelope/ADR.md)). 머신 경로와 무관한 기존 한계이며 후속 이슈로 추적한다.
-- **#277 / T-034 / D30** — 머신 ACL(`{0}`–`{2}`)과 복제 신원(`LDAP_REPLICATION_IDENTITY=prepare`, 규칙은 `{0}`)의 결합 순서(복제 `{0}` + 머신 `{1}`–`{3}`) 미구현. **함께 쓰지 않는다**([machine-ldap-account.md](../../machine-ldap-account.md) 12절 경고, ADR D30).
+- **#277 / T-034 / D30** — 해결: 복제 `{0}` + 머신 `{1}`–`{3}`([machine-ldap-account.md](../../machine-ldap-account.md) 5.1·12절, ADR D30).
 - **D25** — 핸들러 이전에 Go HTTP 서버가 거절한 요청(431, 잘못된 요청 줄, 헤더 timeout, TLS·HTTP/2 사전 오류)은 감사·접근·오류 로그 어디에도 남지 않는다. ingress/프록시 접근 로그가 있어야 기록된다([audit-event-schema.md](../../audit-event-schema.md), 차트 README).
 - **opt-in scope는 기본으로 꺼져 있다** — `audit.read`·`server.settings.read`는 서버의 client 상한에 명시한 경우에만 동작하고, `audit.read`는 accesslog DB의 opt-in ACL이 따로 필요하다. `server.monitor.read`의 accesslog 부분도 `audit.read`가 없으면 비어 있다.
 - **graceful shutdown은 10초 고정** — `ui/backend/cmd/server/main.go`가 종료 시 진행 요청을 최대 10초만 기다린다. 차트는 `terminationGracePeriodSeconds`를 `max(30, 요청 timeout+5)`로 두지만 `MACHINE_REQUEST_TIMEOUT`이 10초를 넘으면 pod 종료 때 10초 넘은 요청이 끊긴다. 긴급 차단 절차 문서에 적었고 코드 변경은 후속 이슈 **#280**으로 추적한다.
