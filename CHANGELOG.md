@@ -287,9 +287,11 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   tool could read; a `dedicated` start now removes such an unreadable stored
   `olcSyncrepl` and re-renders it from the corrected environment, only after every
   stored-config refusal has passed (checks run on a throwaway copy) and with a
-  crash-safe atomic replace; the kept backup has its credentials redacted and the
-  clear-text rollback copy is deleted once the repair is verified (leftovers of a
-  crash are deleted by the next start); the read-back
+  crash-safe atomic replace of an already verified file (no clear-text rollback copy is
+  ever made); the kept backup is structure only (values withheld, also base64 and
+  folded ones; leftovers of a crash are deleted by the next start). Rewriting the config
+  cannot erase the old file's disk blocks: rotate the admin password after the switch if
+  the old olcSyncrepl held it and the volume may be copied, and encrypt it at rest; the read-back
   check is quote-aware, so a password containing `provider=` starts normally), a `_FILE` secret that is
   read once (never twice, never substituted by the admin password),
   `LDAP_TLS_MUTUAL_AUTH`, a custom `LDAP_REPLICATION_BIND_DN`; stored-config

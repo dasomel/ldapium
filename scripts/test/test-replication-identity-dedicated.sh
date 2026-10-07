@@ -1026,8 +1026,8 @@ authzTo: dn:${iddn}
 EOF
     fi
   }
-  break_retry() { # volume: store a retry list slapd cannot load (the offline modify accepts it)
-    printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\nreplace: olcSyncrepl\nolcSyncrepl: rid=001 provider=ldaps://rbx.test:636 bindmethod=simple binddn="cn=admin,%s" credentials="%s" searchbase="%s" type=refreshAndPersist retry="+" interval=00:00:00:10\n' "$base" "$pw" "$base" |
+  break_retry() { # volume [credential]: store a retry list slapd cannot load (the offline modify accepts it)
+    printf 'dn: olcDatabase={1}mdb,cn=config\nchangetype: modify\nreplace: olcSyncrepl\nolcSyncrepl: rid=001 provider=ldaps://rbx.test:636 bindmethod=simple binddn="cn=admin,%s" credentials="%s" searchbase="%s" type=refreshAndPersist retry="+" interval=00:00:00:10\n' "$base" "${2:-$pw}" "$base" |
       rp_off "$1" slapmodify -n 0 -F /etc/openldap/slapd.d >/dev/null
   }
 
@@ -1113,8 +1113,8 @@ exec "/usr/bin/$me" "$@"
 EOF
   fault_path="/faultbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   orig_sum="$(cfg_file_sum "$rp_bk")"
-  for fcase in "awk|1|cannot evaluate the repaired configuration" "awk|2|cannot prepare the repaired main database config" "cp|1|cannot back up the main database config" "awk|3|cannot back up the main database config" \
-    "sync|1|cannot flush the repaired config to disk" "mv|1|cannot replace the main database config" "sync|2|the previous main database config was restored"; do
+  for fcase in "awk|1|cannot evaluate the repaired configuration" "cp|1|cannot prepare the repaired main database config" "awk|2|cannot back up the main database config" \
+    "sync|1|cannot flush the repaired config to disk" "mv|1|cannot replace the main database config" "sync|2|is already in place"; do
     IFS='|' read -r fname fat fmsg <<<"$fcase"
     rpn=$((rpn + 1))
     fv="ldapium-ridded-rf${rpn}-${suffix}"
@@ -1127,33 +1127,69 @@ EOF
     frun="$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "${fv}-c")"
     docker rm -fv "${fv}-c" >/dev/null
     if [ "$frun" != "false 0" ] && [[ "$frun" == false* ]] && [[ "$fout" == *"$fmsg"* ]]; then ok "${flabel}: refused with '${fmsg}'"; else bad "${flabel}: expected exit != 0 with '${fmsg}' (${frun}); got: $(printf '%s' "$fout" | tail -n 2)"; fi
-    check "${flabel}: the original main database config file is intact" "$orig_sum" "$(cfg_file_sum "$fv")"
-    check "${flabel}: whole volumes identical to before the attempt (no temp or backup file left)" "$pre" "$(vol_sum "$fv")"
-    if rp_loads "$fv"; then bad "${flabel}: cn=config unexpectedly loads (the original must still be the unloadable one)"; else ok "${flabel}: the volume is exactly as unrecoverable as before the attempt"; fi
+    if [ "${fname}#${fat}" = "sync#2" ]; then
+      # the rename already happened: the file in place is the verified new one (no rollback copy exists)
+      if rp_loads "$fv" && ! docker run --rm -v "${fv}-cfg:/c:ro" --entrypoint grep "$image" -q '^olcSyncrepl:' '/c/cn=config/olcDatabase={1}mdb.ldif'; then ok "${flabel}: the repaired verified config is in place and loads"; else bad "${flabel}: expected the repaired config in place"; fi
+    else
+      check "${flabel}: the original main database config file is intact" "$orig_sum" "$(cfg_file_sum "$fv")"
+      check "${flabel}: whole volumes identical to before the attempt (no temp or backup file left)" "$pre" "$(vol_sum "$fv")"
+      if rp_loads "$fv"; then bad "${flabel}: cn=config unexpectedly loads (the original must still be the unloadable one)"; else ok "${flabel}: the volume is exactly as unrecoverable as before the attempt"; fi
+    fi
     rp_run "${fv}-c2" "$fv" "${rp_peers_ok[@]}"
     if wait_ready "${fv}-c2"; then ok "${flabel}: a later normal start repairs the volume and runs"; else bad "${flabel}: later start failed"; dlogs "${fv}-c2" | tail -n 4 >&2 || true; fi
     docker rm -fv "${fv}-c2" >/dev/null
     docker volume rm -f "${fv}-cfg" "${fv}-data" >/dev/null
   done
 
-  # helpers for the secret scans
-  # LDIF files wrap long values, so a password can be split across lines: every file is unwrapped
-  # before it is searched (data.mdb is excluded here and checked separately on its raw pages)
+  # ---- secret scans: the previous credential in its plain, base64 (all three alignments), decoded-LDIF-base64,
+  # hex and percent-encoded forms. LDIF files fold long values onto continuation lines and store values with
+  # special characters as `attr:: base64`, so every file is unfolded and its base64 values are decoded first.
   # shellcheck disable=SC2016 # the script runs inside the container
-  scan_sh='for f in $(find "$@" -type f ! -name data.mdb ! -name lock.mdb 2>/dev/null); do if awk '\''/^ /{b=b substr($0,2);next}{print b;b=$0}END{print b}'\'' "$f" | grep -qF -- "$P"; then echo "$f"; fi; done; true'
-  rp_scan_vols() { # cfgvol datavol: files (not the mdb pages) of both volumes that contain the admin password
-    docker run --rm -e P="$pw" -v "${1}-cfg:/c:ro" -v "${1}-data:/d:ro" --entrypoint sh "$image" -c "$scan_sh" sh /c /d
+  scan_core='
+pf=$(mktemp)
+printf "%s\n" "$P" > "$pf"
+if [ "${#P}" -ge 24 ]; then
+  for k in 0 1 2; do
+    pad=$(printf "%*s" "$k" "" | tr " " x)
+    full=$(printf "%s%s" "$pad" "$P" | base64 -w0)
+    n=${#full}
+    printf "%s\n" "$(printf "%s" "$full" | cut -c9-$((n - 8)))" >> "$pf"
+  done
+fi
+hexl=$(printf "%s" "$P" | od -An -v -tx1 | tr -d " \n")
+printf "%s\n%s\n" "$hexl" "$(printf "%s" "$hexl" | tr a-f A-F)" >> "$pf"
+pct=$(printf "%s" "$P" | od -An -v -tx1 | tr -d "\n" | sed "s/ /%/g")
+printf "%s\n%s\n" "$pct" "$(printf "%s" "$pct" | tr a-f A-F)" >> "$pf"
+min=""
+for h in $(printf "%s" "$P" | od -An -v -tx1); do
+  c=$(printf "\\$(printf %03o "0x$h")")
+  case "$c" in [A-Za-z0-9._~-]) min="$min$c" ;; *) min="$min%$h" ;; esac
+done
+printf "%s\n" "$min" >> "$pf"
+for f in $(find "$@" -type f ! -name data.mdb ! -name lock.mdb 2>/dev/null); do
+  { awk "/^ /{b=b substr(\$0,2);next}{print b;b=\$0}END{print b}" "$f" |
+      while IFS= read -r line; do
+        printf "%s\n" "$line"
+        case "$line" in *:\:\ *) printf "%s" "${line#*:: }" | base64 -d 2>/dev/null; printf "\n" ;; esac
+      done; } | grep -a -q -F -f "$pf" && echo "$f"
+done
+rm -f "$pf"
+true'
+  rp_scan_vols() { # volume credential: files (not the mdb pages) of the config and data volumes that contain the credential in any form
+    docker run --rm -e P="$2" -v "${1}-cfg:/c:ro" -v "${1}-data:/d:ro" --entrypoint sh "$image" -c "$scan_core" sh /c /d
   }
-  rp_scan_cfg_only() { # cfgvol: same for the config volume alone
-    docker run --rm -e P="$pw" -v "${1}-cfg:/c:ro" --entrypoint sh "$image" -c "$scan_sh" sh /c
+  rp_scan_cfg_only() { # cfgvol credential
+    docker run --rm -e P="$2" -v "${1}-cfg:/c:ro" --entrypoint sh "$image" -c "$scan_core" sh /c
   }
-  rp_scan_mdb() { # cfgvol datavol: number of data.mdb files whose raw pages contain the admin password
-    docker run --rm -e P="$pw" -v "${1}-data:/d:ro" --entrypoint sh "$image" -c 'grep -rlaF -- "$P" /d --include=data.mdb 2>/dev/null | wc -l; true'
+  rp_scan_layer() { # container credential: the writable layer paths the entrypoint uses (also works on a killed container)
+    local out
+    out="$( { docker cp "$1:/tmp" - ; docker cp "$1:/var/lib/openldap/run" - 2>/dev/null || true; } | docker run --rm -i -e P="$2" --entrypoint sh "$image" -c 'mkdir /x && tar -x -i -C /x 2>/dev/null; set -- /x; '"$scan_core" )" || { helper_fail "rp_scan_layer $1 failed"; return 1; }
+    if [ -n "$out" ]; then printf '%s\n' "$out"; fi
   }
-  rp_scan_ctr() { # container: state directories the container writes
-    docker exec -e P="$pw" "$1" sh -c "$scan_sh" sh /tmp /var/lib/openldap/run
+  rp_scan_mdb() { # datavol credential: number of data.mdb files whose raw pages contain the credential in plain
+    docker run --rm -e P="$2" -v "${1}-data:/d:ro" --entrypoint sh "$image" -c 'grep -rlaF -- "$P" /d --include=data.mdb 2>/dev/null | wc -l; true'
   }
-  # ok when no temp or rollback file is left and at most <max> redacted backups remain
+  # ok when no temp or rollback file is left and at most <max> structure-only backups remain
   leftover_verdict() {
     local l n
     l="$(rp_leftovers "$1")" || return 1
@@ -1165,12 +1201,35 @@ EOF
     docker run --rm -v "${1}-cfg:/c:ro" --entrypoint sh "$image" -c 'ls /c/cn=config | grep -E "repair-tmp|repair-orig|\.bak-" | tr "\n" " "; true'
   }
 
-  # SIGKILL at every point of the repair: before the new file is complete (awk#2), after it is complete
-  # (cp#1), after the rollback copy and the redacted backup exist (sync#1), just before the rename (mv#1),
-  # and after the rename (sync#2). Exact guarantee: the live config is either the original or the complete
-  # verified new file, never partial; a normal restart starts; leftover temp/rollback files are removed by
-  # that start and the volume holds no clear-text copy of the previous password once it runs.
-  for kcase in "awk|2|before the new file is written" "cp|1|new file complete, rollback copy not yet taken" "sync|1|rollback copy and redacted backup taken, not yet flushed" "mv|1|just before the rename" "sync|2|after the rename, before verification"; do
+  # distinctive old credentials: plain, very long (folded across many LDIF lines), non-ASCII (slapd then stores the value
+  # base64-encoded as `olcSyncrepl:: ...`)
+  cred_plain="$pw"
+  cred_long="riddedLongOldAdminPw-$(printf 'Ab3Cd4Ef5Gh6%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)"
+  cred_b64="riddedB64OldAdminPw-éÅü中-Zq7Lm2Xv9Kd4Hs8Wt1Bn6Rc3Yf5Ug0Pe"
+
+  # Scanner self-test: the scan sees each form in a file it is given (so an empty result means absence)
+  st="ldapium-ridded-st-${suffix}"
+  reg_rp "$st"
+  for stc in "$cred_plain" "$cred_long" "$cred_b64"; do
+    docker run --rm --user 0 -e P="$stc" -v "${st}-cfg:/c" --entrypoint sh "$image" -c '
+rm -rf /c/*; mkdir -p /c/t
+printf "olcSyncrepl: x credentials=\"%s\"\n" "$P" > /c/t/plain
+printf "olcSyncrepl:: %s\n" "$(printf "credentials=\"%s\"" "$P" | base64 -w0)" > /c/t/b64
+printf "olcSyncrepl: aaaa\n %s\n" "$P" > /c/t/fold
+printf "x %s\n" "$(printf "%s" "$P" | od -An -v -tx1 | tr -d " \n")" > /c/t/hex
+printf "x %s\n" "$(printf "%s" "$P" | od -An -v -tx1 | tr -d "\n" | sed "s/ /%/g")" > /c/t/pct
+printf "x %s\n" "$(printf "%s" "$P" | base64 -w0)" > /c/t/rawb64
+printf "nothing here\n" > /c/t/none'
+    check "scanner self-test (${stc:0:12}...): finds plain, base64-in-LDIF, folded, hex, percent and raw-base64 forms, not the clean file" \
+      "/c/t/b64 /c/t/fold /c/t/hex /c/t/pct /c/t/plain /c/t/rawb64 " "$(rp_scan_cfg_only "$st" "$stc" | sort | tr '\n' ' ')"
+  done
+  docker volume rm -f "${st}-cfg" "${st}-data" >/dev/null
+
+  # SIGKILL at every step of the repair. The original file is replaced only by an atomic rename of an already verified
+  # file, so no clear-text rollback copy exists: before the rename the only file that holds the old credential is the
+  # (still unrepaired) original itself, after the rename none does. The writable layer never holds it.
+  for kcase in "awk|1|throwaway copy being prepared (before the cut is evaluated)" "cp|1|before the verified file is copied next to the original" \
+    "awk|2|before the structure-only backup is written" "sync|1|backup written, not yet flushed" "mv|1|just before the rename" "sync|2|after the rename"; do
     IFS='|' read -r kname kat kdesc <<<"$kcase"
     rpn=$((rpn + 1))
     fv="ldapium-ridded-rk${rpn}-${suffix}"
@@ -1181,7 +1240,6 @@ EOF
     stalled() { local o; o="$(dlogs "${fv}-c")" || return 1; [[ "$o" == *"ridded: stalling ${kname}"* ]]; }
     if poll stalled; then ok "${klabel}: the repair reached the stalled step"; else bad "${klabel}: never reached the stalled step"; fi
     docker kill "${fv}-c" >/dev/null
-    docker rm -fv "${fv}-c" >/dev/null
     ksum="$(cfg_file_sum "$fv")"
     if [ "$ksum" = "$orig_sum" ]; then
       kstate=original
@@ -1190,51 +1248,58 @@ EOF
     else
       kstate="PARTIAL-OR-UNKNOWN"
     fi
-    case "$kname#$kat" in
-      sync#2) kwant=complete-new ;;
-      *) kwant=original ;;
-    esac
+    kwant=original
+    kholders='/c/cn=config/olcDatabase={1}mdb.ldif '
+    if [ "$kname#$kat" = "sync#2" ]; then kwant=complete-new; kholders=''; fi
     check "${klabel}: the live config is exactly the ${kwant} file (never partial)" "$kwant" "$kstate"
+    check "${klabel}: right after the kill the old credential is in ${kholders:-no volume file}" "$kholders" "$(rp_scan_vols "$fv" "$cred_plain" | tr '\n' ' ')"
+    check "${klabel}: right after the kill the old credential is not in the container's writable layer (/tmp, run)" "" "$(rp_scan_layer "${fv}-c" "$cred_plain" | tr '\n' ' ')"
     echo "INFO: ${klabel}: files left by the kill: [$(rp_leftovers "$fv")]"
+    docker rm -fv "${fv}-c" >/dev/null
     rp_run "${fv}-c2" "$fv" "${rp_peers_ok[@]}"
     if wait_ready "${fv}-c2"; then ok "${klabel}: a normal restart starts"; else bad "${klabel}: restart failed"; dlogs "${fv}-c2" | tail -n 4 >&2 || true; fi
-    check "${klabel}: after the restart no temp or rollback file is left, one redacted backup at most" "ok" \
-      "$(leftover_verdict "$fv" 1)"
-    check "${klabel}: the previous admin password is nowhere in the config volume or the state files" "" "$(rp_scan_vols "$fv" | tr '\n' ' ')"
-    check "${klabel}: ... nor in the container's /tmp and run directory" "" "$(rp_scan_ctr "${fv}-c2" | tr '\n' ' ')"
-    check "${klabel}: ... nor in data.mdb pages (a freed-page check)" "0" "$(rp_scan_mdb "$fv" | tr -d ' ')"
+    check "${klabel}: after the restart no temp or rollback file is left, one structure-only backup at most" "ok" "$(leftover_verdict "$fv" 1)"
+    check "${klabel}: after the restart the old credential is nowhere in the config volume or the state files" "" "$(rp_scan_vols "$fv" "$cred_plain" | tr '\n' ' ')"
+    check "${klabel}: ... nor in the container's /tmp and run directory" "" "$(rp_scan_layer "${fv}-c2" "$cred_plain" | tr '\n' ' ')"
+    check "${klabel}: ... nor in data.mdb pages (a freed-page check)" "0" "$(rp_scan_mdb "$fv" "$cred_plain" | tr -d ' ')"
     docker rm -fv "${fv}-c2" >/dev/null
     docker volume rm -f "${fv}-cfg" "${fv}-data" >/dev/null
   done
 
-  # The admin-mode volume switched to dedicated holds the previous admin password nowhere else than the
-  # design says (its own entry hash, not plaintext): checked for a loadable and for an unloadable stored
-  # olcSyncrepl, right after the first successful start and again after a restart.
-  for sstate in loadable unloadable fresh; do
+  # The previous credential (plain, very long and folded, non-ASCII and so base64-stored) in an unloadable or loadable stored
+  # olcSyncrepl, switched to dedicated: nowhere afterwards, in any form, right after the first start and after a restart.
+  for scase in "loadable|$cred_plain" "unloadable|$cred_plain" "unloadable|$cred_long" "unloadable|$cred_b64" "fresh|$cred_plain"; do
+    sstate="${scase%%|*}"
+    scred="${scase#*|}"
     rpn=$((rpn + 1))
     sv="ldapium-ridded-rs${rpn}-${suffix}"
-    slabel="secret scan [${sstate} stored olcSyncrepl]"
+    slabel="secret scan [${sstate}, ${scred:0:16}...]"
     if [ "$sstate" = fresh ]; then
       slabel="secret scan [fresh volume, dedicated bootstrap]"
       reg_rp "$sv"
     else
       rp_clone "$rp_load" "$sv"
-      [ "$sstate" = unloadable ] && break_retry "$sv"
-      pre_hits="$(rp_scan_cfg_only "$sv" | grep -c . || true)"
-      check "${slabel}: precondition, the admin-mode config volume holds the clear-text admin password (so the scan can see it)" "1" "$pre_hits"
+      [ "$sstate" = unloadable ] && break_retry "$sv" "$scred"
+      check "${slabel}: precondition, the config volume holds the old credential in the original file (so the scan can see it)" "/c/cn=config/olcDatabase={1}mdb.ldif " "$(rp_scan_cfg_only "$sv" "$scred" | tr '\n' ' ')"
+      if [ "$scred" = "$cred_b64" ]; then
+        check "${slabel}: precondition, slapd stored the value base64-encoded (olcSyncrepl::)" "1" "$(docker run --rm -v "${sv}-cfg:/c:ro" --entrypoint grep "$image" -c '^olcSyncrepl::' '/c/cn=config/olcDatabase={1}mdb.ldif' || true)"
+      fi
+      if [ "$scred" = "$cred_long" ]; then
+        check "${slabel}: precondition, the value is folded over continuation lines" "yes" "$([ "$(docker run --rm -v "${sv}-cfg:/c:ro" --entrypoint grep "$image" -c '^ ' '/c/cn=config/olcDatabase={1}mdb.ldif' || true)" -ge 3 ] && echo yes || echo no)"
+      fi
     fi
     rp_run "${sv}-c" "$sv" "${rp_peers_ok[@]}"
     wait_ready "${sv}-c" || bad "${slabel}: node never ready"
-    check "${slabel}: after the switch the admin password is nowhere in the config volume or the state files" "" "$(rp_scan_vols "$sv" | tr '\n' ' ')"
-    check "${slabel}: ... nor in the container's /tmp and run directory" "" "$(rp_scan_ctr "${sv}-c" | tr '\n' ' ')"
-    check "${slabel}: ... nor in the container log" "0" "$(dlogs "${sv}-c" | grep -c -F "$pw" || true)"
-    check "${slabel}: ... nor in data.mdb pages" "0" "$(rp_scan_mdb "$sv" | tr -d ' ')"
+    check "${slabel}: after the switch the old credential is nowhere in the config volume or the state files" "" "$(rp_scan_vols "$sv" "$scred" | tr '\n' ' ')"
+    check "${slabel}: ... nor in the container's /tmp and run directory" "" "$(rp_scan_layer "${sv}-c" "$scred" | tr '\n' ' ')"
+    check "${slabel}: ... nor in the container log" "0" "$(dlogs "${sv}-c" | grep -c -F "$scred" || true)"
+    check "${slabel}: ... nor in data.mdb pages" "0" "$(rp_scan_mdb "$sv" "$scred" | tr -d ' ')"
     docker restart "${sv}-c" >/dev/null
     wait_ready "${sv}-c" || bad "${slabel}: node never ready after the restart"
-    check "${slabel}: after a restart the admin password is still nowhere in the config volume or the state files" "" "$(rp_scan_vols "$sv" | tr '\n' ' ')"
+    check "${slabel}: after a restart the old credential is still nowhere in the config volume or the state files" "" "$(rp_scan_vols "$sv" "$scred" | tr '\n' ' ')"
     check "${slabel}: no repair temp or rollback file remains" "ok" "$(leftover_verdict "$sv" 1)"
     if [ "$sstate" = unloadable ]; then
-      check "${slabel}: the kept backup is marked redacted" "1" "$(docker run --rm -v "${sv}-cfg:/c:ro" --entrypoint sh "$image" -c 'head -qn 1 /c/cn=config/olcDatabase={1}mdb.ldif.bak-* | grep -c "credentials redacted"; true')"
+      check "${slabel}: the kept backup is the structure-only one" "1" "$(docker run --rm -v "${sv}-cfg:/c:ro" --entrypoint sh "$image" -c 'head -qn 1 /c/cn=config/olcDatabase={1}mdb.ldif.bak-* | grep -c "structure only"; true')"
     fi
     docker rm -fv "${sv}-c" >/dev/null
     docker volume rm -f "${sv}-cfg" "${sv}-data" >/dev/null
