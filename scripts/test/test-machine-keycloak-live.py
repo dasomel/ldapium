@@ -50,7 +50,7 @@ import time
 import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'scripts/lib'))
-from machine_live import (ADMIN_DN, ALL_SCOPES, AUDIENCE, AUDIT, BASE_DN, HUMAN_DN, MACHINE_DN, OVER_DN, READER,  # noqa: E402
+from machine_live import (ensure, ADMIN_DN, ALL_SCOPES, AUDIENCE, AUDIT, BASE_DN, HUMAN_DN, MACHINE_DN, OVER_DN, READER,  # noqa: E402
                           REPO, SEED_USER_DN, Keycloak, Live, Signer, Slapd, decode_jwt, jbody, free_port, tamper)
 
 live = Live('ldapium-mk-', deadline_seconds=1200)
@@ -189,8 +189,7 @@ def main():
 
   def expect(api, desc, token, status, code=None, path='/api/users?limit=2', method='GET', **kw):
     st, hdrs, body = api.machine(token, path, method=method, **kw)
-    assert st == status and (code is None or jbody(body).get('code') == code), \
-        f'{desc}: expected {status} {code}, got {st} {live.mask(body)[:200]}'
+    ensure(st == status and (code is None or jbody(body).get('code') == code), f'{desc}: expected {status} {code}, got {st} {live.mask(body)[:200]}')
     parsed = jbody(body)
     if st in (401, 403) and isinstance(parsed, dict):
       messages.setdefault(parsed.get('code'), set()).add(parsed.get('message'))
@@ -368,19 +367,19 @@ def main():
       t = tok('svc-all')
       for method, path in denied:
         st, _, body = api.machine(t, path, method=method)
-        assert st == 403 and jbody(body).get('code') == 'scope_denied', f'{method} {path}: {st} {live.mask(body)[:160]}'
+        ensure(st == 403 and jbody(body).get('code') == 'scope_denied', f'{method} {path}: {st} {live.mask(body)[:160]}')
       st, _, body = api.machine(t, '/api/users', method='HEAD')
-      assert st == 403, f'HEAD /api/users: {st}'
+      ensure(st == 403, f'HEAD /api/users: {st}')
       st, _, body = api.machine(tok('svc-groups'), '/api/users?limit=2')
-      assert st == 403 and jbody(body).get('code') == 'scope_denied', f'groups-only token on users: {st}'
+      ensure(st == 403 and jbody(body).get('code') == 'scope_denied', f'groups-only token on users: {st}')
       st, _, body = api.machine(tok('svc-reader2'), '/api/audit/actions')
-      assert st == 403, f'token without audit.read on audit actions: {st}'
+      ensure(st == 403, f'token without audit.read on audit actions: {st}')
       st, _, body = api.machine(t, '/api/no-such-route')
-      assert st == 404, f'unknown route: {st}'
+      ensure(st == 404, f'unknown route: {st}')
       for dn in ['cn=accesslog', 'cn=config', 'cn=Monitor', 'dc=org', 'cn=ACCESSLOG', 'cn=\\61ccesslog']:
         for route in ('/api/entry', '/api/tree'):
           st, _, body = api.machine(tok('svc-reader'), route + '?dn=' + urllib.parse.quote(dn))
-          assert st == 403 and jbody(body).get('code') == 'scope_denied', f'{route} dn={dn}: {st}'
+          ensure(st == 403 and jbody(body).get('code') == 'scope_denied', f'{route} dn={dn}: {st}')
     zero_binds(f'{label}: all 37 never-allowed operations (scope_denied with a token holding every scope), HEAD, scope-insufficient tokens, an unknown route and sensitive DNs',
                denied_batch)
   st, _, body = ldap_api.machine(tok('svc-groups'), '/api/groups?limit=1')
@@ -392,16 +391,16 @@ def main():
   def mixed():
     t = tok('svc-reader')
     st, hdrs, body = ldap_api.machine(t, '/api/users?limit=2', extra=human)
-    assert st == 400 and 'Set-Cookie' not in hdrs, f'bearer + real session cookie: {st} {body[:120]}'
+    ensure(st == 400 and 'Set-Cookie' not in hdrs, f'bearer + real session cookie: {st} {body[:120]}')
     st, hdrs, body = sso_api.machine(t, '/api/users?limit=2', extra={'Cookie': 'ldapium_session=forged'})
-    assert st == 400 and 'Set-Cookie' not in hdrs, f'bearer + cookie in SSO mode: {st}'
+    ensure(st == 400 and 'Set-Cookie' not in hdrs, f'bearer + cookie in SSO mode: {st}')
     st, _, body = ldap_api.machine(t, '/api/users', method='POST', extra={'Origin': 'https://evil.example', 'Content-Type': 'application/json'})
-    assert st == 403 and jbody(body).get('code') == 'origin_mismatch', f'foreign Origin POST with a valid bearer: {st} {body[:120]}'
+    ensure(st == 403 and jbody(body).get('code') == 'origin_mismatch', f'foreign Origin POST with a valid bearer: {st} {body[:120]}')
     st, _, body = ldap_api.machine(t, '/api/users', method='POST', extra={'Origin': 'null', 'Content-Type': 'application/json'})
-    assert st == 403, f'null Origin POST: {st}'
+    ensure(st == 403, f'null Origin POST: {st}')
     for bad in ('Bearer', 'Bearer  two-spaces', 'Basic dXNlcjpwYXNz', 'bearer ' + t + ',x'):
       st, _, body = ldap_api.call('GET', '/api/users?limit=2', {'Authorization': bad})
-      assert st == 401, f'malformed Authorization {bad[:20]!r}: {st}'
+      ensure(st == 401, f'malformed Authorization {bad[:20]!r}: {st}')
     host, port = ldap_api.base_url.split('//')[1].split(':')
     conn = http.client.HTTPConnection(host, int(port), timeout=10)
     conn.putrequest('GET', '/api/users?limit=2')
@@ -409,15 +408,14 @@ def main():
     conn.putheader('Authorization', 'Bearer ' + t)
     conn.endheaders()
     resp = conn.getresponse()
-    assert resp.status == 401, f'two Authorization headers: {resp.status}'
+    ensure(resp.status == 401, f'two Authorization headers: {resp.status}')
     resp.read()
     conn.close()
     st, hdrs, body = ldap_api.call('OPTIONS', '/api/users', {'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'GET',
                                                                 'Access-Control-Request-Headers': 'authorization'})
-    assert 'authorization' not in (hdrs.get('Access-Control-Allow-Headers') or '').lower() and 'Access-Control-Allow-Origin' not in hdrs, \
-        f'preflight must not allow authorization: {st} {dict(hdrs)}'
+    ensure('authorization' not in (hdrs.get('Access-Control-Allow-Headers') or '').lower() and 'Access-Control-Allow-Origin' not in hdrs, f'preflight must not allow authorization: {st} {dict(hdrs)}')
     st, _, body = ldap_api.machine(t, '/api/users?limit=2', extra={'Origin': 'https://evil.example'})
-    assert st == 200, f'GET with a foreign Origin and a valid bearer is not gated: {st}'
+    ensure(st == 200, f'GET with a foreign Origin and a valid bearer is not gated: {st}')
   before_mixed = binds()
   mixed()
   check(binds() == before_mixed + 1, 'mixed cookie+bearer (400), foreign/null Origin POST (403), malformed and duplicate Authorization (401) and the preflight were all refused with no bind; '
@@ -475,7 +473,7 @@ def main():
     cursor, seen = '', 0
     while True:
       st, body = over_get('svc-reader', f'/api/{resource}?limit=2' + (('&cursor=' + urllib.parse.quote(cursor)) if cursor else ''))
-      assert st == 200, f'{resource}: {st}'
+      ensure(st == 200, f'{resource}: {st}')
       seen += 1
       cursor = jbody(body).get('nextCursor', '')
       if not cursor:
@@ -501,7 +499,7 @@ def main():
                           dict(held, MACHINE_LDAP_BIND_PASSWORD=live.secret('wrong-' + secrets.token_hex(8))))
   for i in range(2):  # below the ppolicy lockout (5), so the good containers keep working
     st, _, body = bad_api.machine(tok('svc-reader'), '/api/users?limit=2')
-    assert st == 503 and jbody(body).get('code') == 'unavailable' and 'userPassword' not in body, f'wrong machine password: {st} {body[:120]}'
+    ensure(st == 503 and jbody(body).get('code') == 'unavailable' and 'userPassword' not in body, f'wrong machine password: {st} {body[:120]}')
   check(True, 'wrong machine bind password -> 503 unavailable, no data, no fallback to another identity (2 attempts)')
   check(ldap_api.machine(tok('svc-reader'), '/api/users?limit=2')[0] == 200, 'the correct-password container still binds (account not locked)')
   lim_api = live.start_ui(live.name_prefix + '-uilim', ldap_url,

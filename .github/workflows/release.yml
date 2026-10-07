@@ -181,7 +181,7 @@ jobs:
           done
 
           [ "$missing" -eq 0 ] || exit 1
-          echo "vulnerability scan and upgrade/backup e2e all succeeded on $SHA"
+          echo "all release-critical checks (vulnerability scan, upgrade/backup e2e, machine bearer auth (real Keycloak)) succeeded on $SHA"
 
   build-server:
     name: Build server image

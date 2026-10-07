@@ -43,6 +43,15 @@ One git tag publishes everything. `v0.1.0` produces:
 5. **Merge to `main` and wait for CI to be green.** Tag from a commit that has
    already passed, not from one you hope will.
 
+   The release gate requires the job **`machine bearer auth (real Keycloak)`**
+   (`machine-keycloak-e2e.yml`) to have succeeded **on the tagged SHA**, like the
+   other release-critical checks. A main commit that predates that workflow has no
+   such run, so tagging it **fails the gate**. Either re-run the workflow on that
+   SHA (`gh workflow run machine-keycloak-e2e.yml --ref <branch-or-tag-at-that-SHA>`
+   and wait for success; it must be a run for that exact commit) or tag a newer
+   commit. A skipped or cancelled run, or a success on another SHA, never satisfies
+   the gate.
+
 6. **Tag and push:**
 
    ```sh

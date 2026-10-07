@@ -80,10 +80,26 @@ jobs:
       - name: Emergency revocation and rollback drill (two replicas per revision)
         run: python3 scripts/test/test-machine-revocation-drill.py
 
-      # The scripts remove their own containers and networks even on failure (and print
-      # scrubbed container logs first), so this only reports leaks.
-      - name: Report leftover docker objects
+      # The scripts remove their own containers, volumes and networks even on failure (and print
+      # scrubbed container logs first). The runner is fresh per job, so anything left under these
+      # prefixes belongs to this run: list it and fail. `if: always()` makes it run after an earlier
+      # failure; it fails on its own findings only, so it never hides that earlier failure.
+      - name: Fail on leftover docker objects
         if: always()
         run: |
-          docker ps -a --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --format '{{.Names}} {{.Status}}'
-          docker network ls --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --format '{{.Name}}'
+          set -u
+          leaks=0
+          for kind in "ps -a" "volume ls" "network ls"; do
+            case "$kind" in
+              "ps -a") fmt='{{.Names}} {{.Status}}' ;;
+              *) fmt='{{.Name}}' ;;
+            esac
+            # shellcheck disable=SC2086
+            out=$(docker $kind --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --format "$fmt")
+            if [ -n "$out" ]; then
+              echo "::error::leftover docker objects ($kind):"
+              echo "$out"
+              leaks=1
+            fi
+          done
+          [ "$leaks" -eq 0 ]

@@ -30,7 +30,7 @@ import threading
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'scripts/lib'))
-from machine_live import (ADMIN_DN, ALL_SCOPES, AUDIENCE, BASE_DN, MACHINE_DN, READER, Keycloak, LDAPProxy, Live,  # noqa: E402
+from machine_live import (ensure, ADMIN_DN, ALL_SCOPES, AUDIENCE, BASE_DN, MACHINE_DN, READER, Keycloak, LDAPProxy, Live,  # noqa: E402
                           Slapd, jbody)
 
 live = Live('ldapium-md-', deadline_seconds=900)
@@ -97,11 +97,11 @@ def main():
     terminationGracePeriodSeconds) and delete them."""
     codes = {}
     for name in old_replicas:
-      assert live.run(['docker', 'stop', '-t', '15', name]).returncode == 0
+      ensure(live.run(['docker', 'stop', '-t', '15', name]).returncode == 0)
       logs = live.run(['docker', 'logs', name])
       old_logs.append(logs.stdout + logs.stderr)  # kept for the final secret scan; the container is deleted next
       codes[name] = live.run(['docker', 'inspect', '-f', '{{.State.ExitCode}}', name]).stdout.strip()
-      assert live.run(['docker', 'rm', '-fv', name]).returncode == 0
+      ensure(live.run(['docker', 'rm', '-fv', name]).returncode == 0)
     return codes
 
   both = ('svc-drill', 'svc-other')
@@ -110,7 +110,7 @@ def main():
   t_drill = token('svc-drill')
   for name, api in r1:
     st, _, _ = api.machine(t_drill, '/api/users?limit=1')
-    assert st == 200, f'{name}: {st}'
+    ensure(st == 200, f'{name}: {st}')
   check(True, 'revision 1 (2 replicas, svc-drill allowed): the svc-drill token -> 200 on every replica')
 
   # ==== (a) disable the Keycloak client ======================================================
@@ -119,7 +119,7 @@ def main():
   check(st != 200 and resp.get('error') in ('invalid_client', 'unauthorized_client'), f'(a) Keycloak refuses NEW tokens for the disabled client ({st} {resp.get("error")})')
   for name, api in r1:
     st, _, _ = api.machine(t_drill, '/api/users?limit=1')
-    assert st == 200, f'{name}: {st}'
+    ensure(st == 200, f'{name}: {st}')
   check(True, '(a) the token issued BEFORE the disable STILL passes on every replica until it expires (documented: disabling the client is not revocation)')
 
   # ==== (b) remove the client from the server allowlist and replace ALL replicas =============
@@ -156,10 +156,10 @@ def main():
   before = binds()
   for name, api in r2:
     st, _, body = api.machine(t_drill, '/api/users?limit=1')
-    assert st == 401 and jbody(body).get('code') == 'token_invalid', f'{name}: {st} {body[:100]}'
+    ensure(st == 401 and jbody(body).get('code') == 'token_invalid', f'{name}: {st} {body[:100]}')
   check(binds() == before, '(b) after the rollout the SAME token is 401 token_invalid on every new replica, BIND COUNT 0')
   for name, api in r2:
-    assert api.machine(token('svc-other'), '/api/users?limit=1')[0] == 200
+    ensure(api.machine(token('svc-other'), '/api/users?limit=1')[0] == 200)
   check(True, '(b) a client that stays allowed (svc-other) is served by every new replica')
   kc.update_client(REALM, cids['svc-drill'], enabled=True)
   st, _, _ = r2[0][1].machine(token('svc-drill'), '/api/users?limit=1')
@@ -174,16 +174,15 @@ def main():
   for name, api in r3:
     st, _, body = api.machine(t_other, '/api/users?limit=1')
     st2, _, body2 = api.call('GET', '/api/users?limit=1')
-    assert st == 401 and jbody(body).get('code') == 'unauthenticated' and (st2, jbody(body2).get('code')) == (st, 'unauthenticated'), \
-        f'{name}: bearer {st} {body[:100]} vs none {st2} {body2[:100]}'
+    ensure(st == 401 and jbody(body).get('code') == 'unauthenticated' and (st2, jbody(body2).get('code')) == (st, 'unauthenticated'), f'{name}: bearer {st} {body[:100]} vs none {st2} {body2[:100]}')
   check(binds() == before, '(c) with MACHINE_AUTH_ENABLED=false the bearer is ignored: the same 401 unauthenticated as a request without credentials, BIND COUNT 0')
   for name, api in r3:
     cookie = api.login_human(slapd.human_password)
     st, _, body = api.call('GET', '/api/users?limit=2', cookie)
-    assert st == 200 and len(jbody(body).get('users', [])) == 2, f'{name}: cookie read {st}'
+    ensure(st == 200 and len(jbody(body).get('users', [])) == 2, f'{name}: cookie read {st}')
     st, _, _ = api.call('POST', '/api/logout', dict(cookie, Origin=api.base_url))
-    assert st in (200, 204), f'{name}: logout {st}'
-    assert api.call('GET', '/api/users?limit=1', cookie)[0] == 401
+    ensure(st in (200, 204), f'{name}: logout {st}')
+    ensure(api.call('GET', '/api/users?limit=1', cookie)[0] == 401)
   check(True, '(c) the cookie flow is unchanged on every replica: login, read (200), logout, session gone (401)')
 
   # ==== (d) rollback: redeploy the original allowlist =============================================
@@ -192,7 +191,7 @@ def main():
   check(containers_of(3) == [] and all(c == '0' for c in codes.values()), 'revision 3 replaced, none left')
   for name, api in r4:
     st, _, _ = api.machine(t_drill, '/api/users?limit=1')
-    assert st == 200, f'{name}: {st}'
+    ensure(st == 200, f'{name}: {st}')
   check(True, '(d) rollback: with the original allowlist the still-unexpired svc-drill token passes again on every replica')
 
   scan = live.all_logs() + ''.join(old_logs)

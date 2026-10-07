@@ -36,18 +36,22 @@ a wrong azp; a token with only preferred_username; and, on a Keycloak that runs 
 `token-exchange` feature, the exchange that works without any client setting. On the default server
 a client without standard.token.exchange.enabled is refused by Keycloak itself.
 
+The legacy-exchange row is mandatory. LDAPIUM_ALLOW_NO_LEGACY_EXCHANGE=1 (default off) skips it only when the
+server itself reports the legacy feature as unavailable.
+
 Run: python3 scripts/test/test-machine-keycloak-settings-live.py
 Override LDAPIUM_IMAGE / LDAPIUM_UI_IMAGE / KEYCLOAK_IMAGE / LDAPIUM_TEST_PREFIX /
 LDAPIUM_TEST_DEADLINE as needed.
 """
 import json
+import os
 import pathlib
 import secrets
 import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'scripts/lib'))
-from machine_live import (ADMIN_DN, ALL_SCOPES, AUDIENCE, BASE_DN, MACHINE_DN, READER, Keycloak, Live, Signer,  # noqa: E402
+from machine_live import (ensure, ADMIN_DN, ALL_SCOPES, AUDIENCE, BASE_DN, MACHINE_DN, READER, Keycloak, Live, Signer,  # noqa: E402
                           Slapd, decode_jwt, jbody)
 
 live = Live('ldapium-mks-', deadline_seconds=1200)
@@ -134,7 +138,7 @@ def main():
   def refused(api, label, token):
     before = binds()
     st, _, body = api.machine(token, '/api/users?limit=2')
-    assert st == 401 and jbody(body).get('code') == 'token_invalid', f'{label}: {st} {live.mask(body)[:160]}'
+    ensure(st == 401 and jbody(body).get('code') == 'token_invalid', f'{label}: {st} {live.mask(body)[:160]}')
     check(binds() == before, f'{label} -> 401 token_invalid, BIND COUNT 0')
 
   # ==== Phase A: the default server (no legacy token-exchange feature) ====================
@@ -229,14 +233,22 @@ def main():
   check(audit_client_settings(kc_b, REALM, cid_b) == [], 'operator audit: the client conforms (standard.token.exchange.enabled is NOT set)')
   st, _, _ = api_b.machine(token_b, '/api/users?limit=2')
   check(st == 200, 'legacy-feature server: the baseline SA token -> 200')
-  st, ex_legacy = kc_b.token(REALM, 'svc-legacy', legacy_secret, subject_token=token_b, **EXCHANGE)
-  if st == 200:
+  # The legacy feature must really be on: asked of the server, not inferred from a failed exchange.
+  kc_b.admin_login()
+  _, _, info = kc_b.http('GET', kc_b.base + '/admin/serverinfo', {'Authorization': 'Bearer ' + kc_b._token})
+  feature_on = any(f.get('name') == 'TOKEN_EXCHANGE' and f.get('enabled') for f in json.loads(info).get('features', []))
+  if not feature_on and os.environ.get('LDAPIUM_ALLOW_NO_LEGACY_EXCHANGE') == '1':
+    # Explicit opt-out (default off), allowed ONLY when the server itself reports the feature unavailable.
+    print('NOTE: LDAPIUM_ALLOW_NO_LEGACY_EXCHANGE=1 and this Keycloak does not offer the legacy token-exchange feature: '
+          'the legacy-exchange row is NOT verified', flush=True)
+  else:
+    check(feature_on, f'the server reports the legacy token-exchange feature as enabled (KC_FEATURES=token-exchange)')
+    st, ex_legacy = kc_b.token(REALM, 'svc-legacy', legacy_secret, subject_token=token_b, **EXCHANGE)
+    check(st == 200, f'legacy token-exchange feature: the client exchanges its own token WITHOUT any client setting ({st} {ex_legacy.get("error")})')
     lc = decode_jwt(ex_legacy['access_token'])[1]
-    check('client_id' not in lc, 'legacy token-exchange feature: the client exchanged its own token WITHOUT any client setting (EVIDENCE 2.9 row 11 reproduced), the result has no client_id')
+    check('client_id' not in lc, 'the legacy-exchange result has no client_id (EVIDENCE 2.9 row 11 reproduced)')
     tokens_used.append(ex_legacy['access_token'])
     refused(api_b, 'LEGACY-feature exchange token', ex_legacy['access_token'])
-  else:
-    print(f'NOTE: legacy token exchange could not be exercised on this Keycloak ({st} {ex_legacy}); the legacy case is NOT verified', flush=True)
 
   scan = live.all_logs()
   leaks = [t[:10] + '...' for t in tokens_used if t and t in scan] + [s[:6] + '...' for s in live.secret_values if len(s) >= 8 and s in scan]

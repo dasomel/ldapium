@@ -317,7 +317,10 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   JWKS key rotation / floods / hostile issuer responses / discovery recovery behind a
   counting proxy, and the emergency revocation and rollback drill across replicas.
   `release.yml` now also requires the job `machine bearer auth (real Keycloak)` to have
-  succeeded on the tagged commit.
+  succeeded on the tagged commit. From now on tagging a main commit that predates this
+  workflow (no run of that job on the SHA) fails the release gate: re-run the workflow on
+  that SHA via `workflow_dispatch` or tag a newer commit; skipped, cancelled or other-SHA
+  runs never satisfy it (see `RELEASING.md`).
 
 ## [0.1.1] — 2026-09-24
 

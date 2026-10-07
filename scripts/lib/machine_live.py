@@ -65,6 +65,12 @@ def b64u_decode(text):
   return base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
 
 
+def ensure(condition, message='check failed'):
+  """A real check: not an `assert`, so `python -O` cannot turn it into a no-op."""
+  if not condition:
+    raise AssertionError(message)
+
+
 def jbody(text):
   try:
     return json.loads(text)
@@ -123,7 +129,7 @@ class Live:
   # ---- reporting -------------------------------------------------------------
 
   def check(self, condition, message):
-    assert condition, message
+    ensure(condition, message)
     self.checks += 1
     print('PASS: ' + message, flush=True)
 
@@ -190,7 +196,7 @@ class Live:
 
   def make_network(self):
     self.networks.append(self.network)
-    assert self.run(['docker', 'network', 'create', self.network]).returncode == 0
+    ensure(self.run(['docker', 'network', 'create', self.network]).returncode == 0)
 
   def register(self, name):
     self.containers.append(name)
@@ -214,9 +220,9 @@ class Live:
       cmd += ['--label', lab]
     cmd += list(extra_docker) + [self.ui_image]
     res = self.run(cmd)
-    assert res.returncode == 0, res.stderr
+    ensure(res.returncode == 0, res.stderr)
     published = port or self.published_port(name, '8080/tcp')
-    assert published or not wait, f'{name} exited during startup'
+    ensure(published or not wait, f'{name} exited during startup')
     api = Api(self, f'http://127.0.0.1:{published}')
     if wait:
       self.wait_ui(api, name)
@@ -260,9 +266,9 @@ class Api:
   def login_human(self, human_password):
     status, hdrs, body = self.call('POST', '/api/login', {'Origin': self.base_url, 'Content-Type': 'application/json'},
                                    {'identity': HUMAN_DN, 'password': human_password})
-    assert status == 200, f'human login failed: {status} {self.live.mask(body)}'
+    ensure(status == 200, f'human login failed: {status} {self.live.mask(body)}')
     cookie = hdrs.get('Set-Cookie', '').split(';')[0]
-    assert cookie.startswith('ldapium_session='), 'no session cookie'
+    ensure(cookie.startswith('ldapium_session='), 'no session cookie')
     return {'Cookie': cookie}
 
 
@@ -288,7 +294,7 @@ class Slapd:
     res = live.run(['docker', 'run', '-d', '--name', self.name, '--network', live.network,
                     '-p', f'127.0.0.1:{self.port}:389', '--env-file', env, '-e', 'LDAP_ROOT_DN=' + BASE_DN,
                     '-e', 'LDAP_ACCESSLOG_ENABLED=true', '-e', 'LDAP_ACCESSLOG_OPS=writes reads bind', live.ldap_image])
-    assert res.returncode == 0, res.stderr
+    ensure(res.returncode == 0, res.stderr)
 
     def ready():
       put = live.run(['docker', 'exec', '-i', self.name, 'sh', '-c', 'umask 077; cat > /tmp/.pw-admin'],
@@ -300,7 +306,7 @@ class Slapd:
 
   def put_password(self, path, password):
     res = self.live.run(['docker', 'exec', '-i', self.name, 'sh', '-c', f'umask 077; cat > {path}'], input=password)
-    assert res.returncode == 0, res.stderr
+    ensure(res.returncode == 0, res.stderr)
 
   def tool(self, tool, args, bind_dn, pw_path, input_data=None, uri='ldap://127.0.0.1'):
     # docker exec -i: the heredoc/stdin must reach the tool (AGENTS.md).
@@ -364,14 +370,14 @@ cn: g0{i}
 member: {SEED_USER_DN}
 """
     res = self.admin_tool('ldapadd', [], ldif)
-    assert res.returncode == 0, 'seed failed: ' + self.live.mask(res.stderr)
+    ensure(res.returncode == 0, 'seed failed: ' + self.live.mask(res.stderr))
 
   def apply_ldif(self, template, tokens):
     text = (FIXTURES / template).read_text()
     for k, v in tokens.items():
       text = text.replace('@' + k + '@', v)
     res = self.config_tool('ldapmodify', [], text)
-    assert res.returncode == 0, f'ldapmodify {template}: {self.live.mask(res.stderr)}'
+    ensure(res.returncode == 0, f'ldapmodify {template}: {self.live.mask(res.stderr)}')
 
   def apply_acl(self, over_privileged=False):
     """The package's ACL LDIF for the least-privilege machine DN (and, when asked,
@@ -401,7 +407,7 @@ member: {SEED_USER_DN}
   def seed_password_secret(self):
     """Change a user's password so the accesslog holds a userPassword reqMod VALUE."""
     mod = f"dn: {SEED_USER_DN}\nchangetype: modify\nreplace: userPassword\nuserPassword: {self.seed_secret}\n"
-    assert self.admin_tool('ldapmodify', [], mod).returncode == 0
+    ensure(self.admin_tool('ldapmodify', [], mod).returncode == 0)
     res = self.tool('ldapsearch', ['-LLL', '-b', 'cn=accesslog', '(reqMod=userPassword:*)', 'reqMod'],
                     'cn=admin,cn=accesslog', '/tmp/.pw-admin')
     found = []
@@ -568,7 +574,7 @@ class Keycloak:
     env_path = live.write_secret_file(self.name + '.env', ''.join(f'{k}={v}\n' for k, v in env.items()))
     res = live.run(['docker', 'run', '-d', '--name', self.name, '--network', live.network,
                     '-p', f'127.0.0.1:{self.port}:8080', '--env-file', env_path, live.keycloak_image, 'start-dev'])
-    assert res.returncode == 0, res.stderr
+    ensure(res.returncode == 0, res.stderr)
     self.wait_ready()
 
   def wait_ready(self, timeout=180):
@@ -582,10 +588,10 @@ class Keycloak:
     self._token = None
 
   def stop(self):
-    assert self.live.run(['docker', 'stop', '-t', '5', self.name]).returncode == 0
+    ensure(self.live.run(['docker', 'stop', '-t', '5', self.name]).returncode == 0)
 
   def restart(self):
-    assert self.live.run(['docker', 'start', self.name]).returncode == 0
+    ensure(self.live.run(['docker', 'start', self.name]).returncode == 0)
     self.wait_ready()
 
   # -- plain HTTP --
@@ -602,7 +608,7 @@ class Keycloak:
                                    'password': self.admin_password}).encode()
     st, _, body = self.http('POST', self.base + '/realms/master/protocol/openid-connect/token',
                             {'Content-Type': 'application/x-www-form-urlencoded'}, form)
-    assert st == 200, f'Keycloak admin login failed: {st} {self.live.mask(body)[:200]}'
+    ensure(st == 200, f'Keycloak admin login failed: {st} {self.live.mask(body)[:200]}')
     self._token = json.loads(body)['access_token']
     self._token_until = time.monotonic() + 40
 
@@ -613,7 +619,7 @@ class Keycloak:
                                {'Authorization': 'Bearer ' + self._token, 'Content-Type': 'application/json'},
                                json.dumps(body).encode() if body is not None else None)
     if expect is not None:
-      assert st in expect, f'Keycloak admin {method} {path}: {st} {self.live.mask(text)[:300]}'
+      ensure(st in expect, f'Keycloak admin {method} {path}: {st} {self.live.mask(text)[:300]}')
     return st, hdrs, text
 
   # -- realm / scopes / clients --
@@ -701,12 +707,12 @@ class Keycloak:
 
   def sa_token(self, realm, client_id, secret, **form):
     st, body = self.token(realm, client_id, secret, **form)
-    assert st == 200, f'client_credentials for {client_id}: {st} {self.live.mask(str(body))[:200]}'
+    ensure(st == 200, f'client_credentials for {client_id}: {st} {self.live.mask(str(body))[:200]}')
     return body['access_token']
 
   def jwks(self, realm):
     st, _, text = self.http('GET', f'{self.base}/realms/{realm}/protocol/openid-connect/certs')
-    assert st == 200, text
+    ensure(st == 200, text)
     return json.loads(text)['keys']
 
 

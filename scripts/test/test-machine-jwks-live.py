@@ -47,7 +47,7 @@ import urllib.request
 import http.server
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'scripts/lib'))
-from machine_live import (ADMIN_DN, AUDIENCE, BASE_DN, MACHINE_DN, READER, ALL_SCOPES, Keycloak, Live, Slapd,  # noqa: E402
+from machine_live import (ensure, ADMIN_DN, AUDIENCE, BASE_DN, MACHINE_DN, READER, ALL_SCOPES, Keycloak, Live, Slapd,  # noqa: E402
                           b64u, decode_jwt, jbody, tamper)
 
 live = Live('ldapium-mj-', deadline_seconds=1500)
@@ -203,7 +203,7 @@ def main():
   check(new_kid != old_kid and {k['kid'] for k in kc.jwks(REALM) if k.get('use') == 'sig'} >= {old_kid, new_kid},
         f'Keycloak now publishes both signing keys ({old_kid[:8]}..., {new_kid[:8]}...) and signs with the new one')
   since = time.monotonic() - s_mark
-  assert since < MIN_REFRESH - 3, f'the rotation steps took {since:.0f}s, too close to MIN_REFRESH={MIN_REFRESH}s for the 401 assertion'
+  ensure(since < MIN_REFRESH - 3, f'the rotation steps took {since:.0f}s, too close to MIN_REFRESH={MIN_REFRESH}s for the 401 assertion')
   before = proxy.count('jwks')
   st, _, body = api.machine(new_token_value, path)
   check(st == 401 and jbody(body).get('code') == 'token_invalid' and proxy.count('jwks') == before,
@@ -285,7 +285,7 @@ def main():
     proxy.log.clear()
     api = ui('h' + mode, MACHINE_JWKS_MIN_REFRESH='1s')
     cached = new_token()
-    assert api.machine(cached, path)[0] == 200
+    ensure(api.machine(cached, path)[0] == 200)
     time.sleep(1.5)
     proxy.modes['jwks'] = mode
     t0 = time.monotonic()
