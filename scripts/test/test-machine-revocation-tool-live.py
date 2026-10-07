@@ -121,8 +121,8 @@ with tempfile.TemporaryDirectory(prefix='ldapium-revtool-') as tmp:
     _, entries = module.Directory(args).search()
     assert any(e['cn'] == ['jti-live-jti'] for e in entries)
     print('PASS prune retains fresh JTI')
-    straydn = 'cn=stray,' + revbase
-    ldap('ldapadd', data=module.ldif([('dn', straydn), ('objectClass', 'organizationalRole'), ('cn', 'stray')]) + '\n')
+    straydn = 'cn=jti-stray,' + revbase
+    ldap('ldapadd', data=module.ldif([('dn', straydn), ('objectClass', 'organizationalRole'), ('objectClass', 'extensibleObject'), ('cn', 'jti-stray'), ('ou', 'tool-client')]) + '\n')
     for command in ['add', 'heartbeat', 'remove', 'prune']:
       assert tool(command, accepted=(1,)).returncode == 1
     ldap('ldapdelete', [straydn])

@@ -283,3 +283,18 @@ Go vet (including live tags)/tests/build, chart lint/schema/contracts, shellchec
 version/module checks, incident/tool fixtures, license inventory and govulncheck.
 The scan reported no reachable vulnerabilities. Race check separately passed:
 `go test -race -count=1 ./internal/config ./internal/machineauth ./internal/httpapi`.
+
+Mutation checks (local, each reverted before the final successful live rerun):
+
+- `MAX_TTL=3599` instead of 3600: `TestRevocationToolRetention` fails with
+  `tool retention 4439s != Go ceilings 1h14m0s`.
+- Remove the `device` objectClass guard: live heartbeat erroneously exits 0 for
+  a syntactically valid `jti-stray` non-device (`organizationalRole` plus
+  `extensibleObject`, valid cn/ou/timestamp); the test fails. This isolates the
+  class check from the other format checks.
+- Stop accepting rc 16 for a retry: actual slapd CAS collision raises an LDAP
+  rc 16 error and the live concurrency test fails.
+
+All three were detected (nonzero test exit), then the unmodified tool's full
+live script returned exit 0 again. Mutation outputs were saved under
+`/tmp/ldapium-revocation-mutation-{retention,device,cas}.log` during this run.
