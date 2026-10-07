@@ -375,10 +375,13 @@ func TestVerify_JTI(t *testing.T) {
 			}
 		}
 	})
-	t.Run("flag off: IssuedAt carried, JTI not required", func(t *testing.T) {
-		p, fail := e.verify(e.mod(t, func(map[string]any) {}))
+	t.Run("flag off: valid JTI and IssuedAt carried", func(t *testing.T) {
+		p, fail := e.verify(e.mod(t, func(c map[string]any) { c["jti"] = "optional-jti" }))
 		if fail != nil {
 			t.Fatalf("rejected: %+v", fail)
+		}
+		if p.JTI != "optional-jti" {
+			t.Errorf("JTI = %q, want optional-jti", p.JTI)
 		}
 		if !p.IssuedAt.Equal(e.clock.Now()) {
 			t.Errorf("IssuedAt = %v, want %v", p.IssuedAt, e.clock.Now())

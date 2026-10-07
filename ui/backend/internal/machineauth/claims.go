@@ -144,11 +144,11 @@ func ValidateClaims(p Policy, payload []byte, now time.Time) (*Principal, *Failu
 			return nil, invalid(ReasonTime)
 		}
 	}
-	var jti string
-	if p.RequireJTI {
-		if jti, ok = stringClaim(c, "jti"); !ok {
-			return nil, invalid(ReasonJTI)
-		}
+	// D-T11-1: preserve optional identifiers; requiring one is a separate policy.
+	// Cost: one claim decode even when off; remove with Principal.JTI if unused.
+	jti, hasJTI := stringClaim(c, "jti")
+	if p.RequireJTI && !hasJTI {
+		return nil, invalid(ReasonJTI)
 	}
 	// Expiry is last: a token that reaches it violates nothing else, so it is
 	// the "purely expired" case.
