@@ -356,3 +356,73 @@ func mustJSON(v any) string {
 	}
 	return string(b)
 }
+
+// T-011 (REQ-002, D12): jti is mandatory only under Policy.RequireJTI; iat and
+// jti are carried into the Principal; the flag off changes nothing.
+func TestVerify_JTI(t *testing.T) {
+	e := newVerifyEnv(t)
+	delJTI := func(c map[string]any) { delete(c, "jti") }
+
+	t.Run("flag off: missing/null/number/empty jti still accepted", func(t *testing.T) {
+		for name, mut := range map[string]func(map[string]any){
+			"missing": delJTI,
+			"null":    func(c map[string]any) { c["jti"] = nil },
+			"number":  func(c map[string]any) { c["jti"] = 7 },
+			"empty":   func(c map[string]any) { c["jti"] = "" },
+		} {
+			if _, fail := e.verify(e.mod(t, mut)); fail != nil {
+				t.Errorf("%s: rejected with flag off: %+v", name, fail)
+			}
+		}
+	})
+	t.Run("flag off: IssuedAt carried, JTI not required", func(t *testing.T) {
+		p, fail := e.verify(e.mod(t, func(map[string]any) {}))
+		if fail != nil {
+			t.Fatalf("rejected: %+v", fail)
+		}
+		if !p.IssuedAt.Equal(e.clock.Now()) {
+			t.Errorf("IssuedAt = %v, want %v", p.IssuedAt, e.clock.Now())
+		}
+	})
+
+	e.v.Policy.RequireJTI = true
+	for name, mut := range map[string]func(map[string]any){
+		"missing": delJTI,
+		"null":    func(c map[string]any) { c["jti"] = nil },
+		"number":  func(c map[string]any) { c["jti"] = 7 },
+		"empty":   func(c map[string]any) { c["jti"] = "" },
+		"object":  func(c map[string]any) { c["jti"] = map[string]any{} },
+	} {
+		t.Run("flag on: "+name, func(t *testing.T) {
+			p, fail := e.verify(e.mod(t, mut))
+			if fail == nil {
+				t.Fatalf("accepted: %+v", p)
+			}
+			if fail.Reason != ReasonJTI || fail.Unavailable || fail.Expired {
+				t.Errorf("failure = %+v, want reason jti", fail)
+			}
+		})
+	}
+	t.Run("flag on: valid jti carried with iat", func(t *testing.T) {
+		p, fail := e.verify(e.mod(t, func(c map[string]any) { c["jti"] = "abc-123" }))
+		if fail != nil {
+			t.Fatalf("rejected: %+v", fail)
+		}
+		if p.JTI != "abc-123" || !p.IssuedAt.Equal(e.clock.Now()) {
+			t.Errorf("principal = %+v", p)
+		}
+	})
+	t.Run("flag on: earlier rules keep their reasons", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			mut  func(map[string]any)
+			want Reason
+		}{
+			"iat missing":   {func(c map[string]any) { delete(c, "iat"); delete(c, "jti") }, ReasonTime},
+			"iat in future": {func(c map[string]any) { c["iat"] = e.clock.Now().Unix() + 31; delete(c, "jti") }, ReasonTime},
+		} {
+			if _, fail := e.verify(e.mod(t, tc.mut)); fail == nil || fail.Reason != tc.want {
+				t.Errorf("%s: failure = %+v, want %s", name, fail, tc.want)
+			}
+		}
+	})
+}

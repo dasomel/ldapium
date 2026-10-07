@@ -428,7 +428,7 @@ by `TestMachineAudit_ServerLevelRejectionsAreNotAudited`.
 `reason` values: `ok`, `bad_header`, `mixed_credentials`, `bearer_not_accepted`
 (Authorization on a login/SSO path), `ignored_public`, `not_api`, `not_found`,
 `origin_mismatch`, `preflight`, the verifier's own reasons (`format`, `alg`,
-`typ`, `kid`, `sig`, `iss`, `aud`, `azp`, `sa_claims`, `scope`, `time`, `ttl`,
+`typ`, `kid`, `sig`, `iss`, `aud`, `azp`, `sa_claims`, `scope`, `time`, `ttl`, `jti`,
 `expired`, `jwks_unavailable`), `scope` (not allowlisted or not granted), `rate`
 (a 429 `machine_rate_limited`: the IP failure throttle, which runs before any
 signature work and so has `actor=unknown` plus the token fingerprint, or a verified
