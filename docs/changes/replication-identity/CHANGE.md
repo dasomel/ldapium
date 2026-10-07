@@ -338,3 +338,36 @@ wipe된 노드의 복구는 "피어가 엔트리와 데이터를 갖고 있으�
 - 재검토 답변 기록(Codex): Q1 prepare 우선 설치(우회 경로를 막은 뒤), Q2 opt-in·D43 게이트 유지(두 관리자 비밀번호 수락은 격리가 아님), Q3 SASL EXTERNAL은 후속 분리 — 모두 반영(D52, D56, D57).
 - Open questions or blockers: 유지보수자 결정 필요 질문 없음. **권고**: 구현은 단계별로 병합하되 매 단계 독립 검토를 받는다(이 패키지는 세 번 검토에서 설계가 계속 커졌고 이번에 줄였다). 그래도 안전하게 컴팩트하게 만들 수 없다고 판단되면 #229 두 번째 항목은 보류가 맞다 — 현재 단순화된 설계는 핵심 위험(E1, E8, E13)을 실험으로 막았다고 본다.
 - 검증하지 못한 주장: (a) `credentials`의 파일/SASL 비밀 참조 지원, (b) `olcLimits time=unlimited` 필요성, (c) rootDN 세션이 신원 엔트리를 삭제할 때 클러스터 정체, (d) `prepare`의 로컬 엔트리/ACL 검사, `dedicated` 거부 조건 구현, `ensure`/`rotate`/`retire` 명령(설계만), (e) **전체 소실 절차와 `restore.sh` 복원이 `dedicated`와 호환되는지**(설계만), (f) 점검의 노드 간 교차 비교(E11은 단일 노드 시점 비교만 실측), 대량 엔트리 성능, 값 순서 정규화, (g) 피어 제한 `peername`/`sockurl`, (h) 차트(k8s)·CronJob·`promtool`·`kube_job_status_failed` 경로 전체, 4노드 이상, (i) ldapi peercred(EXTERNAL) 신원이 authz 금지 조건과 무관하다는 점은 기존 동작에 대한 가정, (j) wipe 후 일부 sid의 contextCSN이 전진하는 현상(조사 안 함), (k) `LDAP_REPLICATION_IDENTITY` 한 줄 sed 이미지가 실제 구현과 동등하다는 가정(구현 시 T-012에서 재검증).
+
+## Local regression rerun (2026-10-08)
+
+Built a fresh LDAP image from `985d4b0` (the later #317 change only rebuilds the
+metrics exporter, not LDAP semantics). Commands actually run:
+
+```sh
+LDAPIUM_IMAGE=ldapium:revocation-review LDAPIUM_UI_IMAGE=ldapium-ui:e2e \
+  LDAPIUM_EDGE_PREFIX=ldapium-edge-review229- \
+  python3 scripts/test/test-api-edge-codes-local.py
+RIDDED_ONLY=cluster bash scripts/test/test-replication-identity-dedicated.sh \
+  ldapium:revocation-review
+```
+
+Both returned exit 0. The edge script's secret probe reported
+`names=0 hits=0 seen=2`: neither LDAP password variable is in `/proc/1/environ`,
+and the supplied admin password appears in neither the readable PID-1/descendant
+environments nor command lines. The full edge script passed; the existing local
+UI image was reused, so this is LDAP environment evidence rather than a build
+verification of today's UI source.
+
+The 3-node verified-TLS test finished `replication-identity dedicated test passed`.
+Observed: admin → prepare → dedicated (including password-file path); no admin
+bind in dedicated syncrepl, no admin password in cn=config, no passwords in logs
+or `/proc/1/environ`, first-rule ACL preserved, replicated user writes, wrong
+identity password stalls and correct password catches up. Wiped sid 1 and sid 2
+recover the user list with the same base entryUUID; sid 1 with all peers down
+becomes ready in 4 seconds without creating a DIT, then recovers when peers return.
+
+This rerun used `RIDDED_ONLY=cluster`; it does not cover the refusal/repair/base
+comparison parts, Kubernetes OrderedReady recovery, credential rotation,
+restore/reconcile, cross-node production checks or D43 relaxation. Issue #229
+remains open while those accepted implementation conditions remain incomplete.
