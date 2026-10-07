@@ -10,6 +10,8 @@ Exercises against a real OpenLDAP slapd and ldapium UI backend:
   (c) Forcing a genuinely refused compensation on user create to observe
       the 500 partial_failure response with state=partial and surviving entry.
   (d) ppolicy lastbind bumping entryCSN and exercising If-Match in SSO mode.
+  (e) Concurrent same-tag writes (one 204, rest 412), concurrent same-key requests
+      (409 idempotency_key_conflict while in flight), PATCH merge preservation (#268).
 
 Run with:
   python3 scripts/test/test-api-conditional-writes-local.py
@@ -660,6 +662,182 @@ olcAccess: {{0}}to dn.subtree="{base_dn}" by dn.exact="{ops_dn}" write by * brea
     check(locked_after == locked_before, '(a) replay left the entry byte-identical (lock timestamp and entryCSN unchanged)')
 
     # -------------------------------------------------------------------------------------------------
+    # (e) #268: concurrent same-tag write, concurrent same-key requests, PATCH merge preservation
+    # -------------------------------------------------------------------------------------------------
+    print('\n--- Executing (e): concurrent same If-Match tag, concurrent same Idempotency-Key, PATCH merge ---')
+    entry_path = lambda dn: f'/api/entry?dn={urllib.parse.quote(dn)}'
+
+    # (e1) N concurrent writes carrying the SAME If-Match tag: assertion control is evaluated inside
+    # the directory write, so exactly one wins and every other gets 412 revision_conflict.
+    conc_dn = f'uid=cw-conc-1,ou=people,{base_dn}'
+    status, _, _ = api.call('POST', '/api/users', {'uid': 'cw-conc-1', 'cn': 'CW Conc 1', 'sn': 'Conc', 'mail': 'conc@example.org'})
+    check(status == 201, f'(e1) created {conc_dn} (status={status})')
+    status, hdrs, _ = api.call('GET', entry_path(conc_dn))
+    conc_tag = hdrs.get('ETag')
+    check(status == 200 and conc_tag, f'(e1) read ETag {conc_tag}')
+    # Proves: against the real directory the assertion decides each write, so concurrent same-tag writers
+    # never both succeed. Does not prove atomicity of the server's code path by itself (the barrier only
+    # aligns the clients); that is the directory's assertion control, covered by (b).
+    n_writers = 6
+    barrier = threading.Barrier(n_writers)
+    results = [None] * n_writers
+
+    def conc_writer(i):
+      try:
+        barrier.wait(timeout=10)
+        if i % 2 == 0:
+          results[i] = api.call('PUT', '/api/users', {'dn': conc_dn, 'cn': f'Conc Writer {i}', 'sn': 'Conc'}, {'If-Match': conc_tag})
+        else:
+          results[i] = api.call('PATCH', '/api/users', {'dn': conc_dn, 'cn': f'Conc Writer {i}'}, {'If-Match': conc_tag})
+      except Exception as exc:
+        results[i] = ('error', None, repr(exc))
+
+    writers = [threading.Thread(target=conc_writer, args=(i,)) for i in range(n_writers)]
+    for t in writers:
+      t.start()
+    for t in writers:
+      t.join(timeout=60)
+    codes = sorted(r[0] if r else 'none' for r in results)
+    check(codes == [204] + [412] * (n_writers - 1),
+          f'(e1) {n_writers} concurrent PUT/PATCH with the same If-Match: exactly one 204, rest 412 (got {codes})')
+    for r in results:
+      if r[0] == 412:
+        check(r[2].get('code') == 'revision_conflict' and r[2].get('retryable') is False,
+              f'(e1) loser body is revision_conflict, retryable false (got {r[2]})')
+    winners = [i for i, r in enumerate(results) if r[0] == 204]
+    cn_now = ldap_admin_tool('ldapsearch', ['-LLL', '-b', conc_dn, '-s', 'base', 'cn']).stdout
+    check(f'cn: Conc Writer {winners[0]}' in cn_now and cn_now.count('cn: ') == 1,
+          f'(e1) directory holds only the winner\'s value (writer {winners[0]}): {cn_now.strip()!r}')
+
+    # (e2) Concurrent requests with the SAME Idempotency-Key while the first is in flight. The first
+    # request is held at the LDAP proxy (its password step stalls) and released only after every
+    # duplicate answered; the documented behaviour is asserted: 409 idempotency_key_conflict, retryable.
+    # Why the held create ends in 403 (expected env property, not a product defect): ops has `write`
+    # but not `manage` on userPassword, so slapd's ppolicy pwdSafeModify refuses the password set
+    # (LDAP 50), the UI maps that to 403 forbidden and compensates by deleting the new entry. (c) relies
+    # on the same refusal. The probe below pins that cause instead of assuming it.
+    probe = subprocess.run(
+        ['docker', 'exec', '-i', ldap_container, 'ldappasswd', '-x', '-H', 'ldap://127.0.0.1',
+         '-D', ops_dn, '-w', ops_password, '-s', 'Probe-Pw-Strong-1x!', conc_dn],
+        capture_output=True, text=True)
+    probe_out = (probe.stdout + probe.stderr).strip()
+    check(probe.returncode != 0 and '(50)' in probe_out,
+          f'(e2) ops cannot set a password on another entry (LDAP 50 insufficient access, pwdSafeModify): rc={probe.returncode} {probe_out[:160]!r}')
+    proxy.intercept_pwd_modify = True
+    proxy.pwd_modify_event.clear()
+    proxy.bump_done.clear()
+    held_uid = 'cw-held-' + secrets.token_hex(4)
+    held_dn = f'uid={held_uid},ou=people,{base_dn}'
+    held_body = {'uid': held_uid, 'cn': 'CW Held', 'sn': 'Held', 'password': 'Held-Pw-Strong-1x!'}
+    held_key = 'idem-key-' + secrets.token_hex(8)
+    held_result = []
+    first = threading.Thread(
+        target=lambda: held_result.append(api.call('POST', '/api/users', held_body, {'Idempotency-Key': held_key})),
+        daemon=True)
+    first.start()
+    n_dups = 5
+    dup_results = [None] * n_dups
+    try:
+      check(proxy.pwd_modify_event.wait(timeout=30), '(e2) first keyed request is held in flight at the LDAP proxy')
+
+      def dup_caller(i):
+        try:
+          dup_results[i] = api.call('POST', '/api/users', held_body, {'Idempotency-Key': held_key})
+        except Exception as exc:
+          dup_results[i] = ('error', None, repr(exc))
+
+      dups = [threading.Thread(target=dup_caller, args=(i,)) for i in range(n_dups)]
+      for t in dups:
+        t.start()
+      for t in dups:
+        t.join(timeout=20)
+      # The proxy hold self-expires after 30s; a slow run that lost the hold must fail loudly here.
+      check(first.is_alive() and not held_result and all(r is not None for r in dup_results),
+            f'(e2) all duplicates answered while the first request was still held (held_result={held_result}, dups={[r and r[0] for r in dup_results]})')
+      dup_codes = [r[0] for r in dup_results]
+      check(dup_codes == [409] * n_dups, f'(e2) {n_dups} concurrent same-key requests while in flight all got 409 (got {dup_codes})')
+      for r in dup_results:
+        check(r[2].get('code') == 'idempotency_key_conflict' and r[2].get('retryable') is True,
+              f'(e2) body is idempotency_key_conflict, retryable true (got {r[2]})')
+    finally:
+      # Release the held request whatever happened above.
+      proxy.intercept_pwd_modify = False
+      proxy.bump_done.set()
+      first.join(timeout=60)
+    check(not first.is_alive() and held_result, '(e2) held request finished after release')
+    held_status, _, held_body_resp = held_result[0]
+    check(held_status == 403 and held_body_resp.get('code') == 'forbidden',
+          f'(e2) held create ends in exactly 403 forbidden (password step refused) (got {held_status} {held_body_resp.get("code")})')
+    gone = ldap_admin_tool('ldapsearch', ['-LLL', '-b', held_dn, '-s', 'base', 'dn'])
+    check(gone.returncode == 32 and held_uid not in gone.stdout,
+          f'(e2) compensation removed the entry: base search rc=32 noSuchObject (rc={gone.returncode})')
+    allq = ldap_admin_tool('ldapsearch', ['-LLL', '-b', base_dn, f'(uid={held_uid})', 'dn'])
+    check(allq.returncode == 0 and held_uid not in allq.stdout, f'(e2) subtree search finds no entry for the key\'s uid (rc={allq.returncode})')
+    proxy.pwd_modify_event.clear()
+    proxy.bump_done.clear()
+
+    # (e3) PATCH merge preservation: changing one attribute must leave the others (single- and
+    # multi-valued, incl. ones the API does not model) untouched in the directory.
+    patch_uid = 'cw-patch-1'
+    patch_dn = f'uid={patch_uid},ou=people,{base_dn}'
+    seed_ldif = f"""dn: {patch_dn}
+objectClass: inetOrgPerson
+uid: {patch_uid}
+cn: CW Patch 1
+cn: CW Patch Alias
+sn: Patch
+givenName: Pat
+mail: patch@example.org
+telephoneNumber: +82 10 0000 0001
+telephoneNumber: +82 10 0000 0002
+description: first description
+description: second description
+"""
+    res = ldap_admin_tool('ldapadd', [], seed_ldif)
+    check(res.returncode == 0, f'(e3) seeded {patch_dn} with multi-valued attributes')
+    status, hdrs, _ = api.call('GET', entry_path(patch_dn))
+    patch_tag = hdrs.get('ETag')
+    check(status == 200 and patch_tag, f'(e3) read ETag {patch_tag}')
+
+    def attr_values(dn, attr):
+      out = ldap_admin_tool('ldapsearch', ['-LLL', '-b', dn, '-s', 'base', attr]).stdout
+      return sorted(line.split(': ', 1)[1] for line in out.splitlines() if line.startswith(attr + ': '))
+
+    before = {a: attr_values(patch_dn, a) for a in ('cn', 'sn', 'givenName', 'telephoneNumber', 'description', 'objectClass', 'uid')}
+    status, hdrs, body = api.call('PATCH', '/api/users', {'dn': patch_dn, 'mail': 'patched@example.org'}, {'If-Match': patch_tag})
+    check(status == 204, f'(e3) PATCH of one attribute with If-Match returned 204 ({describe(status, hdrs, body)})')
+    check(attr_values(patch_dn, 'mail') == ['patched@example.org'], '(e3) patched attribute changed in the directory')
+    after = {a: attr_values(patch_dn, a) for a in before}
+    check(after == before, f'(e3) every other attribute and multi-value preserved (before={before} after={after})')
+    check(len(after['telephoneNumber']) == 2 and len(after['description']) == 2 and len(after['cn']) == 2,
+          '(e3) multi-valued attributes kept both values')
+
+    # Group PATCH: description change keeps the multi-valued member list.
+    group_dn = f'cn=cw-patch-grp,ou=people,{base_dn}'
+    group_ldif = f"""dn: {group_dn}
+objectClass: groupOfNames
+cn: cw-patch-grp
+description: old group description
+member: {patch_dn}
+member: {conc_dn}
+member: {ops_dn}
+"""
+    res = ldap_admin_tool('ldapadd', [], group_ldif)
+    check(res.returncode == 0, f'(e3) seeded group {group_dn} with 3 members')
+    status, hdrs, _ = api.call('GET', entry_path(group_dn))
+    group_tag = hdrs.get('ETag')
+    members_before = attr_values(group_dn, 'member')
+    status, hdrs, body = api.call('PATCH', '/api/groups', {'dn': group_dn, 'description': 'new group description'}, {'If-Match': group_tag})
+    check(status == 204, f'(e3) group PATCH with If-Match returned 204 ({describe(status, hdrs, body)})')
+    check(attr_values(group_dn, 'description') == ['new group description'], '(e3) group description changed')
+    check(attr_values(group_dn, 'member') == members_before and len(members_before) == 3,
+          '(e3) group PATCH preserved all 3 member values')
+    # A PATCH with the now-stale tag must still 412 and not touch anything.
+    snap = entry_snapshot(patch_dn)
+    status, _, body = api.call('PATCH', '/api/users', {'dn': patch_dn, 'mail': 'stale@example.org'}, {'If-Match': patch_tag})
+    check(status == 412 and entry_snapshot(patch_dn) == snap, f'(e3) stale-tag PATCH is 412 and leaves the entry byte-identical (status={status})')
+
+    # -------------------------------------------------------------------------------------------------
     # (c) Force a genuinely refused compensation and observe 500 partial_failure response
     # -------------------------------------------------------------------------------------------------
     print('\n--- Executing (c): forcing genuinely refused compensation -> 500 partial_failure ---')
@@ -834,7 +1012,7 @@ userPassword: {sso_user_pw}
     check(tag2 != tag1, '(d) ETag moved after successful conditional write')
     check(body.get('attributes', {}).get('mail') == ['updated@example.org'], '(d) attributes updated in directory')
 
-    print('\nAll checks (a), (b), (c), (d) passed successfully!')
+    print('\nAll checks (a), (b), (c), (d), (e) passed successfully!')
   except BaseException:
     dump_container_logs()
     raise
