@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -114,7 +115,18 @@ func (x *machineExecutor) run(c echo.Context, p *machineauth.Principal, op machi
 // 503. A lost connection or an expired request deadline is an availability
 // problem of the execution step, not a bug in the handler, and the body of a
 // 5xx is static anyway.
+//
+// This is the one choke point for errors from a handler's own directory
+// operations (#288): they get the same deadline rule the dial/bind path has
+// (ldapclient.CtxOr), so a timeout-type failure at the request deadline is
+// audited as deadline, not upstream_error. Refused/reset/EOF stay as they are.
+// The original error is kept in the chain for the log.
 func machineDirectoryFailure(c echo.Context, err error) error {
+	if n := ldapclient.CtxOr(c.Request().Context(), err); !errors.Is(n, err) {
+		err = fmt.Errorf("%w: %w", n, err)
+	} else {
+		err = n
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		auditStateOf(c).setReason(reasonDeadline)
