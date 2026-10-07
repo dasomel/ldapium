@@ -98,7 +98,9 @@ func main() {
 	<-quit
 
 	stopJanitor()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	grace := shutdownGrace(cfg.Machine.Enabled, cfg.Machine.RequestTimeout)
+	log.Printf("shutting down, waiting up to %s for in-flight requests", grace)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
