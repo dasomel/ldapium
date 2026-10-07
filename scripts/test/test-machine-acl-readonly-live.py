@@ -2,18 +2,21 @@
 """Live read-only proof of the machine LDAP account's ACL (#214, staged unit 3).
 
 docs/changes/machine-principal-auth, T-015 / T-026 / AC-018, against real slapd.
-Applies the documented procedure (docs/machine-ldap-account.md) to THREE freshly
+Applies the documented procedure (docs/machine-ldap-account.md) to FOUR freshly
 initialised containers and proves, as the machine DN M with allowed subtree B:
 
   (a) LDAP_ANONYMOUS_READ_BASE unset
   (b) LDAP_ANONYMOUS_READ_BASE set (to B)
   (c) an operator added a leading allow rule (`{0}to attrs=description by users
       write`) before the machine rules were applied
+  (d) the replication identity's rule (LDAP_REPLICATION_IDENTITY=prepare, #229) already
+      sits at {0}: the machine rules go in at {1}-{3} (#277, D30)
 
 In each configuration:
   - the olcAccess read back after applying is exactly the three machine rules at
     {0}-{2} (text compared with the committed LDIF) followed by EVERY pre-existing
-    rule in its original order (the operator's extra rule included);
+    rule in its original order (the operator's extra rule included); in (d) the
+    replication rule stays {0} and the machine rules are exactly {1}-{3};
   - M binds, reads entries and attributes inside B, never sees userPassword,
     shadowLastChange, pwdHistory (or any attribute of the secret list) even with
     explicit requests, `*`, `+` or a filter on them, and sees nothing outside B
@@ -66,9 +69,9 @@ guide_path = repo_root / 'docs/machine-ldap-account.md'
 ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
 prefix = os.environ.get('LDAPIUM_TEST_PREFIX', 'ldapium-macl-')
 mutation = os.environ.get('LDAPIUM_ACL_MUTATE', '')
-only_configs = os.environ.get('LDAPIUM_ACL_CONFIGS', 'a,b,c').split(',')
-if not (set(only_configs) <= {'a', 'b', 'c'} and only_configs):
-  raise SystemExit('LDAPIUM_ACL_CONFIGS is a comma list of a, b, c')
+only_configs = os.environ.get('LDAPIUM_ACL_CONFIGS', 'a,b,c,d').split(',')
+if not (set(only_configs) <= {'a', 'b', 'c', 'd'} and only_configs):
+  raise SystemExit('LDAPIUM_ACL_CONFIGS is a comma list of a, b, c, d')
 run_id = uuid.uuid4().hex[:6]
 name_prefix = prefix + run_id
 
@@ -345,24 +348,34 @@ APPLY = ('sed -e "s|@MACHINE_DN@|$MACHINE_DN|g" -e "s|@ALLOWED_DN@|$ALLOWED_DN|g
          '-e "s|@MAIN_DB_DN@|$MAIN_DB_DN|g" | '
          'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin')
 
+# The documented apply command for a node whose replication identity rule sits at
+# {0} (#277): the same LDIF, shifted to {1}-{3} on its way in.
+SHIFT = ('sed -e "s|^olcAccess: {2}|olcAccess: {3}|" -e "s|^olcAccess: {1}|olcAccess: {2}|" '
+         '-e "s|^olcAccess: {0}|olcAccess: {1}|" | ')
+APPLY_SHIFTED = SHIFT + APPLY
+
 # The documented discovery of the main database's config DN (the guide pipes it
 # through `sed -n 's/^dn: //p'`).
 DISCOVER = 'ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -b cn=config "(olcSuffix=$ROOT_DN)" dn'
 
-# The documented rollback: refuse unless {0}-{2} are the machine rules, then
-# delete exactly those three indexes (highest first).
+# The documented rollback: the machine rules are {0}-{2}, or {1}-{3} when the
+# replication identity's rule is {0}; refuse unless exactly those three indexes
+# are the machine rules, then delete them (highest first).
 ROLLBACK = r'''
-n=$(ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no \
-      -b "$MAIN_DB_DN" -s base olcAccess \
-    | grep -c "^olcAccess: {[0-2]}.*dn.exact=\"$MACHINE_DN\"")
-if [ "$n" != 3 ]; then echo "refusing: {0}-{2} are not the machine rules" >&2; exit 1; fi
-printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {2}\nolcAccess: {1}\nolcAccess: {0}\n" "$MAIN_DB_DN" \
+acl=$(ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no \
+        -b "$MAIN_DB_DN" -s base olcAccess)
+o=0
+if printf "%s\n" "$acl" | grep -q "^olcAccess: {0}.*dn.exact=\"cn=replicator,$ROOT_DN\""; then o=1; fi
+n=$(printf "%s\n" "$acl" | grep -c "^olcAccess: {[$o-$((o+2))]}.*dn.exact=\"$MACHINE_DN\"")
+if [ "$n" != 3 ]; then echo "refusing: the three rules after the replication rule (or {0}-{2}) are not the machine rules" >&2; exit 1; fi
+printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {%s}\nolcAccess: {%s}\nolcAccess: {%s}\n" "$MAIN_DB_DN" $((o+2)) $((o+1)) $o \
   | ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin
 '''
 
 
 def proc_env(node):
-  return {'MACHINE_DN': machine_dn, 'ALLOWED_DN': allowed_dn, 'MAIN_DB_DN': node.main_db, 'CFG_URI': ldapi_uri}
+  return {'MACHINE_DN': machine_dn, 'ALLOWED_DN': allowed_dn, 'MAIN_DB_DN': node.main_db, 'CFG_URI': ldapi_uri,
+          'ROOT_DN': base_dn}
 
 
 # ---- seed data ---------------------------------------------------------------------
@@ -658,13 +671,23 @@ def other_dbs_rules(node):
   return res.stdout
 
 
+# The rule `LDAP_REPLICATION_IDENTITY=prepare` stores at {0} (image/entrypoint.sh, ri_acl).
+REPL_RULE = (f'to * by dn.exact="cn=replicator,{base_dn}" ssf=128 read '
+             f'by dn.exact="cn=replicator,{base_dn}" none by * break')
+
+
 def run_config(node, cfg, operator_rule):
-  print(f'=== configuration {cfg}: LDAP_ANONYMOUS_READ_BASE={node.anon_base or "(unset)"}, operator rule={operator_rule} ===', flush=True)
+  repl = cfg == 'd'  # the machine rules go in behind the replication rule: {1}-{3}
+  k = 1 if repl else 0
+  print(f'=== configuration {cfg}: LDAP_ANONYMOUS_READ_BASE={node.anon_base or "(unset)"}, operator rule={operator_rule}, replication rule={repl} ===', flush=True)
   node.start()
   seed(node)
   if operator_rule:
     res = node.cfg('ldapmodify', [], f'dn: {node.main_db}\nchangetype: modify\nadd: olcAccess\nolcAccess: {{0}}to attrs=description by users write\n')
     require(res.returncode == 0, 'operator rule: ' + mask(res.stderr))
+  if repl:
+    res = node.cfg('ldapmodify', [], f'dn: {node.main_db}\nchangetype: modify\nadd: olcAccess\nolcAccess: {{0}}{REPL_RULE}\n')
+    require(res.returncode == 0, 'replication rule: ' + mask(res.stderr))
 
   node.raw_before, rules = node.olc_access()
   node.rules_before = [re.sub(r'^\{\d+\}', '', r) for r in rules]
@@ -693,23 +716,25 @@ def run_config(node, cfg, operator_rule):
   other_before = other_dbs_rules(node)
 
   template = mutate(fixture_text('main-database.ldif')) if mutation else fixture_text('main-database.ldif')
-  res = node.sh(APPLY, template, proc_env(node))
+  res = node.sh(APPLY_SHIFTED if repl else APPLY, template, proc_env(node))
   require(res.returncode == 0, 'apply (documented procedure): ' + mask(res.stderr))
 
-  # Read back: the machine rules are {0}-{2}, then every old rule in its old order.
+  # Read back: the machine rules are {0}-{2} ({1}-{3} behind the replication rule), then every old rule in its old order.
   _, after_rules = node.olc_access()
   machine_values = [norm(re.sub('@MACHINE_DN@', machine_dn, re.sub('@ALLOWED_DN@', allowed_dn, v)))
                     for v in ldif_values(fixture_text('main-database.ldif'))]
-  expected_rules = [f'{{{i}}}{norm(v)}' for i, v in enumerate([re.sub(r'^\{\d+\}', '', mv) for mv in machine_values]
-                                                                 + [norm(r) for r in node.rules_before])]
+  old = [norm(r) for r in node.rules_before]
+  expected_rules = [f'{{{i}}}{norm(v)}' for i, v in enumerate(old[:k] + [re.sub(r'^\{\d+\}', '', mv) for mv in machine_values]
+                                                                 + old[k:])]
+  where = '{1}-{3} behind the replication rule at {0}' if repl else '{0}-{2}'
   check([norm(r) for r in after_rules] == expected_rules,
-        f'[{cfg}] olcAccess read back: machine rules are exactly {{0}}-{{2}}, then the {len(node.rules_before)} previous rules in order')
+        f'[{cfg}] olcAccess read back: machine rules are exactly {where}, then the {len(node.rules_before) - k} previous rules in order')
   if [norm(r) for r in after_rules] != expected_rules:
     for r in after_rules:
       print('  read back: ' + r[:150], flush=True)
-  check(len(after_rules) >= 3 and all(f'dn.exact="{machine_dn}"' in r for r in after_rules[:3])
-        and not any(f'dn.exact="{machine_dn}"' in r for r in after_rules[3:]),
-        f'[{cfg}] the three rules naming M occupy positions 0-2 and no other position')
+  check(len(after_rules) >= k + 3 and all(f'dn.exact="{machine_dn}"' in r for r in after_rules[k:k + 3])
+        and not any(f'dn.exact="{machine_dn}"' in r for r in after_rules[:k] + after_rules[k + 3:]),
+        f'[{cfg}] the three rules naming M occupy positions {k}-{k + 2} and no other position')
   check(other_dbs_rules(node) == other_before, f'[{cfg}] the monitor and accesslog databases\' own olcAccess are untouched')
 
   outside = machine_reads(node, cfg)
@@ -744,16 +769,17 @@ def main():
     check(any(significant(b) == want for b in blocks), f'operator guide contains the committed {name} verbatim')
 
   guide = norm(guide_path.read_text())
-  for label, script in (('apply', APPLY), ('discovery', DISCOVER), ('rollback', ROLLBACK)):
+  for label, script in (('apply', APPLY), ('shifted apply', APPLY_SHIFTED), ('discovery', DISCOVER), ('rollback', ROLLBACK)):
     check(norm(script) in guide, f'operator guide contains the {label} command exactly as this script runs it')
 
   outcomes = {}
-  for node, cfg, operator_rule in ((Node('a', ''), 'a', False), (Node('b', allowed_dn), 'b', False), (Node('c', ''), 'c', True)):
+  for node, cfg, operator_rule in ((Node('a', ''), 'a', False), (Node('b', allowed_dn), 'b', False), (Node('c', ''), 'c', True),
+                                   (Node('d', ''), 'd', False)):
     if cfg in only_configs:
       outcomes[cfg] = run_config(node, cfg, operator_rule)
-  for name in (outcomes['a'] if len(outcomes) == 3 else []):
-    same = outcomes['a'][name] == outcomes['b'][name] == outcomes['c'][name]
-    check(same, f'outside-B answer identical in (a), (b) and (c): {name}')
+  for name in (outcomes['a'] if len(outcomes) == 4 else []):
+    same = outcomes['a'][name] == outcomes['b'][name] == outcomes['c'][name] == outcomes['d'][name]
+    check(same, f'outside-B answer identical in (a), (b), (c) and (d): {name}')
 
 
 if __name__ == '__main__':

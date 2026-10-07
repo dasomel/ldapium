@@ -32,7 +32,7 @@
 | D25 | **핸들러 이전에 Go HTTP 서버가 거절한 요청(431, 잘못된 요청 줄, 헤더 timeout, TLS·HTTP/2 사전 오류)은 감사·접근·오류 로그 어디에도 남지 않는다.** 서버 계층 훅은 `Authorization`을 볼 수 없어 오해를 부르는 줄만 만들기 때문에 만들지 않는다 | 기록이 필요하면 ingress/프록시 접근 로그 |
 | D26–D29 | ACL 증명에서 확인: 비밀 속성 목록 8개, `cn=admin,cn=config` simple bind로 ACL 적용, 검색은 `B` 안에서 시작해야 함, 비밀번호 증명은 삭제+추가 형태(`pwdSafeModify`), `pwdLockout`으로 잘못된 bind 비밀번호가 계정을 잠금 | — |
 | D31–D32 | 구현 중 확정: IP 예약은 인증+실행 전체 동안 유지(TTL이 인증 deadline을 덮음), 명시한 `UI_TRUSTED_PROXIES` CIDR만 XFF를 신뢰(Echo 기본 사설망 신뢰 비활성) | — |
-| D30 | **미해결**: 머신 ACL은 `LDAP_REPLICATION_IDENTITY=prepare`와 함께 쓰지 않는다(`prepare`는 규칙이 `{0}`이어야 하고 머신 규칙이 `{0}`–`{2}`를 차지). 확인된 공존 순서는 복제 규칙 `{0}` + 머신 규칙 `{1}`–`{3}`이며 구현은 TASKS T-034 | T-034 |
+| D30 | **해결(#277)**: 복제 신원 규칙 `{0}` + 머신 규칙 `{1}`–`{3}` + 이미지 규칙. 두 설치 순서(prepare 후 5.1 / 머신 규칙 후 prepare)가 같은 배치로 수렴, prepare의 "첫 값" 검사는 그대로. 머신 롤백은 오프셋을 감지, 신원 롤백은 `{0}`과 olcLimits 삭제 | T-034 |
 
 ## Compatibility and rollback
 
