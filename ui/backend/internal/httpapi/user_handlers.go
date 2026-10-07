@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -153,10 +154,28 @@ func (s *Server) handleSetPassword(c echo.Context) error {
 		}
 	}
 
-	generated, err := currentSession(c).Bound.SetPassword(c.Request().Context(), req.DN, req.OldPassword, req.Password)
+	sess := currentSession(c)
+	limiterKey := sess.ID + "\x00" + normalizeDN(req.DN)
+	allowed, retryAfter, finish := s.passwordLimiter.begin(limiterKey)
+	if !allowed {
+		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
+		logPasswordRateLimitEvent(requestIDOf(c), sess.ID, req.DN)
+		// D266: 429 for repeated wrong current password
+		return apiErr(http.StatusTooManyRequests, "password_change_rate_limited", "too many failed password change attempts")
+	}
+
+	// finish is idempotent: the deferred call settles the in-flight slot if
+	// SetPassword panics (echo's Recover turns that into a 500), so a panic can
+	// never leave the key blocked until restart.
+	defer finish("other")
+	generated, err := sess.Bound.SetPassword(c.Request().Context(), req.DN, req.OldPassword, req.Password)
 	if err != nil {
+		if errors.Is(err, domain.ErrCurrentPasswordRejected) {
+			finish("rejected")
+		}
 		return respondErr(c, err)
 	}
+	finish("success")
 	return c.JSON(http.StatusOK, setPasswordResponse{GeneratedPassword: generated})
 }
 

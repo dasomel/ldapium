@@ -346,6 +346,10 @@ spec:
               value: {{ .Values.ui.session.loginFailureLimit | quote }}
             - name: UI_LOGIN_FAILURE_WINDOW
               value: {{ .Values.ui.session.loginFailureWindow | quote }}
+            - name: UI_PASSWORD_CHANGE_FAILURE_LIMIT
+              value: {{ .Values.ui.session.passwordChangeFailureLimit | quote }}
+            - name: UI_PASSWORD_CHANGE_FAILURE_WINDOW
+              value: {{ .Values.ui.session.passwordChangeFailureWindow | quote }}
             - name: UI_TRUSTED_PROXIES
               value: {{ .Values.ui.trustedProxies | quote }}
             {{- if .Values.ui.cors.allowedOrigins }}

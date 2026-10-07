@@ -120,3 +120,32 @@ func fingerprintIdentity(identity string) string {
 func requestIDOf(c echo.Context) string {
 	return c.Response().Header().Get(echo.HeaderXRequestID)
 }
+
+// passwordEvent is the structured record emitted when a password-change
+// request is rate-limited.
+type passwordEvent struct {
+	Event              string `json:"event"`
+	Result             string `json:"result"`
+	RequestID          string `json:"request_id"`
+	SessionFingerprint string `json:"session_fingerprint"`
+	TargetFingerprint  string `json:"target_fingerprint"`
+	Reason             string `json:"reason,omitempty"`
+}
+
+// logPasswordRateLimitEvent writes a structured event for a rate-limited
+// password change.
+func logPasswordRateLimitEvent(requestID, sessionID, targetDN string) {
+	line, err := json.Marshal(passwordEvent{
+		Event:              "password_change",
+		Result:             authResultRateLimited,
+		RequestID:          requestID,
+		SessionFingerprint: fingerprintIdentity(sessionID),
+		TargetFingerprint:  fingerprintIdentity(targetDN),
+		Reason:             "too_many_failures",
+	})
+	if err != nil {
+		log.Printf("password event marshal error: %v", err)
+		return
+	}
+	log.Println(string(line))
+}

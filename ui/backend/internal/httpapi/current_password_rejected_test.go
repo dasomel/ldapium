@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -26,7 +27,9 @@ func (c setPasswordErrClient) SetPassword(context.Context, string, string, strin
 
 func postPassword(t *testing.T, err error) *httptest.ResponseRecorder {
 	t.Helper()
-	s := &Server{}
+	s := &Server{
+		passwordLimiter: newPasswordLimiter(10, time.Minute, 100),
+	}
 	body := `{"dn":"uid=alice,ou=people,dc=example,dc=org","oldPassword":"old","password":"NewSecret123!x"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/users/password", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -88,7 +91,7 @@ func TestSetPassword_OldPasswordWithEmptyNewPasswordNeverReachesTheDirectory(t *
 	c := echo.New().NewContext(req, rec)
 	rec.Header().Set(echo.HeaderXRequestID, "RID264")
 	c.Set(sessionContextKey, &session.Session{ID: "s", DN: leakDN, Bound: countingSetPasswordClient{&fakeLoginClient{}, &calls}})
-	err := (&Server{}).handleSetPassword(c)
+	err := (&Server{passwordLimiter: newPasswordLimiter(10, time.Minute, 100)}).handleSetPassword(c)
 	he, ok := err.(*echo.HTTPError)
 	if !ok || he.Code != http.StatusBadRequest {
 		t.Fatalf("got %v (rec %d), want a 400 HTTPError", err, rec.Code)

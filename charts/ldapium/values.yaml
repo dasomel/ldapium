@@ -704,6 +704,14 @@ ui:
     #    applies over (Go duration syntax).
     loginFailureWindow: 1m
 
+    # -- UI_PASSWORD_CHANGE_FAILURE_LIMIT: failed POST /api/users/password attempts
+    #    (wrong current password) allowed per session+DN within the window before
+    #    a 429 is returned. 0 disables the limiter. In-memory and per-pod.
+    passwordChangeFailureLimit: 10
+    # -- UI_PASSWORD_CHANGE_FAILURE_WINDOW: the sliding window passwordChangeFailureLimit
+    #    applies over (Go duration syntax).
+    passwordChangeFailureWindow: 1m
+
   # -- UI_TRUSTED_PROXIES: how the login limiter resolves a request's client
   #    IP. "private" (default) trusts loopback/link-local/private-network
   #    hops ahead of the client, matching an in-cluster ingress — Echo walks

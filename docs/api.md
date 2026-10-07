@@ -268,6 +268,7 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 |---|---|
 | `GET /api/users`, `/api/groups` | 파라미터 없음: 최대 5000건, 초과 시 `truncated: true`. `limit`/`cursor`/`q`/`sort`를 보내면 커서 모드: 페이지당 `limit` 1-200 (기본 50), 순회 길이 제한 없음([목록 페이지네이션](#목록-페이지네이션-users-groups)) |
 | `GET /api/audit/actions` | `limit` 1-200 (기본 50), `before`에 이전 응답의 `nextBefore` |
+| `POST /api/users/password` | `current_password_rejected` 연속 발생 시 세션+DN 단위 429 (`Retry-After`), 차단 중에는 올바른 암호도 429로 거부되며 윈도우 통과 후 성공 시 초기화. (`UI_PASSWORD_CHANGE_FAILURE_LIMIT`, `UI_PASSWORD_CHANGE_FAILURE_WINDOW`, 기본 10회/1m) |
 | 로그인 | IP별 실패 횟수 제한, 초과 시 429 + `Retry-After` |
 | 요청 본문 | 프로필 64KiB, 방식/연결 32KiB, 정책/역할 작업/미리보기 16KiB |
 | 매핑 미리보기 | `claim_values` 최대 100개 |

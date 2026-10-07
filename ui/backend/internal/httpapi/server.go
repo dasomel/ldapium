@@ -28,15 +28,16 @@ import (
 // plain struct (not a global) so tests can construct one with a fake
 // Dialer and an isolated Store.
 type Server struct {
-	backups      *backup.Manager
-	kc           *keycloak.Client
-	profiles     *appprofile.Store
-	echo         *echo.Echo
-	cfg          config.Config
-	dialer       ldapclient.Dialer
-	sessions     *session.Store
-	sso          *oidcAuthenticator
-	loginLimiter *loginLimiter
+	backups         *backup.Manager
+	kc              *keycloak.Client
+	profiles        *appprofile.Store
+	echo            *echo.Echo
+	cfg             config.Config
+	dialer          ldapclient.Dialer
+	sessions        *session.Store
+	sso             *oidcAuthenticator
+	loginLimiter    *loginLimiter
+	passwordLimiter *passwordLimiter
 	// metrics is a no-op until EnableMetrics replaces it (see metrics.go).
 	metrics metrics.Recorder
 	// idem is the in-memory Idempotency-Key store (nil unless
@@ -62,12 +63,13 @@ func New(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, s
 
 func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.Store, spa fs.FS, opts ...serverOption) (*Server, error) {
 	s := &Server{
-		echo:         echo.New(),
-		cfg:          cfg,
-		dialer:       dialer,
-		sessions:     sessions,
-		loginLimiter: newBoundedLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow, cfg.LoginLimiterMaxEntries),
-		metrics:      metrics.Nop{},
+		echo:            echo.New(),
+		cfg:             cfg,
+		dialer:          dialer,
+		sessions:        sessions,
+		loginLimiter:    newBoundedLoginLimiter(cfg.LoginFailureLimit, cfg.LoginFailureWindow, cfg.LoginLimiterMaxEntries),
+		passwordLimiter: newPasswordLimiter(cfg.PasswordChangeFailureLimit, cfg.PasswordChangeFailureWindow, cfg.PasswordChangeLimiterMaxEntries),
+		metrics:         metrics.Nop{},
 	}
 	for _, opt := range opts {
 		opt(s)
