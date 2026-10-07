@@ -1,0 +1,105 @@
+name: Machine bearer auth E2E (real Keycloak)
+
+# Live proof of machine bearer authentication (#214, change package
+# docs/changes/machine-principal-auth, T-021/T-022/T-025/T-027/T-028) against a REAL
+# Keycloak, a real slapd and the real UI backend, on one plain docker network (no kind):
+#   - test-machine-keycloak-live.py: both UI auth modes, every allowed operation, the
+#     invalid-token and never-allowed-operation matrices with slapd bind counts, JWKS outage,
+#     rate limits, secret values with an over-privileged bind, secret scan of all logs.
+#   - test-machine-keycloak-settings-live.py: the Keycloak client settings an operator must
+#     apply (lightweight tokens, scopes, token exchange incl. the legacy feature, human tokens).
+#   - test-machine-jwks-live.py: key rotation with overlap, floods, hostile issuer responses and
+#     discovery recovery behind a counting proxy in front of Keycloak.
+#   - test-machine-revocation-drill.py: emergency revocation and rollback across replicas.
+# It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
+
+on:
+  # No paths filter, deliberately: release-critical checks must always report
+  # (see e2e.yml for why a path-filtered check can block merging).
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: machine-keycloak-e2e-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/schedule/dispatch
+  # runs are grouped per commit SHA and never cancel each other. Grouping
+  # main pushes by ref once let an older commit's late run cancel or
+  # displace HEAD's run, losing checks release.yml requires (2026-09-24).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Exact tag, per this repo's own pinning convention for third-party images and the same one
+  # keycloak-federation-e2e.yml uses: "latest"/"nightly" would make a failure here ambiguous
+  # between "this integration broke" and "upstream changed under us". The scripts read it from
+  # KEYCLOAK_IMAGE.
+  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.7.4
+  LDAPIUM_IMAGE: ldapium:machine-e2e
+  LDAPIUM_UI_IMAGE: ldapium-ui:machine-e2e
+
+jobs:
+  machine-keycloak:
+    name: machine bearer auth (real Keycloak)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale (why throttle, why
+    # queue: max instead of the default queue: single).
+    concurrency:
+      group: heavy-e2e-lane-b-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build server image
+        run: docker build -t "$LDAPIUM_IMAGE" image
+
+      - name: Build UI image
+        run: docker build -t "$LDAPIUM_UI_IMAGE" ui
+
+      - name: Pull the pinned Keycloak image
+        run: docker pull "$KEYCLOAK_IMAGE"
+
+      - name: Machine auth, both UI modes (valid, invalid and never-allowed matrices, outage, limits, secret scan)
+        run: python3 scripts/test/test-machine-keycloak-live.py
+
+      - name: Keycloak client settings (positive and negative, token exchange, lightweight, human tokens)
+        run: python3 scripts/test/test-machine-keycloak-settings-live.py
+
+      - name: JWKS rotation, floods, hostile issuer responses, discovery recovery (counting proxy)
+        run: python3 scripts/test/test-machine-jwks-live.py
+
+      - name: Emergency revocation and rollback drill (two replicas per revision)
+        run: python3 scripts/test/test-machine-revocation-drill.py
+
+      # The scripts remove their own containers, volumes and networks even on failure (and print
+      # scrubbed container logs first). The runner is fresh per job, so anything left under these
+      # prefixes belongs to this run: list it and fail. `if: always()` makes it run after an earlier
+      # failure; it fails on its own findings only, so it never hides that earlier failure.
+      - name: Fail on leftover docker objects
+        if: always()
+        run: |
+          set -u
+          leaks=0
+          for kind in "ps -a" "volume ls" "network ls"; do
+            case "$kind" in
+              "ps -a") fmt='{{.Names}} {{.Status}}' ;;
+              *) fmt='{{.Name}}' ;;
+            esac
+            # shellcheck disable=SC2086
+            out=$(docker $kind --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --format "$fmt")
+            if [ -n "$out" ]; then
+              echo "::error::leftover docker objects ($kind):"
+              echo "$out"
+              leaks=1
+            fi
+          done
+          [ "$leaks" -eq 0 ]
