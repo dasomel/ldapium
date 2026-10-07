@@ -555,12 +555,12 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 | `REQ-010` | AC-011 | T-018(#270 의존), T-020, T-021 | `h/machine_limiter_test.go`(경계 표), execution-live, keycloak-live | MET(replica별) |
 | `REQ-011` | AC-002, AC-012 | T-011, T-020 | `m/verifier_test.go` `TestVerify_TimeBoundaries` | MET |
 | `REQ-012` | AC-013 | T-014, T-020 | `h/machine_contract_test.go`, `jq` | MET |
-| `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 꺼짐 단위 테스트 4종, `scripts/test/test-chart-machine-auth.sh`, 드릴 (c) | MET(클러스터 설치 미실행 #284) |
+| `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 꺼짐 단위 테스트 4종, `scripts/test/test-chart-machine-auth.sh`, 드릴 (c) | MET(kind 설치 실행 #284, EVIDENCE §8; 발급자 stand-in) |
 | `REQ-014` | AC-010 | T-017, T-021 | `TestMachineAudit_NoTokenMaterialInLogsOrResponses`, 로그 스캔 | MET |
 | `REQ-015` | AC-005, AC-015 | T-040, T-021 | `TestDNWithinBase`, `TestMachineGuard_*`, keycloak-live | MET |
 | `REQ-016` | AC-008, AC-016 | T-010, T-019, T-025 | `m/keyset_test.go`, `TestHTTPFetcher_Limits`, jwks-live | MET |
 | `REQ-017` | AC-017 | T-041, T-021 | `h/machine_boundary_test.go` `TestMachineCursor_Isolation` | MET |
-| `REQ-018` | AC-019 | T-027, T-030, T-032 | `test-machine-revocation-drill.py` 18 검사, `docs/machine-auth-operations.md` | MET(#280, #284) |
+| `REQ-018` | AC-019 | T-027, T-030, T-032 | `test-machine-revocation-drill.py` 18 검사, `docs/machine-auth-operations.md` | MET(#280; Helm 교체 kind 실행 #284, EVIDENCE §8) |
 
 ## Review record
 
@@ -755,12 +755,12 @@ Documentation and proof only: the operator guide [machine-ldap-account.md](../..
 | 010 | MET(replica별) | `machine_limiter_test.go`(`TestMachineIPThrottle_BoundaryN`·`_InclusiveWindowEdge`·`_ReleasedOnEveryExitPath`·`_TensOfThousandsOfIPsStayWithinDefaultCap`, `TestMachineOrdering_*`, `TestMachineClientBudget_*`), `machine_limiter_ttl_test.go`, `machine_limiter_panic_test.go` → `test-machine-execution-live.py`(소한도 컨테이너), keycloak-live(client 429·위조 XFF) |
 | 011 | MET | `machineauth` `TestVerify_TimeBoundaries`, `config` `TestMachine_BoundaryAccepted` |
 | 012 | MET | `machine_contract_test.go` 계약 테스트 5종 + `jq` 집계 |
-| 013 | MET(제한: #284) | `TestMachine_FeatureOffIgnoresBearer`·`config` `TestMachine_DefaultOffParsesNothing`·`TestMachineLimits_AbsentWhenFeatureOff`·`TestMachineAudit_FeatureOffEmitsNothing`, `scripts/test/test-chart-machine-auth.sh`(40 PASS; 꺼짐 렌더가 origin/main과 바이트 동일은 T-016 기록) → 드릴 (c). 클러스터 설치는 실행하지 않음 |
+| 013 | MET(제한: 발급자 stand-in) | `TestMachine_FeatureOffIgnoresBearer`·`config` `TestMachine_DefaultOffParsesNothing`·`TestMachineLimits_AbsentWhenFeatureOff`·`TestMachineAudit_FeatureOffEmitsNothing`, `scripts/test/test-chart-machine-auth.sh`(40 PASS; 꺼짐 렌더가 origin/main과 바이트 동일은 T-016 기록) → 드릴 (c). kind 설치 실행(#284): `machineAuth.enabled=false` → bearer 401 `unauthenticated`(EVIDENCE §8) |
 | 014 | MET | `TestMachineAudit_NoTokenMaterialInLogsOrResponses`, 차트 `secretKeyRef`만(`ui-deployment.yaml`, 차트 테스트), 로그 스캔 0건 |
 | 015 | MET | `TestDNWithinBase`·`TestMachineGuard_*`·`TestMachineMonitor_AccessLogOnlyWithAuditRead` → keycloak-live·execution-live(accesslog/config/Monitor DN 403·LDAP 연결 0) |
 | 016 | MET | `TestKeySet_*`·`TestHTTPFetcher_Limits`·`config` `TestMachine_InsecureHTTPException` → jwks-live(A–E) |
 | 017 | MET | `machine_boundary_test.go` `TestMachineCursorBinding`·`TestMachineCursor_Isolation` → keycloak-live(client 간·사람↔머신) |
-| 018 | MET(제한: #280, #284) | `test-machine-revocation-drill.py`(18 검사: 비활성화 후 구토큰 통과, allowlist 제거 후 교체·옛 컨테이너 0·같은 토큰 401, 진행 중 요청 정상 종료, 기능 off), [machine-auth-operations.md](../../machine-auth-operations.md) |
+| 018 | MET(제한: #280, 발급자 stand-in) | `test-machine-revocation-drill.py`(18 검사: 비활성화 후 구토큰 통과, allowlist 제거 후 교체·옛 컨테이너 0·같은 토큰 401, 진행 중 요청 정상 종료, 기능 off), [machine-auth-operations.md](../../machine-auth-operations.md) |
 
 ### 수용 시나리오 AC-001–019
 
@@ -776,7 +776,7 @@ Documentation and proof only: the operator guide [machine-ldap-account.md](../..
 | 008 | MET | `TestKeySet_A…H`, `_E_StaleBoundary` | jwks-live (D), keycloak-live JWKS 중단(캐시 kid 200·미지 kid 503+`Retry-After: 30`·복구) |
 | 009 | MET | `config` 변형 테스트, `TestMachineExec_DeadlineBoundsBindAndSearch`·`_SlotIsTakenBeforeBind`·`_ClientCancelReleasesConnectionAndSlot`, `ldapclient` `TestBindHonoursContextDeadline`·`TestStartTLSHandshakeHonoursContextDeadline` | execution-live: 지연 프록시, 중단 50건 후 `cn=Monitor` 기준선 복귀; keycloak-live: 잘못된 비밀번호 503 |
 | 010 | MET | `TestMachineAudit_*`(조기 반환 13행, `_RateRows`) | 라이브는 허용·검증 실패·scope 거부 3행만, 나머지 행은 단위(알려진 한계) |
-| 011 | MET | `machine_limiter_test.go` 경계 표 전 행, `machine_limiter_exit_test.go` | execution-live·keycloak-live. 실제 프록시 뒤 XFF는 미실행(#284); 명시 CIDR 신뢰 오류는 #282로 수정 |
+| 011 | MET | `machine_limiter_test.go` 경계 표 전 행, `machine_limiter_exit_test.go` | execution-live·keycloak-live. ingress 뒤 XFF는 kind에서 실행(#284, EVIDENCE §8: 기본 ingress 6×401 후 7번째 429, `use-forwarded-headers=true`는 위조 XFF로 429 회피 — 음성 대조, `proxy-real-ip-cidr` 제한 시 유지); 명시 CIDR 신뢰 오류는 #282로 수정 |
 | 012 | MET(대체) | `TestVerify_TimeBoundaries` 경계 표 | 실제 만료는 기본 300 s가 아니라 3 s 수명 client + skew 0 컨테이너로 확인(문서화된 대체) |
 | 013 | MET | `machine_contract_test.go`, `TestOpenAPIMachineBearerEqualsCodeAllowlist` | `jq`: 8/37/8/53 |
 | 014 | MET | `TestMachine_FeatureOffIgnoresBearer`(401 `not logged in`), 꺼짐 전용 테스트 3종 | 드릴 (c). 기존 e2e 무변경 통과는 PR #281 헤드 `d41d338`에서 `E2E (kind)` 37555431568·`UI E2E (browser)` 37555431582·`UI fixture E2E (docker)` 37555431580·`API + credentials E2E (docker)` 37555431684·`CI` 37555431545 모두 success, main 병합 커밋에서는 `CI` 37557393337·`UI E2E (browser)` 37557393384·`API + credentials E2E (docker)` 37557393386 success(EVIDENCE §7.4) |
@@ -784,7 +784,7 @@ Documentation and proof only: the operator guide [machine-ldap-account.md](../..
 | 016 | MET | `TestKeySet_A_RandomKidFlood`…`_G_Rotation`, `TestHTTPFetcher_Limits` | jwks-live: 위조 3,080건 → 조회 0, 무작위 kid 24,196건/65 s → 조회 3(상한 4) |
 | 017 | MET | `TestMachineCursorBinding`, `TestMachineCursor_Isolation` | keycloak-live |
 | 018 | MET | — | `test-machine-acl-readonly-live.py`: 세 구성 `349 checks passed, 0 failed`, 변이 11종 전부 탐지 |
-| 019 | MET(docker replica) | — | `test-machine-revocation-drill.py` 18 검사. Helm/pod 교체는 아님(#284), 10 s 초과 요청 종료는 #280 |
+| 019 | MET(docker replica) | — | `test-machine-revocation-drill.py` 18 검사. Helm/pod 교체는 kind에서 실행(#284, EVIDENCE §8), 10 s 초과 요청 종료는 #280 |
 
 ### #214 판정
 
@@ -795,7 +795,7 @@ Documentation and proof only: the operator guide [machine-ldap-account.md](../..
 - **#277 / T-034 / D30** — 해결: 복제 신원 규칙 `{0}` + 머신 규칙 `{1}`–`{3}`, 두 설치 순서와 독립 롤백([machine-ldap-account.md](../../machine-ldap-account.md) 5.1·11·12절, 시험 `test-machine-acl-with-identity.sh`).
 - **#280** — 정상 종료 대기가 10 s 고정이라 `MACHINE_REQUEST_TIMEOUT` > 10 s이면 교체 시 긴 요청이 끊긴다(기본값 10 s에서는 드릴이 통과).
 - **#266** — 사람 세션 현재 비밀번호 시도 무제한(머신 경로와 무관한 기존 한계).
-- **#284(신규)** — `ui.machineAuth`는 차트 렌더·kubeconform까지만 증명, 클러스터 설치·실제 ingress XFF·Helm replica 교체·다중 노드 ACL은 미실행.
+- **#284** — 해결(PR #302 스크립트, #306 워크플로; EVIDENCE §8): kind에서 클러스터 설치·ingress XFF·Helm replica 교체·다중 노드 ACL을 실행했다(42 검사 ALL PASS, GitHub Actions 37630937041 success). 수용된 한계: 발급자는 stand-in(nginx 정적 discovery+JWKS, openssl 서명 — 실제 Keycloak은 `machine-keycloak-e2e.yml`), kind에서 진행 중 요청 미실행(docker 드릴과 #280 종료 시험이 담당), 각 bearer 호출을 처리한 LDAP pod 미검증, INT/TERM/HUP 정리 미검증, post-renderer Helm 3 경로 미검증.
 - **#285(신규)** — 머신 쓰기 scope(비목표). **#286(신규)** — 즉시 폐기(introspection)·API key·mTLS(비목표). **#287(신규)** — 앱 내 API 문서 화면이 머신 호출 가능 표시를 안 함(표시 문제).
 - subtree 단위 권한은 별도 패키지 [oidc-organization-authorization](../oidc-organization-authorization/CHANGE.md)의 몫이다.
 - 구조적 한계: D25(핸들러 이전 서버 거절은 로그 없음, ingress 로그 필요), limiter는 replica별, `audit.read`·`server.settings.read`는 기본 꺼짐, 백오프 기저는 `MIN_REFRESH`(기본값에서만 30 s→5 m와 동일, EVIDENCE §5.3).

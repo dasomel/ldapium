@@ -109,7 +109,7 @@
       **Close-out audit(2026-10-07)**: 위 "5a 병합 뒤 갱신" 의무를 이 감사가 이행했다 — `docs/IMPLEMENTATION-STATUS.md`의 머신 절을 라이브 검증·단위만·미검증으로 다시 썼고(5a 병합 반영), ADR.md의 상태·"Not verified" 절을 갱신했다.
 - [x] `T-032` 릴리스 노트, 롤백·긴급 차단(`MACHINE_AUTH_ENABLED=false`/allowlist 제거 + 전 replica 교체), 호환성(기존 경로·OpenAPI additive) 기록.
       **구현 단위 5b**: `CHANGELOG.md` [Unreleased]에 기능 전체 릴리스 노트(추가적·기본 꺼짐·켜기 위한 조건·롤백·긴급 차단·알려진 한계·미검증), [machine-auth-operations.md](../../machine-auth-operations.md)에 절차(Keycloak 비활성화는 발급 토큰을 폐기하지 않음 명시). 절차의 라이브 드릴은 T-027(5a)이며 미실행이다.
-      **Close-out audit(2026-10-07)**: 위 "절차의 라이브 드릴은 … 미실행이다"는 5a 이전 서술이다. 드릴은 `test-machine-revocation-drill.py`(T-027, 18 검사, CI 실행 37557393281)로 실행됐다(docker replica 기준; Helm/pod는 #284). `CHANGELOG.md`의 같은 취지 문장도 갱신했다.
+      **Close-out audit(2026-10-07)**: 위 "절차의 라이브 드릴은 … 미실행이다"는 5a 이전 서술이다. 드릴은 `test-machine-revocation-drill.py`(T-027, 18 검사, CI 실행 37557393281)로 실행됐다(docker replica 기준; Helm/pod 교체는 이후 #284에서 kind로 실행, EVIDENCE §8). `CHANGELOG.md`의 같은 취지 문장도 갱신했다.
 - [ ] `T-033` 포트폴리오/OpenForge 상태 영향 검토 및 검증 완료 후 게시.
       **검토 결과(5b, 문서만, 2026-10-07)**: (1) 다운스트림 SDK·소비자 저장소 없음(T-001), `llms.txt`는 단위 1·4에서 이미 동기화돼 현재 문서와 일치. (2) 영향 있는 외부 기록은 OpenForge 공개 상태 한 곳이다: 상태는 사람이 `.github/workflows/publish-openforge-status.yml`(`workflow_dispatch`, `OPENFORGE_STATUS_TOKEN` 필요)로 게시한다. (3) 지금 게시하지 않는다 — 이 기능은 라이브 Keycloak e2e·CI 게이트(5a)가 병합되기 전이고 #214가 열려 있어 `implemented`로 올릴 근거가 없다. **외부 조치(수행하지 않음, 유지보수자 몫)**: 5a 병합 + 라이브 e2e 녹색 + 릴리스 후, 위 워크플로를 `development_status`(그때의 검증된 상태)와 `milestone`(예: "machine bearer API auth, read-only, default off")으로 실행. 이 항목은 그때까지 열어 둔다.
       **Close-out audit(2026-10-07)**: **열린 채 유지(체크하지 않음)**. 외부 조치이며 이 저장소 안에서 끝낼 수 없다. 소유자: 유지보수자 dasomel(`OPENFORGE_STATUS_TOKEN` 보유자). 전제: **이 close-out 감사 PR이 병합된 뒤**(감사가 `implemented`로 올릴 근거를 제공한다). 이 시점에 단위 5a는 병합됐고(#281) 라이브 e2e는 PR 헤드에서 success(실행 37555431534)였다. 실행: `.github/workflows/publish-openforge-status.yml`(`workflow_dispatch`)을 그때의 검증된 `development_status`와 `milestone`(예: "machine bearer API auth, read-only, default off")으로 실행. 이 감사는 게시를 수행하지 않았다.
@@ -124,7 +124,7 @@
 - **opt-in scope는 기본으로 꺼져 있다** — `audit.read`·`server.settings.read`는 서버의 client 상한에 명시한 경우에만 동작하고, `audit.read`는 accesslog DB의 opt-in ACL이 따로 필요하다. `server.monitor.read`의 accesslog 부분도 `audit.read`가 없으면 비어 있다.
 - **graceful shutdown은 10초 고정** — `ui/backend/cmd/server/main.go`가 종료 시 진행 요청을 최대 10초만 기다린다. 차트는 `terminationGracePeriodSeconds`를 `max(30, 요청 timeout+5)`로 두지만 `MACHINE_REQUEST_TIMEOUT`이 10초를 넘으면 pod 종료 때 10초 넘은 요청이 끊긴다. 긴급 차단 절차 문서에 적었고 코드 변경은 후속 이슈 **#280**으로 추적한다.
 - **limiter는 replica별** — 한도는 전역이 아니다. 공유 limiter는 ingress/게이트웨이 계층의 일.
-- **미실행(close-out 갱신)** — 라이브 Keycloak e2e·release 게이트·긴급 차단 드릴·공유 client scope 오염 가설은 5a(#281)에서 실행·해소됐다(EVIDENCE §5). 여전히 미실행: 다중 노드·복제·Kubernetes에서의 ACL 적용, 실제 프록시(ingress) 뒤 XFF 위조, 실제 클러스터 설치와 Helm replica 교체 — 후속 이슈 **#284**.
+- **미실행(close-out 갱신)** — 라이브 Keycloak e2e·release 게이트·긴급 차단 드릴·공유 client scope 오염 가설은 5a(#281)에서 실행·해소됐다(EVIDENCE §5). #284(PR #302·#306)에서 kind로 실행·증명됐다(다중 노드 ACL, ingress 뒤 XFF와 위조 음성 대조, 클러스터 설치, Helm replica 교체; EVIDENCE §8). 수용된 한계: 발급자는 stand-in(실제 Keycloak 아님), kind에서 진행 중 요청 미실행, 각 bearer 호출을 처리한 LDAP pod 미검증, 시그널(INT/TERM/HUP) 정리 미검증, Helm 3의 post-renderer 경로 미검증.
 - **비목표의 후속(close-out 신규 이슈)** — 머신 쓰기 scope **#285**, 즉시 폐기·introspection·API key·mTLS **#286**, 앱 내 API 문서 화면의 머신 호출 가능 표시 **#287**. subtree 단위 권한은 [oidc-organization-authorization](../oidc-organization-authorization/CHANGE.md) 패키지의 몫이다.
 
 ## Completion review

@@ -43,5 +43,5 @@
 ## Not verified
 
 - (ADR 작성 시점의 "라이브 e2e 미병합"은 해소됨) 실제 Keycloak 라이브 e2e(양·음성 토큰, 키 회전·폭주, 긴급 차단 드릴)는 #281로 병합돼 CI job `machine bearer auth (real Keycloak)`로 실행된다([EVIDENCE §5](EVIDENCE.md)). 기본값 1 h의 STALE/EXPIRED 행과 시나리오 a–h의 정확한 조회 횟수는 fake clock 단위 시험에만 근거한다.
-- 다중 노드·복제·Kubernetes에서의 ACL 적용, 실제 프록시 뒤 XFF 위조, 실제 클러스터 설치는 실행하지 않았다(후속 #284).
+- 다중 노드·복제·Kubernetes에서의 ACL 적용, 실제 프록시 뒤 XFF 위조, 실제 클러스터 설치는 실행하지 않았다. 이후 #284(PR #302·#306)에서 kind 클러스터로 실행했다: 다중 노드 ACL, ingress 뒤 XFF(위조 음성 대조 포함), Helm 설치·replica 교체 — [EVIDENCE.md §8](EVIDENCE.md). 남은 수용된 한계: 발급자는 stand-in(실제 Keycloak 아님), 진행 중 요청은 kind에서 미실행.
 - (해소) 공유 client scope에 audience mapper를 둔 경우의 SSO 토큰 오염은 5a에서 실행했고 401임을 확인했다([EVIDENCE §5.3](EVIDENCE.md)).
