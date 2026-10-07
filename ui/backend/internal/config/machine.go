@@ -21,6 +21,9 @@ import (
 // nothing reads them yet.
 type MachineConfig struct {
 	Enabled bool
+	// WriteEnabled is MACHINE_WRITE_ENABLED (machine-write-scope D1). It is
+	// always false in this unit: loadMachineWrite refuses to start with it on.
+	WriteEnabled bool
 
 	// IssuerURL must be https, except under InsecureHTTP (local test only).
 	IssuerURL    string
@@ -61,10 +64,10 @@ type MachineClient struct {
 	Scopes []string
 }
 
-// MachineScopes is the closed set of scopes the server understands (D3,
-// "v1 operation classification"). httpapi's operation allowlist must use
-// exactly these names; a contract test enforces it.
-var MachineScopes = []string{
+// MachineReadScopes are the scopes of the v1 read allowlist (D3, "v1 operation
+// classification"). httpapi's operation allowlist must use exactly these names;
+// a contract test enforces it.
+var MachineReadScopes = []string{
 	"directory.users.read",
 	"directory.groups.read",
 	"directory.tree.read",
@@ -74,6 +77,28 @@ var MachineScopes = []string{
 	"audit.read",
 	"server.settings.read",
 }
+
+// MachineWriteScopes is the write scope vocabulary (machine-write-scope D7: one
+// scope per operation, no wildcard). T-010 only declares the names: no write
+// operation is open yet, so a client ceiling naming one is refused at startup
+// (parseMachineClients) instead of being silently accepted and doing nothing.
+var MachineWriteScopes = []string{
+	"directory.users.create",
+	"directory.users.update",
+	"directory.users.delete",
+	"directory.users.lock",
+	"directory.users.unlock",
+	"directory.groups.create",
+	"directory.groups.update",
+	"directory.groups.delete",
+	"directory.groups.members.add",
+	"directory.groups.members.remove",
+	"directory.users.password.write",
+}
+
+// MachineScopes is the closed set of scopes the server understands: the read
+// scopes followed by the write vocabulary (D7).
+var MachineScopes = append(append([]string(nil), MachineReadScopes...), MachineWriteScopes...)
 
 // builtinRootDNs are the rootdns of the image's other databases (monitor,
 // accesslog, config); they are always compared against the machine bind DN
@@ -101,10 +126,16 @@ func loadMachine(getenv func(string) string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	// machine-write-scope D1/D10: the write switch is separate from v1 and, when
+	// off, no other MACHINE_WRITE_* variable is read.
+	writeEnabled, err := loadMachineWrite(getenv, enabled)
+	if err != nil {
+		return err
+	}
 	if !enabled {
 		return nil
 	}
-	m := MachineConfig{Enabled: true}
+	m := MachineConfig{Enabled: true, WriteEnabled: writeEnabled}
 
 	m.IssuerURL = strings.TrimSpace(getenv("MACHINE_OIDC_ISSUER_URL"))
 	if m.IssuerURL == "" && cfg.SSO.Enabled {
@@ -250,8 +281,12 @@ func sortedAlgs() []string {
 // must be explicit.
 func parseMachineClients(raw string) ([]MachineClient, error) {
 	known := map[string]bool{}
-	for _, s := range MachineScopes {
+	for _, s := range MachineReadScopes {
 		known[s] = true
+	}
+	writeScopes := map[string]bool{}
+	for _, s := range MachineWriteScopes {
+		writeScopes[s] = true
 	}
 	var out []MachineClient
 	seen := map[string]bool{}
@@ -276,8 +311,11 @@ func parseMachineClients(raw string) ([]MachineClient, error) {
 			if s == "" {
 				continue
 			}
+			if writeScopes[s] {
+				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope, but no write operation is available yet (machine-write-scope T-010)")
+			}
 			if !known[s] {
-				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS contains an unknown scope (known: %s)", strings.Join(MachineScopes, ", "))
+				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS contains an unknown scope (known: %s)", strings.Join(MachineReadScopes, ", "))
 			}
 			if !dup[s] {
 				dup[s] = true

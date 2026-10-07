@@ -561,9 +561,11 @@ func TestMachine_CORSNotExtended(t *testing.T) {
 	}
 }
 
-// AC-003 / T-024: with every scope, only the 8 allowlisted operations reach
-// the execution boundary; the other 37 protected operations are 403 and never
-// bind. Drives every registered protected operation.
+// AC-003 / T-024 / D13: with every scope, only the 8 allowlisted operations
+// reach the execution boundary; every operation on the contract deny list
+// (deniedOps: D2 permanent + unopened writes) is 403 and never binds. The
+// expectation is data-driven: each registered protected operation must be in
+// exactly one of the allowlists and the deny list.
 func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 	h := newHarness(t, harnessOpt{})
 	tok := h.fullToken()
@@ -571,10 +573,26 @@ func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 	if len(ops) != 45 {
 		t.Fatalf("registered protected operations = %d, want 45", len(ops))
 	}
-	allowed := 0
+	spec := map[string]string{} // operationId -> "METHOD specPath"
+	for _, o := range loadSpecOps(t) {
+		spec[o.ID] = o.Method + " " + o.Path
+	}
+	denied := map[string]bool{}
+	for _, d := range deniedOps {
+		key, ok := spec[d.ID]
+		if !ok {
+			t.Fatalf("denied operation %s is not in the spec", d.ID)
+		}
+		denied[key] = true
+	}
+	allowed, rejected := 0, 0
 	for _, r := range ops {
 		rec := h.do(r.Method, r.URL, bearer(tok))
 		_, isAllowed := machineOpFor(r.Method, r.Route)
+		isDenied := denied[r.Method+" "+routeToSpecPath(r.Route)]
+		if isAllowed == isDenied {
+			t.Errorf("%s %s must be in exactly one of allowlist/deny list (allow=%v deny=%v)", r.Method, r.Route, isAllowed, isDenied)
+		}
 		switch {
 		case isAllowed && rec.Code != 200:
 			t.Errorf("allowed %s %s: %d %s", r.Method, r.Route, rec.Code, rec.Body)
@@ -583,13 +601,15 @@ func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 		}
 		if isAllowed {
 			allowed++
+		} else {
+			rejected++
 		}
 		if len(rec.Header().Values("Set-Cookie")) != 0 {
 			t.Errorf("%s %s: Set-Cookie", r.Method, r.Route)
 		}
 	}
-	if allowed != 8 || len(h.reached()) != 8 {
-		t.Fatalf("allowed=%d reached=%v, want exactly 8", allowed, h.reached())
+	if allowed != 8 || rejected != 37 || len(h.reached()) != 8 {
+		t.Fatalf("allowed=%d rejected=%d reached=%v, want exactly 8 and 37", allowed, rejected, h.reached())
 	}
 	if h.dialer.binds.Load() != 0 || h.dialer.pings.Load() != 0 {
 		t.Error("LDAP touched")
