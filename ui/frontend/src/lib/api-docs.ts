@@ -64,6 +64,8 @@ export interface Endpoint {
   op: Operation
   tag: string
   auth: AuthKind
+  /** x-machine-scope when the op's security lists machineBearer; undefined otherwise. */
+  machineScope?: string
 }
 
 export interface EndpointGroup { tag: string; description?: string; endpoints: Endpoint[] }
@@ -152,13 +154,20 @@ export function operationAuth(op: Operation): AuthKind {
   return 'session'
 }
 
+/** Scope a machine principal needs, or undefined when the op does not accept machineBearer. */
+export function operationMachineScope(op: Operation): string | undefined {
+  if (!op.security?.some((req) => 'machineBearer' in req)) return undefined
+  const scope = op['x-machine-scope']
+  return typeof scope === 'string' && scope ? scope : (op.security.flatMap((req) => req.machineBearer ?? [])[0])
+}
+
 export function collectEndpoints(doc: OpenApiDoc): Endpoint[] {
   const out: Endpoint[] = []
   for (const [path, item] of Object.entries(doc.paths ?? {})) {
     for (const method of METHODS) {
       const op = item[method] as Operation | undefined
       if (!op) continue
-      out.push({ id: `${method} ${path}`, method, path, op, tag: op.tags?.[0] ?? UNTAGGED, auth: operationAuth(op) })
+      out.push({ id: `${method} ${path}`, method, path, op, tag: op.tags?.[0] ?? UNTAGGED, auth: operationAuth(op), machineScope: operationMachineScope(op) })
     }
   }
   return out

@@ -95,6 +95,7 @@ export function ApiDocsPage() {
         <CardHeader><CardTitle>{t('apiDocs.authTitle')}</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-[13px] text-muted-foreground">{t('apiDocs.authBody')}</p>
+          <p className="text-[13px] text-muted-foreground">{t('apiDocs.machineBody')}</p>
           <p className="text-[13px]"><span className="text-muted-foreground">{t('apiDocs.baseUrl')}: </span><code className="font-mono text-[12.5px]">{origin}</code></p>
           <CodeBlock code={buildLoginCurl(origin)} label={t('apiDocs.loginExample')} />
         </CardContent>
