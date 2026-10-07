@@ -76,7 +76,8 @@ type machineIPThrottle struct {
 
 // newMachineIPThrottle returns nil when the throttle is disabled (limit or
 // window <= 0; config.Load never produces that, only hand-built test configs).
-// ttl is the self-expiry of a leaked reservation (MACHINE_REQUEST_TIMEOUT).
+// ttl is the self-expiry of a leaked reservation; it must exceed the longest
+// request (authentication deadline + MACHINE_REQUEST_TIMEOUT, D31).
 func newMachineIPThrottle(limit int, window time.Duration, maxEntries int, ttl time.Duration, now func() time.Time) *machineIPThrottle {
 	if limit <= 0 || window <= 0 {
 		return nil

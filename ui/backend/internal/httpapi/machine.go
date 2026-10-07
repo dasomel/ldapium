@@ -33,6 +33,9 @@ type machineDeps struct {
 	fetcher machineauth.Fetcher
 	now     func() time.Time
 	exec    machineExec
+	// authTimeout replaces machineAuthTimeout (tests prove the fail-closed path
+	// without waiting ten real seconds).
+	authTimeout time.Duration
 }
 
 type serverOption func(*Server)
@@ -42,6 +45,17 @@ func withMachineDeps(d machineDeps) serverOption {
 	return func(s *Server) { s.machineTest = &d }
 }
 
+// machineAuthTimeout is the deadline of the whole authentication phase (D31):
+// the verification, including the wait for a JWKS refresh. One refresh has its
+// own machineauth.FetchTimeout, and a lookup may wait for a second one (a flight
+// it joined ends, the key is still missing, it starts the next), so the phase
+// gets two; anything longer fails closed with a 503.
+const machineAuthTimeout = 2 * machineauth.FetchTimeout
+
+// reservationMargin is the slack added on top of the longest possible request
+// (D31) before a reservation self-expires.
+const reservationMargin = time.Second
+
 // machineAuth is the runtime of the bearer path.
 type machineAuth struct {
 	verifier *machineauth.Verifier
@@ -50,6 +64,9 @@ type machineAuth struct {
 	baseDN   string
 	exec     machineExec
 	cancel   context.CancelFunc
+
+	// authTimeout bounds the authentication phase (D31).
+	authTimeout time.Duration
 
 	// Limits (D9, T-018); each is nil when its config value is unset, which
 	// config.Load never allows in production (every one has a range with min 1).
@@ -67,6 +84,7 @@ type machineAuth struct {
 func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer) (*machineAuth, error) {
 	m := cfg.Machine
 	fetcher, now := machineauth.Fetcher(nil), time.Now
+	authTimeout := machineAuthTimeout
 	exec := machineExec(newMachineExecutor(m, dialer).run)
 	if d != nil {
 		if d.fetcher != nil {
@@ -77,6 +95,9 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 		}
 		if d.exec != nil {
 			exec = d.exec
+		}
+		if d.authTimeout > 0 {
+			authTimeout = d.authTimeout
 		}
 	}
 	if fetcher == nil {
@@ -115,12 +136,17 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 		clientIDs[i] = c.ID
 	}
 	ma := &machineAuth{
-		ip:       newMachineIPThrottle(m.AuthFailureLimit, m.AuthFailureWindow, m.IPLimiterMax, m.RequestTimeout, now),
-		budget:   newClientBudget(m.RateLimitRPS, m.RateLimitBurst, m.ClientConcurrency, clientIDs, now),
-		keys:     keys,
-		ceilings: machineCeilings(m.Clients),
-		baseDN:   cfg.BaseDN,
-		exec:     exec,
+		// D31: a reservation is held for the whole request, authentication and then
+		// the execution step (which starts its own RequestTimeout), so its
+		// self-expiry must cover both, or an expired reservation would let a
+		// still-running request be counted out of the per-IP budget.
+		ip:          newMachineIPThrottle(m.AuthFailureLimit, m.AuthFailureWindow, m.IPLimiterMax, authTimeout+m.RequestTimeout+reservationMargin, now),
+		authTimeout: authTimeout,
+		budget:      newClientBudget(m.RateLimitRPS, m.RateLimitBurst, m.ClientConcurrency, clientIDs, now),
+		keys:        keys,
+		ceilings:    machineCeilings(m.Clients),
+		baseDN:      cfg.BaseDN,
+		exec:        exec,
 		verifier: &machineauth.Verifier{
 			Policy: machineauth.Policy{
 				Issuer:        m.IssuerURL,
@@ -270,14 +296,35 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication concurrency limit reached")
 	}
 	defer release()
-	p, fail := m.verifier.Verify(c.Request().Context(), token)
+	// D31: the authentication phase has one deadline, the same one the
+	// reservation outlives. Reaching it ends the work (the JWKS wait honors
+	// the context) and fails closed.
+	authCtx, cancelAuth := context.WithTimeout(c.Request().Context(), m.authTimeout)
+	p, fail := m.verifier.Verify(authCtx, token)
+	// Only the phase's own deadline counts: a client that went away ends the
+	// context with Canceled and keeps its reason.
+	expired := errors.Is(authCtx.Err(), context.DeadlineExceeded)
+	cancelAuth()
 	release()
+	if fail == nil && expired {
+		// Verified, but past the deadline (a key source that ignored the
+		// context): the reservation may be gone, so do not proceed.
+		st.setReason(reasonDeadline)
+		c.Response().Header().Set(echo.HeaderRetryAfter, "1")
+		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication deadline exceeded")
+	}
 	if fail != nil {
 		// A 401 is the source's failure; a 503 (key source trouble) is not.
 		if !fail.Unavailable {
 			tk.fail()
 		}
-		st.setReason(string(fail.Reason))
+		if fail.Unavailable && expired {
+			// The wait for the key source ended at the deadline: audited as
+			// such, not as a key source outage (HTTP behaviour unchanged).
+			st.forceReason(reasonDeadline)
+		} else {
+			st.setReason(string(fail.Reason))
+		}
 		return machineFailure(c, fail)
 	}
 	// From here on the identity is verified, so it is what the audit line names.

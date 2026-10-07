@@ -154,7 +154,13 @@ limiter is either bypassable or shared by everyone:
   not a superset of `private`, since adding it on top would leave this
   mode no stricter than `private` — for a proxy whose own address isn't
   itself on a private range and needs stricter trust than `private`
-  grants. Via Helm, a multi-CIDR list must go in a `-f values.yaml` file
+  grants. A peer outside the list (including a loopback, link-local or
+  private-network peer) is never trusted: its `X-Forwarded-For` is ignored
+  and it keys on its own address. **Compatibility note:** before this fix
+  the implicit private-network trust stayed on next to an explicit list, so
+  an unlisted private peer could forge `X-Forwarded-For`; if you set a CIDR
+  list and relied on that implicit trust, list every proxy CIDR explicitly
+  (for example the ingress controller's pod CIDR). Via Helm, a multi-CIDR list must go in a `-f values.yaml` file
   rather than `--set`, which splits on bare commas (see the chart README's
   "Three helm footguns"); escape with `\,` if `--set` is unavoidable.
 - `none`: ignore `X-Forwarded-For` entirely and key on the raw TCP peer.
