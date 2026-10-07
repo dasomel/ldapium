@@ -85,8 +85,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `pwdHistory`, `pKCS8PrivateKey`, `userPKCS12`, `oathSecret`, `oathEncKey` and
   `oathTokenPIN`. No image, chart or backend change. Known and documented: ACLs are per
   node, the default policy locks the account after 5 bad binds, and the machine rules
-  conflict with `LDAP_REPLICATION_IDENTITY=prepare` (do not combine until the combined
-  order is implemented, D30 / T-034).
+  combine with `LDAP_REPLICATION_IDENTITY=prepare` only in the defined order (identity
+  rule `{0}`, machine rules `{1}`-`{3}`; D30 / T-034, #277).
 - Machine bearer authentication, unit 4 (#214, **default off**): the limits and the
   Helm values. Order per request: `Authorization` grammar, then a per-source **IP
   failure throttle before any signature or JWKS work** (10 failures per sliding 60 s,
@@ -126,8 +126,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   Procedure: `docs/machine-auth-operations.md`. **Known limits:** requests the Go HTTP
   server rejects before any handler (431, malformed request line, header timeout,
   TLS/HTTP/2 pre-handler errors) are not audited and leave no log without an ingress
-  access log (D25); limits are per replica; the machine ACL cannot be combined with
-  `LDAP_REPLICATION_IDENTITY=prepare` yet (D30, T-034). **Verification:** the live end-to-end runs against a real Keycloak (both UI modes), the Keycloak client settings checks, the JWKS rotation and flood checks and the emergency revocation drill run in `machine-keycloak-e2e.yml` and gate releases (see the unit 5a note below). **Not verified:** installing the chart with machine auth on a cluster, a real ingress in front of `X-Forwarded-For`, and the ACL on more than one LDAP node (#284).
+  access log (D25); limits are per replica; the machine ACL combines with
+  `LDAP_REPLICATION_IDENTITY=prepare` in the defined order (D30, T-034, #277). **Verification:** the live end-to-end runs against a real Keycloak (both UI modes), the Keycloak client settings checks, the JWKS rotation and flood checks and the emergency revocation drill run in `machine-keycloak-e2e.yml` and gate releases (see the unit 5a note below). **Not verified:** installing the chart with machine auth on a cluster, a real ingress in front of `X-Forwarded-For`, and the ACL on more than one LDAP node (#284).
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause
