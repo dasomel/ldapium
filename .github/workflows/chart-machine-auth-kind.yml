@@ -1,0 +1,92 @@
+name: Chart machine auth (kind)
+
+# Cluster proof of ui.machineAuth.* (#284, follow-up of #214, change package
+# docs/changes/machine-principal-auth): scripts/test/test-chart-machine-auth-kind.sh installs
+# the chart on a throwaway kind cluster behind a real ingress-nginx and checks the per-node
+# LDAP ACL, a bearer call through the ingress, forged X-Forwarded-For vs ui.trustedProxies,
+# and Helm replica replacement revoking a client on every replica. The script creates and
+# deletes its own cluster; this workflow only provides the tools and the two images.
+# Not path-filtered, as issue #284's acceptance asks (a filter would skip it on exactly the
+# changes that can break it: chart, backend, image, ACL docs); it also runs on manual dispatch
+# and weekly to catch drift in the unpinned parts (the ingress-nginx manifest fetch, the runner
+# image). If its cost on every PR becomes a problem, narrow it deliberately and say so in #284.
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 3" # Wednesday 05:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chart-machine-auth-kind-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_TAG: machine-kind
+
+jobs:
+  machine-auth-kind:
+    name: machine auth on kind (ingress, XFF, per-node ACL, revocation)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # Heavy job (image builds + kind cluster): shares one of three lanes; see e2e.yml's
+    # migration-dryrun job for the rationale (why throttle, why queue: max).
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # install_only: the script creates (and deletes) its own cluster with an ingress-ready node.
+      - name: Install kind and kubectl
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: true
+          version: v0.33.0
+          kubectl_version: v1.37.1
+
+      # Helm 4.3.0, not the 3.17.3 other workflows pin: the script was developed and proven on
+      # Helm 4 (its post-renderer goes through a throwaway plugin there) and its Helm 3
+      # branch has never run.
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      - name: Tool versions (the script needs yq v4 by mikefarah, preinstalled on the runner)
+        run: |
+          set -euo pipefail
+          docker version --format '{{.Server.Version}}'
+          kind version
+          kubectl version --client
+          helm version --short
+          yq --version
+          yq --version | grep -q 'mikefarah/yq.* version v4'
+
+      - name: Build server image
+        run: docker build -t "ldapium:$IMAGE_TAG" image
+
+      - name: Build UI image
+        run: docker build -t "ldapium-ui:$IMAGE_TAG" ui
+
+      - name: Machine auth on kind
+        run: ./scripts/test/test-chart-machine-auth-kind.sh
+
+      # The script deletes its cluster on exit, including on failure; anything left is a leak.
+      - name: Fail on leftover kind clusters
+        if: always()
+        run: |
+          set -u
+          left=$(kind get clusters 2>/dev/null | grep -F 'ldapium-mk-' || true)
+          if [ -n "$left" ]; then
+            echo "::error::leftover kind clusters:"
+            echo "$left"
+            exit 1
+          fi
