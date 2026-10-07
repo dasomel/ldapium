@@ -3,7 +3,10 @@ package ldapclient
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -36,18 +39,49 @@ func (c deadlineCtx) Deadline() (time.Time, bool) { return c.deadline, true }
 func TestCtxOrAtIOTimeoutBeforeContextTimer(t *testing.T) {
 	deadline := time.Now()
 	ctx := deadlineCtx{context.Background(), deadline}
-	netErr := ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection timed out"))
+	libTimeout := ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection timed out"))
+	wrappedNet := ldap.NewError(ldap.ErrorNetwork, timeoutNetErr{})
 
 	for name, in := range map[string]error{
-		"ldap network timeout": mapErr("bind", netErr),
-		"net timeout":          timeoutNetErr{},
+		"library timeout":     mapErr("bind", libTimeout),
+		"net timeout":         timeoutNetErr{},
+		"ldap-wrapped net":    mapErr("bind", wrappedNet),
+		"os deadline":         os.ErrDeadlineExceeded,
+		"dial i/o timeout":    &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded},
+		"timeout, at +1ms":    libTimeout,
+		"timeout, deadline+1": libTimeout,
 	} {
-		got := ctxOrAt(ctx, in, deadline)
-		if !errors.Is(got, context.DeadlineExceeded) {
-			t.Errorf("%s: err = %v, want the context's deadline error", name, got)
+		// both orders: exactly at the deadline and after it
+		for _, now := range []time.Time{deadline, deadline.Add(time.Millisecond)} {
+			got := ctxOrAt(ctx, in, now)
+			if !errors.Is(got, context.DeadlineExceeded) {
+				t.Errorf("%s: err = %v, want the context's deadline error", name, got)
+			}
+			if !errors.Is(got, in) {
+				t.Errorf("%s: the original error is not in the chain of %v", name, got)
+			}
 		}
-		if got.Error() == context.DeadlineExceeded.Error() {
-			t.Errorf("%s: underlying error dropped from %q", name, got)
+	}
+}
+
+// A network failure that is not a timeout keeps its identity even after the
+// deadline: it is a real directory/network fact, not an expiry.
+func TestCtxOrAtKeepsNonTimeoutNetworkErrors(t *testing.T) {
+	deadline := time.Now()
+	ctx := deadlineCtx{context.Background(), deadline}
+	for name, in := range map[string]error{
+		"refused": ldap.NewError(ldap.ErrorNetwork, &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}),
+		"reset":   ldap.NewError(ldap.ErrorNetwork, &net.OpError{Op: "read", Err: syscall.ECONNRESET}),
+		"eof":     ldap.NewError(ldap.ErrorNetwork, io.EOF),
+		"closed":  ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed")),
+		"net eof": io.ErrUnexpectedEOF,
+	} {
+		got := ctxOrAt(ctx, mapErr("bind", in), deadline.Add(time.Second))
+		if errors.Is(got, context.DeadlineExceeded) {
+			t.Errorf("%s: relabelled as a deadline expiry: %v", name, got)
+		}
+		if !errors.Is(got, in) {
+			t.Errorf("%s: original error lost: %v", name, got)
 		}
 	}
 }

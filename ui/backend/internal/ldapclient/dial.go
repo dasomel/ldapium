@@ -124,19 +124,33 @@ func ctxOrAt(ctx context.Context, err error, now time.Time) error {
 		return cerr
 	}
 	if deadline, ok := ctx.Deadline(); ok && !now.Before(deadline) && isTimeoutErr(err) {
-		return fmt.Errorf("%w: %v", context.DeadlineExceeded, err)
+		// Both stay matchable with errors.Is; the network error is also in the text.
+		return fmt.Errorf("%w: %w", context.DeadlineExceeded, err)
 	}
 	return err
 }
 
-// isTimeoutErr reports whether err is a network/I/O timeout: the library's own
-// "connection timed out" (LDAP result 200) or a net.Error that timed out.
+// libTimeoutText is what go-ldap's reader loop reports when its per-request
+// timeout fires (conn.go: NewError(ErrorNetwork, errors.New("ldap: connection
+// timed out"))). It is an untyped error, so the text is the only handle.
+const libTimeoutText = "ldap: connection timed out"
+
+// isTimeoutErr reports whether err is a genuine timeout: a net.Error that timed
+// out, os.ErrDeadlineExceeded, or (last resort, text match on the unwrapped
+// cause of an ErrorNetwork) the library's own request timeout. Refused, reset,
+// EOF and closed-connection failures are network errors but not timeouts, and
+// stay as they are even after the deadline.
 func isTimeoutErr(err error) bool {
-	if ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
-	var ne net.Error
-	return errors.As(err, &ne) && ne.Timeout()
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var le *ldap.Error
+	return errors.As(err, &le) && le.ResultCode == ldap.ErrorNetwork &&
+		le.Err != nil && le.Err.Error() == libTimeoutText
 }
 
 // Ping is the unauthenticated counterpart to Bind: it proves the LDAP
