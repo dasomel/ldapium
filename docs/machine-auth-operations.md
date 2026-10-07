@@ -86,3 +86,104 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HDR" https://ldapium.example.com
 3. ingress가 클라이언트가 보낸 `X-Forwarded-For`를 덮어쓰거나 정리하고, `UI_TRUSTED_PROXIES`가 그 ingress의 CIDR(또는 `none`)이며, **ingress/프록시 접근 로그가 켜져 있음**(핸들러 이전 거절은 ldapium 로그에 없음).
    - kind 클러스터의 ingress-nginx에서 실측(`scripts/test/test-chart-machine-auth-kind.sh`): 컨트롤러 ConfigMap에 `use-forwarded-headers: "true"`를 켜고 `proxy-real-ip-cidr`를 제한하지 않으면(기본 0.0.0.0/0) 클라이언트가 보낸 위조 `X-Forwarded-For`가 그대로 신뢰되어 IP 실패 throttle이 우회됩니다(위조값마다 새 IP, 10회 모두 401, 429 없음). `proxy-real-ip-cidr`를 실제 상위 프록시 대역으로 제한하면 예산이 유지됩니다. 기본 설정(`use-forwarded-headers` 꺼짐)은 헤더를 덮어써 안전합니다.
 4. limiter는 replica별 상태입니다(전역 한도가 아님). replica 수만큼 한도가 늘어납니다.
+
+## LDAP revocation writer (staged #286 T-013)
+
+The operator tool exists; **the API does not yet consume the revocation entries**.
+Until the request hook is shipped, recording an entry does not invalidate a token.
+The existing allowlist removal and replica replacement procedure remains the backstop.
+
+Run `scripts/machine-revocation.sh` on an operator host with Python 3 and the
+OpenLDAP CLI (`ldapsearch`, `ldapadd`, `ldapmodify`, `ldapdelete`). Use verified
+`ldaps://` and the normal LDAP client CA configuration. The password is read
+through `--password-file`, never an argument. `--container NAME` runs the LDAP
+commands inside a local container; the password-file path then belongs to that
+container. It does not copy the credential to the host. The writer binds as an
+operator/admin identity; the API machine identity remains read-only.
+
+Create `ou=revocations,ou=system,<root>` as an `organizationalUnit` with a single
+`ou: revocations`. Run `init` once before enabling the future API consumer:
+
+```sh
+scripts/machine-revocation.sh init --uri ldaps://ldap.example.org:636 \
+  --base 'ou=revocations,ou=system,dc=example,dc=org' \
+  --bind-dn 'cn=admin,dc=example,dc=org' --password-file /run/secrets/admin
+```
+
+Every mutating command takes those same connection arguments. `init` refuses an
+existing sentinel or any entries; it never resets a generation. `add --kind jti
+--client CLIENT --id-file FILE` reads only the jti identifier from a file (no
+newline, no NUL, no JWT). `add --kind cutoff --client CLIENT` adds a new immutable
+cutoff before removing that client's old cutoffs. The directory supplies its
+`createTimestamp`; operators must not replace it. `remove --cn CN` explicitly
+undoes one revocation, so use it only when reaccepting that token/client is
+intended; removing the sentinel is refused. A failed command may already have
+written entries: repair malformed entries, then run `heartbeat` to republish.
+Do not restore an old sentinel as a rollback: it can reenable revoked tokens and
+its generation may be rejected by a running consumer.
+
+`heartbeat` and `prune` remove jti entries older than the retention period and
+publish a new sentinel. `add` also prunes. Cutoffs are never pruned automatically.
+`retention` prints the minimum (4440 seconds); `--retention` can increase it up to
+86400 seconds and never decreases a previously published value. Every mutation
+checks all descendants without a device-only filter: stray, nested, malformed,
+multi-valued cn/ou and newline/NUL values block writes. More than 80% of
+`--max-entries` (default 2000, range 1–2500) emits a warning. Reaching the cap
+refuses a new entry; reduce the load before enabling the consumer. Failed LDAP
+commands and partial results are errors. Sentinel generation/count/digest/time/
+retention are changed atomically by deleting the exact old attribute values and
+adding the new values. rc 16 means another writer won; the tool rereads,
+recalculates and retries at most eight times. Exhaustion exits nonzero.
+
+Schedule `heartbeat` substantially more often than `SENTINEL_MAX_AGE` (future
+consumer default 5 minutes), e.g. every minute, and alert on nonzero status. A
+CronJob uses an operator tools image containing Python 3, the OpenLDAP CLI, and
+both `scripts/machine-revocation.sh` and `scripts/lib/machine_revocation.py`:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: machine-revocation-heartbeat
+spec:
+  schedule: '* * * * *'
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: heartbeat
+              image: YOUR_PINNED_OPERATOR_TOOLS_IMAGE
+              command: ['/opt/ldapium/scripts/machine-revocation.sh']
+              args: ['heartbeat', '--uri', 'ldaps://ldap.example.org:636',
+                     '--base', 'ou=revocations,ou=system,dc=example,dc=org',
+                     '--bind-dn', 'cn=admin,dc=example,dc=org',
+                     '--password-file', '/run/secrets/admin']
+              volumeMounts:
+                - {name: credential, mountPath: /run/secrets, readOnly: true}
+          volumes:
+            - name: credential
+              secret:
+                secretName: machine-revocation-operator
+                defaultMode: 0400
+```
+
+Supply trusted CA configuration and mount permissions for the image's operator
+UID. This example is not installed by Helm; the stock LDAPium image has no Python
+writer runtime. It carries an admin credential, so restrict access to the Job
+and its Secret. Monitor the heartbeat and directory capacity before API rollout.
+
+For a client incident: (1) block issuance at the IdP and **confirm** new
+`client_credentials` requests fail, repeating the check across the IdP nodes;
+(2) write a cutoff (or known jti); (3) after the consumer ships, confirm the same
+previously issued token returns 401 on every API replica; (4) apply the allowlist
+and replica replacement backstop. Under healthy replication, synchronized clocks
+(NTP), successful refreshes and the configured query budgets, the planned
+visibility bound is `REFRESH + 2 × 5s + replication delay`. This is a conditional
+bound, not a measured guarantee for an arbitrary cluster. A partitioned LDAP
+node may serve old data until sentinel aging forces unavailability. IdP issuance
+propagation and skew beyond `MACHINE_CLOCK_SKEW` remain exposure windows; use
+known-jti revocation and the backstop together if those windows are unacceptable.

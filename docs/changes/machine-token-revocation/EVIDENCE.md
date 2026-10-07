@@ -240,3 +240,39 @@ All revocation drill checks passed: 18 checks in 23s.
 → 머신 DN은 `createTimestamp`에 대한 범위 필터(`>=`, `<=`)를 정상 평가하고 `modifyTimestamp`를 읽는다(필터 속성이 undefined가 되는 §1·AGENTS.md의 경우가 아님: 기본 ACL이 `B` 안 모든 속성에 `read`를 준다). 설계 변경 없음. `B`를 좁힌 구성(§5.3)에서는 revocations 규칙이 `to dn.subtree`이므로 같은 효과임을 이 항목에서 별도로 재측정하지는 않았다(**미실행**).
 
 값 조건부 modify: 관리자가 sentinel `description`을 `delete: description`(옛 값 지정) + `add: description`(새 값)으로 갱신. 첫 쓰기 rc 0, 같은 옛 값을 쓰는 두 번째 쓰기는 **rc 16 `No such attribute`("modify/delete: description: no such value")**로 실패하고 값은 첫 쓰기 것(`ts=2`)으로 남음 → 동시에 도는 두 heartbeat는 조용히 덮어쓰지 못한다.
+
+## 10. T-013 writer — local real LDAP proof (2026-10-08)
+
+Implementation: `scripts/machine-revocation.sh` / `scripts/lib/machine_revocation.py`.
+Python 3 + OpenLDAP CLI on the operator host; optional Docker CLI transport uses
+`docker exec -i` and an in-container 0600 credential file. No credentials in argv.
+
+```sh
+docker build -t ldapium:revocation-review -f image/Dockerfile ./image
+LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-revocation-tool-live.py
+```
+
+Observed on the newly built image: init success, repeated init refusal, jti add,
+repeat-jti idempotency, existing-entry client/case collision refusal, cutoff
+replacement leaving exactly one cutoff; real concurrent sentinel modification
+returns `[0, 16, 0]` (one contender fails with `no such value`, rereads and retries).
+The first two modifications are synchronized by a host barrier; all LDAP replies
+come from slapd. No fake LDAP replies or in-memory directory is used.
+
+Actual LDAP rows are passed to `TestRevocationToolLiveSentinel`: Go
+`ParseSentinel`/`BuildSnapshot` validates the tool's generation/count/digest/time/
+retention; `Snapshot.Check` returns revoked for the written jti. The separately
+executed tool `retention` is compared with Go `Retention` at configuration ceilings.
+Fresh jti survives prune; non-device stray blocks add/heartbeat/remove/prune;
+real multi-valued and newline cn values block heartbeat. Explicit jti remove
+succeeds; sentinel removal fails; heartbeat succeeds after repair. Container logs
+contain no operator password. The uniquely named container is removed on exit.
+
+Initial failed attempt: the test supplied `LDAP_BASE_DN` instead of image
+`LDAP_ROOT_DN`; the image refused startup before any LDAP write. Corrected and
+rerun. This was a test-harness failure, not counted as runtime evidence.
+
+Not verified: actual aging past the 4440-second retention/prune boundary
+(`createTimestamp` is server-owned); Kubernetes CronJob execution; simultaneous
+writers on different multi-provider nodes. The tool is operator-only; API
+revocation enforcement remains absent until T-014/T-015.

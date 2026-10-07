@@ -181,6 +181,21 @@ ldapium은 Keycloak이 발급한 access token을 **오프라인으로** 검증�
 
 **제안 방향**: 폐기를 목적으로 도입하는 확인은 fail-open일 수 없다. B는 요청 경로를 건드리지 않으므로 fail-closed의 비용이 작다. A는 fail-closed의 비용이 큰 반면 fail-open은 목적을 무너뜨린다 — 이것이 A를 후속으로 미루는 가장 큰 이유다.
 
+### 보존 공식 상수 표 (T-013)
+
+| 입력 | 설정 상한 (초) | 도구 상수 |
+|---|---:|---|
+| MaxTTL | 3600 | MAX_TTL |
+| skew | 60 | MAX_SKEW (공식에서 3배) |
+| REFRESH | 60 | MAX_REFRESH |
+| MAX_STALE | 600 | MAX_STALE |
+| ret 최소 | 4440 | MIN_RETENTION |
+| ret 최대 | 86400 | MAX_RETENTION / machineauth.RetentionCeiling |
+
+`TestRevocationToolRetention`은 실행한 도구의 결과를 Go `Retention`의 설정
+상한 입력 결과와 비교한다. 라이브 writer 테스트는 실제 LDAP의 sentinel과
+항목을 `BuildSnapshot`에 전달해 건수·digest·시각 및 jti 판정을 교차 검증한다.
+
 ## Change impact
 
 | Area | Impact / evidence needed |
