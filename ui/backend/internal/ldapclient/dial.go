@@ -111,6 +111,12 @@ func ctxOr(ctx context.Context, err error) error {
 	return ctxOrAt(ctx, err, time.Now())
 }
 
+// CtxOr is ctxOr for callers outside this package: the machine execution step
+// applies the same deadline rule to errors a handler got back from its own
+// directory operations (#288), so the phase in which the deadline hit does not
+// change how it is classified.
+func CtxOr(ctx context.Context, err error) error { return ctxOr(ctx, err) }
+
 // ctxOrAt is ctxOr with an injectable clock. Besides the ended-context case it
 // covers the tie at the deadline: the connection's own timeout (SetTimeout is
 // armed with the time left until the deadline) and the context's timer fire at
