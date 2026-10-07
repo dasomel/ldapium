@@ -382,7 +382,30 @@ panic, or a normal response. The line is written by a wrapper outside all of
 those steps, so an early return cannot skip it. The one exception: a request
 the Go HTTP server rejects before any handler runs (oversized headers 431, a
 malformed request line 400, a TLS failure) never reaches the application and
-has no line; it shows up only in the server or ingress logs (D25).
+has no line (D25, below).
+
+### Known limitation (D25): server-level rejections are not audited
+
+"One line per `Authorization`-carrying request" holds for every request that
+reaches the application's handler chain. It does **not** hold for requests the Go
+HTTP server rejects before any handler runs:
+
+- request headers over the size limit (431), a malformed request line (400),
+- header read timeouts and other request-parse rejections,
+- connection-level TLS failures, and the TLS termination point itself when TLS
+  ends at an ingress (the backend never sees those requests),
+- HTTP/2 stream or connection errors raised by the server before the handler.
+
+In the default, directly exposed configuration there is no ingress and the
+backend has no server access logger, and the Go server answers 431 and a
+malformed-request-line 400 without an `ErrorLog` entry, so such a request is
+recorded **nowhere**: not in `machine_access`, not in an access log, not in an
+error log. There is no sound server-layer alternative inside the backend (an
+`http.Server` `ErrorLog`/`ConnState` hook cannot tell whether the rejected request
+carried an `Authorization` header, and a fabricated line without it would be a
+misleading audit record). **If you need a record of these requests, enable access
+logging at the ingress, load balancer or reverse proxy.** The behaviour is pinned
+by `TestMachineAudit_ServerLevelRejectionsAreNotAudited`.
 
 ```json
 {"event":"machine_access","provider":"oidc","actor":"svc-reader","request_id":"...","operation":"listUsers","method":"GET","status":200,"result":"success","reason":"ok","subject_fingerprint":"826ee2c670ed","bind_dn":"uid=machine,ou=system,dc=example,dc=org"}

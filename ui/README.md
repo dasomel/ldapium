@@ -122,7 +122,7 @@ LDAP connection details and a session secret explicitly.
 | `UI_LOGIN_FAILURE_LIMIT` | no | `10` | Failed `POST /api/login` attempts allowed per client IP (see `UI_TRUSTED_PROXIES` below for how that IP is resolved) within the window before a `429` is returned; `0` disables the limiter. In-memory and per-pod — with multiple UI replicas the OpenLDAP ppolicy lockout is the backstop that holds cluster-wide |
 | `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
 | `UI_LOGIN_LIMITER_MAX_ENTRIES` | no | `10000` | Hard cap on client sources the login limiter tracks (IPv6 counts per /64; must be >= 1). When full, expired sources go first, then the non-blocked source with the fewest stored failures (as of its last update; oldest on ties); a blocked source is never evicted, and only if all slots are blocked does a new source get the same `429` a blocked one does |
-| `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients (#214, change package `machine-principal-auth`). **Unit 1 only: with it on, an authorized request still ends in a fixed `503` because the least-privilege LDAP bind identity is not implemented yet.** Unset, no `MACHINE_*` variable is read and nothing changes. When on, startup requires `MACHINE_OIDC_ISSUER_URL` (https; inherits `SSO_ISSUER_URL`; `MACHINE_OIDC_INSECURE_HTTP=true` is a local-test exception that logs a WARN), `MACHINE_OIDC_AUDIENCE`, `MACHINE_ALLOWED_CLIENTS` (`clientId=scope,scope;clientId2=scope`), `MACHINE_LDAP_BIND_DN`, `MACHINE_LDAP_BIND_PASSWORD`, `MACHINE_LDAP_ROOT_DNS` (`;`-separated, escape a literal `;` as `\3B`), and `UI_TRUSTED_PROXIES` set to CIDRs or `none` (not `private`). Optional tuning (`MACHINE_OIDC_ALGS`, `MACHINE_TOKEN_MAX_TTL`, `MACHINE_CLOCK_SKEW` 0-60s, `MACHINE_JWKS_CACHE_TTL`/`_MAX_STALE`/`_MIN_REFRESH`, `MACHINE_SA_USERNAME_PREFIX`, limiter and concurrency values) and the full contract are in `docs/changes/machine-principal-auth/CHANGE.md` and `docs/api.md`. The machine LDAP account and its read-only ACL are created by the operator: see [`docs/machine-ldap-account.md`](../docs/machine-ldap-account.md) (apply it on every LDAP node before turning this on) |
+| `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients: read-only `GET` operations only (#214, change package `machine-principal-auth`). Unset, no `MACHINE_*` variable is read and nothing changes. All other `MACHINE_*` variables, defaults, bounds and the startup failure rules are in [Machine bearer authentication](#machine-bearer-authentication) below. |
 | `UI_IDEMPOTENCY_ENABLED` | no | `false` | Honour `Idempotency-Key` on the core user/group writes (#216). Records are in process memory (24h) and a restart forgets them, so enable it only for a single UI process (the chart does: one replica, `Recreate`). Off, a keyed write is refused with `422 idempotency_unsupported` |
 | `UI_IDEMPOTENCY_TTL` | no | `24h` | How long a completed record replays (1m-7d) |
 | `UI_IDEMPOTENCY_KEY_FILE` | no | _(unset)_ | Absolute path of the persisted fingerprint key: created once with mode 0600 in a 0700 directory owned by the UI user, never regenerated; startup is refused if it is unsafe. Two lines (`current`, `previous`) rotate it. Required for `Idempotency-Key` on backup start (the key lives in the durable job record); without it that key is refused. Never logged |
@@ -183,6 +183,64 @@ refused with the blocked-source `429` only when **all** slots are blocked,
 which costs an attacker `UI_LOGIN_LIMITER_MAX_ENTRIES` x
 `UI_LOGIN_FAILURE_LIMIT` failed binds inside one window (100000 at the
 defaults); already tracked sources are unaffected.
+
+### Machine bearer authentication
+
+Off by default. With `MACHINE_AUTH_ENABLED=true` a Keycloak service-account access
+token (`client_credentials`) can call eight read-only `GET` operations; every other
+operation answers a bearer token with `403 scope_denied`. The HTTP contract, error
+codes and a worked `curl` example are in [`docs/api.md`](../docs/api.md); the
+operator guides are [`docs/machine-keycloak-client.md`](../docs/machine-keycloak-client.md)
+(Keycloak client), [`docs/machine-ldap-account.md`](../docs/machine-ldap-account.md)
+(LDAP account and ACL) and [`docs/machine-auth-operations.md`](../docs/machine-auth-operations.md)
+(rollback and emergency revocation). Durations use Go syntax (`30s`, `10m`); an unset
+or empty variable takes its default and a value outside its bounds fails startup.
+
+| Variable | Required when on | Default | Bounds / meaning |
+|---|---|---|---|
+| `MACHINE_OIDC_ISSUER_URL` | yes (or SSO on) | inherits `SSO_ISSUER_URL` when empty and `SSO_ENABLED=true` | `https` only. Must equal the token `iss` byte for byte (a trailing `/` counts) |
+| `MACHINE_OIDC_INSECURE_HTTP` | no | `false` | Local-test exception that allows an `http://` issuer; logs a WARN at startup. Not a Helm value |
+| `MACHINE_OIDC_AUDIENCE` | yes | none | Must be an exact member of the token `aud`. `account` (Keycloak's default `aud`) is refused at startup |
+| `MACHINE_OIDC_ALGS` | no | `RS256,ES256` | Comma list from `RS256/384/512, PS256/384/512, ES256/384/512, EdDSA`. `none` and `HS*` fail startup |
+| `MACHINE_ALLOWED_CLIENTS` | yes | none | `clientId=scope,scope;clientId2=scope`. The per-client scope ceiling: effective rights are the token scope intersected with this list. Known scopes: `directory.users.read`, `directory.groups.read`, `directory.tree.read`, `directory.entry.read`, `directory.policies.read`, `server.monitor.read`, and the opt-in `audit.read`, `server.settings.read`. Unknown scope, duplicate client, empty scope list or the SSO browser client (when SSO is on) fail startup |
+| `MACHINE_SA_USERNAME_PREFIX` | no | `service-account-` | Expected `preferred_username` prefix of a service account. Not a Helm value |
+| `MACHINE_TOKEN_MAX_TTL` | no | `10m` | `1ms` to `1h` inclusive; a token whose `exp - iat` is larger is refused |
+| `MACHINE_CLOCK_SKEW` | no | `30s` | `0s` to `60s` |
+| `MACHINE_JWKS_CACHE_TTL` / `MACHINE_JWKS_MAX_STALE` / `MACHINE_JWKS_MIN_REFRESH` | no | `10m` / `1h` / `30s` | `1m`-`24h` / `0`-`24h` / `1s`-`1h`. Key source: fresh within the TTL, a known `kid` is still verified locally up to TTL + max stale, a refetch starts at most once per min refresh |
+| `MACHINE_LDAP_BIND_DN` | yes | none | The one dedicated read-only LDAP account. Refused at startup when it equals (DN-parsed, case/spacing/escape variants included) a backup/profile administrator, `LDAP_SERVICE_ACCOUNT_DN` or a rootdn, or any run of RDNs inside one |
+| `MACHINE_LDAP_BIND_PASSWORD` | yes | none | Inject from a Secret, never a manifest literal; never logged or returned |
+| `MACHINE_LDAP_ROOT_DNS` | yes | none | The main database rootdn(s), **semicolon**-separated because a DN contains commas: `cn=admin,dc=example,dc=org`. Each entry must parse as a DN; a literal `;` inside one is written `\3B`. The monitor, accesslog and config rootdns are built in. A comma-joined list fails startup |
+| `MACHINE_AUTH_FAILURE_LIMIT` / `MACHINE_AUTH_FAILURE_WINDOW` | no | `10` / `1m` | `1`-`1000` / `1s`-`1h`. Per-IP failure throttle, checked before any signature or JWKS work |
+| `MACHINE_RATE_LIMIT_RPS` / `MACHINE_RATE_LIMIT_BURST` | no | `5` / `10` | `1`-`10000` each; token bucket per **verified** client |
+| `MACHINE_CLIENT_CONCURRENCY` | no | `4` | `1`-`1000`; concurrent requests per verified client |
+| `MACHINE_MAX_CONCURRENCY` / `MACHINE_MAX_AUTH_CONCURRENCY` | no | `8` / `16` | `1`-`1000` each; global LDAP slots / global in-flight authentications |
+| `MACHINE_REQUEST_TIMEOUT` | no | `10s` | `1s`-`5m`; one deadline for dial, bind and every search of a machine request |
+| `MACHINE_IP_LIMITER_MAX` | no | `10000` | `1`-`1000000`; hard cap on tracked source IPs (IPv6 per /64) |
+
+All limits are per process (per replica), not cluster-wide.
+
+**Startup failure rules** (any of these stops the process with a message naming the
+variable): a required variable above is missing; the issuer is not `https` (unless
+`MACHINE_OIDC_INSECURE_HTTP=true`); `MACHINE_OIDC_AUDIENCE` is `account`; the bind DN
+matches a privileged DN (above); a `MACHINE_LDAP_ROOT_DNS` entry is not a valid DN;
+a duration or number is out of bounds; `MACHINE_OIDC_ALGS` names a symmetric
+algorithm; `MACHINE_ALLOWED_CLIENTS` is malformed or lists the SSO browser client (when `SSO_ENABLED=true`). A
+discovery or JWKS fetch that fails at startup is **not** a startup failure: it is
+logged at ERROR, every bearer request answers `503` with `Retry-After`, and the
+fetch is retried without a restart (an `issuer` in the discovery document that
+differs from the configured one found at startup is a startup failure).
+
+**`UI_TRUSTED_PROXIES` is required.** With the feature on, the default `private`
+is refused at startup: set the ingress CIDR list or `none`. Behind `private`, any
+client on the internal network could forge `X-Forwarded-For` and choose its own
+key in the per-IP failure throttle. The ingress must also overwrite or strip any
+`X-Forwarded-For` a client sends.
+
+**Logging.** Every request that carries an `Authorization` header and reaches a
+handler produces one `event=machine_access` log line ([`docs/audit-event-schema.md`](../docs/audit-event-schema.md)).
+Requests the Go HTTP server rejects first (431, malformed request line, header
+timeout, TLS/HTTP/2 pre-handler errors) leave no line anywhere unless an ingress or
+proxy access log exists; enable one if you need that record.
 
 ### Keycloak client setup
 
@@ -303,14 +361,16 @@ shifts depending on which other databases/overlays are enabled, rather than
 assuming a fixed value:
 
 ```bash
-ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+PWF=$(umask 077; mktemp); printf %s "$LDAP_ADMIN_PASSWORD" > "$PWF"   # a password in argv (-w) is visible in process listings; -y reads it from the file
+ACCESSLOG_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -y "$PWF" \
   -b cn=config "(olcSuffix=cn=accesslog)" dn | sed -n 's/^dn: //p')
-cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -y "$PWF"
 dn: $ACCESSLOG_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=admin,cn=accesslog" read by dn.exact="<your DN>" read by * none
 EOF
+rm -f "$PWF"
 ```
 
 ## Development

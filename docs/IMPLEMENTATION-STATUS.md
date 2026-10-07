@@ -81,6 +81,30 @@ Boundaries:
 - Live against disposable containers (#255; `scripts/test/test-backup-jobs-remotes-live.py`): the success path to S3/FTP/SFTP, SIGKILL after the grace period, and the deadline path (stand-in worker). Remote failure injection and the real worker's deadline cleanup are unit-test only.
 - Live evidence for these features is in the packages' `EVIDENCE*.md` files (local Docker runs); the CI workflows named there were not re-run for this section.
 
+## Machine bearer authentication (#214, default off)
+
+Change package: `docs/changes/machine-principal-auth/` (CHANGE, TASKS, EVIDENCE, [ADR](changes/machine-principal-auth/ADR.md)), accepted 2026-10-07 (Revision 5), merged in staged units with the feature **off by default**. Contract and operator guides: `docs/api.md`, `docs/machine-keycloak-client.md`, `docs/machine-ldap-account.md`, `docs/machine-auth-operations.md`. Issue #214 stays open (partial).
+
+Implemented and merged (units 1-4: #272, #274, #276, #278):
+
+- Keycloak service-account access token as a bearer credential on exactly eight read-only `GET` operations; 37 protected operations always `403 scope_denied`; runtime deny-by-default guard; OpenAPI `machineBearer` additive
+- token verification (alg allowlist, `typ`, `iss`, exact `aud` membership, `azp`==`client_id`, service-account rule, scope, `iat`/`exp`/`nbf`/lifetime cap), JWKS key source with fail-closed 503, per-IP failure throttle before signature work, per-client budgets, bounded state
+- dedicated read-only LDAP execution identity bound per request with a request deadline, base boundary (`LDAP_BASE_DN`, no accesslog/config/Monitor), cursor binding, one `event=machine_access` audit line per request that reaches a handler
+- operator ACL guide with the final `olcAccess` LDIF, Helm `ui.machineAuth.*`
+
+Live-verified (local Docker against a real slapd stack; recorded in `EVIDENCE.md` and `TASKS.md`; the CI workflow `api-credentials-e2e.yml` runs these scripts but its run result was not re-checked for this section):
+
+- read-only proof of the machine LDAP account in three configurations (349 checks, 11 mutation runs that must each be detected) and the execution boundaries (slow/dead LDAP, aborted requests, slot return, limiter 429, audit reasons, secret scan of container logs) with a stand-in issuer
+- Keycloak 26.7.4 token and JWKS behaviour: observed by hand on a real Keycloak (`EVIDENCE.md` section 2), not by an automated run against ldapium
+
+Unit-tested only (no live run):
+
+- claim verifier boundaries against a local JWKS, the `selectAuth` matrix, the JWKS state machine on a fake clock, limiter boundaries, config validation, Helm rendering and kubeconform (`scripts/test/test-chart-machine-auth.sh`; no cluster install)
+
+In progress, **not merged** (unit 5a): live e2e against a real Keycloak (positive and negative tokens, key rotation and request storms, JWKS/discovery recovery, rollback and emergency-block drill), the new CI workflow and the `release.yml` release gate. Until it is merged, no live Keycloak result is claimed here.
+
+Known limitations and follow-ups: see "Known limitations and follow-ups" in `docs/changes/machine-principal-auth/TASKS.md` (#266, #277/T-034, D25 unaudited server-level rejections, D30, opt-in scopes off by default). Requests the Go HTTP server rejects before any handler are in no log unless the ingress keeps an access log.
+
 ## Operations / resilience
 
 - scheduled backup with integrity manifest
@@ -112,7 +136,7 @@ Boundaries:
 - Multi-provider conflict resolution is observable but still follows OpenLDAP's last-write/CSN behavior; ldapium does not invent a distributed consensus layer on top of it.
 - SIEM export tooling is batch-oriented: `scripts/ship-audit-log.sh` ships NDJSON batches with retry/dead-letter and cursor persistence to HTTP sinks; real-time background push daemonization is delegated to platform log forwarders.
 - Audit retention is bifurcated: `cn=accesslog` purge age is configurable via `LDAP_ACCESSLOG_PURGE_DAYS` (default 30 days) in `image/entrypoint.sh` (with a fixed 1-hour purge cycle in `olcAccessLogPurge`), whereas `auditlog` writes to `LDAP_AUDIT_FILE` (default `/dev/stdout`) with no OpenLDAP-native retention or log rotation mechanism, leaving file management to container/host log shippers.
-- The management REST API (`ui/backend`) has no internal role-based access engine: requests are gated by session cookie validation (`requireSession` in `ui/backend/internal/httpapi/middleware.go` and `server.go`). In default LDAP login mode, operations execute over the user's bound LDAP connection and are authorized by OpenLDAP's own ACLs; in SSO mode, the backend binds using `LDAP_SERVICE_ACCOUNT_DN`, meaning all authenticated Keycloak users with `SSO_ADMIN_ROLE` share the service account's directory permissions (see `ui/README.md`).
+- The management REST API (`ui/backend`) has no internal role-based access engine: requests are gated by session cookie validation (`requireSession` in `ui/backend/internal/httpapi/middleware.go` and `server.go`), plus, only when `MACHINE_AUTH_ENABLED=true`, a read-only bearer path for eight GET operations with its own static scope allowlist (see the machine bearer section above). In default LDAP login mode, operations execute over the user's bound LDAP connection and are authorized by OpenLDAP's own ACLs; in SSO mode, the backend binds using `LDAP_SERVICE_ACCOUNT_DN`, meaning all authenticated Keycloak users with `SSO_ADMIN_ROLE` share the service account's directory permissions (see `ui/README.md`).
 - The Helm chart is completely cloud-provider agnostic: defaults in `charts/ldapium/values.yaml` specify `service.type: ClusterIP` and default `storageClassName: ""` with no cloud-specific annotations, validated by continuous Kind-based CI (`.github/workflows/e2e.yml`) and air-gapped bundle installations using `imagePullPolicy=Never` (`scripts/offline-install.sh`).
 
 ## Related evidence
@@ -130,6 +154,9 @@ Boundaries:
 - `docs/audit-event-schema.md`
 - `docs/api.md`
 - `docs/ui-operations.md`
+- `docs/machine-keycloak-client.md`
+- `docs/machine-auth-operations.md`
+- `docs/changes/machine-principal-auth/ADR.md`
 - `docs/changes/CLOSE-OUT-2026-10.md`
 - `docs/incident-evidence.md`
 - `.github/workflows/e2e.yml`

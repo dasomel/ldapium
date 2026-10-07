@@ -9,9 +9,11 @@ bind) is described under Replication below.
 ## Quick start
 
 ```bash
+# a value in --set is visible in process listings; --set-file reads it from a file
+(umask 077; openssl rand -base64 24 | tr -d '\n' > admin.pw)
 helm install ldap charts/ldapium \
   --set image.repository=<your-registry>/ldapium \
-  --set auth.adminPassword="$(openssl rand -base64 24)"
+  --set-file auth.adminPassword=admin.pw
 ```
 
 There is **no default admin password**: `image/entrypoint.sh` refuses to start
@@ -366,6 +368,30 @@ contains commas. Limits are per UI pod. For an emergency block, remove the
 client from `allowedClients` (or disable the feature) and replace **every** pod:
 revoking the Keycloak client alone does not invalidate tokens already issued.
 
+**Secrets by reference.** The only secret is the machine LDAP bind password, passed as
+a `secretKeyRef` to `ui.machineAuth.existingSecret` / `existingSecretKey` (default key
+`machine-ldap-bind-password`); create that Secret yourself. Keycloak client secrets
+never reach ldapium, which only verifies token signatures with the issuer's public
+keys. `MACHINE_OIDC_ALGS`, `MACHINE_SA_USERNAME_PREFIX` and `MACHINE_OIDC_INSECURE_HTTP`
+are not chart values (they keep their defaults); the full variable list with bounds is
+in [`ui/README.md`](../../ui/README.md#machine-bearer-authentication).
+
+**Ingress logging is required for a complete record.** The application writes one
+`event=machine_access` line for every `Authorization`-carrying request that reaches a
+handler. Requests the Go HTTP server rejects before a handler (oversized headers 431,
+a malformed request line, header read timeouts, TLS or HTTP/2 pre-handler errors, and
+anything stopped where TLS terminates at the ingress) are recorded nowhere by the
+application, and in a directly exposed deployment nowhere at all
+(`docs/audit-event-schema.md`, D25). Turn on access logging on the ingress, load
+balancer or proxy in front of the UI if you need that record.
+
+**Pod replacement.** `terminationGracePeriodSeconds` is `max(30, requestTimeoutSeconds+5)`
+while the feature is on. The UI server's own graceful shutdown waits a fixed 10 s for
+in-flight requests, so a `requestTimeoutSeconds` above 10 does not extend that wait.
+Emergency block and rollback procedures, including how to confirm that every old pod
+is gone: [`docs/machine-auth-operations.md`](../../docs/machine-auth-operations.md).
+Keycloak client requirements: [`docs/machine-keycloak-client.md`](../../docs/machine-keycloak-client.md).
+
 ## Hardening
 
 **Group A, on by default.** `ldap.limits.*` are always rendered and the image
@@ -433,12 +459,13 @@ LDAP client (SSSD gateways, Keycloak).
 
 ## Machine bearer authentication: LDAP account and ACL
 
-The chart has no `ui.machineAuth.*` values yet (staged rollout, #214). A deployment
-that sets `MACHINE_AUTH_ENABLED` on the UI by hand needs a dedicated read-only LDAP
-account and three `olcAccess` rules on the main database of **every** LDAP pod
-(`cn=config` ACLs are per node and are lost with a fresh `config` volume): follow
+`ui.machineAuth.*` wires the UI configuration only; the LDAP side is an operator
+step the chart never performs. Machine requests run as one dedicated read-only LDAP
+account, which needs three `olcAccess` rules on the main database of **every** LDAP
+pod (`cn=config` ACLs are per node and are lost with a fresh `config` volume): follow
 [`docs/machine-ldap-account.md`](../../docs/machine-ldap-account.md) and verify the
-rule order before enabling it.
+rule order before enabling the feature. Do not combine it with
+`LDAP_REPLICATION_IDENTITY=prepare` on the LDAP image (rule-order conflict, D30; tracked as T-034).
 
 ## Keycloak SSO
 
@@ -816,7 +843,7 @@ with its binder attributed, a failed bind shows up with `reqResult: 49`
 (not silently dropped), and a write does **not** show up a second time.
 
 ```
-$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+$ ldapsearch -x -D cn=admin,cn=accesslog -y <password-file> -b cn=accesslog \
     "(objectClass=auditSearch)" reqStart reqAuthzID reqDN reqFilter reqResult
 dn: reqStart=20260823155413.000004Z,cn=accesslog
 reqStart: 20260823155413.000004Z
@@ -825,7 +852,7 @@ reqDN: dc=example,dc=org
 reqFilter: (objectClass=*)
 reqResult: 0
 
-$ ldapsearch -x -D cn=admin,cn=accesslog -w <password> -b cn=accesslog \
+$ ldapsearch -x -D cn=admin,cn=accesslog -y <password-file> -b cn=accesslog \
     "(objectClass=auditBind)" reqStart reqDN reqResult
 dn: reqStart=20260823155732.000004Z,cn=accesslog
 reqStart: 20260823155732.000004Z
@@ -1016,14 +1043,16 @@ assuming a fixed value, the same way `.github/workflows/ui-e2e.yml` does in
 CI:
 
 ```bash
-MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" \
+PWF=$(umask 077; mktemp); printf %s "$LDAP_ADMIN_PASSWORD" > "$PWF"   # a password in argv (-w) is visible in process listings; -y reads it from the file
+MONITOR_DN=$(ldapsearch -x -LLL -D "cn=admin,cn=config" -y "$PWF" \
   -b cn=config "(olcDatabase=monitor)" dn | sed -n 's/^dn: //p')
-cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD"
+cat <<EOF | ldapmodify -x -D "cn=admin,cn=config" -y "$PWF"
 dn: $MONITOR_DN
 changetype: modify
 replace: olcAccess
 olcAccess: {0}to * by dn.exact="cn=monitoring,cn=Monitor" read by dn.exact="<your DN>" read by * none
 EOF
+rm -f "$PWF"
 ```
 
 Widening this ACL to `by users read` instead of naming a specific DN would
@@ -1312,4 +1341,4 @@ read/write/list/delete rights for owned-backup retention. No Secret values are r
 The runtimeConfirmed setting is an operator assertion; Helm cannot inspect image contents.
 
 Backups UI policies default disabled. Select one scheduler owner: existing `backup`
-CronJob and this controller otherwise operate independently. See [UI operating guide](../../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).
+CronJob and this controller otherwise operate independently. See [UI operating guide](../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).

@@ -354,7 +354,7 @@ printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {2}\nolcAccess
 - **UI 의존**: 이 ACL이 `M`에게 읽기를 줄 뿐 UI의 머신 경로가 어떤 DN으로 검색하는지는 `getEntry`/`listTree` 코드 가드(D14)가 정한다.
   `B`를 `LDAP_BASE_DN`으로 두는 구성은 단위 2의 라이브 시험(`scripts/test/test-machine-execution-live.py`)이 같은 LDIF로 실제 UI 요청을 돌려
   확인했다.
-- **자동화 없음**: 계정 생성·ACL 적용은 수동이다(Q2). 차트는 `ui.machineAuth.*`를 아직 제공하지 않는다(T-016).
+- **자동화 없음**: 계정 생성·ACL 적용은 수동이다(Q2). 차트의 `ui.machineAuth.*`는 UI 설정만 렌더하고 계정·ACL은 만들지 않는다([차트 README](../charts/ldapium/README.md)). Keycloak 쪽은 [machine-keycloak-client.md](machine-keycloak-client.md), 롤백·긴급 차단은 [machine-auth-operations.md](machine-auth-operations.md).
 
 ## 14. 마무리: 임시 비밀번호 파일 지우기
 
