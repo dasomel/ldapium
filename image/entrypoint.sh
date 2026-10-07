@@ -1598,6 +1598,11 @@ if [ "$LDAP_REPLICATION_IDENTITY" = "dedicated" ] && [ -f "$MARKER" ]; then
     ri_cfail="replication identity dedicated: cannot evaluate the repaired configuration; nothing was modified; refusing to start"
     ri_tmpd=$(mktemp -d /tmp/ldapium-repair.XXXXXX) || die "$ri_cfail"
     trap 'rm -rf "$ri_tmpd"' EXIT
+    # The copy can hold other databases' olcRootPW, and dash skips an EXIT trap on a fatal
+    # signal, so signals exit explicitly (same as the bootstrap and section 4 traps).
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # The main database file is NOT copied (it holds the old credentials): only its cut version is written.
     mkdir "$ri_tmpd/cn=config" || die "$ri_cfail"
     cp -a "$CONFIG_DIR/cn=config.ldif" "$ri_tmpd/" || die "$ri_cfail"
@@ -1754,7 +1759,7 @@ EOF
   if [ -n "$ri_pending" ]; then
     ri_apply_repair
     rm -rf "$ri_tmpd"
-    trap - EXIT
+    trap - EXIT HUP INT TERM
     ri_rdir="$CONFIG_DIR"
     ri_pending=""
     ri_scan

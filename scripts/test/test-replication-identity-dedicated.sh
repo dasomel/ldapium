@@ -427,6 +427,99 @@ EOF
   wait_ready "$n3" || bad "n3 never ready after the password was fixed"
   if poll has_uid "$n3" late; then ok "right identity password again: the consumer catches up"; else bad "the consumer never caught up after the fix"; fi
 
+  # tls_reqcert=demand at RUNTIME (#290). The stored olcSyncrepl string alone proves nothing about
+  # what slapd does with it. A rogue provider that serves the identity with the right password and
+  # a different entry is put first in n3's peer list; n3 must refuse its certificate, so the
+  # rogue-only entry never arrives and the rogue never sees a BIND. Each rogue has a positive
+  # control (it does serve the identity and the entry to a client that skips verification), so a
+  # rogue that is merely broken cannot pass; with tls_reqcert ignored the entry would replicate.
+  #   ca   : certificate from a different CA, hostname matches
+  #   host : certificate from the trusted CA (ca.pem), hostname does NOT match the peer name
+  rogue_cert() { # volume mode name
+    docker run --rm --user 0 -v "$1:/rc" -v "${certs}:/certs:ro" --entrypoint sh "$image" -c '
+set -e
+cd /rc
+if [ "$1" = ca ]; then
+  printf "subjectAltName=DNS:%s,DNS:localhost\n" "$2" > ext.cnf
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 -subj /CN=ridded-rogue-ca
+else
+  printf "subjectAltName=DNS:wrong-host.invalid\n" > ext.cnf
+  cp /certs/ca.pem ca.pem
+  cp /certs/ca.key ca.key
+fi
+openssl req -newkey rsa:2048 -nodes -keyout k.pem -out s.csr -subj /CN=localhost
+openssl x509 -req -in s.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out c.pem -days 2 -extfile ext.cnf
+rm -f ca.key
+chown -R 999:999 /rc
+chmod 600 k.pem
+' sh "$2" "$3" > /dev/null 2>&1
+  }
+  reqcert_probe() { # label mode: ca|host
+    local label="$1" mode="$2" rg rgv sl_r rg_peers pre rc_pat o
+    rg="ldapium-ridded-rg${mode}-${suffix}"
+    rgv="${rg}-certs"
+    reg_containers+=("$rg")
+    reg_vols+=("$rgv")
+    docker volume create "$rgv" > /dev/null
+    rogue_cert "$rgv" "$mode" "$rg" || { bad "${label}: could not create the rogue certificate"; return; }
+    docker run -d --name "$rg" --network "$net" --hostname "$rg" -v "${rgv}:/certs:ro" \
+      -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem -e LDAP_TLS_CA_FILE=/certs/ca.pem \
+      -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 \
+      -e LDAP_REPLICATION_PEERS="ldaps://${rg}:636" "$image" > /dev/null
+    wait_ready "$rg" || { bad "${label}: rogue provider never ready"; return; }
+    docker exec -i "$rg" ldapadd -x -H ldap://localhost -D "$admin" -w "$pw" > /dev/null << EOF
+dn: ${iddn}
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: replicator
+userPassword: ${idpw}
+EOF
+    add_user "$rg" rogueuser
+    # control: the rogue serves the identity bind and the rogue-only entry to a client that skips verification
+    o="$(docker run --rm --network "$net" -v "${rgv}:/rc:ro" -e LDAPTLS_CACERT=/rc/ca.pem -e LDAPTLS_REQCERT=never --entrypoint ldapsearch "$image" \
+      -x -LLL -H "ldaps://${rg}:636" -D "$iddn" -w "$idpw" -b "$base" '(uid=rogueuser)' uid 2>&1 || true)"
+    check "${label}: control: the rogue serves the identity bind and its entry when verification is skipped" "uid: rogueuser" "$(grep '^uid:' <<< "$o" || echo "no entry: ${o:0:200}")"
+    if [ "$mode" = ca ]; then
+      o="$(docker run --rm --network "$net" -v "${rgv}:/rc:ro" -e LDAPTLS_CACERT=/rc/ca.pem -e LDAPTLS_REQCERT=demand --entrypoint ldapsearch "$image" \
+        -x -LLL -H "ldaps://${rg}:636" -D "$iddn" -w "$idpw" -b "$base" '(uid=rogueuser)' uid 2>&1 || true)"
+      check "${label}: control: its certificate verifies against its OWN CA and name" "uid: rogueuser" "$(grep '^uid:' <<< "$o" || echo "no entry: ${o:0:200}")"
+    fi
+    pre="$(log_lines "$rg")" || return
+    # n3 consumes from the rogue (rid 001) and from n2 (rid 002); every other setting stays 'dedicated'
+    rg_peers="ldaps://${rg}:636,ldaps://${n2}:636,ldaps://${n3}:636"
+    docker rm -f "$n3" > /dev/null
+    # LDAPTLS_REQCERT=never (the image default is demand) makes slapd's global policy permissive, so only
+    # the stored per-syncrepl tls_reqcert=demand can refuse the rogue: an ignored option would let it in.
+    start_node "$n3" 3 dedicated -e "LDAP_REPLICATION_PEERS=${rg_peers}" -e LDAPTLS_REQCERT=never
+    wait_ready "$n3" || { bad "${label}: n3 never ready with the rogue peer"; docker logs "$n3" 2>&1 | tail -n 15 >&2; return; }
+    sl_r="$(syncrepl_list "$n3")"
+    check "${label}: n3 stored a tls_reqcert=demand value for the rogue provider (rid=001)" "1" \
+      "$(grep -c "rid=001 provider=ldaps://${rg}:636 .*tls_reqcert=demand" <<< "$sl_r" || true)"
+    # the legitimate provider keeps working while the rogue is refused
+    add_user "$n2" rqprobe
+    poll has_uid "$n3" rqprobe || bad "${label}: n3 stopped syncing from the legitimate provider"
+    rc_pat='TLS|tls|certificate|can.t contact|rid=001.*(rc=-|retry)'
+    # shellcheck disable=SC2317,SC2329 # invoked through poll
+    saw_refusal() { local l m; l="$(dlogs "$n3")" || return 1; m="$(grep -E "$rc_pat" <<< "$l" | grep 'rid=001' || true)"; [ -n "$m" ]; }
+    if poll saw_refusal; then ok "${label}: n3 logs the failed rid=001 connection to the rogue"; else bad "${label}: n3 never logged a failed connection to the rogue"; fi
+    sleep 12
+    check "${label}: the rogue-only entry never reached n3 (certificate refused)" "absent" "$(lacks_uid "$n3" rogueuser && echo absent || echo present-or-search-failed)"
+    o="$(new_log "$rg" "$pre")" || return
+    check "${label}: the rogue saw no BIND as the identity from n3 (refused before the bind)" "0" \
+      "$(bind_ips <<< "$o" | grep -c "dn=\"${iddn}\"" || true)"
+    check "${label}: the identity password is not in n3's log" "0" "$(grep -c -F -e "$idpw" <<< "$(dlogs "$n3")" || true)"
+    docker exec "$n2" ldapdelete -x -H ldap://localhost -D "$admin" -w "$pw" "uid=rqprobe,${base}" > /dev/null
+    poll lacks_uid "$n3" rqprobe || bad "${label}: the probe entry's delete never reached n3"
+    docker rm -fv "$rg" > /dev/null 2>&1 || true
+    docker volume rm -f "$rgv" > /dev/null 2>&1 || true
+  }
+  reqcert_probe "rogue provider, certificate from another CA" ca
+  reqcert_probe "rogue provider, trusted CA but mismatching hostname" host
+  restart_node "$n3" dedicated
+  wait_ready "$n3" || bad "n3 never ready after the rogue probes"
+  check "n3 restored: two olcSyncrepl values, none for a rogue" "2:0" "$(nlines "$(syncrepl_list "$n3")"):$(grep -c 'ridded-rg' <<< "$(syncrepl_list "$n3")" || true)"
+  check "n3 restored: user list unchanged" "alice carol dave erin late " "$(uids "$n3")"
+
   echo "== Part 2: wipe recovery in dedicated mode"
   uuid="$(base_uuid "$n2")"
   [ -n "$uuid" ] || bad "no base entryUUID read from n2"
