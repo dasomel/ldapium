@@ -204,7 +204,7 @@ or empty variable takes its default and a value outside its bounds fails startup
 | `MACHINE_OIDC_ALGS` | no | `RS256,ES256` | Comma list from `RS256/384/512, PS256/384/512, ES256/384/512, EdDSA`. `none` and `HS*` fail startup |
 | `MACHINE_ALLOWED_CLIENTS` | yes | none | `clientId=scope,scope;clientId2=scope`. The per-client scope ceiling: effective rights are the token scope intersected with this list. Known scopes: `directory.users.read`, `directory.groups.read`, `directory.tree.read`, `directory.entry.read`, `directory.policies.read`, `server.monitor.read`, and the opt-in `audit.read`, `server.settings.read`. Unknown scope, duplicate client, empty scope list or the SSO browser client (when SSO is on) fail startup |
 | `MACHINE_SA_USERNAME_PREFIX` | no | `service-account-` | Expected `preferred_username` prefix of a service account. Not a Helm value |
-| `MACHINE_TOKEN_MAX_TTL` | no | `10m` | > 0 and <= `1h`; a token whose `exp - iat` is larger is refused |
+| `MACHINE_TOKEN_MAX_TTL` | no | `10m` | `1ms` to `1h` inclusive; a token whose `exp - iat` is larger is refused |
 | `MACHINE_CLOCK_SKEW` | no | `30s` | `0s` to `60s` |
 | `MACHINE_JWKS_CACHE_TTL` / `MACHINE_JWKS_MAX_STALE` / `MACHINE_JWKS_MIN_REFRESH` | no | `10m` / `1h` / `30s` | `1m`-`24h` / `0`-`24h` / `1s`-`1h`. Key source: fresh within the TTL, a known `kid` is still verified locally up to TTL + max stale, a refetch starts at most once per min refresh |
 | `MACHINE_LDAP_BIND_DN` | yes | none | The one dedicated read-only LDAP account. Refused at startup when it equals (DN-parsed, case/spacing/escape variants included) a backup/profile administrator, `LDAP_SERVICE_ACCOUNT_DN` or a rootdn, or any run of RDNs inside one |
