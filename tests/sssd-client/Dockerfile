@@ -4,7 +4,7 @@
 # published, so the usual non-root-runtime rationale doesn't apply here.
 # trivy:ignore:AVD-DS-0026 one-shot check-and-exit container, not a service —
 # there is nothing running after entrypoint exits for a HEALTHCHECK to poll.
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 ENV DEBIAN_FRONTEND=noninteractive
 
