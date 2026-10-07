@@ -165,6 +165,7 @@ done
 | `idempotency_unsupported` | 422 | 이 서버에서 멱등 기능이 꺼져 있는데 키가 붙음 |
 | `if_match_required` | 428 | `If-Match` 필요 |
 | `login_rate_limited` | 429 | 로그인 실패 제한(`retryable: true`, `Retry-After`) |
+| `password_change_rate_limited` | 429 | 비밀번호 변경 실패 제한(세션+DN 단위, `retryable: true`, `Retry-After`) |
 | `machine_rate_limited` | 429 | 머신 bearer 요청이 IP 실패 throttle(서명·JWKS 이전) 또는 검증된 client의 rate/동시 실행 한도에 걸림(`retryable: true`, 정확한 `Retry-After`) |
 | `internal` | 500 | 예상 못 한 실패(문구 고정, `requestId`로 로그 조회) |
 | `upstream_failed` | 502 | Keycloak 작업 실패 |
@@ -268,7 +269,7 @@ curl -b jar -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json'
 |---|---|
 | `GET /api/users`, `/api/groups` | 파라미터 없음: 최대 5000건, 초과 시 `truncated: true`. `limit`/`cursor`/`q`/`sort`를 보내면 커서 모드: 페이지당 `limit` 1-200 (기본 50), 순회 길이 제한 없음([목록 페이지네이션](#목록-페이지네이션-users-groups)) |
 | `GET /api/audit/actions` | `limit` 1-200 (기본 50), `before`에 이전 응답의 `nextBefore` |
-| `POST /api/users/password` | `current_password_rejected` 연속 발생 시 세션+DN 단위 429 (`Retry-After`), 차단 중에는 올바른 암호도 429로 거부되며 윈도우 통과 후 성공 시 초기화. (`UI_PASSWORD_CHANGE_FAILURE_LIMIT`, `UI_PASSWORD_CHANGE_FAILURE_WINDOW`, 기본 10회/1m) |
+| `POST /api/users/password` | `current_password_rejected` 연속 발생 시 세션+DN 단위 429 (`Retry-After`), 차단 중에는 올바른 암호도 429로 거부되며 윈도우 통과 후 성공 시 초기화. (`UI_PASSWORD_CHANGE_FAILURE_LIMIT`, `UI_PASSWORD_CHANGE_FAILURE_WINDOW`, 기본 10회/1m). 반복 실패는 세션도 계정도 잠그지 않습니다: bind 잠금은 ppolicy 소관이고 이 limiter는 암호 변경 엔드포인트만 제한합니다. 예산은 세션+DN 단위, 프로세스 메모리, pod별이며 재시작 시 초기화되고 새 로그인은 새 예산으로 시작합니다(세션 간 DN별 카운터는 공격자가 피해자 본인의 암호 변경을 잠글 수 있어 채택하지 않음) |
 | 로그인 | IP별 실패 횟수 제한, 초과 시 429 + `Retry-After` |
 | 요청 본문 | 프로필 64KiB, 방식/연결 32KiB, 정책/역할 작업/미리보기 16KiB |
 | 매핑 미리보기 | `claim_values` 최대 100개 |

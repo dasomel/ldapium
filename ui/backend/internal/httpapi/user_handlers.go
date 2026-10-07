@@ -161,7 +161,7 @@ func (s *Server) handleSetPassword(c echo.Context) error {
 		c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(ceilSeconds(retryAfter)))
 		logPasswordRateLimitEvent(requestIDOf(c), sess.ID, req.DN)
 		// D266: 429 for repeated wrong current password
-		return apiErr(http.StatusTooManyRequests, "password_change_rate_limited", "too many failed password change attempts")
+		return apiErr(http.StatusTooManyRequests, codePasswordChangeRateLimited, "too many failed password change attempts")
 	}
 
 	// finish is idempotent: the deferred call settles the in-flight slot if

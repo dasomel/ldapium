@@ -22,7 +22,7 @@ var goldenCodes = []string{
 	"forbidden", "idempotency_capacity", "idempotency_key_conflict", "idempotency_key_reused", "idempotency_outcome_unknown",
 	"idempotency_unsupported", "if_match_required", "internal", "invalid_credentials", "invalid_request",
 	"job_not_cancellable", "job_not_found", "keycloak_disabled", "login_rate_limited", "machine_rate_limited", "method_not_allowed", "not_found",
-	"origin_mismatch", "partial_failure", "persistence_unavailable", "revision_conflict", "scan_limit_exceeded", "scan_timeout",
+	"origin_mismatch", "partial_failure", "password_change_rate_limited", "persistence_unavailable", "revision_conflict", "scan_limit_exceeded", "scan_timeout",
 	"scope_denied", "session_expired", "size_limit_exceeded", "token_expired", "token_invalid", "unauthenticated",
 	"unavailable", "unsupported_media_type", "upstream_failed", "validation_failed",
 }
@@ -74,6 +74,7 @@ func TestEnvelope_RetryableRules(t *testing.T) {
 		want         bool
 	}{
 		{codeLoginRateLimited, "POST", true},
+		{codePasswordChangeRateLimited, "POST", true},
 		{codeUnavailable, "GET", true},
 		{codeScanTimeout, "GET", true},
 		{codeBackupBusy, "POST", true},

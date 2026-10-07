@@ -7017,6 +7017,7 @@
               "not_found",
               "origin_mismatch",
               "partial_failure",
+              "password_change_rate_limited",
               "persistence_unavailable",
               "revision_conflict",
               "scan_limit_exceeded",
