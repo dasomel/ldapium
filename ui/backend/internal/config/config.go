@@ -132,17 +132,17 @@ type Config struct {
 	// the eviction and fail-closed policy.
 	LoginLimiterMaxEntries int
 
-	// PasswordChangeFailureLimit is the number of failed POST /api/users/password
+	// ChangeAttemptFailureLimit is the number of failed POST /api/users/password
 	// attempts (current_password_rejected) a single session+DN may make within
-	// PasswordChangeFailureWindow before being rate-limited (#266). Zero disables.
-	PasswordChangeFailureLimit int
+	// ChangeAttemptFailureWindow before being rate-limited (#266). Zero disables.
+	ChangeAttemptFailureLimit int
 
-	// PasswordChangeFailureWindow is the sliding window for PasswordChangeFailureLimit.
-	PasswordChangeFailureWindow time.Duration
+	// ChangeAttemptFailureWindow is the sliding window for ChangeAttemptFailureLimit.
+	ChangeAttemptFailureWindow time.Duration
 
-	// PasswordChangeLimiterMaxEntries (UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES)
+	// ChangeAttemptLimiterMaxEntries (UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES)
 	// is the hard cap on session+DN pairs tracked by the password limiter.
-	PasswordChangeLimiterMaxEntries int
+	ChangeAttemptLimiterMaxEntries int
 
 	// IdempotencyEnabled (UI_IDEMPOTENCY_ENABLED, default false) lets the
 	// core user/group writes honour an Idempotency-Key from the in-memory
@@ -337,30 +337,30 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	pwLimitRaw := orDefault(getenv("UI_PASSWORD_CHANGE_FAILURE_LIMIT"), "10")
-	cfg.PasswordChangeFailureLimit, err = strconv.Atoi(strings.TrimSpace(pwLimitRaw))
+	cfg.ChangeAttemptFailureLimit, err = strconv.Atoi(strings.TrimSpace(pwLimitRaw))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid UI_PASSWORD_CHANGE_FAILURE_LIMIT %q: %w", pwLimitRaw, err)
 	}
-	if cfg.PasswordChangeFailureLimit < 0 {
-		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_FAILURE_LIMIT must not be negative, got %d", cfg.PasswordChangeFailureLimit)
+	if cfg.ChangeAttemptFailureLimit < 0 {
+		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_FAILURE_LIMIT must not be negative, got %d", cfg.ChangeAttemptFailureLimit)
 	}
 
 	pwWindowRaw := orDefault(getenv("UI_PASSWORD_CHANGE_FAILURE_WINDOW"), "1m")
-	cfg.PasswordChangeFailureWindow, err = time.ParseDuration(pwWindowRaw)
+	cfg.ChangeAttemptFailureWindow, err = time.ParseDuration(pwWindowRaw)
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid UI_PASSWORD_CHANGE_FAILURE_WINDOW %q: %w", pwWindowRaw, err)
 	}
-	if cfg.PasswordChangeFailureWindow <= 0 {
-		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_FAILURE_WINDOW must be positive, got %v", cfg.PasswordChangeFailureWindow)
+	if cfg.ChangeAttemptFailureWindow <= 0 {
+		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_FAILURE_WINDOW must be positive, got %v", cfg.ChangeAttemptFailureWindow)
 	}
 
 	pwMaxRaw := orDefault(getenv("UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES"), "10000")
-	cfg.PasswordChangeLimiterMaxEntries, err = strconv.Atoi(strings.TrimSpace(pwMaxRaw))
+	cfg.ChangeAttemptLimiterMaxEntries, err = strconv.Atoi(strings.TrimSpace(pwMaxRaw))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES %q: %w", pwMaxRaw, err)
 	}
-	if cfg.PasswordChangeLimiterMaxEntries < 1 {
-		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES must be at least 1, got %d", cfg.PasswordChangeLimiterMaxEntries)
+	if cfg.ChangeAttemptLimiterMaxEntries < 1 {
+		return Config{}, fmt.Errorf("UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES must be at least 1, got %d", cfg.ChangeAttemptLimiterMaxEntries)
 	}
 
 	cfg.TrustedProxies, err = validateTrustedProxies(getenv("UI_TRUSTED_PROXIES"))
