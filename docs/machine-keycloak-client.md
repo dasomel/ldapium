@@ -9,7 +9,7 @@ ldapium은 토큰의 claim으로 "이 토큰이 정말 그 client의 서비스 �
   아래 "관측" 표시는 그 실험에서 직접 확인한 것이고, 관리 콘솔의 메뉴 이름은 **문서 작성 시 다시 눌러 보지 않았습니다**(26.7.4 기준, 버전에 따라 다를 수 있음).
 - 거부 규칙의 정본: [CHANGE.md](changes/machine-principal-auth/CHANGE.md) "토큰 검증 정책".
 - LDAP 쪽 준비(전용 계정·ACL)는 [`machine-ldap-account.md`](machine-ldap-account.md), 긴급 차단·롤백은 [`machine-auth-operations.md`](machine-auth-operations.md).
-- **실제 Keycloak을 띄워 이 설정의 양성·음성을 점검하는 라이브 e2e는 이 문서와 같은 단계에서 병합되지 않았습니다**(단위 5a, 진행 중). 아래 "잘못 설정하면" 표의 거동은 EVIDENCE의 실제 Keycloak 관측과, 같은 claim 형태를 고정한 ldapium 검증기 단위 테스트에 근거합니다.
+- 이 설정의 양성·음성은 실제 Keycloak 26.7.4로 자동 점검됩니다: `scripts/test/test-machine-keycloak-settings-live.py`(요건 ①–⑤를 `audit_client_settings()`로 점검, 위반마다 401·bind 0)와 `scripts/test/test-machine-keycloak-live.py`, CI job `machine bearer auth (real Keycloak)`. 아래 "잘못 설정하면" 표의 각 행은 [EVIDENCE §2.9·§5.1](changes/machine-principal-auth/EVIDENCE.md)의 실제 Keycloak 관측과 같은 claim 형태를 고정한 단위 테스트(`machineauth/verifier_test.go` `TestVerify_NegativeTable`)에 근거합니다.
 
 ## 1. 필요한 client 설정
 
@@ -112,7 +112,7 @@ print(json.dumps(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))))
   - **신선(FRESH, 마지막 조회 성공 후 `MACHINE_JWKS_CACHE_TTL`=10분 이내)**: 삭제된 키로 서명된 토큰도 **계속 200**입니다. 이 동안 알려진 `kid`는 조회를 일으키지 않습니다.
   - **STALE(TTL 초과, `MACHINE_JWKS_CACHE_TTL`+`MACHINE_JWKS_MAX_STALE`=1시간 10분 이내)**: 알려진 `kid`의 첫 요청은 여전히 캐시된 옛 키로 검증되어 통과하고, 그 요청이 **백그라운드 조회 1건**을 시작합니다(조회 최소 간격 `MACHINE_JWKS_MIN_REFRESH`=30초 예산 안에서). 조회가 성공하면 키 집합이 교체되어 이후 그 `kid`는 401(`token_invalid`, `reason=kid`)입니다. 조회가 실패하면(Keycloak 중지 등) backoff(30초→최대 5분)로 재시도하며 그동안은 계속 통과합니다.
   - **EXPIRED(1시간 10분 초과)**: 캐시를 쓰지 않고 조회가 필요합니다. 성공하면 위처럼 401, 실패·backoff 중이면 **503 + `Retry-After`**.
-  - 요청이 없으면 조회도 없습니다(키 집합은 요청이 올 때만 갱신). 최악의 경우 삭제된 키의 토큰이 통과하는 시간은 **조회가 계속 실패할 때 1시간 10분**, 정상일 때는 **캐시 TTL 10분 + 그 뒤 첫 요청이 갱신을 마칠 때까지**입니다. 토큰 자체의 `exp`(+skew)가 더 이르면 그때 끝납니다. 수치는 `keyset.go`와 CHANGE.md "JWKS·discovery 상태 기계"(시나리오 c·d·e)를 읽어 확인했고, 실제 Keycloak 앞에서의 라이브 확인은 하지 않았습니다(단위 5a).
+  - 요청이 없으면 조회도 없습니다(키 집합은 요청이 올 때만 갱신). 최악의 경우 삭제된 키의 토큰이 통과하는 시간은 **조회가 계속 실패할 때 1시간 10분**, 정상일 때는 **캐시 TTL 10분 + 그 뒤 첫 요청이 갱신을 마칠 때까지**입니다. 토큰 자체의 `exp`(+skew)가 더 이르면 그때 끝납니다. 수치는 `keyset.go`와 CHANGE.md "JWKS·discovery 상태 기계"(시나리오 c·d·e)를 읽어 확인했습니다. 키 회전과 옛 키 제거 뒤 TTL(시험에서는 60 s)이 지나면 거부되는 것은 실제 Keycloak 앞 계수 프록시로 라이브 확인했고(`scripts/test/test-machine-jwks-live.py`), 기본값 1시간 STALE/EXPIRED 구간은 fake clock 단위 시험(`machineauth/keyset_test.go`)만의 근거입니다.
   - **즉시 폐기 수단이 아닙니다.** 즉시 차단은 서버 쪽뿐입니다: `MACHINE_ALLOWED_CLIENTS`에서 제거 또는 `MACHINE_AUTH_ENABLED=false`로 배포하고 **모든 replica를 교체**한 뒤 진행 중 요청이 끝났는지 확인합니다([`machine-auth-operations.md`](machine-auth-operations.md)). 새 pod는 시작 시 키를 새로 받으므로 pod 교체는 캐시도 비웁니다.
 - ldapium은 JWKS를 10분(`MACHINE_JWKS_CACHE_TTL`) 캐시하고 조회는 최소 30초 간격(`MACHINE_JWKS_MIN_REFRESH`)입니다. 새 `kid`는 마지막 조회 성공 후 30초까지 401일 수 있습니다(문서화된 비용).
 - Keycloak/JWKS가 닿지 않으면 알려진 `kid`는 stale 한도(`MACHINE_JWKS_MAX_STALE`, 기본 1시간) 안에서 로컬 검증되고, 그 밖에는 **503 + `Retry-After`**(fail closed)입니다. 서명 검증을 생략하는 폴백은 없습니다.

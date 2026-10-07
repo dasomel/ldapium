@@ -63,7 +63,8 @@ try:
   subprocess.run(['npx','playwright','test','e2e/backups.spec.ts','e2e/backup-jobs.spec.ts'],cwd=repo/'ui/frontend',check=True,
     env=dict(os.environ,E2E_BASE_URL=url,E2E_ADMIN_DN=admin_dn,E2E_ADMIN_PASSWORD=password))
   runs=command(['docker','exec',ui,'ls','/var/lib/ldapium-backups/logs']).split()
-  assert runs,'log backup left no run directory in the backup root'
+  if not runs:
+    raise AssertionError('log backup left no run directory in the backup root')
   print('PASS: backups spec against backup-runtime UI; log backup runs on disk: '+str(len(runs)))
 except Exception:
   # Scrub the generated password: container logs must not leak it into CI output.

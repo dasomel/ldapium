@@ -24,7 +24,8 @@ for _ in range(180):
   state=call('/v1/backups')['states'].get('data',{})
   if state.get('status')!='running':break
   time.sleep(1)
-assert state['status']=='succeeded',state['status']
+if not (state['status']=='succeeded'):
+  raise AssertionError(state['status'])
 run=Path(cfg['root'])/'data'/state['run_id']
 source=subprocess.run(['ldapsearch','-x','-H',ldap['url'],'-D',ldap['admin_dn'],'-y',ldap['password_file'],'-b',ldap['base_dn'],'-s','base','entryUUID'],check=True,capture_output=True,text=True).stdout
 source_uuid=next(line for line in source.splitlines() if line.startswith('entryUUID:'))
@@ -49,12 +50,14 @@ try:
   if result.returncode!=0:
     output=subprocess.run(['docker','logs','--tail','15',name],capture_output=True,text=True)
     raise RuntimeError(('restored directory failed to start: '+output.stderr+output.stdout).replace(Path(ldap['password_file']).read_text(),'[redacted]'))
-  assert source_uuid in result.stdout,'entryUUID was not preserved'
+  if not (source_uuid in result.stdout):
+    raise AssertionError('entryUUID was not preserved')
   exported=next(run.glob('data-*.ldif.gz'))
   expected=sum(line.startswith('dn:') for line in gzip.open(exported,'rt'))
   restored=subprocess.run(['docker','exec',name,'ldapsearch','-x','-H','ldap://127.0.0.1','-D',ldap['admin_dn'],'-y','/restore/password','-b',ldap['base_dn'],'-E','pr=500/noprompt','1.1'],capture_output=True,text=True,check=True).stdout
   actual=sum(line.startswith('dn:') for line in restored.splitlines())
-  assert actual==expected,f'restored entry count mismatch: expected={expected} actual={actual}'
+  if not (actual==expected):
+    raise AssertionError(f'restored entry count mismatch: expected={expected} actual={actual}')
   print('PASS: restored entry count matches snapshot: '+str(expected))
   print('PASS: actual UI LDAP data+config backup, manifest integrity, offline restore, bound LDAP query and preserved entryUUID')
 finally:

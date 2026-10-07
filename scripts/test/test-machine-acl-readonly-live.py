@@ -67,7 +67,8 @@ ldap_image = os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e')
 prefix = os.environ.get('LDAPIUM_TEST_PREFIX', 'ldapium-macl-')
 mutation = os.environ.get('LDAPIUM_ACL_MUTATE', '')
 only_configs = os.environ.get('LDAPIUM_ACL_CONFIGS', 'a,b,c').split(',')
-assert set(only_configs) <= {'a', 'b', 'c'} and only_configs, 'LDAPIUM_ACL_CONFIGS is a comma list of a, b, c'
+if not (set(only_configs) <= {'a', 'b', 'c'} and only_configs):
+  raise SystemExit('LDAPIUM_ACL_CONFIGS is a comma list of a, b, c')
 run_id = uuid.uuid4().hex[:6]
 name_prefix = prefix + run_id
 
@@ -85,8 +86,8 @@ human_password = 'Human-' + secrets.token_urlsafe(18)
 
 SECRET_ATTRS = ('userPassword', 'shadowLastChange', 'pwdHistory', 'pKCS8PrivateKey', 'userPKCS12',
                 'oathSecret', 'oathEncKey', 'oathTokenPIN')
-assert mutation in ('', 'reorder', 'widen', 'nosecret') or (mutation.startswith('drop:') and mutation[5:] in SECRET_ATTRS), \
-    'LDAPIUM_ACL_MUTATE must be reorder, widen, nosecret or drop:<secret attribute>'
+if not (mutation in ('', 'reorder', 'widen', 'nosecret') or (mutation.startswith('drop:') and mutation[5:] in SECRET_ATTRS)):
+  raise SystemExit('LDAPIUM_ACL_MUTATE must be reorder, widen, nosecret or drop:<secret attribute>')
 
 containers = []
 tmp_dirs = []
@@ -107,7 +108,8 @@ def check(condition, message):
 
 
 def require(condition, message):
-  assert condition, message
+  if not condition:
+    raise AssertionError(message)
 
 
 def mask(text):
@@ -315,7 +317,8 @@ def mutate(text):
       names = [n for n in m.group(2).split(',') if n != attr]
       return m.group(1) + ','.join(names)
     out, n = re.subn(r'(olcAccess: \{0\}to attrs=)([^\n]*)', drop, text, count=1)
-    assert n == 1 and attr in SECRET_ATTRS
+    if not (n == 1 and attr in SECRET_ATTRS):
+      raise AssertionError('n == 1 and attr in SECRET_ATTRS')
     return out
   if mutation == 'nosecret':
     lines = text.splitlines(keepends=True)

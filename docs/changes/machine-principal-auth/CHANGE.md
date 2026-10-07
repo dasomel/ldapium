@@ -1,8 +1,8 @@
 # Change: 외부 HTTP API용 머신 주체(서비스) 인증 — 읽기 전용 범위
 
 - Change class: `D` — 인증·인가 경계 추가, 신규 자격 증명 수용 경로
-- Owner: 미지정 — 수용 전 지정
-- Related issue: 미등록 — 출처 [api-integration PLAN P0](../api-integration/PLAN.md)
+- Owner: 유지보수자 dasomel(수용자와 동일; 2026-10-07 close-out 감사에서 확정)
+- Related issue: [#214](https://github.com/dasomel/ldapium/issues/214)(열림; 닫기는 close-out 감사 병합 후 유지보수자 결정) — 출처 [api-integration PLAN P0](../api-integration/PLAN.md)
 - Status: `Accepted (2026-10-07; Revision 5; staged implementation, default off)`
 - Revision 2 (2026-10-07): addresses T-005 security review round 1 (BLOCKER).
 - Revision 3 (2026-10-07): addresses T-005 round 2 (ACL order, rootdn list syntax, service-account identification, JWKS state machine, selectAuth precedence, IP throttle numbers); re-review pending; acceptance by the maintainer instruction of 2026-10-07 follows a passing re-review
@@ -11,11 +11,9 @@
 - Accepted by / date: dasomel / 2026-10-07 — 근거: 유지보수자(사용자) 지시('승인 후 구현까지', 2026-10-07)와 독립 Codex 보안 재검토 5라운드(1라운드 BLOCKER → Revision 2–5 반영 → 최종 확인 PASS). 수용 범위는 **설계(v1 읽기 전용, 기본 꺼짐)**이며 구현은 TASKS.md 순서대로 단계 병합한다. 각 구현 PR은 Class D로 독립 검토를 받는다. 코드 수준 항목(ACL 적용 후 `olcAccess` 읽기 확인, 라이브 e2e 등)은 해당 task의 완료 조건이다.
 - 작성일: 2026-10-04 (Revision 2: 2026-10-07)
 
-> 이 문서는 설계 제안이다. 코드·ACL·Helm·OpenAPI는 변경하지 않았고, 아래 동작은
-> 어느 것도 구현·런타임 검증되지 않았다. Keycloak 토큰·JWKS 거동과 오퍼레이션 집계는
-> 2026-10-07에 실제 Keycloak 26.7.4 실행과 코드 읽기로 확인해 [EVIDENCE.md](EVIDENCE.md)에
-> 기록했다(T-001, T-004 완료). 이 문서의 규칙은 그 관측에 근거하며, 구현 검증은 별개다.
-> Revision 2의 변경 요약은 끝의 “Revision 2” 절.
+> 이 문서는 수용된 설계 정본이다(구현은 2026-10-07 수용 이후 기본 꺼짐으로 단계 병합됨). 본문(Problem, Requirements, Architecture 등)은 수용 시점의 설계 서술이고,
+> **구현·검증 상태의 정본은 아래 "Traceability matrix"와 끝의 "Close-out audit (2026-10-07)"** 이다. Keycloak 토큰·JWKS 거동과 오퍼레이션 집계는
+> 2026-10-07에 실제 Keycloak 26.7.4 실행과 코드 읽기로 확인해 [EVIDENCE.md](EVIDENCE.md)에 기록했다(T-001, T-004). Revision 2의 변경 요약은 끝의 “Revision 2” 절.
 
 ## Problem
 
@@ -541,31 +539,33 @@ JWKS 검증은 외부 모킹 없이 로컬 `httptest` 서버가 실제 JWKS를 �
 
 ## Traceability matrix
 
-| Requirement | Acceptance | Task | Evidence |
-|---|---|---|---|
-| `REQ-001` | AC-001, AC-002 | T-010, T-011, T-019, T-020, T-021, T-028 | 검증기 단위·e2e 음성 표(양성 대조 포함), [EVIDENCE §2](EVIDENCE.md) |
-| `REQ-002` | AC-001, AC-003 | T-012, T-024, T-020, T-021 | scope 해석 테스트, 가드 전수 호출 8/37, 합성 라우트 403 |
-| `REQ-003` | AC-004, AC-013 | T-012, T-014, T-024 | 거부 37개 전수, 계약 테스트 |
-| `REQ-004` | AC-001, AC-009, AC-018 | T-010, T-013, T-015, T-026 | 기동 검증(ParseDN 변형), bind DN 로그, `olcAccess` 순서 읽기·쓰기 시도 거부(3구성) |
-| `REQ-005` | AC-005 | T-040, T-021 | non-admin 과권한 bind e2e, 값 grep |
-| `REQ-006` | AC-006 | T-012, T-020, T-021 | `selectAuth` 매트릭스, 중복 쿠키 회귀, Origin·CORS·혼용 e2e |
-| `REQ-007` | AC-007 | T-021 | 2모드 e2e |
-| `REQ-008` | AC-008, AC-009 | T-006, T-011, T-013, T-019, T-021, T-025 | 상태 기계 시나리오 a–h 조회 횟수, 기동 실패 |
-| `REQ-009` | AC-001, AC-010 | T-017, T-020, T-021 | 줄 수 표·로그 secret scan |
-| `REQ-010` | AC-011 | T-018(#270 의존), T-020, T-021 | limiter 단위(경계 표·reservation·상한), 429 e2e, 위조 XFF |
-| `REQ-011` | AC-002, AC-012 | T-011, T-020 | 실제 서명 검증기 경유 경계 표 |
-| `REQ-012` | AC-013 | T-014, T-020 | 계약 테스트 |
-| `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 기존 CI 통과, 차트 렌더, 롤백 드릴 |
-| `REQ-014` | AC-010 | T-017, T-021 | 로그·응답 grep |
-| `REQ-015` | AC-005, AC-015 | T-040, T-021 | accesslog/config/Monitor 403 표, 로그 미발행 |
-| `REQ-016` | AC-008, AC-016 | T-010, T-019, T-025 | 조회 시작 상한 1+⌈T/30⌉·시나리오 a–h 표, https 기동 검증 |
-| `REQ-017` | AC-017 | T-041, T-021 | cursor 교차 재생·갱신 후 연속 |
-| `REQ-018` | AC-019 | T-027, T-030, T-032 | 롤아웃 드릴 표, 운영 문서 |
+실제 산출물과 판정(2026-10-07 close-out 감사, main `5c74f73`; 테스트 이름·라이브 스크립트 전체 목록은 아래 "Close-out audit" 표). 약어: `h/`=`ui/backend/internal/httpapi/`, `m/`=`.../machineauth/`, `c/`=`.../config/`, `l/`=`.../ldapclient/`; 라이브 = `scripts/test/test-machine-*-live.py`·`test-machine-revocation-drill.py`, CI job `machine bearer auth (real Keycloak)`·`api-credentials-e2e.yml`.
+
+| Requirement | Acceptance | Task | Verifying artifacts | Verdict |
+|---|---|---|---|---|
+| `REQ-001` | AC-001, AC-002 | T-010, T-011, T-019, T-020, T-021, T-028 | `m/verifier_test.go`(`TestVerify_NegativeTable` 48 하위 케이스 외), keycloak-live·settings-live, [EVIDENCE §2·§5](EVIDENCE.md) | MET |
+| `REQ-002` | AC-001, AC-003 | T-012, T-024, T-020, T-021 | `h/machine_test.go` `TestMachine_EveryProtectedOperationExercised`(8/37)·`_NewProtectedGetWithoutAllowlistIsDenied`, keycloak-live | MET |
+| `REQ-003` | AC-004, AC-013 | T-012, T-014, T-024 | `h/machine_contract_test.go`, `TestMachine_NonGetAlwaysDenied`, `jq` 8/37/53 | MET |
+| `REQ-004` | AC-001, AC-009, AC-018 | T-010, T-013, T-015, T-026 | `c/machine_test.go` `TestMachine_BindDNEquivalence`, ACL 라이브 349 검사(3구성)+변이 11 | MET(결합 제한 #277) |
+| `REQ-005` | AC-005 | T-040, T-021 | `l/secret_boundary_test.go`, keycloak-live 비밀 값 0건 | MET |
+| `REQ-006` | AC-006 | T-012, T-020, T-021 | `TestSelectAuth_Matrix`, `TestMachine_DuplicateCookiesUnchanged`, keycloak-live | MET |
+| `REQ-007` | AC-007 | T-021 | keycloak-live(LDAP·SSO 모드) | MET |
+| `REQ-008` | AC-008, AC-009 | T-006, T-011, T-013, T-019, T-021, T-025 | `m/keyset_test.go` `TestKeySet_A…H`, `TestMachine_StartupDiscoveryPolicy`, jwks-live | MET |
+| `REQ-009` | AC-001, AC-010 | T-017, T-020, T-021 | `h/machine_audit_test.go`, 로그 스캔 0건 | MET(예외 D25) |
+| `REQ-010` | AC-011 | T-018(#270 의존), T-020, T-021 | `h/machine_limiter_test.go`(경계 표), execution-live, keycloak-live | MET(replica별) |
+| `REQ-011` | AC-002, AC-012 | T-011, T-020 | `m/verifier_test.go` `TestVerify_TimeBoundaries` | MET |
+| `REQ-012` | AC-013 | T-014, T-020 | `h/machine_contract_test.go`, `jq` | MET |
+| `REQ-013` | AC-014, AC-019 | T-015, T-016, T-021, T-027 | 꺼짐 단위 테스트 4종, `scripts/test/test-chart-machine-auth.sh`, 드릴 (c) | MET(클러스터 설치 미실행 #284) |
+| `REQ-014` | AC-010 | T-017, T-021 | `TestMachineAudit_NoTokenMaterialInLogsOrResponses`, 로그 스캔 | MET |
+| `REQ-015` | AC-005, AC-015 | T-040, T-021 | `TestDNWithinBase`, `TestMachineGuard_*`, keycloak-live | MET |
+| `REQ-016` | AC-008, AC-016 | T-010, T-019, T-025 | `m/keyset_test.go`, `TestHTTPFetcher_Limits`, jwks-live | MET |
+| `REQ-017` | AC-017 | T-041, T-021 | `h/machine_boundary_test.go` `TestMachineCursor_Isolation` | MET |
+| `REQ-018` | AC-019 | T-027, T-030, T-032 | `test-machine-revocation-drill.py` 18 검사, `docs/machine-auth-operations.md` | MET(#280, #284) |
 
 ## Review record
 
 - Accepted scope/requirements: REQ-001–REQ-018 설계(Revision 5), 읽기 전용 v1, 기본 꺼짐. 2026-10-07 유지보수자 지시('승인 후 구현까지')를 재검토 5라운드 통과 후 이행해 수용했다(Revision 5 최종 확인 PASS). T-005 1차 독립 보안 검토(Codex)는 BLOCKER였고 Revision 2가 이를 반영했다.
-- Material changes after acceptance and re-review: 해당 없음.
+- Material changes after acceptance and re-review: 수용 뒤 구현 중 확정된 결정 D17–D32는 이 문서 끝의 "Implementation notes"와 [ADR.md](ADR.md)에 설계 변경이 아닌 명확화로 기록돼 있다(T-006 미결이던 `listTree` 상한은 D21, 최소 ACL 비밀 속성 목록 확장은 D26, 결합 순서 D30은 미결로 T-034/#277). 이 close-out 감사는 설계 서술을 바꾸지 않았다.
 - Open questions or blockers: Q1–Q10은 2026-10-04 유지보수자 지시("열린 질문 권장으로 처리")로 권고안 채택(Revision 2에서 뒤집힌 것 없음, Q5·Q9·Q10에 주석). 아래 결정 표 참조. 패키지 자체의 수용(Accepted)은 별도 검토가 필요하며 구현은 그 이후에 시작한다.
 
 ### Resolved questions (2026-10-04, 유지보수자 지시: 권고안 채택)
@@ -721,3 +721,89 @@ Documentation and proof only: the operator guide [machine-ldap-account.md](../..
 - D31: **Reservation lifetime and the authentication deadline.** An IP reservation (D9) is held for the whole request: the authentication phase and then the execution step, which starts its own `MACHINE_REQUEST_TIMEOUT` only at the LDAP step. The self-expiry was `MACHINE_REQUEST_TIMEOUT` (minimum 1 s) while authentication can wait up to two 5 s JWKS refreshes, so a live request could lose its reservation and the per-IP "N minus failures" bound broke (Codex reproduction: N=1, timeout 1 s, two simultaneous authentications and two failures admitted). Fix: the authentication phase now has one explicit deadline `machineAuthTimeout` = 2 x `FetchTimeout` = 10 s (context passed to the verifier; the JWKS wait honors it), and the reservation self-expires after `authentication deadline + MACHINE_REQUEST_TIMEOUT + 1 s`, so it outlives the longest possible request. Reaching the authentication deadline fails closed with 503 `Retry-After: 1` (audit reason `deadline`), releases the reservation and is not counted as a failure (503 is never a failure, D9). A verification that succeeds only after the deadline (a key source that ignored the context) is also refused with 503. Escape hatch: a truly leaked reservation is still reclaimed at its expiry. Cost: a leaked reservation now blocks up to ~16 s (default timeout) instead of 10 s. Not covered: a handler that ignores its context after the execution deadline.
 - D32: **Explicit `UI_TRUSTED_PROXIES` CIDRs trust only those CIDRs.** `ipExtractorFor` passed only `TrustIPRange` options to Echo's XFF extractor, which keeps its defaults (loopback, link-local, private networks) trusted unless disabled, so with `UI_TRUSTED_PROXIES=10.0.0.0/8` a private peer such as `192.168.50.2` outside the list could forge `X-Forwarded-For` and get a fresh failure budget per request (Codex reproduction: failure limit 1, `XFF=198.51.100.1` 401, again 429, `XFF=198.51.100.2` 401 with `peer_failures=0`). Fix: the three defaults are switched off in explicit-list mode, so an unlisted peer keys on its own address. `none` and `private` are unchanged. This is a deliberate behaviour change for operators who set explicit CIDRs and relied on implicit private-network trust (shared by the login limiter and the machine limiter only; the machine audit line has no IP field): list every proxy CIDR explicitly. No other extractor option or default-trust setting exists in the unit; the other limiter TTLs (JWKS cache, neg cache, failure window) guard no in-flight work.
 - Replication (code reading, not run on a cluster): `olcSyncrepl` exists only on the main mdb database with `searchbase=$LDAP_ROOT_DN`; `cn=config` is not replicated. The machine account entry replicates, the ACL does not: apply and verify on every node and again after a fresh config volume.
+
+## Close-out audit (2026-10-07)
+
+감사 기준: `origin/main` `5c74f73`(단위 A0–A5b #269 #272 #274 #276 #278 #279 #281, 수정 #273 #282 병합 후). 문서만 바꿨다(코드 변경 없음; 별도 커밋으로 테스트 스크립트의 `assert`를 실제 raise로 바꿨다). 판정 어휘: **MET** = main에 증명 산출물이 있고 이 감사가 실행 가능한 것은 직접 실행함, **PARTIAL**, **NOT MET**. 라이브 Keycloak 스크립트는 다시 돌리지 않았고 CI 결과와 [EVIDENCE.md](EVIDENCE.md)의 기록을 인용한다.
+
+### 이 감사가 실제로 실행한 것
+
+| 확인 | 명령 | 결과 |
+|---|---|---|
+| 단위·계약 전체 | `cd ui/backend && go test ./internal/httpapi ./internal/machineauth ./internal/config ./internal/ldapclient -count=1 -v` | 네 패키지 `ok`, 최상위 테스트 `--- PASS` 526 · FAIL 0 · SKIP 0(머신 외 테스트 포함) |
+| 경쟁 검사 | 같은 네 패키지 `-race -count=1` | 네 패키지 `ok` |
+| 정적 | `go vet ./internal/...` | 종료 0 |
+| 전체 모듈 | `go test ./... -count=1` | 나머지 패키지 `ok`; `cmd/server`·`web`은 이 작업 트리에 프런트 빌드(`web/dist`)가 없어 `pattern all:dist: no matching files found`로 **setup failed**(환경 문제, 코드 실패 아님; 이 감사에서 빌드하지 않음) |
+| OpenAPI 집계 | `jq` (`ui/backend/internal/httpapi/openapi/openapi.json`) | 오퍼레이션 53, `security: []`(공개) 8, `machineBearer` 보유 8(전부 `get`: 비-GET 0), `securitySchemes` = `cookieAuth`·`machineBearer`; 보호 45 − 허용 8 = 거부 37 |
+| 차트 | `scripts/test/test-chart-machine-auth.sh` | `PASS` 40줄, `FAIL`·기타 줄 없음 |
+| 선택 재실행 | `TestMachine_FeatureOffIgnoresBearer`·`TestMachine_EveryProtectedOperationExercised`·`TestSelectAuth_Matrix`·`TestOpenAPIMachine*` 등 `-v` | 전부 `--- PASS` |
+| CI(라이브) | `gh run list --workflow machine-keycloak-e2e.yml` | PR 마지막 헤드 `d41d338` 실행 **37555431534 success**; main 병합 커밋 `5c74f73` push 실행 **37557393281** → **success** |
+
+### 요구사항 REQ-001–018
+
+| REQ | 판정 | 증명 산출물(단위 → 라이브) |
+|---|---|---|
+| 001 | MET | `machineauth/verifier_test.go` `TestVerify_PositiveControl`·`_NegativeTable`(48 하위 케이스)·`_SignatureAndAlgorithmAttacks`·`_TimeBoundaries`, `review_test.go` `TestVerify_AccountAudienceNeverAccepted` → `test-machine-keycloak-live.py`(음성 40종 × 두 모드, bind 26→26), `test-machine-keycloak-settings-live.py` |
+| 002 | MET | `httpapi/machine_test.go` `TestMachine_EveryProtectedOperationExercised`(45 전수: 8 도달·37 403·bind 0)·`_NewProtectedGetWithoutAllowlistIsDenied`·`_ScopeResolution` → keycloak-live(거부 37+HEAD+scope 부족+민감 DN, bind 29→29) |
+| 003 | MET | `machine_contract_test.go` `TestOpenAPIDeniedOperationsNeverCarryMachineBearer`·`TestOpenAPINoNonGetCarriesMachineBearer`·`TestMachine_NonGetAlwaysDenied`, `jq` 8/37 |
+| 004 | MET(제한: #277) | `config/machine_test.go` `TestMachine_BindDNEquivalence`(변형 12종)·`_StartupFailures`·`_RootDNsAreSemicolonSeparated`·`_SSOServiceAccountCollision`, `TestMachineExec_BindFailureIs503AndNeverFallsBack`·`_RunsHandlersAsTheMachineIdentity` → `test-machine-acl-readonly-live.py`(세 구성 349 검사, 변이 11종, `api-credentials-e2e.yml`). `LDAP_REPLICATION_IDENTITY=prepare`와의 결합은 미지원(문서가 함께 쓰지 말라고 경고) |
+| 005 | MET | `ldapclient/secret_boundary_test.go` `TestAuditDTONeverEmitsReqModValues`·`TestEntryRedactedAttrsIsPinned`, `TestMachineGuard_EntryAndTreeAreBoundedToBaseDN` → keycloak-live(과권한 bind, 응답 17개에서 비밀 값 0건, accesslog `reqMod` 10건 시드) |
+| 006 | MET | `TestSelectAuth_Matrix`·`TestMachine_DuplicateCookiesUnchanged`·`_AuthorizationShapes`·`_PublicAuthRoutesRejectAuthorization`·`_OriginGateStaysOutermost`·`_CORSNotExtended` → keycloak-live(쿠키+bearer 400, Origin 403, preflight, bind 0) |
+| 007 | MET | `config` `TestMachine_InheritsSSOIssuer` → keycloak-live가 LDAP 모드와 SSO 모드를 모두 실행(71 검사) |
+| 008 | MET | `machineauth/keyset_test.go` `TestKeySet_A…H`(정확한 조회 횟수)·`_F1_*`·`_F2_*`, `TestMachine_KeySourceOutageIs503WithRetryAfter`·`_StartupDiscoveryPolicy` → `test-machine-jwks-live.py`(D: 발급자 중단 상태 기동 → 32 s 뒤 재시작 없이 200) |
+| 009 | MET(예외 D25) | `machine_audit_test.go` `TestMachineAudit_ExactlyOneLinePerAuthorizedRequest`·`_EarlyReturnsAndFields`·`_NoTokenMaterialInLogsOrResponses`·`_ServerLevelRejectionsAreNotAudited` → keycloak-live(8개 컨테이너 로그 323,801 B 스캔 0건, 허용·위조·scope 거부 각 1줄) |
+| 010 | MET(replica별) | `machine_limiter_test.go`(`TestMachineIPThrottle_BoundaryN`·`_InclusiveWindowEdge`·`_ReleasedOnEveryExitPath`·`_TensOfThousandsOfIPsStayWithinDefaultCap`, `TestMachineOrdering_*`, `TestMachineClientBudget_*`), `machine_limiter_ttl_test.go`, `machine_limiter_panic_test.go` → `test-machine-execution-live.py`(소한도 컨테이너), keycloak-live(client 429·위조 XFF) |
+| 011 | MET | `machineauth` `TestVerify_TimeBoundaries`, `config` `TestMachine_BoundaryAccepted` |
+| 012 | MET | `machine_contract_test.go` 계약 테스트 5종 + `jq` 집계 |
+| 013 | MET(제한: #284) | `TestMachine_FeatureOffIgnoresBearer`·`config` `TestMachine_DefaultOffParsesNothing`·`TestMachineLimits_AbsentWhenFeatureOff`·`TestMachineAudit_FeatureOffEmitsNothing`, `scripts/test/test-chart-machine-auth.sh`(40 PASS; 꺼짐 렌더가 origin/main과 바이트 동일은 T-016 기록) → 드릴 (c). 클러스터 설치는 실행하지 않음 |
+| 014 | MET | `TestMachineAudit_NoTokenMaterialInLogsOrResponses`, 차트 `secretKeyRef`만(`ui-deployment.yaml`, 차트 테스트), 로그 스캔 0건 |
+| 015 | MET | `TestDNWithinBase`·`TestMachineGuard_*`·`TestMachineMonitor_AccessLogOnlyWithAuditRead` → keycloak-live·execution-live(accesslog/config/Monitor DN 403·LDAP 연결 0) |
+| 016 | MET | `TestKeySet_*`·`TestHTTPFetcher_Limits`·`config` `TestMachine_InsecureHTTPException` → jwks-live(A–E) |
+| 017 | MET | `machine_boundary_test.go` `TestMachineCursorBinding`·`TestMachineCursor_Isolation` → keycloak-live(client 간·사람↔머신) |
+| 018 | MET(제한: #280, #284) | `test-machine-revocation-drill.py`(18 검사: 비활성화 후 구토큰 통과, allowlist 제거 후 교체·옛 컨테이너 0·같은 토큰 401, 진행 중 요청 정상 종료, 기능 off), [machine-auth-operations.md](../../machine-auth-operations.md) |
+
+### 수용 시나리오 AC-001–019
+
+| AC | 판정 | 단위/계약 | 라이브(스크립트) · 비고 |
+|---|---|---|---|
+| 001 | MET | `TestMachineExec_RunsHandlersAsTheMachineIdentity`, `TestMachineAudit_ExactlyOneLinePerAuthorizedRequest` | keycloak-live: 허용 8개 200, 12 요청 = slapd accesslog 머신 DN bind 정확히 12·관리자 bind 0 |
+| 002 | MET | `TestVerify_NegativeTable`(48), `_SignatureAndAlgorithmAttacks`, `TestMachine_VerificationFailuresAre401WithGenericBody` | keycloak-live 음성 40종·양성 대조, bind 26→26 |
+| 003 | MET | `TestMachine_EveryProtectedOperationExercised`, `_NewProtectedGetWithoutAllowlistIsDenied` | 거부 배치 bind 29→29 |
+| 004 | MET | `TestMachine_NonGetAlwaysDenied`, `TestOpenAPIDeniedOperationsNeverCarryMachineBearer` | 거부 37개는 `openapi.json`에서 도출해 전수 |
+| 005 | MET | `TestAuditDTONeverEmitsReqModValues`, `TestMachineMonitor_AccessLogOnlyWithAuditRead` | 과권한 컨테이너 응답 17개, 비밀 값 0건 |
+| 006 | MET | `TestSelectAuth_Matrix` 외 위 REQ-006 목록 | 혼용·Origin·preflight |
+| 007 | MET | — | keycloak-live: LDAP 모드·SSO 모드 모두 |
+| 008 | MET | `TestKeySet_A…H`, `_E_StaleBoundary` | jwks-live (D), keycloak-live JWKS 중단(캐시 kid 200·미지 kid 503+`Retry-After: 30`·복구) |
+| 009 | MET | `config` 변형 테스트, `TestMachineExec_DeadlineBoundsBindAndSearch`·`_SlotIsTakenBeforeBind`·`_ClientCancelReleasesConnectionAndSlot`, `ldapclient` `TestBindHonoursContextDeadline`·`TestStartTLSHandshakeHonoursContextDeadline` | execution-live: 지연 프록시, 중단 50건 후 `cn=Monitor` 기준선 복귀; keycloak-live: 잘못된 비밀번호 503 |
+| 010 | MET | `TestMachineAudit_*`(조기 반환 13행, `_RateRows`) | 라이브는 허용·검증 실패·scope 거부 3행만, 나머지 행은 단위(알려진 한계) |
+| 011 | MET | `machine_limiter_test.go` 경계 표 전 행, `machine_limiter_exit_test.go` | execution-live·keycloak-live. 실제 프록시 뒤 XFF는 미실행(#284); 명시 CIDR 신뢰 오류는 #282로 수정 |
+| 012 | MET(대체) | `TestVerify_TimeBoundaries` 경계 표 | 실제 만료는 기본 300 s가 아니라 3 s 수명 client + skew 0 컨테이너로 확인(문서화된 대체) |
+| 013 | MET | `machine_contract_test.go`, `TestOpenAPIMachineBearerEqualsCodeAllowlist` | `jq`: 8/37/8/53 |
+| 014 | MET | `TestMachine_FeatureOffIgnoresBearer`(401 `not logged in`), 꺼짐 전용 테스트 3종 | 드릴 (c). 기존 e2e 무변경 통과는 PR #281 헤드 `d41d338`에서 `E2E (kind)` 37555431568·`UI E2E (browser)` 37555431582·`UI fixture E2E (docker)` 37555431580·`API + credentials E2E (docker)` 37555431684·`CI` 37555431545 모두 success, main 병합 커밋에서는 `CI` 37557393337·`UI E2E (browser)` 37557393384·`API + credentials E2E (docker)` 37557393386 success(EVIDENCE §7.4) |
+| 015 | MET(대체) | `TestDNWithinBase`, `TestMachineGuard_*` | accesslog/config/Monitor DN 403·LDAP 연결 0. "가드를 끈 빌드의 ACL 백스톱"은 머신 DN의 직접 ldapsearch 거부(ACL 스크립트)로 대체 |
+| 016 | MET | `TestKeySet_A_RandomKidFlood`…`_G_Rotation`, `TestHTTPFetcher_Limits` | jwks-live: 위조 3,080건 → 조회 0, 무작위 kid 24,196건/65 s → 조회 3(상한 4) |
+| 017 | MET | `TestMachineCursorBinding`, `TestMachineCursor_Isolation` | keycloak-live |
+| 018 | MET | — | `test-machine-acl-readonly-live.py`: 세 구성 `349 checks passed, 0 failed`, 변이 11종 전부 탐지 |
+| 019 | MET(docker replica) | — | `test-machine-revocation-drill.py` 18 검사. Helm/pod 교체는 아님(#284), 10 s 초과 요청 종료는 #280 |
+
+### #214 판정
+
+**수용 기준 충족; 이슈 #214는 닫을 수 있다**(닫기는 이 PR 병합 후 유지보수자의 별도 결정). 근거: 이슈 본문의 범위 세 항목 — (1) Keycloak 서비스 클라이언트 bearer 검증(iss/aud/exp/JWKS) (2) 서버측 오퍼레이션별 scope·읽기 전용 기본값·최소권한 LDAP bind 매핑 (3) 쿠키 흐름과의 계약 분리·`userPassword` 비노출 — 이 REQ-001–018 전부 MET로 단위와 실제 Keycloak 라이브에서 증명됐고, 릴리스 게이트(`release.yml`의 `release_critical`에 job `machine bearer auth (real Keycloak)`)가 연결돼 있다. PARTIAL·NOT MET인 REQ/AC는 없다.
+
+**수용된 제한(각각 문서화됨)**
+
+- **#277 / T-034 / D30** — 머신 ACL과 `LDAP_REPLICATION_IDENTITY=prepare` 결합 미구현. 함께 쓰지 않는다([machine-ldap-account.md](../../machine-ldap-account.md) 12절).
+- **#280** — 정상 종료 대기가 10 s 고정이라 `MACHINE_REQUEST_TIMEOUT` > 10 s이면 교체 시 긴 요청이 끊긴다(기본값 10 s에서는 드릴이 통과).
+- **#266** — 사람 세션 현재 비밀번호 시도 무제한(머신 경로와 무관한 기존 한계).
+- **#284(신규)** — `ui.machineAuth`는 차트 렌더·kubeconform까지만 증명, 클러스터 설치·실제 ingress XFF·Helm replica 교체·다중 노드 ACL은 미실행.
+- **#285(신규)** — 머신 쓰기 scope(비목표). **#286(신규)** — 즉시 폐기(introspection)·API key·mTLS(비목표). **#287(신규)** — 앱 내 API 문서 화면이 머신 호출 가능 표시를 안 함(표시 문제).
+- subtree 단위 권한은 별도 패키지 [oidc-organization-authorization](../oidc-organization-authorization/CHANGE.md)의 몫이다.
+- 구조적 한계: D25(핸들러 이전 서버 거절은 로그 없음, ingress 로그 필요), limiter는 replica별, `audit.read`·`server.settings.read`는 기본 꺼짐, 백오프 기저는 `MIN_REFRESH`(기본값에서만 30 s→5 m와 동일, EVIDENCE §5.3).
+- **T-033**(OpenForge 공개 상태 게시)은 외부 조치로 열려 있다: 소유자는 유지보수자 dasomel, 전제는 "이 감사 병합 후".
+
+### 이 감사가 확인하지 못한 것
+
+- 라이브 스크립트 4개와 ACL 증명을 다시 돌리지 않았다(CI 실행 id와 EVIDENCE §4–§5 기록을 인용; 단위 시험 수치만 직접 재현).
+- `go test ./...`의 `cmd/server`·`web`은 프런트 빌드 부재로 이 작업 트리에서 컴파일하지 못했다. `cmd/server/main.go`의 종료 코드는 이 감사에서 실행하지 않았다(#280은 `cmd/server/main.go:101`의 `10*time.Second`를 읽어 확인).
+- 기존 `ui-e2e`·`e2e` 전체는 로컬에서 재실행하지 않았다. 대신 위 CI 실행 id를 인용했다. main 병합 커밋의 `E2E (kind)`·`UI fixture E2E (docker)`·`Keycloak LDAP federation E2E`·`SSSD E2E`는 감사 시점에 아직 pending이었고(`Upgrade and rollback E2E`는 진행 중) 그 결과는 주장하지 않는다.
+- 문서의 curl·kubectl·helm 예시는 코드 읽기로만 대조했다(5b 기록 그대로).

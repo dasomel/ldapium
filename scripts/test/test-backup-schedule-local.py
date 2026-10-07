@@ -23,7 +23,8 @@ try:
   for _ in range(100):
     view=call('/v1/backups');state=view['states'].get('logs',{})
     if state.get('last_attempt')!=previous and state.get('status')=='succeeded':
-      assert state['next_run']>state['last_success']
+      if not (state['next_run']>state['last_success']):
+        raise AssertionError("state['next_run']>state['last_success']")
       print('PASS: real scheduled log execution and completion-relative next run; independent data policy unchanged')
       break
     time.sleep(1)

@@ -127,9 +127,7 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   server rejects before any handler (431, malformed request line, header timeout,
   TLS/HTTP/2 pre-handler errors) are not audited and leave no log without an ingress
   access log (D25); limits are per replica; the machine ACL cannot be combined with
-  `LDAP_REPLICATION_IDENTITY=prepare` yet (D30, T-034). **Not yet verified:** the live
-  end-to-end run against a real Keycloak, its CI workflow and the release gate are a
-  separate unit (5a) and are not part of this change.
+  `LDAP_REPLICATION_IDENTITY=prepare` yet (D30, T-034). **Verification:** the live end-to-end runs against a real Keycloak (both UI modes), the Keycloak client settings checks, the JWKS rotation and flood checks and the emergency revocation drill run in `machine-keycloak-e2e.yml` and gate releases (see the unit 5a note below). **Not verified:** installing the chart with machine auth on a cluster, a real ingress in front of `X-Forwarded-For`, and the ACL on more than one LDAP node (#284).
 - Self-service change password with a current password the directory does not
   accept is now `400` with the new stable code `current_password_rejected` and a
   fixed text (#264, `D264-1`..`D264-3`); it used to be `500 internal`. The cause
