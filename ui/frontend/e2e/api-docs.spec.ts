@@ -284,7 +284,7 @@ test('api docs page shows the machine badge only on machineBearer ops and states
   const expected = collectEndpoints(SERVED).filter((e) => e.machineScope)
   await expect(page.getByRole('button').getByText(/^Machine-callable: /)).toHaveCount(expected.length)
   for (const e of expected) {
-    const row = page.getByRole('button', { name: new RegExp(`${e.path.replace(/[/{}]/g, '\\$&')}.*Machine-callable: ${e.machineScope!.replace(/\./g, '\\.')}`) })
+    const row = page.getByRole('button').filter({ hasText: e.path }).filter({ hasText: `Machine-callable: ${e.machineScope}` })
     await expect(row.first()).toBeVisible()
   }
 })
