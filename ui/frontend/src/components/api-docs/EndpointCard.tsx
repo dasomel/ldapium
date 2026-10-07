@@ -63,7 +63,8 @@ export function EndpointCard({ doc, endpoint: e, open, onToggle }: { doc: OpenAp
         <span className={cn('w-16 shrink-0 rounded-full border px-2 py-0.5 text-center font-mono text-[11px] font-semibold uppercase', methodClass[e.method])}>{e.method}</span>
         <span className="min-w-0 break-all font-mono text-[12.5px]">{e.path}</span>
         <span className="hidden min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground md:inline">{e.op.summary}</span>
-        <Badge variant={e.auth === 'public' ? 'success' : e.auth === 'admin' ? 'danger' : 'neutral'} className="ml-auto shrink-0">{t(authKey)}</Badge>
+        {e.machineScope && <Badge variant="accent" className="ml-auto shrink-0 font-mono" title={t('apiDocs.machineHint')}>{t('apiDocs.machine')}: {e.machineScope}</Badge>}
+        <Badge variant={e.auth === 'public' ? 'success' : e.auth === 'admin' ? 'danger' : 'neutral'} className={cn('shrink-0', !e.machineScope && 'ml-auto')}>{t(authKey)}</Badge>
       </button>
       {open && (
         <div id={panelId} className="space-y-4 border-t border-border p-4">

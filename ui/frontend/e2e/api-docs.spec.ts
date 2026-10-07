@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '@playwright/test'
-import { buildCurl, collectEndpoints, type OpenApiDoc } from '../src/lib/api-docs'
+import { buildCurl, collectEndpoints, operationMachineScope, type OpenApiDoc } from '../src/lib/api-docs'
 
 // Mocked spec, no live backend or login: /api-docs is a public route, so this
 // also proves the page renders for a logged-out visitor.
@@ -257,4 +257,34 @@ test('endpoint counts read naturally in Korean', async ({ page }) => {
   await page.goto('/api-docs')
   await expect(page.getByRole('heading', { name: /^users/ })).toContainText('1개 엔드포인트')
   await expect(page.getByRole('heading', { name: /^users/ })).not.toContainText('1 개')
+})
+
+// The served spec is embedded from the backend; the machine-callable set is
+// derived from it (security lists machineBearer), never hard-coded here.
+const SERVED = JSON.parse(readFileSync(join(process.cwd(), '../backend/internal/httpapi/openapi/openapi.json'), 'utf8')) as OpenApiDoc
+
+test('machine badge maps exactly the machineBearer operations, with their x-machine-scope', () => {
+  const eps = collectEndpoints(SERVED)
+  const expected = eps.filter((e) => e.op.security?.some((s) => 'machineBearer' in s))
+  expect(expected).toHaveLength(8)
+  expect(eps.filter((e) => e.machineScope).map((e) => e.id).sort()).toEqual(expected.map((e) => e.id).sort())
+  for (const e of expected) {
+    expect(e.op['x-machine-scope'], e.id).toBeTruthy()
+    expect(e.machineScope, e.id).toBe(e.op['x-machine-scope'])
+    expect(operationMachineScope(e.op)).toBe(e.machineScope)
+  }
+  expect(eps.filter((e) => !e.machineScope && e.op.security?.length !== 0)).not.toHaveLength(0)
+})
+
+test('api docs page shows the machine badge only on machineBearer ops and states default-off', async ({ page }) => {
+  await page.route('**/api/me', (r) => r.fulfill({ status: 401, json: { error: 'x' } }))
+  await page.route('**/api/v1/openapi.json', (r) => r.fulfill({ json: SERVED }))
+  await page.goto('/api-docs')
+  await expect(page.getByText(/when the server enables machine auth \(off by default\)/).first()).toBeVisible()
+  const expected = collectEndpoints(SERVED).filter((e) => e.machineScope)
+  await expect(page.getByRole('button').getByText(/^Machine-callable: /)).toHaveCount(expected.length)
+  for (const e of expected) {
+    const row = page.getByRole('button', { name: new RegExp(`${e.path.replace(/[/{}]/g, '\\$&')}.*Machine-callable: ${e.machineScope!.replace(/\./g, '\\.')}`) })
+    await expect(row.first()).toBeVisible()
+  }
 })
