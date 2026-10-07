@@ -254,15 +254,13 @@ func (s *Server) headPreMiddleware() echo.MiddlewareFunc {
 }
 
 // restoreMethodMiddleware restores c.Request().Method to its pre-rewrite value
-// before Echo's LoggerWithConfig middleware formats the log line.
-// Without it the access log would record HEAD requests as GET.
+// before Echo's LoggerWithConfig middleware formats the log line and before the handler writes.
+// Without it the access log would record HEAD requests as GET, and net/http would not discard the body.
 func (s *Server) restoreMethodMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if orig := c.Get(origMethodKey); orig != nil {
-				defer func() {
-					c.Request().Method = orig.(string)
-				}()
+				c.Request().Method = orig.(string)
 			}
 			return next(c)
 		}

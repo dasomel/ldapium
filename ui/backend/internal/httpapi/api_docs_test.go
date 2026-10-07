@@ -338,6 +338,35 @@ func TestHEADBehaviour(t *testing.T) {
 			t.Errorf("Content-Type = %q, want %q", ct, getResp.Header.Get("Content-Type"))
 		}
 	})
+
+	t.Run("HEAD then GET on same connection does not leak body", func(t *testing.T) {
+		client := &http.Client{
+			Transport: &http.Transport{
+				DisableKeepAlives: false,
+			},
+		}
+		for i := 0; i < 50; i++ {
+			req, _ := http.NewRequest("HEAD", srv.URL+"/api/v1/openapi.json", nil)
+			resp1, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("HEAD iter %d err: %v", i, err)
+			}
+			if _, err := io.Copy(io.Discard, resp1.Body); err != nil {
+				t.Fatalf("HEAD iter %d body: %v", i, err)
+			}
+			resp1.Body.Close()
+
+			req2, _ := http.NewRequest("GET", srv.URL+"/api/v1/openapi.json", nil)
+			resp2, err := client.Do(req2)
+			if err != nil {
+				t.Fatalf("GET iter %d err: %v", i, err)
+			}
+			if _, err := io.Copy(io.Discard, resp2.Body); err != nil {
+				t.Fatalf("GET iter %d body: %v", i, err)
+			}
+			resp2.Body.Close()
+		}
+	})
 }
 
 // The access log must record the real method: headPreMiddleware rewrites HEAD
