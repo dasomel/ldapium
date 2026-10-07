@@ -382,3 +382,40 @@ $ go test ./machineauth -run TestVerify_NegativeTable -v -> 하위 케이스 48 
 | `Keycloak LDAP federation E2E`·`SSSD E2E`·`E2E (kind)`·`UI fixture E2E (docker)`·`Upgrade and rollback E2E` — main | 37557393267·37557393349·37557393315·37557393242·37557393464 | 감사 시점 pending/진행 중(결과 미주장) |
 
 감사 시점에 아직 완료되지 않은 워크플로가 있으면 위 표에 `pending`으로 적었고, 그 결과를 이 감사는 주장하지 않는다.
+
+## 8. kind 클러스터 라이브 증명 (#284, PR #302 · #306, 2026-10-07)
+
+`ui.machineAuth`를 실제 Kubernetes에 설치해 다중 노드 ACL, ingress 뒤 XFF 제한, Helm replica 교체를 관측했다.
+
+### 8.1 실행
+
+| 항목 | 값 |
+|---|---|
+| 스크립트 | `scripts/test/test-chart-machine-auth-kind.sh`(PR #302) |
+| 워크플로 | `.github/workflows/chart-machine-auth-kind.yml`(PR #306; path 필터 없음, `workflow_dispatch`, 주 1회) |
+| 로컬 환경 | macOS/Colima, Helm 4.3.0, kind, LDAP pod 2 + UI pod 2, ingress-nginx 1.12.1 |
+| 로컬 결과 | **ALL PASS, 42 검사** |
+| GitHub 실행 | [Actions 37630937041](https://github.com/dasomel/ldapium/actions/runs/37630937041) — workflow `Chart machine auth (kind)`, event `pull_request`(PR #306), ubuntu-24.04, job 6m14s, conclusion `success` |
+
+재확인: `gh run view 37630937041 --json conclusion,jobs`
+
+### 8.2 관측
+
+| 시나리오 | 관측 |
+|---|---|
+| 다중 노드 ACL | 머신 규칙을 pod 0에만 적용하면 pod 1에는 없다. 양쪽에 적용하면 각 pod에 세 규칙이 보이고, 머신 계정은 `userPassword`를 보지 못하며 쓰기는 rc 50으로 거부된다 |
+| ingress 경유 허용 호출 | bearer 호출 200, ingress access log에 기록됨 |
+| XFF, `ui.trustedProxies=10.244.0.0/16`, 기본 ingress | 401 x6 후 7번째 요청 429 |
+| XFF, 신뢰하지 않는 peer에서 pod 직접 호출 | 401 x3 후 429 |
+| **음성 대조**: ingress `use-forwarded-headers=true` | 401 x10, 429 없음 — 위조 XFF가 제한을 회피한다. 함정은 [machine-auth-operations.md](../../machine-auth-operations.md) 5절 점검 목록에 문서화 |
+| `proxy-real-ip-cidr` 제한 | 예산 유지: 401 x6, 첫 429는 5번째 |
+| drill client를 뺀 `helm upgrade` | 옛 pod·ReplicaSet 소멸, 업그레이드 전 토큰은 새 pod 둘 다에서 401 `token_invalid`, 다른 client는 200 |
+| `machineAuth.enabled=false` | bearer 401 `unauthenticated` |
+
+### 8.3 수용된 한계
+
+- 발급자는 stand-in이다: nginx가 정적 discovery 문서와 JWKS를 TLS로 서빙하고 토큰은 openssl로 서명했다. 실제 Keycloak이 아니다(실제 Keycloak은 `machine-keycloak-e2e.yml`, docker, §5가 담당).
+- Pod 교체 중 진행 중 요청은 kind에서 실행하지 않았다(docker 드릴과 #280의 종료 시험이 담당).
+- 각 bearer 호출을 어느 LDAP pod가 처리했는지는 검증하지 않았다.
+- INT/TERM/HUP 정리는 실제 시그널을 보내 검증하지 않았다.
+- post-renderer의 Helm 3 경로는 시험하지 않았다(Helm 4.3.0만 실행).
