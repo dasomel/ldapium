@@ -134,6 +134,40 @@ with tempfile.TemporaryDirectory(prefix='ldapium-revtool-') as tmp:
       assert tool('heartbeat', accepted=(1,)).returncode == 1
       ldap('ldapmodify', data=module.ldif([('dn', dn)]) + 'changetype: modify\ndelete: cn\n' + module.ldif([('cn', value)]) + '\n')
     print('PASS multi-valued/newline cn blocks publication')
+    # Server metadata is immutable over LDAP. This disposable offline fixture
+    # exercises the real prune path without a 74-minute wall-clock wait.
+    identifier.write_text('aged-jti')
+    tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier)])
+    stamped = int(time.time())
+    modifications = ''
+    for cn, age in [('jti-aged-jti', module.MIN_RETENTION + 30),
+                    ('jti-live-jti', module.MIN_RETENTION - 30)]:
+      value = module.datetime.datetime.fromtimestamp(stamped - age, module.datetime.timezone.utc).strftime('%Y%m%d%H%M%SZ')
+      modifications += module.ldif([('dn', 'cn=' + cn + ',' + revbase)]) + 'changetype: modify\nreplace: createTimestamp\n' + module.ldif([('createTimestamp', value)]) + '\n'
+    run(['docker', 'stop', '-t', '1', name])
+    run(['docker', 'run', '--rm', '-i', '--volumes-from', name,
+         '--entrypoint', 'slapmodify', os.environ.get('LDAPIUM_IMAGE', 'ldapium:e2e'),
+         '-F', '/etc/openldap/slapd.d', '-n', '1'], modifications)
+    run(['docker', 'start', name])
+    for _ in range(30):
+      if ldap('ldapsearch', ['-LLL', '-b', revbase, '-s', 'base', 'dn'], accepted=(0, 255)).returncode == 0:
+        break
+      time.sleep(1)
+    else:
+      raise AssertionError('LDAP fixture restart timeout')
+    _, aged_entries = module.Directory(args).search()
+    actual = {module.single(e['cn']): module.timestamp(module.single(e['createtimestamp'])) for e in aged_entries}
+    assert actual['jti-aged-jti'] == stamped - module.MIN_RETENTION - 30
+    assert actual['jti-live-jti'] == stamped - module.MIN_RETENTION + 30
+    tool('prune')
+    sent, aged_entries = module.Directory(args).search()
+    assert not any(e['cn'] == ['jti-aged-jti'] for e in aged_entries)
+    assert any(e['cn'] == ['jti-live-jti'] for e in aged_entries)
+    rows.write_text(json.dumps([sent, *aged_entries]))
+    p = subprocess.run(['go', 'test', './internal/machineauth', '-run', 'TestRevocationTool', '-count=1'],
+      cwd=ROOT / 'ui/backend', env=goenv, text=True, capture_output=True, timeout=90)
+    assert p.returncode == 0, p.stdout + p.stderr
+    print('PASS offline age fixture: ret+30s pruned, ret-30s retained; Go validates refreshed sentinel')
     tool('remove', ['--cn', 'jti-live-jti'])
     assert tool('remove', ['--cn', 'sentinel'], accepted=(1,)).returncode == 1
     tool('heartbeat')
@@ -141,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix='ldapium-revtool-') as tmp:
     logs = run(['docker', 'logs', name])
     assert password not in logs.stdout + logs.stderr
     print('PASS container logs contain no credential')
-    print('NOT VERIFIED: aged createTimestamp prune boundary (server-owned, 4440s minimum)')
+    print('NOT VERIFIED: natural 4440s wall-clock aging and exact one-second boundary')
   finally:
     logs = subprocess.run(['docker', 'logs', name], text=True, capture_output=True)
     (pathlib.Path('/tmp') / (name + '.log')).write_text((logs.stdout + logs.stderr).replace(password, '<redacted>'))

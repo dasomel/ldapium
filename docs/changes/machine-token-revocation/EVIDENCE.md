@@ -298,3 +298,18 @@ Mutation checks (local, each reverted before the final successful live rerun):
 All three were detected (nonzero test exit), then the unmodified tool's full
 live script returned exit 0 again. Mutation outputs were saved under
 `/tmp/ldapium-revocation-mutation-{retention,device,cas}.log` during this run.
+
+### T-013 aged-entry fixture (2026-10-08)
+
+The full live tool test now stops its uniquely owned disposable LDAP container,
+uses `slapmodify -n 1` over its volumes to set two createTimestamp fixtures,
+restarts it and reads the stored timestamps back. A JTI at `ret+30 s` is pruned;
+a JTI at `ret-30 s` remains. The resulting count/digest/sentinel is validated by
+Go, then normal remove/heartbeat and credential-log checks pass. Exit 0.
+This is an offline-aged fixture, not a natural 4440-second wait or an exact
+one-second boundary measurement. The previous limitation is narrowed accordingly.
+
+Disabling `Directory.prune` caused the aged-entry absence assertion to fail
+(AssertionError for `jti-aged-jti`); source was restored and the whole live script
+passed again. Logs: `/tmp/ldapium-revocation-aged-live.log` and
+`/tmp/ldapium-revocation-mutation-prune.log`.
