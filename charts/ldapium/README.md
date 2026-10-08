@@ -1345,3 +1345,17 @@ The runtimeConfirmed setting is an operator assertion; Helm cannot inspect image
 
 Backups UI policies default disabled. Select one scheduler owner: existing `backup`
 CronJob and this controller otherwise operate independently. See [UI operating guide](../../ui/README.md#scheduled-local--s3--ftp--ssh-backups).
+
+### Live machine token revocation
+
+`ui.machineAuth.revocation.enabled` defaults to false and adds no environment while disabled. Prepare the container, machine read ACL and sentinel with [the operations guide](../../docs/machine-auth-operations.md) before enabling it. Missing/stale snapshots fail closed after token verification. The chart creates no revocation entries or writer identity.
+
+| Value under `ui.machineAuth.revocation` | Default | Bounds |
+| --- | --- | --- |
+| `refreshSeconds` | 5 | 1–60 |
+| `maxStaleSeconds` | 15 | refresh + 5 through 600 |
+| `sentinelMaxAgeSeconds` | 300 | 30–3600 |
+| `baseDN` | empty | `ou=revocations,ou=system,<ldap.rootDN>`; backend validates the DN |
+| `maxEntries` | 2000 | 1–2500 |
+
+The base and machine ACL must agree on every LDAP node. Full multi-replica drill acceptance remains pending.
