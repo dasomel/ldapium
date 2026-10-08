@@ -75,6 +75,13 @@ rejection alongside otherwise valid cn/sn fields and no echo of rejected values.
 The pure request-builder test now checks exactly seven changes and the original
 DN, so an added attribute or changed target fails.
 
+The POST baseline test observes current human create behavior: unknown LDAP-only
+fields are accepted but ignored by the supported DTO; a 201 reaches CreateUser
+with the expected uid/cn/sn and no password. Thus PATCH strictness must not be
+assumed for machine POST; its future guard must independently reject unknown keys.
+
 Remaining T-002 evidence: live memberOf/refint behavior outside the writing
-identity's ACL, and POST unknown-field binding baseline. This inspection does
+identity's ACL. This inspection does
 not establish LDAP permissions, open any write route or complete T-002.
+
+Final `go test -race -count=1 ./internal/httpapi ./internal/ldapclient` passed after the POST baseline test was added. Logs: `/tmp/ldapium-write-inventory-tests.log`.
