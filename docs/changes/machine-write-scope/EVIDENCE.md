@@ -88,3 +88,12 @@ Final `go test -race -count=1 ./internal/httpapi ./internal/ldapclient` passed a
 T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-overlay-live.py` exited 0. A fresh uniquely owned LDAP container gives its writer only group-member write plus general read. User cn Modify is denied rc50. Direct memberOf Modify is refused rc19 (`no user modification allowed`), a schema restriction rather than an ACL result. The same writer's group member Add sets user memberOf and member Delete clears it despite no user-attribute write permission. Credential log scan passes. CI runs this test in API+credentials E2E. Initial rc50 expectation for memberOf was corrected to the observed schema result; no ACL was weakened. Logs: `/tmp/ldapium-write-overlay-live.log`.
 
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
+
+
+## T-012/T-018/T-019 pre-connect DN policy scaffold
+
+This unit has no request-path connection and does not complete the LDAP identity/type acceptance gates. `dnStrictlyWithinBase` refuses the boundary itself. `machineWritePolicy` separates creation-parent inclusion from target/member strict descendants, refuses protected identities and descendants, and requires exact group allowlist membership even inside allowed subtrees. The existing inclusive read guard is unchanged.
+
+D26 canonical `uid/cn/ou/dc` naming types and reproducible ASCII values deliberately reject LDAP schema aliases/OIDs, BER hex values, repeated/edge whitespace and unsupported naming types. Positive tests retain case-insensitive spelling, escaped ASCII and multivalued RDN support. Invalid protected policy fails closed.
+
+`go test -race ./internal/httpapi -count=1`: PASS (13.187s). Initial BER test failed because go-ldap decodes the hex value into a normal string; rejecting BER notation before parsing made it pass. Live server identity/entryUUID comparison, closed attribute whitelist, bind selection and configuration wiring remain pending. No T-012/T-018/T-019 completion boxes are checked by this scaffold.
