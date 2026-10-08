@@ -66,3 +66,10 @@ Remaining: independent security review, documentation/Helm integration at later 
 Observed `go test -race -count=1 ./internal/config ./internal/httpapi ./internal/machineauth`: all three packages passed. Removing the protected-identity comparison made `TestMachineWriteIdentitiesRejectProtectedDNVariants` fail with real assertions; source restored and `go test ./internal/config -run ^TestMachineWrite -count=1` passed. Logs: `/tmp/ldapium-write-identities-{tests,mutation,restored}.log`.
 
 Final `make check` exited 0 after the identity ambiguity guard was added (frontend lint/build; backend formatting/vet/live-tag vet/tests/build; shell, manifest, chart, license and reachable vulnerability checks). The 3-package race run also passed after the final code change. This is configuration/HTTP guard evidence; no claim of live write-identity bind or ACL verification is made because there is no consumer or opened operation in this unit.
+
+
+### T-011 independent review correction: schema aliases
+
+Independent review reproduced `commonName=admin` and `domainComponent` base aliases binding as rootdn while the old Go distinctness check accepted them (`/tmp/ldapium-security-alias-live.log`). Canonical `uid/cn/ou/dc` naming types are now required on writer and protected identities; unknown names, OIDs, ambiguous whitespace and non-ASCII values fail closed. The cost is refusal of unusual but legitimate naming types; operators must use canonical spelling, with no privileged fallback.
+
+`go test -race ./internal/config -count=1` passed after adding the review reproducer plus writer/read/root/backup/profile/service/lock alias cases. Independent reviewer recheck remains required; no machine write route is opened.

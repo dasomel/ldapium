@@ -102,11 +102,34 @@ func machineWriteIdentity(getenv func(string) string, prefix string, cfg Config,
 	return identity, nil
 }
 
+// D26: slapd resolves schema aliases that ParseDN.EqualFold leaves distinct.
+// A canonical type allowlist refuses commonName/userid/domainComponent aliases
+// on both the writer and protected identities. Cost: unusual naming types are
+// rejected; escape hatch: canonical uid/cn/ou/dc spelling, never a fallback bind.
 func writeIdentityDNUnambiguous(dn *ldap.DN) bool {
+	if dn == nil || len(dn.RDNs) == 0 {
+		return false
+	}
 	for _, rdn := range dn.RDNs {
+		seen := map[string]bool{}
 		for _, a := range rdn.Attributes {
-			if (len(a.Type) > 0 && a.Type[0] >= '0' && a.Type[0] <= '9') || strings.TrimSpace(a.Value) != a.Value || strings.ContainsAny(a.Value, "\r\n\t\x00") || strings.Contains(a.Value, "  ") {
+			typ := strings.ToLower(a.Type)
+			switch typ {
+			case "uid", "cn", "ou", "dc":
+			default:
 				return false
+			}
+			if seen[typ] {
+				return false
+			}
+			seen[typ] = true
+			if a.Value == "" || strings.TrimSpace(a.Value) != a.Value || strings.Contains(a.Value, "  ") {
+				return false
+			}
+			for _, ch := range a.Value {
+				if ch < 32 || ch > 126 {
+					return false
+				}
 			}
 		}
 	}
