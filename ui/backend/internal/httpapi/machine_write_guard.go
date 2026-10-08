@@ -61,7 +61,7 @@ func dnStrictlyWithinBase(base, target string) bool {
 
 // machineWritePolicy is the pre-connect policy for one authenticated client.
 // It deliberately carries no LDAP connection and grants no operation by itself.
-// Protected containers are represented by Subtrees; protected identities deny
+// Allowed write containers are represented by Subtrees; protected identities deny
 // themselves and descendants even when an overlapping subtree is allowed.
 type machineWritePolicy struct {
 	Subtrees  []string
