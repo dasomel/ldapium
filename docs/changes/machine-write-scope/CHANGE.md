@@ -352,3 +352,19 @@ subtree 상한이 보호 DN을 덮는 설정(예: 상한이 `BASE_DN` 전체)에
 | `moveEntry`, 백업 8, 프로파일 14, `getMe` | — | — | — | **영구 거부**(D2) | — |
 
 참고: `setPassword`는 `If-Match`를 지원하지 않는다(ADR D216-2, 비밀번호 확장 연산은 assertion control을 실을 수 없음). 따라서 비밀번호 단계는 조건부 쓰기 강제(REQ-005)를 만족시킬 수 없고, 멱등 키 + 대상 한정 + 한도로만 보호된다 — 비밀번호 단계를 별도 승인으로 두는 이유 중 하나다.
+
+
+### 부록 A — T-002 확정 속성 목록 (2026-10-08, #328)
+
+실제 DTO·핸들러·LDAP 요청 빌더 재고조사 및 증거: [EVIDENCE.md](EVIDENCE.md) T-002.
+
+| 오퍼레이션 | 쓰는 속성/연산 |
+|---|---|
+| createUser | objectClass 고정 {top, person, organizationalPerson, inetOrgPerson}; uid, cn, sn; 선택 givenName, mail, departmentNumber, o, ou |
+| patchUser | cn, sn, givenName, mail, departmentNumber, o, ou의 Replace만; DN/uid 불변 |
+| patchGroup | cn, description; 첫 머신 출하에는 미개방 |
+| add/removeGroupMember | member Add/Delete |
+| lock/unlockUser | pwdAccountLockedTime Replace |
+| setPassword / createUser의 password 입력 | 별도 RFC3062 확장 연산; 일반 데이터 쓰기 입력에서는 금지 |
+
+memberOf·refint의 파생 쓰기는 요청 신원의 대상 속성 쓰기 ACL로 막히지 않음을 라이브 확인했다. POST는 미지원 JSON 속성을 무시하지만 PATCH는 거부한다. 따라서 머신 입력 가드는 POST에도 닫힌 목록을 독립 적용해야 한다. objectClass 수정·uid 수정·memberOf·pwd*·운영 속성은 일반 쓰기 목록에 없다. 이 표는 조사 결과 확정이며 쓰기 오퍼레이션이나 LDAP 권한을 개방하지 않는다.

@@ -73,3 +73,37 @@ Final `make check` exited 0 after the identity ambiguity guard was added (fronte
 Independent review reproduced `commonName=admin` and `domainComponent` base aliases binding as rootdn while the old Go distinctness check accepted them (`/tmp/ldapium-security-alias-live.log`). Canonical `uid/cn/ou/dc` naming types are now required on writer and protected identities; unknown names, OIDs, ambiguous whitespace and non-ASCII values fail closed. The cost is refusal of unusual but legitimate naming types; operators must use canonical spelling, with no privileged fallback.
 
 `go test -race ./internal/config -count=1` passed after adding the review reproducer plus writer/read/root/backup/profile/service/lock alias cases. Independent reviewer recheck remains required; no machine write route is opened.
+
+## T-002 attribute inventory baseline (2026-10-08)
+
+Current request builders (`ldapclient/users.go`, `groups.go`, `domain/patch.go`, `httpapi/patch_handlers.go`):
+
+| Operation | Attributes actually written | Notes |
+|---|---|---|
+| createUser | objectClass={top,person,organizationalPerson,inetOrgPerson}; uid,cn,sn; optional givenName,mail,departmentNumber,o,ou | password triggers separate RFC3062 operation and compensation; future data-only machine create must reject password |
+| patchUser | cn,sn,givenName,mail,departmentNumber,o,ou (Replace only) | uid absent from DTO; target DN unchanged; no ModifyDN |
+| patchGroup | cn,description | membership separate; first machine release keeps group writes closed |
+| add/removeGroupMember | member (Add/Delete) | server overlays may update memberOf/refint effects |
+| lock/unlockUser | pwdAccountLockedTime | separate lock identity stage |
+| setPassword | RFC3062 extended operation | separately approved credential stage; no data identity access |
+
+PATCH rejects unknown/LDAP-only attributes before directory calls, including uid,
+password/userPassword, objectClass, memberOf, pwd*, operational timestamps/CSN and
+displayName (readable but not a patchable DTO field). The baseline test verifies
+rejection alongside otherwise valid cn/sn fields and no echo of rejected values.
+The pure request-builder test now checks exactly seven changes and the original
+DN, so an added attribute or changed target fails.
+
+The POST baseline test observes current human create behavior: unknown LDAP-only
+fields are accepted but ignored by the supported DTO; a 201 reaches CreateUser
+with the expected uid/cn/sn and no password. Thus PATCH strictness must not be
+assumed for machine POST; its future guard must independently reject unknown keys.
+
+T-002 source/DTO observations and separate live overlay evidence are complete below. These fixtures do not establish the future production write ACL or open any write route.
+
+Final `go test -race -count=1 ./internal/httpapi ./internal/ldapclient` passed after the POST baseline test was added. Logs: `/tmp/ldapium-write-inventory-tests.log`.
+
+
+T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-overlay-live.py` exited 0. A fresh uniquely owned LDAP container gives its writer only group-member write plus general read. User cn Modify is denied rc50. Direct memberOf Modify is refused rc19 (`no user modification allowed`), a schema restriction rather than an ACL result. The same writer's group member Add sets user memberOf and member Delete clears it despite no user-attribute write permission. Credential log scan passes. CI runs this test in API+credentials E2E. Initial rc50 expectation for memberOf was corrected to the observed schema result; no ACL was weakened. Logs: `/tmp/ldapium-write-overlay-live.log`.
+
+Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
