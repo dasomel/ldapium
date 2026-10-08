@@ -13,6 +13,7 @@ base = 'dc=example,dc=org'
 writer = 'cn=writer,' + base
 user = 'uid=baseline,' + base
 group = 'cn=baseline-group,' + base
+other = 'uid=refint-consumer,' + base
 password = secrets.token_hex(24)
 
 
@@ -81,6 +82,23 @@ olcAccess: {{2}}to * by dn.exact="{writer}" read by * read
     result = ldap('ldapsearch', ['-LLL', '-b', user, '-s', 'base', 'memberOf'])
     assert 'memberOf:' not in result.stdout
     print('PASS permitted member Delete clears overlay memberOf despite user write denial')
+    ldap('ldapadd', data=f'dn: {other}\nobjectClass: inetOrgPerson\nobjectClass: extensibleObject\nuid: refint-consumer\ncn: Refint\nsn: Consumer\nmanager: {user}\n')
+    ldap('ldapmodify', dn='cn=admin,cn=config',
+      uri='ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi', data=f'''dn: olcDatabase={{1}}mdb,cn=config
+changetype: modify
+replace: olcAccess
+olcAccess: {{0}}to attrs=userPassword by anonymous auth by * none
+olcAccess: {{1}}to dn.exact="{user}" attrs=entry by dn.exact="{writer}" write by * break
+olcAccess: {{2}}to dn.exact="{base}" attrs=children by dn.exact="{writer}" write by * break
+olcAccess: {{3}}to * by dn.exact="{writer}" read by * read
+''')
+    assert ldap('ldapmodify', dn=writer, data=f'dn: {other}\nchangetype: modify\ndelete: manager\n', allowed=(50,)).returncode == 50
+    before = ldap('ldapsearch', ['-LLL', '-b', other, '-s', 'base', 'manager'])
+    assert 'manager: ' + user in before.stdout
+    ldap('ldapdelete', [user], dn=writer)
+    after = ldap('ldapsearch', ['-LLL', '-b', other, '-s', 'base', 'manager'])
+    assert 'manager:' not in after.stdout
+    print('PASS writer cannot Modify other manager (rc50); permitted user Delete clears refint reference')
     logs = run(['docker', 'logs', name])
     assert password not in logs.stdout + logs.stderr
     print('PASS container logs contain no credential')
