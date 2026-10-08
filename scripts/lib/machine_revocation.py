@@ -228,7 +228,9 @@ def main():
         raise Error('jti requires --id-file')
       with open(a.id_file, encoding='utf-8') as f:
         identifier = single([f.read(MAX_VALUE_BYTES + 1)])
-      if not re.fullmatch(r'[A-Za-z0-9_-]+', identifier):
+      # D286-13b: Keycloak transient token ids use a colon-prefixed identifier.
+      # Keep dots forbidden so a JWT cannot be supplied as an identifier.
+      if not re.fullmatch(r'[A-Za-z0-9_:-]+', identifier):
         raise Error('jti must be an identifier, never a JWT or bearer token')
       cn = single(['jti-' + identifier])
     elif a.kind == 'cutoff':

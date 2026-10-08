@@ -313,3 +313,7 @@ Disabling `Directory.prune` caused the aged-entry absence assertion to fail
 (AssertionError for `jti-aged-jti`); source was restored and the whole live script
 passed again. Logs: `/tmp/ldapium-revocation-aged-live.log` and
 `/tmp/ldapium-revocation-mutation-prune.log`.
+
+### Real issuer identifier compatibility
+
+The enabled HTTP drill initially exposed that real Keycloak JTI identifiers contain a colon, while the tool's identifier whitelist excluded it. The whitelist now admits colon in the identifier file while keeping dots, newline and NUL forbidden. `LDAPIUM_IMAGE=ldapium:revocation-integration python3 scripts/test/test-machine-revocation-tool-live.py` passed, including colon add/remove, CAS recovery, Go digest/count cross-check and offline-aged prune fixture. The real Keycloak token was revoked on both unchanged UI replicas in 1.03 seconds after this correction.

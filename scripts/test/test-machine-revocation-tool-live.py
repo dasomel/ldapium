@@ -71,8 +71,11 @@ with tempfile.TemporaryDirectory(prefix='ldapium-revtool-') as tmp:
     for invalid in ['bad\njti', 'bad\x00jti', 'header.payload.signature']:
       identifier.write_text(invalid)
       assert tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier)], accepted=(1,)).returncode == 1
+    identifier.write_text('trrt:live-jti')
+    tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier)])
+    tool('remove', ['--cn', 'jti-trrt:live-jti'])
     identifier.write_text('live-jti')
-    print('PASS identifier files reject newline, NUL, and bearer JWT')
+    print('PASS identifier files accept colon and reject newline, NUL, and bearer JWT')
     print('PASS repeat JTI is idempotent; case-fold/client collisions are refused')
     tool('add', ['--kind', 'cutoff', '--client', 'tool-client'])
     time.sleep(1)
