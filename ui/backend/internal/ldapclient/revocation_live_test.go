@@ -121,6 +121,22 @@ func TestRevocationReaderLive(t *testing.T) {
 	if snap.Check("client", time.Now(), "wire-jti", time.Now()) != machineauth.DecisionRevoked {
 		t.Fatal("tool JTI not observed")
 	}
+	// Same cardinality is insufficient: replace a vouched-for row without
+	// publishing the sentinel and require the digest to reject the torn data.
+	if out, err := ldap("ldapdelete", "", "cn=jti-wire-jti,"+revbase); err != nil {
+		t.Fatal(out)
+	}
+	if out, err := ldap("ldapadd", fmt.Sprintf("dn: cn=jti-replacement,%s\nobjectClass: device\ncn: jti-replacement\nou: client\n", revbase)); err != nil {
+		t.Fatal(out)
+	}
+	if _, err := read(snap.Generation()); !errors.Is(err, machineauth.ErrDigestMismatch) {
+		t.Fatalf("same-count replacement accepted: %v", err)
+	}
+	if out, err := ldap("ldapdelete", "", "cn=jti-replacement,"+revbase); err != nil {
+		t.Fatal(out)
+	}
+	invoke("add", "--kind", "jti", "--client", "client", "--id-file", idfile)
+	t.Log("PASS same-count changed composition rejected by digest")
 	invoke("remove", "--cn", "jti-wire-jti")
 	snap, err = read(snap.Generation())
 	if err != nil {

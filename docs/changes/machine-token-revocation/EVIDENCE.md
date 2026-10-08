@@ -259,6 +259,6 @@ State-machine race tests verify retain/expire/recover, max-generation propagatio
 
 Not yet verified: L4 node alternation, real partition/lagged replica, torn-sentinel retry live, response-size/entry-cap live, CI integration with the merged T-013 tool, and independent security review. T-014 remains unchecked. This draft alone does not enable token enforcement or complete #286.
 
-Validation: `make check` exited 0 (frontend lint/build, backend formatting/vet including live tags, backend tests/build, shell/Helm/manifests/licenses and reachable vulnerability checks). Final live run passed in 5.193 s. Logs: `/tmp/ldapium-source-{check,live,tests}.log`. No entrypoint/image/schema/Helm/request-path changes.
+Validation: `make check` exited 0 (frontend lint/build, backend formatting/vet including live tags, backend tests/build, shell/Helm/manifests/licenses and reachable vulnerability checks). Final expanded live run passed in 5.798 s (same-count replacement is refused by digest). Logs: `/tmp/ldapium-source-{check,live,tests}.log`. No entrypoint/image/schema/Helm/request-path changes.
 
 Mutation evidence: discarding the previous snapshot on refresh failure is detected by `TestRevocationRefreshRetainsSnapshotAndExpires`; disabling credential backoff is detected by `TestRevocationCredentialBackoffAndRegression`. Both produced actual test assertions (`--- FAIL`), not build failures; source restored afterward. Logs: `/tmp/ldapium-source-mutation-{discard-old,no-backoff}.log`.
