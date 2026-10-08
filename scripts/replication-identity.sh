@@ -126,12 +126,16 @@ if [ "$cmd" = reconcile ]; then
   case "$uri" in ldaps://*) ;; *) die "reconcile requires verified LDAPS" ;; esac
   [ "${LDAPTLS_REQCERT:-demand}" = demand ] || die "reconcile requires LDAPTLS_REQCERT=demand"
   export LDAPTLS_REQCERT=demand
-  [ -n "$current_file" ] && [ -f "$current_file" ] && [ -r "$current_file" ] || die "--current-password-file must name a readable regular file"
+  if [ -z "$current_file" ] || [ ! -f "$current_file" ] || [ ! -r "$current_file" ]; then
+    die "--current-password-file must name a readable regular file"
+  fi
   # Check exact bytes, including trailing LF/NUL, rather than shell command substitution.
   total=$(wc -c < "$current_file" | tr -d ' ')
   printable=$(LC_ALL=C tr -cd '\040-\176' < "$current_file" | wc -c | tr -d ' ')
   distinct=$(LC_ALL=C fold -w1 < "$current_file" | sort -u | wc -l | tr -d ' ')
-  [ "$total" = "$printable" ] && [ "$total" -ge 32 ] && [ "$distinct" -ge 10 ] || die "current credential fails byte hygiene (not proof of randomness)"
+  if [ "$total" != "$printable" ] || [ "$total" -lt 32 ] || [ "$distinct" -lt 10 ]; then
+    die "current credential fails byte hygiene (not proof of randomness)"
+  fi
   cmp -s "$current_file" "$pwfile" && die "current replication credential must differ from administrator credential"
   unsafe=$(LC_ALL=C tr -cd '\042\134' < "$current_file" | wc -c | tr -d ' ')
   [ "$unsafe" = 0 ] || die "current credential contains quote or backslash unsupported by dedicated mode"
