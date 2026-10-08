@@ -50,10 +50,14 @@ func TestUserPatchModify(t *testing.T) {
 
 func TestUserPatchModifyMapsEveryField(t *testing.T) {
 	f := func(v string) *domain.PatchField { return &domain.PatchField{Value: v} }
-	got := changeSummary(userPatchModify("uid=a,dc=x", domain.UserPatch{
+	mod := userPatchModify("uid=a,dc=x", domain.UserPatch{
 		CN: f("c"), SN: f("s"), GivenName: f("g"), Mail: f("m@example.org"),
 		Department: f("d"), Organization: f("o"), OrganizationalUnit: f("u"),
-	}, nil))
+	}, nil)
+	got := changeSummary(mod)
+	if mod.DN != "uid=a,dc=x" || len(got) != 7 {
+		t.Fatalf("PATCH changed target or attribute inventory: dn=%s attrs=%v", mod.DN, got)
+	}
 	for attr, want := range map[string]string{"cn": "c", "sn": "s", "givenName": "g", "mail": "m@example.org", "departmentNumber": "d", "o": "o", "ou": "u"} {
 		if v := got[attr]; len(v) != 1 || v[0] != want {
 			t.Errorf("%s = %v, want [%s]", attr, v, want)
