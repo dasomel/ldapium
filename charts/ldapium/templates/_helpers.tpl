@@ -210,6 +210,22 @@ Rendered from statefulset.yaml, so every `helm template`/`install` runs it.
 */}}
 {{- define "ldapium.validateHardening" -}}
 {{- $h := .Values.ldap.hardening -}}
+{{/* D66: mode selects the identity and credential atomically. Admin rollback cannot
+retain a dedicated password and silently stall the administrator bind. */}}
+{{- if eq .Values.replication.identity "dedicated" -}}
+{{- if ne (include "ldapium.replicationEnabled" .) "true" -}}
+{{- fail "replication.identity=dedicated requires replication enabled" -}}
+{{- end -}}
+{{- if or (not .Values.tls.enabled) (not .Values.tls.caFile) (not .Values.tls.existingSecret) -}}
+{{- fail "replication.identity=dedicated requires tls.enabled, tls.caFile and tls.existingSecret for verified TLS" -}}
+{{- end -}}
+{{- if or (not .Values.replication.existingSecret) .Values.replication.bindDN -}}
+{{- fail "replication.identity=dedicated requires replication.existingSecret and an empty replication.bindDN (the image selects the reserved DN)" -}}
+{{- end -}}
+{{- else if .Values.replication.existingSecret -}}
+{{- fail "replication.existingSecret is dedicated-only; remove it when rolling back identity to admin/prepare" -}}
+{{- end -}}
+
 {{- if and (or $h.disallowAnonBind $h.requireAuthc) .Values.ldap.anonymousReadBase -}}
 {{- fail "ldap.hardening.disallowAnonBind / requireAuthc contradict ldap.anonymousReadBase: anonymous uid lookups (SSSD, Keycloak federation, the UI's bare-uid login) would be rejected. Unset ldap.anonymousReadBase and move those clients to a bind DN, or leave both hardening flags false." -}}
 {{- end -}}
