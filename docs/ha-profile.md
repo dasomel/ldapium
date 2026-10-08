@@ -283,3 +283,20 @@ ACL faults outside the enumerated attributes, losses already present in the root
 view, changes between checks, and discarded multi-provider writes. Run the pending
 configuration and propagation gates before changing replication modes or resuming
 peers after a restore. The check must not be treated as package acceptance.
+
+Pass `--config-password-file` to also inspect `cn=config` as its administrator.
+`--configuration-only` performs that inspection before an identity is created;
+`--dedicated` additionally checks each stored consumer's simple bind DN, verified
+LDAPS/CA configuration, credential hygiene and SHA-256 fingerprint against the
+current identity password file. Raw credentials and fingerprints are never printed.
+The inspector requires the identity ACL/limit rules at index zero and refuses
+TLS client authentication, authz mappings/rewrite/proxy policy, delegated data
+attributes, and any reserved-identity rootDN. Actual LDAP wire reads and a real
+runtime proxy-policy injection are exercised in the live test.
+
+This is a conservative configuration predicate, still not the complete G1/G2
+procedure. Escaped/quoted, non-ASCII and uncommon/OID DN spellings are refused
+instead of guessed; use the full slapdn operator inspection for those deployments.
+It checks configured credentials, not credentials retained by already-connected
+consumer sessions, and does not prove that each configured peer is reachable or
+replicates. The remaining cross-node, canary and restore checks still apply.
