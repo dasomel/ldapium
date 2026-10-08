@@ -163,6 +163,7 @@ done
 | `idempotency_outcome_unknown` | 409 | 쓰기 결과를 알 수 없음(연결 유실·패닉) 또는 기록의 지문 키가 더 이상 없음. 리소스를 읽어 확인(`retryable: false`) |
 | `idempotency_capacity` | 503 | 멱등 기록 저장소가 가득 참: 새 키만 거부(`retryable: true`, `Retry-After`) |
 | `idempotency_unsupported` | 422 | 이 서버에서 멱등 기능이 꺼져 있는데 키가 붙음 |
+| `idempotency_key_required` | 428 | 머신 쓰기의 `Idempotency-Key` 누락 |
 | `if_match_required` | 428 | `If-Match` 필요 |
 | `login_rate_limited` | 429 | 로그인 실패 제한(`retryable: true`, `Retry-After`) |
 | `password_change_rate_limited` | 429 | 비밀번호 변경 실패 제한(세션+DN 단위, `retryable: true`, `Retry-After`) |
@@ -381,3 +382,5 @@ Go HTTP 서버가 핸들러 이전에 거절하는 요청(헤더 초과 431, 잘
 
 머신 bearer는 기본 꺼짐이며 쓰기·비밀번호·백업은 어떤 경우에도 지원하지 않습니다. 웹 UI는 아직 서버 커서를 쓰지 않고 클라이언트 측 페이징을 유지합니다(API 소비자용).
 설계 방향은 [`docs/changes/api-integration/PLAN.md`](changes/api-integration/PLAN.md)를 참고하세요.
+
+머신 쓰기 준비 middleware는 `Idempotency-Key` 누락을 428 `idempotency_key_required`로 거부하고, 기록 주체를 검증된 issuer/client 쌍으로 분리합니다. 사람 요청의 선택적 헤더와 DN 주체는 유지합니다. 머신 쓰기 오퍼레이션은 아직 403이며, 쓰기 개방 전 재생보다 먼저 인가·보호 DN 검사를 연결해야 합니다.
