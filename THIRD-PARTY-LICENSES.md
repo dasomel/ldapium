@@ -37,11 +37,11 @@ SBOM attached to that release, or:
 | `github.com/cespare/xxhash/v2` | MIT | [link](https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt) |
 | `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | [link](https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE) |
 | `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.8/LICENSE) |
-| `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
-| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
+| `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.5/LICENSE) |
+| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.5/json/LICENSE) |
 | `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.14/v3/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
-| `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.15.4/LICENSE) |
+| `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.16.0/LICENSE) |
 | `github.com/labstack/gommon` | MIT | [link](https://github.com/labstack/gommon/blob/v0.5.0/LICENSE) |
 | `github.com/mattn/go-colorable` | MIT | [link](https://github.com/mattn/go-colorable/blob/v0.1.15/LICENSE) |
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
@@ -112,7 +112,7 @@ SBOM attached to that release, or:
 | `cookie@1.1.1` | https://github.com/jshttp/cookie |
 | `detect-node-es@1.1.0` | https://github.com/thekashey/detect-node |
 | `get-nonce@1.0.1` | https://github.com/theKashey/get-nonce |
-| `lucide-react@1.48.0` | https://github.com/lucide-icons/lucide |
+| `lucide-react@1.52.0` | https://github.com/lucide-icons/lucide |
 | `react-dom@19.3.0` | https://github.com/react/react |
 | `react-remove-scroll-bar@2.3.8` | https://github.com/theKashey/react-remove-scroll-bar |
 | `react-remove-scroll@2.7.2` | https://github.com/theKashey/react-remove-scroll |

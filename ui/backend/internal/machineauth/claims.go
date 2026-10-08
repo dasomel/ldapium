@@ -33,6 +33,7 @@ const (
 	ReasonScope  Reason = "scope"
 	ReasonTime   Reason = "time" // iat/exp/nbf shape and skew
 	ReasonTTL    Reason = "ttl"
+	ReasonJTI    Reason = "jti"     // missing, null, non-string or empty jti while RequireJTI is on
 	ReasonExpire Reason = "expired" // otherwise-valid token past exp+skew
 	ReasonJWKS   Reason = "jwks_unavailable"
 )
@@ -52,6 +53,9 @@ type Policy struct {
 	SAPrefix string
 	MaxTTL   time.Duration
 	Skew     time.Duration
+	// RequireJTI makes a missing, null, non-string or empty jti a rejection
+	// (reason jti). Off, jti is not consulted for acceptance (REQ-002, D12).
+	RequireJTI bool
 }
 
 // Principal is what a fully verified token yields. Subject is only ever
@@ -61,6 +65,10 @@ type Principal struct {
 	Scopes      []string
 	SubjectHash string
 	Expiry      time.Time
+	// IssuedAt is the validated iat; JTI is the token id, empty unless
+	// Policy.RequireJTI made it mandatory. No revocation decision is made here.
+	IssuedAt time.Time
+	JTI      string
 }
 
 // Failure describes why verification did not produce a Principal.
@@ -136,6 +144,12 @@ func ValidateClaims(p Policy, payload []byte, now time.Time) (*Principal, *Failu
 			return nil, invalid(ReasonTime)
 		}
 	}
+	// D-T11-1: preserve optional identifiers; requiring one is a separate policy.
+	// Cost: one claim decode even when off; remove with Principal.JTI if unused.
+	jti, hasJTI := stringClaim(c, "jti")
+	if p.RequireJTI && !hasJTI {
+		return nil, invalid(ReasonJTI)
+	}
 	// Expiry is last: a token that reaches it violates nothing else, so it is
 	// the "purely expired" case.
 	if now.After(exp.Add(p.Skew)) {
@@ -148,6 +162,8 @@ func ValidateClaims(p Policy, payload []byte, now time.Time) (*Principal, *Failu
 		Scopes:      strings.FieldsFunc(scopeRaw, func(r rune) bool { return r == ' ' }),
 		SubjectHash: hex.EncodeToString(sum[:6]),
 		Expiry:      exp,
+		IssuedAt:    iat,
+		JTI:         jti,
 	}, nil
 }
 

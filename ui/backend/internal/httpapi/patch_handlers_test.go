@@ -166,3 +166,23 @@ func TestPatch_IfMatch(t *testing.T) {
 		}
 	}
 }
+
+// D25 / T-002: reject LDAP-only and identity attributes before directory I/O.
+func TestPatchUserRejectsAttributesOutsideClosedInventory(t *testing.T) {
+	for _, name := range []string{"uid", "password", "userPassword", "objectClass", "memberOf", "pwdAccountLockedTime", "pwdPolicySubentry", "entryCSN", "createTimestamp", "displayName"} {
+		t.Run(name, func(t *testing.T) {
+			s, pr, ck := newPatchServer(t)
+			body, err := json.Marshal(map[string]any{"dn": targetDN, "cn": "Changed", "sn": "Name", name: "sentinel-attribute-value"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := doPatch(s, ck, "/api/users", "application/json", string(body))
+			if rec.Code != http.StatusBadRequest || len(pr.calls) != 0 {
+				t.Fatalf("status=%d calls=%v", rec.Code, pr.calls)
+			}
+			if strings.Contains(rec.Body.String(), "sentinel-attribute-value") {
+				t.Fatal("response echoed rejected value")
+			}
+		})
+	}
+}

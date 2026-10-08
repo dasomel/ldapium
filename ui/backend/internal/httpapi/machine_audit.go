@@ -69,7 +69,7 @@ var machineReasons = func() map[string]bool {
 		string(machineauth.ReasonFormat), string(machineauth.ReasonAlg), string(machineauth.ReasonTyp),
 		string(machineauth.ReasonKid), string(machineauth.ReasonSig), string(machineauth.ReasonIss),
 		string(machineauth.ReasonAud), string(machineauth.ReasonAzp), string(machineauth.ReasonSA),
-		string(machineauth.ReasonScope), string(machineauth.ReasonTime), string(machineauth.ReasonTTL),
+		string(machineauth.ReasonScope), string(machineauth.ReasonTime), string(machineauth.ReasonTTL), string(machineauth.ReasonJTI),
 		string(machineauth.ReasonExpire), string(machineauth.ReasonJWKS),
 	} {
 		m[r] = true
