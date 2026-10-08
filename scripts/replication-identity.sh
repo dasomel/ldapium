@@ -131,7 +131,7 @@ if [ "$cmd" = reconcile ]; then
   fi
   # Check exact bytes, including trailing LF/NUL, rather than shell command substitution.
   total=$(wc -c < "$current_file" | tr -d ' ')
-  printable=$(LC_ALL=C tr -cd '\040-\176' < "$current_file" | wc -c | tr -d ' ')
+  printable=$(LC_ALL=C tr -cd '\041-\176' < "$current_file" | wc -c | tr -d ' ')
   distinct=$(LC_ALL=C fold -w1 < "$current_file" | sort -u | wc -l | tr -d ' ')
   if [ "$total" != "$printable" ] || [ "$total" -lt 32 ] || [ "$distinct" -lt 10 ]; then
     die "current credential fails byte hygiene (not proof of randomness)"

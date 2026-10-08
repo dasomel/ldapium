@@ -7,7 +7,8 @@ The current file initially fails an actual identity bind with LDAP 49. Reconcile
 an SSHA hash using file input, verifies the current TLS bind, preserves the prior
 credential, and leaves the hash count unchanged on repeat. The test rejects clear
 LDAP, disabled certificate verification, LF/NUL input and a missing identity. A
-credential ending with an ASCII space is preserved exactly and binds successfully.
+credential ending with an ASCII space is refused, matching dedicated entrypoint
+hygiene (0x21–0x7e).
 A temporary CA/server certificate and named volume avoid Colima file UID mapping.
 
 This evidence covers the online credential primitive. Peer isolation and restored

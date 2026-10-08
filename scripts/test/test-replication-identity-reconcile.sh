@@ -54,8 +54,7 @@ check_rc 1 ri reconcile --current-password-file /tmp/newline.pw
 printf '%s\0' "$current" | docker exec -i "$name" sh -c 'cat > /tmp/nul.pw'
 check_rc 1 ri reconcile --current-password-file /tmp/nul.pw
 printf '%s' "$current" | docker exec -i "$name" sh -c 'cat > /tmp/space.pw; printf " " >> /tmp/space.pw'
-check_rc 0 ri reconcile --current-password-file /tmp/space.pw
-check_rc 0 bind /tmp/space.pw
+check_rc 1 ri reconcile --current-password-file /tmp/space.pw
 ri retire --yes
 check_rc 1 ri reconcile --current-password-file /tmp/current.pw
 echo 'ALL PASS: real verified TLS, add, repeat, old credential, bytes, missing entry'
