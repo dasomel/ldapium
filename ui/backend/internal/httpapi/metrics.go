@@ -30,7 +30,14 @@ func (s *Server) EnableMetrics(sessions func() int) http.Handler {
 		codes = append(codes, code)
 	}
 	sort.Strings(codes)
-	reg := metrics.New(metrics.Options{Routes: routes, Codes: codes, Sessions: sessions})
+	options := metrics.Options{Routes: routes, Codes: codes, Sessions: sessions}
+	if s.machine != nil && s.machine.revocation != nil {
+		options.Revocation = func() (bool, uint64, uint64) {
+			status := s.machine.revocation.status()
+			return status.Ready, status.Successes, status.Failures
+		}
+	}
+	reg := metrics.New(options)
 	s.metrics = reg
 	return reg.Handler()
 }

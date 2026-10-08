@@ -86,3 +86,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HDR" https://ldapium.example.com
 3. ingress가 클라이언트가 보낸 `X-Forwarded-For`를 덮어쓰거나 정리하고, `UI_TRUSTED_PROXIES`가 그 ingress의 CIDR(또는 `none`)이며, **ingress/프록시 접근 로그가 켜져 있음**(핸들러 이전 거절은 ldapium 로그에 없음).
    - kind 클러스터의 ingress-nginx에서 실측(`scripts/test/test-chart-machine-auth-kind.sh`): 컨트롤러 ConfigMap에 `use-forwarded-headers: "true"`를 켜고 `proxy-real-ip-cidr`를 제한하지 않으면(기본 0.0.0.0/0) 클라이언트가 보낸 위조 `X-Forwarded-For`가 그대로 신뢰되어 IP 실패 throttle이 우회됩니다(위조값마다 새 IP, 10회 모두 401, 429 없음). `proxy-real-ip-cidr`를 실제 상위 프록시 대역으로 제한하면 예산이 유지됩니다. 기본 설정(`use-forwarded-headers` 꺼짐)은 헤더를 덮어써 안전합니다.
 4. limiter는 replica별 상태입니다(전역 한도가 아님). replica 수만큼 한도가 늘어납니다.
+
+### Revocation source implementation stage (T-014)
+
+With `MACHINE_REVOCATION_ENABLED=true`, the source refreshes using the machine LDAP identity. Its readiness is observable on the private metrics listener as `ldapium_ui_machine_revocation_ready`; `ldapium_ui_machine_revocation_refresh_total{result="success"|"failure"}` counts refresh outcomes. No series is emitted when disabled. A failed refresh retains the last complete snapshot until its query-start age exceeds `MAX_STALE`. Invalid machine credentials back off from 60 seconds to 15 minutes; a successful refresh resets the backoff. LDAP diagnostics and identifiers are omitted from refresh error logs.
+
+This implementation stage does not connect revocation decisions to bearer requests. T-015 and the full live drill must land before operators can rely on enforcement. The 1 MiB guard bounds retained decoded search data; one oversized entry can be allocated by the LDAP decoder before the guard runs. A refresh uses one connection to one node; round-robin URLs can still alternate snapshots between refreshes, so production replica/partition acceptance remains required.

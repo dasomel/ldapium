@@ -240,3 +240,23 @@ All revocation drill checks passed: 18 checks in 23s.
 → 머신 DN은 `createTimestamp`에 대한 범위 필터(`>=`, `<=`)를 정상 평가하고 `modifyTimestamp`를 읽는다(필터 속성이 undefined가 되는 §1·AGENTS.md의 경우가 아님: 기본 ACL이 `B` 안 모든 속성에 `read`를 준다). 설계 변경 없음. `B`를 좁힌 구성(§5.3)에서는 revocations 규칙이 `to dn.subtree`이므로 같은 효과임을 이 항목에서 별도로 재측정하지는 않았다(**미실행**).
 
 값 조건부 modify: 관리자가 sentinel `description`을 `delete: description`(옛 값 지정) + `add: description`(새 값)으로 갱신. 첫 쓰기 rc 0, 같은 옛 값을 쓰는 두 번째 쓰기는 **rc 16 `No such attribute`("modify/delete: description: no such value")**로 실패하고 값은 첫 쓰기 것(`ts=2`)으로 남음 → 동시에 도는 두 heartbeat는 조용히 덮어쓰지 못한다.
+
+## 11. T-014 source draft (2026-10-08)
+
+The LDAP source opens a fresh machine-bound connection per refresh. Sentinel / subtree / sentinel use that connection, a total five-second deadline, a server size limit of MAX_ENTRIES+2, and a one-entry streaming buffer. A changed sentinel is retried once within the original query budget. Fixed error messages prevent LDAP diagnostics from leaking into logs. Decoded retained rows are capped at 1 MiB; this does **not** bound go-ldap's allocation for an individual wire entry before decoding.
+
+Local evidence (disposable `ldapium:revocation-review`, T-013 tool from draft #323):
+
+```
+LDAPIUM_IMAGE=ldapium:revocation-review \
+LDAPIUM_REVOCATION_TOOL=/tmp/ldapium-revocation-tool/scripts/machine-revocation.sh \
+go test -tags live ./internal/ldapclient -run TestRevocationReaderLive -count=1 -v
+```
+
+Observed: missing sentinel refused; init then empty snapshot accepted; tool-written JTI revoked and removal restored OK; real bad password returned rc49 classification; generation regression refused; unpublished row caused count mismatch; multivalued cn was malformed; hidden sentinel and clock-injected stale sentinel were refused; stopped LDAP failed refresh and old snapshot expired; restart recovered after restoring the disposable ACL, publishing heartbeat, and rereading Docker's dynamically reassigned host port. No token/credential values were printed. The harness initially failed because of an incorrect ldapi socket/auth choice, then because its old Docker host port was reused after restart; both were corrected before claiming recovery.
+
+State-machine race tests verify retain/expire/recover, max-generation propagation, 60 s to 15 m credential backoff, reset on success, cancellation, and cumulative counters. Metrics appear only when the source is enabled, on the existing private metrics listener. The request path is unchanged (T-015).
+
+Not yet verified: L4 node alternation, real partition/lagged replica, torn-sentinel retry live, response-size/entry-cap live, CI integration with the merged T-013 tool, and independent security review. T-014 remains unchecked. This draft alone does not enable token enforcement or complete #286.
+
+Validation: `make check` exited 0 (frontend lint/build, backend formatting/vet including live tags, backend tests/build, shell/Helm/manifests/licenses and reachable vulnerability checks). Final live run passed in 5.193 s. Logs: `/tmp/ldapium-source-{check,live,tests}.log`. No entrypoint/image/schema/Helm/request-path changes.
