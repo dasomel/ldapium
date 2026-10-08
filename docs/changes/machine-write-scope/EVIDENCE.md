@@ -54,3 +54,15 @@ These checks validate compatibility, not machine-write execution.
 
 Not verified: T-002's complete attribute inventory/overlay behavior; T-004's
 write identity runtime matrix; T-011 onward implementation and opening gates.
+
+## T-011 configuration draft (2026-10-08)
+
+Adds separate data and optional lock identities, validates idempotency/auth prerequisites and DN separation, and ignores subordinate variables behind disabled switches. Uses v1's administrator/root/service-identity checks, adding the read and fixed replication identities. Numeric attribute type and ambiguous whitespace spellings on either side of the DN comparison fail closed. Credential identities are deliberately excluded under Resolved Q1's separate-approval rule; this is recorded as a T-011 partial scope rather than implementing the parenthetical W_cred early.
+
+The HTTP regression presents a valid token containing all scope vocabulary with both identities configured: every non-GET protected route remains 403 scope_denied, no executor or directory bind is reached. No operation registration, client write ceiling, request execution, ACL, image or Helm change.
+
+Remaining: independent security review, documentation/Helm integration at later stages, live bind/ACL proof when the identities acquire consumers, and the separately approved credential stage. T-011 remains unchecked pending review and the clarified scope.
+
+Observed `go test -race -count=1 ./internal/config ./internal/httpapi ./internal/machineauth`: all three packages passed. Removing the protected-identity comparison made `TestMachineWriteIdentitiesRejectProtectedDNVariants` fail with real assertions; source restored and `go test ./internal/config -run ^TestMachineWrite -count=1` passed. Logs: `/tmp/ldapium-write-identities-{tests,mutation,restored}.log`.
+
+Final `make check` exited 0 after the identity ambiguity guard was added (frontend lint/build; backend formatting/vet/live-tag vet/tests/build; shell, manifest, chart, license and reachable vulnerability checks). The 3-package race run also passed after the final code change. This is configuration/HTTP guard evidence; no claim of live write-identity bind or ACL verification is made because there is no consumer or opened operation in this unit.
