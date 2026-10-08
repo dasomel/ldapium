@@ -88,3 +88,15 @@ Final `go test -race -count=1 ./internal/httpapi ./internal/ldapclient` passed a
 T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-overlay-live.py` exited 0. A fresh uniquely owned LDAP container gives its writer only group-member write plus general read. User cn Modify is denied rc50. Direct memberOf Modify is refused rc19 (`no user modification allowed`), a schema restriction rather than an ACL result. The same writer's group member Add sets user memberOf and member Delete clears it despite no user-attribute write permission. Credential log scan passes. CI runs this test in API+credentials E2E. Initial rc50 expectation for memberOf was corrected to the observed schema result; no ACL was weakened. Logs: `/tmp/ldapium-write-overlay-live.log`.
 
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
+
+
+## T-017 machine If-Match prerequisite
+
+`machineIfMatch` is intentionally not wired until T-013. The write-operation table stays empty.
+Unit table covers absent/empty (428), wildcard/weak/list/repeated/malformed/unquoted/whitespace (400), and a valid strong entryCSN tag. Existing human conditional-write tests remain unchanged. Existing OpenAPI error enum already contains `if_match_required` and `invalid_request`; operation security stays unchanged while writes are closed.
+
+- `go test ./internal/httpapi -run 'TestMachineIfMatch|Conditional' -count=1`: PASS.
+- `go test -race ./internal/httpapi -count=1`: PASS (12.801s).
+- Mutation allowing `*`: `TestMachineIfMatch/wildcard` fails with `missing rejection`; mutation restored.
+- Live LDAP is not claimed by this header parser unit; LDAP assertion evidence belongs to T-018/T-021.
+- Independent security review and final request-path integration remain pending.
