@@ -88,3 +88,16 @@ Final `go test -race -count=1 ./internal/httpapi ./internal/ldapclient` passed a
 T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-overlay-live.py` exited 0. A fresh uniquely owned LDAP container gives its writer only group-member write plus general read. User cn Modify is denied rc50. Direct memberOf Modify is refused rc19 (`no user modification allowed`), a schema restriction rather than an ACL result. The same writer's group member Add sets user memberOf and member Delete clears it despite no user-attribute write permission. Credential log scan passes. CI runs this test in API+credentials E2E. Initial rc50 expectation for memberOf was corrected to the observed schema result; no ACL was weakened. Logs: `/tmp/ldapium-write-overlay-live.log`.
 
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
+
+
+## T-018 atomic target-type constraint (partial)
+
+`WithMachineWriteConstraints` marks the future machine execution context. User Modify/Delete controls add `objectClass=inetOrgPerson`, group Modify/Delete controls add `objectClass=groupOfNames`, ANDed with the mandatory entryCSN. Human contexts preserve the old revision/unconditional controls. The marker is not connected to HTTP until T-013. This is not full T-018: protected-entry UUID comparison and read-identity member checks remain required.
+
+Actual Go LDAP-wire test runs inside a fresh `ldapium:revocation-review` container, bound as `cn=writer` (not root). Wrong-type group→DeleteUser and user→DeleteGroup both return ErrRevisionConflict (LDAP122); correct PatchUser and AddMember succeed; missing machine revision is refused. Administrator readback confirms both wrong-type targets survive, correct mail/member values exist, forbidden mail absent. Credential scan passes. The fixture grants the writer broad non-secret writes deliberately to isolate the type control; it does not validate final least-privilege ACLs.
+
+- `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-type-live.py`: PASS, actual Go live test 0.02s plus post-write readback.
+- Mutation removing the class conjunct: live test fails `group through user deletion: <nil>` (the wrongly typed entry was deleted). Restored binary/source and final live rerun PASS.
+- `go test -race ./internal/ldapclient ./internal/httpapi -count=1`: PASS (4.987s / 12.687s).
+- `make check`: exit0, formatting/vet/build/test/chart/license/vulnerability checks passed (0 reachable vulnerabilities). Initial failure was missing frontend oxlint; `npm ci` installed pinned dependencies and the complete rerun passed.
+- Initial test binary had Darwin format; rebuilding with GOOS=linux corrected the container exec format failure. CI explicitly cross-builds Linux and runs the live path; no path filter added.
