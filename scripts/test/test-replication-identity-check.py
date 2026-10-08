@@ -22,6 +22,22 @@ class StableCheck(unittest.TestCase):
   def test_root_same_csn_changed_content(self):
     self.assertEqual(check.compare(row(), row(), row(pw=b"changed")), (1, 0))
 
+  def test_hidden_identity_csn_is_error(self):
+    visible = row(); visible[b"cn=x"].pop("entrycsn")
+    with self.assertRaises(ValueError):
+      check.compare(row(), visible, row())
+
+  def test_each_view_requires_one_nonempty_csn_before_pending(self):
+    for index in range(3):
+      for invalid in ((), (b"",), (b"1", b"2")):
+        views = [row(), row(csn=b"2"), row(csn=b"3")]
+        views[index][b"cn=x"]["entrycsn"] = invalid
+        with self.assertRaises(ValueError):
+          check.compare(*views)
+
+  def test_root_defect_not_hidden_by_identity_change(self):
+    self.assertEqual(check.compare(row(), row(csn=b"2"), row(pw=b"changed")), (1, 0))
+
   def test_missing_entry(self):
     self.assertEqual(check.compare(row(), {}, row()), (1, 0))
 

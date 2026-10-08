@@ -45,6 +45,23 @@ LDIF
 ri ensure --out /tmp/old.pw
 "$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --ca-file /certs/ca.pem
 
+# Hidden stability metadata is an evidence error, not a concurrent-write warning.
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to attrs=entryCSN by dn.exact="$identity" none by * break
+LDIF
+result=0
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --ca-file /certs/ca.pem || result=$?
+[ "$result" = 2 ] || { echo 'FAIL checker accepted hidden stability metadata'; exit 1; }
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcAccess
+olcAccess: {0}to attrs=entryCSN by dn.exact="$identity" none by * break
+LDIF
+
 # Same CSN / hidden userPassword is a real ACL defect, not a replication outage.
 docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
 dn: olcDatabase={1}mdb,cn=config

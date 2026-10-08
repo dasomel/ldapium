@@ -45,19 +45,22 @@ def parse_ldif(raw):
 def compare(first, identity, second, attrs=ATTRS):
   # D59: same entryCSN and different contents is a defect, even if another
   # entry changed during the scan. Unstable entries are deferred, never failed.
+  for view in (first, identity, second):
+    for item in view.values():
+      csn = item.get('entrycsn', ())
+      if len(csn) != 1 or not csn[0]:
+        raise ValueError('entryCSN unavailable to checker')
   failed, pending = 0, 0
   for dn in first.keys() | identity.keys() | second.keys():
     a, v, b = first.get(dn), identity.get(dn), second.get(dn)
     if a is None or b is None or a.get('entrycsn') != b.get('entrycsn'):
       pending += 1
       continue
-    if not a.get('entrycsn'):
-      raise ValueError('entryCSN unavailable to checker')
-    if v is not None and v.get('entrycsn') != a.get('entrycsn'):
-      pending += 1
-      continue
     if any(a.get(key, ()) != b.get(key, ()) for key in attrs):
       failed += 1
+      continue
+    if v is not None and v.get('entrycsn') != a.get('entrycsn'):
+      pending += 1
       continue
     if v is None or any(a.get(key, ()) != v.get(key, ()) for key in attrs):
       failed += 1
