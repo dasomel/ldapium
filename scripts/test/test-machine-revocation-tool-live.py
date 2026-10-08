@@ -63,7 +63,9 @@ with tempfile.TemporaryDirectory(prefix='ldapium-revtool-') as tmp:
     assert tool('init', accepted=(1,)).returncode == 1
     identifier = tmp / 'jti'
     identifier.write_text('live-jti')
-    tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier)])
+    warning = tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier), '--max-entries', '1'])
+    assert '80%' in warning.stderr
+    print('PASS active entries above 80% warn without exposing identifiers')
     tool('add', ['--kind', 'jti', '--client', 'tool-client', '--id-file', str(identifier)])
     assert tool('add', ['--kind', 'jti', '--client', 'other-client', '--id-file', str(identifier)], accepted=(1,)).returncode == 1
     identifier.write_text('LIVE-JTI')
