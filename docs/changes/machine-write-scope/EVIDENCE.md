@@ -54,3 +54,27 @@ These checks validate compatibility, not machine-write execution.
 
 Not verified: T-002's complete attribute inventory/overlay behavior; T-004's
 write identity runtime matrix; T-011 onward implementation and opening gates.
+
+## T-002 attribute inventory baseline (2026-10-08)
+
+Current request builders (`ldapclient/users.go`, `groups.go`, `domain/patch.go`, `httpapi/patch_handlers.go`):
+
+| Operation | Attributes actually written | Notes |
+|---|---|---|
+| createUser | objectClass={top,person,organizationalPerson,inetOrgPerson}; uid,cn,sn; optional givenName,mail,departmentNumber,o,ou | password triggers separate RFC3062 operation and compensation; future data-only machine create must reject password |
+| patchUser | cn,sn,givenName,mail,departmentNumber,o,ou (Replace only) | uid absent from DTO; target DN unchanged; no ModifyDN |
+| patchGroup | cn,description | membership separate; first machine release keeps group writes closed |
+| add/removeGroupMember | member (Add/Delete) | server overlays may update memberOf/refint effects |
+| lock/unlockUser | pwdAccountLockedTime | separate lock identity stage |
+| setPassword | RFC3062 extended operation | separately approved credential stage; no data identity access |
+
+PATCH rejects unknown/LDAP-only attributes before directory calls, including uid,
+password/userPassword, objectClass, memberOf, pwd*, operational timestamps/CSN and
+displayName (readable but not a patchable DTO field). The baseline test verifies
+rejection alongside otherwise valid cn/sn fields and no echo of rejected values.
+The pure request-builder test now checks exactly seven changes and the original
+DN, so an added attribute or changed target fails.
+
+Remaining T-002 evidence: live memberOf/refint behavior outside the writing
+identity's ACL, and POST unknown-field binding baseline. This inspection does
+not establish LDAP permissions, open any write route or complete T-002.
