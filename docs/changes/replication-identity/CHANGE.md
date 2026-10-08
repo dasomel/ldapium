@@ -371,3 +371,38 @@ This rerun used `RIDDED_ONLY=cluster`; it does not cover the refusal/repair/base
 comparison parts, Kubernetes OrderedReady recovery, credential rotation,
 restore/reconcile, cross-node production checks or D43 relaxation. Issue #229
 remains open while those accepted implementation conditions remain incomplete.
+
+### Refusal and repair verification; scanner regression (2026-10-08)
+
+```
+RIDDED_ONLY=refusals bash scripts/test/test-replication-identity-dedicated.sh ldapium:revocation-review
+RIDDED_ONLY=repair bash scripts/test/test-replication-identity-dedicated.sh ldapium:revocation-review
+```
+
+Both completed with exit 0 and `replication-identity dedicated test passed`.
+The refusal run had 148 PASS assertions: unsafe environment/peer/retry settings,
+stored delegation/rewrite/client-certificate/rootDN collisions and misplaced ACL
+rules were refused without modifying configuration or data; the clean dedicated
+path and administrator rollback were exercised.
+
+The first repair run exposed a false-pass bug in `rp_scan_layer`: the extraction
+helper ran as the image's non-root user, `mkdir /x` failed, and its shell proceeded
+to scan a nonexistent directory and report an empty result. Those earlier
+writable-layer absence assertions are invalid. The helper now uses root only in
+the disposable extraction container, checks both archive copies and extraction,
+and propagates setup failure. LDAP containers and filesystem modes are unchanged.
+Actual controls detect a private 0600 credential file, accept a clean layer, and
+reject a failed copy with a recorded helper failure.
+
+The corrected full repair run had 178 PASS assertions and no permission-denied
+or FAIL diagnostics: refusal ordering with byte-identical volumes; injected
+awk/cp/sync/mv failures; six SIGKILL points followed by normal restart; plaintext,
+folded and base64 credentials removed from configuration/state, writable-layer
+paths, logs and data pages; structure-only backup preservation; disk-full refusal
+with the original file intact and no temporary/backup files left behind.
+Logs: `/tmp/ldapium-229-refusals.log`, `/tmp/ldapium-229-repair-fixed.log`.
+
+This verifies the existing implementation and fixes its test harness. It does
+not implement rotate/reconcile/rollback-admin operator commands, total-loss
+restore, periodic/cross-node checks, Kubernetes/Helm acceptance or D43 relaxation.
+Issue #229 remains open.

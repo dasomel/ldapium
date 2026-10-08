@@ -1276,7 +1276,11 @@ true'
   }
   rp_scan_layer() { # container credential: the writable layer paths the entrypoint uses (also works on a killed container)
     local out
-    out="$( { docker cp "$1:/tmp" - ; docker cp "$1:/var/lib/openldap/run" - 2>/dev/null || true; } | docker run --rm -i -e P="$2" --entrypoint sh "$image" -c 'mkdir /x && tar -x -i -C /x 2>/dev/null; set -- /x; '"$scan_core" )" || { helper_fail "rp_scan_layer $1 failed"; return 1; }
+    # D-VERIFY-1: the scanner helper runs as root only in its throwaway extraction
+    # container. Cost: privileged file reads; escape hatch: a writable extraction
+    # directory with equivalent checked access. Never report absence if copy or
+    # extraction failed (the production LDAP container remains non-root).
+    out="$( { docker cp "$1:/tmp" - && docker cp "$1:/var/lib/openldap/run" -; } | docker run --rm -i --user 0 -e P="$2" --entrypoint sh "$image" -c 'set -e; mkdir /x; tar -x -i -C /x; set -- /x; '"$scan_core" )" || { helper_fail "rp_scan_layer $1 failed"; return 1; }
     if [ -n "$out" ]; then printf '%s\n' "$out"; fi
   }
   rp_scan_mdb() { # datavol credential: number of data.mdb files whose raw pages contain the credential in plain
@@ -1317,6 +1321,22 @@ printf "nothing here\n" > /c/t/none'
       "/c/t/b64 /c/t/fold /c/t/hex /c/t/pct /c/t/plain /c/t/rawb64 " "$(rp_scan_cfg_only "$st" "$stc" | sort | tr '\n' ' ')"
   done
   docker volume rm -f "${st}-cfg" "${st}-data" >/dev/null
+
+  # Verify the actual docker-cp/tar path, including unreadable/copy failures.
+  layerprobe="ldapium-ridded-layerprobe-${suffix}"
+  reg_containers+=("$layerprobe")
+  docker run -d --name "$layerprobe" --entrypoint sh "$image" -c 'mkdir -p /var/lib/openldap/run; sleep 300' >/dev/null
+  printf '%s' "$cred_plain" | docker exec -i "$layerprobe" sh -c 'umask 077; cat > /tmp/ridded-layer-secret'
+  check "layer scanner positive control: detects a private credential file" "/x/tmp/ridded-layer-secret " "$(rp_scan_layer "$layerprobe" "$cred_plain" | tr '\n' ' ')"
+  docker exec "$layerprobe" rm /tmp/ridded-layer-secret
+  check "layer scanner negative control: clean layer is empty" "" "$(rp_scan_layer "$layerprobe" "$cred_plain" | tr '\n' ' ')"
+  if rp_scan_layer "${layerprobe}-absent" "$cred_plain" >/dev/null 2>&1; then
+    bad "layer scanner copy failure incorrectly succeeded"; exit 1
+  fi
+  [ -s "$fail_flag" ] || { bad "layer scanner copy failure was not recorded"; exit 1; }
+  rm -f "$fail_flag"
+  ok "layer scanner copy failure returns nonzero and records helper failure"
+  docker rm -f "$layerprobe" >/dev/null
 
   # SIGKILL at every step of the repair. The original file is replaced only by an atomic rename of an already verified
   # file, so no clear-text rollback copy exists: before the rename the only file that holds the old credential is the
