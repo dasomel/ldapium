@@ -87,6 +87,107 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HDR" https://ldapium.example.com
    - kind 클러스터의 ingress-nginx에서 실측(`scripts/test/test-chart-machine-auth-kind.sh`): 컨트롤러 ConfigMap에 `use-forwarded-headers: "true"`를 켜고 `proxy-real-ip-cidr`를 제한하지 않으면(기본 0.0.0.0/0) 클라이언트가 보낸 위조 `X-Forwarded-For`가 그대로 신뢰되어 IP 실패 throttle이 우회됩니다(위조값마다 새 IP, 10회 모두 401, 429 없음). `proxy-real-ip-cidr`를 실제 상위 프록시 대역으로 제한하면 예산이 유지됩니다. 기본 설정(`use-forwarded-headers` 꺼짐)은 헤더를 덮어써 안전합니다.
 4. limiter는 replica별 상태입니다(전역 한도가 아님). replica 수만큼 한도가 늘어납니다.
 
+## LDAP revocation writer (staged #286 T-013)
+
+The operator tool exists; **the request enforcement hook remains a separate staged unit**.
+Until the request hook is shipped, recording an entry does not invalidate a token.
+The existing allowlist removal and replica replacement procedure remains the backstop.
+
+Run `scripts/machine-revocation.sh` on an operator host with Python 3 and the
+OpenLDAP CLI (`ldapsearch`, `ldapadd`, `ldapmodify`, `ldapdelete`). Use verified
+`ldaps://` and the normal LDAP client CA configuration. The password is read
+through `--password-file`, never an argument. `--container NAME` runs the LDAP
+commands inside a local container; the password-file path then belongs to that
+container. It does not copy the credential to the host. The writer binds as an
+operator/admin identity; the API machine identity remains read-only.
+
+Create `ou=revocations,ou=system,<root>` as an `organizationalUnit` with a single
+`ou: revocations`. Run `init` once before enabling the future API consumer:
+
+```sh
+scripts/machine-revocation.sh init --uri ldaps://ldap.example.org:636 \
+  --base 'ou=revocations,ou=system,dc=example,dc=org' \
+  --bind-dn 'cn=admin,dc=example,dc=org' --password-file /run/secrets/admin
+```
+
+Every mutating command takes those same connection arguments. `init` refuses an
+existing sentinel or any entries; it never resets a generation. `add --kind jti
+--client CLIENT --id-file FILE` reads only the jti identifier from a file (no
+newline, no NUL, no JWT). `add --kind cutoff --client CLIENT` adds a new immutable
+cutoff before removing that client's old cutoffs. The directory supplies its
+`createTimestamp`; operators must not replace it. `remove --cn CN` explicitly
+undoes one revocation, so use it only when reaccepting that token/client is
+intended; removing the sentinel is refused. A failed command may already have
+written entries: repair malformed entries, then run `heartbeat` to republish.
+Do not restore an old sentinel as a rollback: it can reenable revoked tokens and
+its generation may be rejected by a running consumer.
+
+`heartbeat` and `prune` remove jti entries older than the retention period and
+publish a new sentinel. `add` also prunes. Cutoffs are never pruned automatically.
+`retention` prints the minimum (4440 seconds); `--retention` can increase it up to
+86400 seconds and never decreases a previously published value. Every mutation
+checks all descendants without a device-only filter: stray, nested, malformed,
+multi-valued cn/ou and newline/NUL values block writes. More than 80% of
+`--max-entries` (default 2000, range 1–2500) emits a warning. Reaching the cap
+refuses a new entry; reduce the load before enabling the consumer. Failed LDAP
+commands and partial results are errors. Sentinel generation/count/digest/time/
+retention are changed atomically by deleting the exact old attribute values and
+adding the new values. rc 16 means another writer won; the tool rereads,
+recalculates and retries at most eight times. Exhaustion exits nonzero.
+
+Schedule `heartbeat` substantially more often than `SENTINEL_MAX_AGE` (future
+consumer default 5 minutes), e.g. every minute, and alert on nonzero status. A
+CronJob uses an operator tools image containing Python 3, the OpenLDAP CLI, and
+both `scripts/machine-revocation.sh` and `scripts/lib/machine_revocation.py`:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: machine-revocation-heartbeat
+spec:
+  schedule: '* * * * *'
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: heartbeat
+              image: YOUR_PINNED_OPERATOR_TOOLS_IMAGE
+              command: ['/opt/ldapium/scripts/machine-revocation.sh']
+              args: ['heartbeat', '--uri', 'ldaps://ldap.example.org:636',
+                     '--base', 'ou=revocations,ou=system,dc=example,dc=org',
+                     '--bind-dn', 'cn=admin,dc=example,dc=org',
+                     '--password-file', '/run/secrets/admin']
+              volumeMounts:
+                - {name: credential, mountPath: /run/secrets, readOnly: true}
+          volumes:
+            - name: credential
+              secret:
+                secretName: machine-revocation-operator
+                defaultMode: 0400
+```
+
+Supply trusted CA configuration and mount permissions for the image's operator
+UID. This example is not installed by Helm; the stock LDAPium image has no Python
+writer runtime. It carries an admin credential, so restrict access to the Job
+and its Secret. Monitor the heartbeat and directory capacity before API rollout.
+
+For a client incident: (1) block issuance at the IdP and **confirm** new
+`client_credentials` requests fail, repeating the check across the IdP nodes;
+(2) write a cutoff (or known jti); (3) after the consumer ships, confirm the same
+previously issued token returns 401 on every API replica; (4) apply the allowlist
+and replica replacement backstop. Under healthy replication, synchronized clocks
+(NTP), successful refreshes and the configured query budgets, the planned
+visibility bound is `REFRESH + 2 × 5s + replication delay`. This is a conditional
+bound, not a measured guarantee for an arbitrary cluster. A partitioned LDAP
+node may serve old data until sentinel aging forces unavailability. IdP issuance
+propagation and skew beyond `MACHINE_CLOCK_SKEW` remain exposure windows; use
+known-jti revocation and the backstop together if those windows are unacceptable.
+
 ### Write identity configuration stage (machine-write-scope T-011)
 
 `MACHINE_WRITE_ENABLED` stays off by default. Enabling it requires machine authentication, `UI_IDEMPOTENCY_ENABLED=true`, and both `MACHINE_WRITE_DATA_BIND_DN` and `MACHINE_WRITE_DATA_BIND_PASSWORD`. `MACHINE_WRITE_LOCK_ENABLED` defaults to false; when enabled it additionally requires `MACHINE_WRITE_LOCK_BIND_DN` and `MACHINE_WRITE_LOCK_BIND_PASSWORD`. Bind passwords follow the existing Secret injection convention and never appear in validation diagnostics. The data and lock identities must differ from one another, the read identity, administrators, service accounts, root DNs and the fixed replication identity. Non-canonical naming types (including schema aliases and numeric OIDs), non-ASCII values and ambiguous whitespace in either write or protected identity DNs are refused: the startup check must prove separation on both sides of the comparison.
@@ -97,4 +198,4 @@ While the write switch is off, subordinate write variables are not read. While t
 
 With `MACHINE_REVOCATION_ENABLED=true`, the source refreshes using the machine LDAP identity. Its readiness is observable on the private metrics listener as `ldapium_ui_machine_revocation_ready`; `ldapium_ui_machine_revocation_refresh_total{result="success"|"failure"}` counts refresh outcomes. No series is emitted when disabled. A failed refresh retains the last complete snapshot until its query-start age exceeds `MAX_STALE`. Invalid machine credentials back off from 60 seconds to 15 minutes; a successful refresh resets the backoff. LDAP diagnostics and identifiers are omitted from refresh error logs.
 
-This implementation stage does not connect revocation decisions to bearer requests. T-015 and the full live drill must land before operators can rely on enforcement. The 1 MiB guard bounds retained decoded search data; one oversized entry can be allocated by the LDAP decoder before the guard runs. A refresh uses one connection to one node; round-robin URLs can still alternate snapshots between refreshes, so production replica/partition acceptance remains required.
+When revocation is enabled, every verified bearer token needs a nonempty JTI and is checked before the client budget or LDAP execution. A revoked token returns 401; an absent or stale snapshot returns 503 with Retry-After: 1. Invalid tokens cannot probe snapshot readiness. Machine entry/tree reads and API writes by human administrators refuse the protected revocation subtree, including DN naming aliases and moves of an ancestor. The full multi-replica live drill remains required before production acceptance. The 1 MiB guard bounds retained decoded search data; one oversized entry can be allocated by the LDAP decoder before the guard runs. A refresh uses one connection to one node; round-robin URLs can still alternate snapshots between refreshes, so production replica/partition acceptance remains required.

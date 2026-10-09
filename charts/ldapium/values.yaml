@@ -770,6 +770,15 @@ ui:
     #    The monitor/accesslog/config rootdns are built into the application and
     #    are not added here. A literal ";" inside a DN must be written \3B.
     extraRootDNs: []
+    # -- Live token revocation. Requires sentinel/tool/ACL preparation before
+    #    enabling; absent or stale snapshots make authenticated requests fail closed.
+    revocation:
+      enabled: false
+      refreshSeconds: 5
+      maxStaleSeconds: 15
+      sentinelMaxAgeSeconds: 300
+      baseDN: ""
+      maxEntries: 2000
     jwks:
       cacheTTL: 10m
       maxStale: 1h

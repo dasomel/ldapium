@@ -39,24 +39,26 @@ const (
 // Reasons: a closed set. The verifier's own reasons (machineauth.Reason) pass
 // through unchanged; the rest come from the steps of the request path.
 const (
-	reasonOK              = "ok"
-	reasonBadHeader       = "bad_header"          // Authorization present but malformed or repeated
-	reasonMixed           = "mixed_credentials"   // bearer plus session cookie
-	reasonBearerNotHere   = "bearer_not_accepted" // Authorization on a cookie-issuing public path
-	reasonIgnoredPublic   = "ignored_public"      // public endpoint, Authorization has no meaning
-	reasonNotAPI          = "not_api"             // not an /api path
-	reasonNotFound        = "not_found"           // unknown /api path or method
-	reasonOriginMismatch  = "origin_mismatch"     // Origin gate
-	reasonPreflight       = "preflight"           // answered by CORS
-	reasonScope           = "scope"               // not allowlisted, or scope not granted
-	reasonRate            = "rate"                // IP throttle or client budget refused (429)
-	reasonBindFailed      = "bind_failed"         // machine LDAP bind failed or timed out
-	reasonCapacity        = "capacity"            // global LDAP concurrency slot unavailable
-	reasonDeadline        = "deadline"            // request deadline expired in the directory
-	reasonCanceled        = "canceled"            // the client went away mid-request
-	reasonRequestRejected = "request_rejected"    // 4xx from the handler (validation, boundary)
-	reasonUpstream        = "upstream_error"      // 5xx from the handler
-	reasonInternal        = "internal"            // panic
+	reasonOK                    = "ok"
+	reasonBadHeader             = "bad_header"          // Authorization present but malformed or repeated
+	reasonMixed                 = "mixed_credentials"   // bearer plus session cookie
+	reasonBearerNotHere         = "bearer_not_accepted" // Authorization on a cookie-issuing public path
+	reasonIgnoredPublic         = "ignored_public"      // public endpoint, Authorization has no meaning
+	reasonNotAPI                = "not_api"             // not an /api path
+	reasonNotFound              = "not_found"           // unknown /api path or method
+	reasonOriginMismatch        = "origin_mismatch"     // Origin gate
+	reasonPreflight             = "preflight"           // answered by CORS
+	reasonScope                 = "scope"               // not allowlisted, or scope not granted
+	reasonRate                  = "rate"                // IP throttle or client budget refused (429)
+	reasonBindFailed            = "bind_failed"         // machine LDAP bind failed or timed out
+	reasonRevoked               = "revoked"
+	reasonRevocationUnavailable = "revocation_unavailable"
+	reasonCapacity              = "capacity"         // global LDAP concurrency slot unavailable
+	reasonDeadline              = "deadline"         // request deadline expired in the directory
+	reasonCanceled              = "canceled"         // the client went away mid-request
+	reasonRequestRejected       = "request_rejected" // 4xx from the handler (validation, boundary)
+	reasonUpstream              = "upstream_error"   // 5xx from the handler
+	reasonInternal              = "internal"         // panic
 )
 
 // machineReasons is the closed set buildMachineEvent enforces.
@@ -65,7 +67,7 @@ var machineReasons = func() map[string]bool {
 	for _, r := range []string{
 		reasonOK, reasonBadHeader, reasonMixed, reasonBearerNotHere, reasonIgnoredPublic, reasonNotAPI,
 		reasonNotFound, reasonOriginMismatch, reasonPreflight, reasonScope, reasonRate, reasonBindFailed,
-		reasonCapacity, reasonDeadline, reasonCanceled, reasonRequestRejected, reasonUpstream, reasonInternal,
+		reasonRevoked, reasonRevocationUnavailable, reasonCapacity, reasonDeadline, reasonCanceled, reasonRequestRejected, reasonUpstream, reasonInternal,
 		string(machineauth.ReasonFormat), string(machineauth.ReasonAlg), string(machineauth.ReasonTyp),
 		string(machineauth.ReasonKid), string(machineauth.ReasonSig), string(machineauth.ReasonIss),
 		string(machineauth.ReasonAud), string(machineauth.ReasonAzp), string(machineauth.ReasonSA),

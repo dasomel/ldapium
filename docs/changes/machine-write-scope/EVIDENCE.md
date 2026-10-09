@@ -115,6 +115,19 @@ Core route middleware now refuses a verified machine principal without Idempoten
 
 `go test -race ./internal/httpapi -count=1` passed. The machine write-operation table stays empty. Startup client quota capacity validation and authorization-before-replay integration remain T-014 opening gates; this stage does not mark T-014 complete. No LDAP-wire behavior is claimed by in-memory subject/store tests.
 
+## T-012/T-018/T-019 pre-connect DN policy scaffold
+
+This unit has no request-path connection and does not complete the LDAP identity/type acceptance gates. `dnStrictlyWithinBase` refuses the boundary itself. `machineWritePolicy` separates creation-parent inclusion from target/member strict descendants, refuses protected identities and descendants, and requires exact group allowlist membership even inside allowed subtrees. The existing inclusive read guard is unchanged.
+
+D26 canonical `uid/cn/ou/dc` naming types and reproducible ASCII values deliberately reject LDAP schema aliases/OIDs, BER hex values, repeated/edge whitespace and unsupported naming types. Positive tests retain case-insensitive spelling, escaped ASCII and multivalued RDN support. Invalid protected policy fails closed.
+
+`go test -race ./internal/httpapi -count=1`: PASS (13.187s). Initial BER test failed because go-ldap decodes the hex value into a normal string; rejecting BER notation before parsing made it pass. Live server identity/entryUUID comparison, closed attribute whitelist, bind selection and configuration wiring remain pending. No T-012/T-018/T-019 completion boxes are checked by this scaffold.
+
+
+T-012 closed-body field guard added to this scaffold: data-only create accepts only uid/cn/sn/givenName/mail/department/organization/organizationalUnit, patch adds dn and excludes uid/password, membership accepts only groupDn/memberDn, user delete accepts no body. Unknown operations deny. Duplicate/case-colliding keys, operational LDAP attributes, objectClass, password (even empty), userPassword, memberOf and privilege fields are refused; human handlers remain unchanged. DTO value validation still belongs to the existing handlers. This helper remains unwired until T-013.
+
+Full httpapi race passed (12.734s; final restored rerun also passed). Two mutations were detected: replacing strict descendant with inclusive ancestry admits the boundary (two failed assertions), and adding password to create's allowlist admits the empty secret field and sentinel password (two failed assertions). Both restored. Logs `/tmp/ldapium-write-boundary-mutation.log`, `/tmp/ldapium-write-password-mutation.log`.
+
 ## T-017 machine If-Match prerequisite
 
 `machineIfMatch` is intentionally not wired until T-013. The write-operation table stays empty.
@@ -125,3 +138,10 @@ Unit table covers absent/empty (428), wildcard/weak/list/repeated/malformed/unqu
 - Mutation allowing `*`: `TestMachineIfMatch/wildcard` fails with `missing rejection`; mutation restored.
 - Live LDAP is not claimed by this header parser unit; LDAP assertion evidence belongs to T-018/T-021.
 - Independent security review and final request-path integration remain pending.
+
+
+## T-016 separate write limiter core (unwired)
+
+A dedicated bounded clientBudget instance enforces integer RPS/burst, one active writer per allowlisted client and a bounded nonblocking global channel. The read budget is separate. Unknown clients create no state; expired/canceled contexts allocate no reservation. Global capacity refusal releases client concurrency (the attempted request consumes its rate token, matching the existing request-budget convention). Reservations release exactly once; cancellation does not release an active writer until its handler exits.
+
+`go test -race ./internal/httpapi -count=1`: PASS (12.291s). Pure state tests cover per-client/global capacity, burst/refill, read/write independence, unknown-client state bounds, repeated release, panic/cancel/error exits and an expired deadline. Removing run's defer release produces three real failed assertions (panic/cancel/error leaked client slot), source restored and targeted suite PASS0.372s. No LDAP claims are made by this limiter unit. Configuration/HTTP/executor integration remains pending, so T-016 stays unchecked.
