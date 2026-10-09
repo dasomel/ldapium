@@ -58,7 +58,7 @@ else
 fi
 mkdir -p "$output_dir"
 work_dir=$(mktemp -d)
-cleanup() { rm -rf "$work_dir"; [ "$cleanup_pwfile" = 1 ] && rm -f "$pwfile"; }
+cleanup() { rm -rf "$work_dir"; if [ "$cleanup_pwfile" = 1 ]; then rm -f "$pwfile"; fi; }
 trap cleanup EXIT
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 dump_entry_count=0

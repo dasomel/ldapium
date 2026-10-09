@@ -33,6 +33,7 @@
 */ -}}
 {{- $ma := .Values.ui.machineAuth -}}
 {{- $missing := list -}}
+{{- if and $ma.revocation.enabled (lt (int $ma.revocation.maxStaleSeconds) (add (int $ma.revocation.refreshSeconds) 5)) }}{{ fail "ui.machineAuth.revocation.maxStaleSeconds must be at least refreshSeconds + 5" }}{{ end -}}
 {{- if and (not $ma.issuerURL) (not .Values.ui.sso.enabled) }}{{ $missing = append $missing "ui.machineAuth.issuerURL (or ui.sso.enabled=true to inherit the SSO issuer)" }}{{ end -}}
 {{- if not $ma.audience }}{{ $missing = append $missing "ui.machineAuth.audience" }}{{ end -}}
 {{- if not $ma.allowedClients }}{{ $missing = append $missing "ui.machineAuth.allowedClients" }}{{ end -}}
@@ -391,6 +392,21 @@ spec:
             {{- $rootDNs := prepend $ma.extraRootDNs (.Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN)) }}
             - name: MACHINE_LDAP_ROOT_DNS
               value: {{ join ";" $rootDNs | quote }}
+            {{- /* D286-16: disabled adds no environment; backend validates the DN. */}}
+            {{- if $ma.revocation.enabled }}
+            - name: MACHINE_REVOCATION_ENABLED
+              value: "true"
+            - name: MACHINE_REVOCATION_REFRESH
+              value: {{ printf "%ds" (int $ma.revocation.refreshSeconds) | quote }}
+            - name: MACHINE_REVOCATION_MAX_STALE
+              value: {{ printf "%ds" (int $ma.revocation.maxStaleSeconds) | quote }}
+            - name: MACHINE_REVOCATION_SENTINEL_MAX_AGE
+              value: {{ printf "%ds" (int $ma.revocation.sentinelMaxAgeSeconds) | quote }}
+            - name: MACHINE_REVOCATION_BASE_DN
+              value: {{ $ma.revocation.baseDN | default (printf "ou=revocations,ou=system,%s" .Values.ldap.rootDN) | quote }}
+            - name: MACHINE_REVOCATION_MAX_ENTRIES
+              value: {{ $ma.revocation.maxEntries | quote }}
+            {{- end }}
             - name: MACHINE_JWKS_CACHE_TTL
               value: {{ $ma.jwks.cacheTTL | quote }}
             - name: MACHINE_JWKS_MAX_STALE
