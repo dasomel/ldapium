@@ -317,3 +317,25 @@ passed again. Logs: `/tmp/ldapium-revocation-aged-live.log` and
 ### Real issuer identifier compatibility
 
 The enabled HTTP drill initially exposed that real Keycloak JTI identifiers contain a colon, while the tool's identifier whitelist excluded it. The whitelist now admits colon in the identifier file while keeping dots, newline and NUL forbidden. `LDAPIUM_IMAGE=ldapium:revocation-integration python3 scripts/test/test-machine-revocation-tool-live.py` passed, including colon add/remove, CAS recovery, Go digest/count cross-check and offline-aged prune fixture. The real Keycloak token was revoked on both unchanged UI replicas in 1.03 seconds after this correction.
+
+## 11. T-014 source draft (2026-10-08)
+
+The LDAP source opens a fresh machine-bound connection per refresh. Sentinel / subtree / sentinel use that connection, a total five-second deadline, a server size limit of MAX_ENTRIES+2, and a one-entry streaming buffer. A changed sentinel is retried once within the original query budget. Fixed error messages prevent LDAP diagnostics from leaking into logs. Decoded retained rows are capped at 1 MiB; this does **not** bound go-ldap's allocation for an individual wire entry before decoding.
+
+Local evidence (disposable `ldapium:revocation-review`, T-013 tool from draft #323):
+
+```
+LDAPIUM_IMAGE=ldapium:revocation-review \
+LDAPIUM_REVOCATION_TOOL=/tmp/ldapium-revocation-tool/scripts/machine-revocation.sh \
+go test -tags live ./internal/ldapclient -run TestRevocationReaderLive -count=1 -v
+```
+
+Observed: missing sentinel refused; init then empty snapshot accepted; tool-written JTI revoked and removal restored OK; real bad password returned rc49 classification; generation regression refused; unpublished row caused count mismatch; multivalued cn was malformed; hidden sentinel and clock-injected stale sentinel were refused; stopped LDAP failed refresh and old snapshot expired; restart recovered after restoring the disposable ACL, publishing heartbeat, and rereading Docker's dynamically reassigned host port. No token/credential values were printed. The harness initially failed because of an incorrect ldapi socket/auth choice, then because its old Docker host port was reused after restart; both were corrected before claiming recovery.
+
+State-machine race tests verify retain/expire/recover, max-generation propagation, 60 s to 15 m credential backoff, reset on success, cancellation, and cumulative counters. Metrics appear only when the source is enabled, on the existing private metrics listener. The request path is unchanged (T-015).
+
+Not yet verified: L4 node alternation, real partition/lagged replica, torn-sentinel retry live, response-size/entry-cap live, CI integration with the merged T-013 tool, and independent security review. T-014 remains unchecked. This draft alone does not enable token enforcement or complete #286.
+
+Validation: `make check` exited 0 (frontend lint/build, backend formatting/vet including live tags, backend tests/build, shell/Helm/manifests/licenses and reachable vulnerability checks). Final expanded live run passed in 5.798 s (same-count replacement is refused by digest). Logs: `/tmp/ldapium-source-{check,live,tests}.log`. No entrypoint/image/schema/Helm/request-path changes.
+
+Mutation evidence: discarding the previous snapshot on refresh failure is detected by `TestRevocationRefreshRetainsSnapshotAndExpires`; disabling credential backoff is detected by `TestRevocationCredentialBackoffAndRegression`. Both produced actual test assertions (`--- FAIL`), not build failures; source restored afterward. Logs: `/tmp/ldapium-source-mutation-{discard-old,no-backoff}.log`.
