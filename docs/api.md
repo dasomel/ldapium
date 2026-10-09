@@ -218,6 +218,7 @@ curl -sS -b jar.txt -X PATCH -H 'Content-Type: application/merge-patch+json' \
 ```
 
 - `If-Match`는 선택입니다. 헤더가 없거나 `*`이면 예전과 같이 무조건 적용됩니다. 적용 대상: `PUT`/`PATCH`/`DELETE`(사용자·그룹), `POST /api/users/lock`·`/unlock`, `POST`/`DELETE /api/groups/members`(그룹의 ETag), `POST /api/entry/move`.
+- 머신 쓰기 준비 가드는 정확히 하나의 강한 `entryCSN` 태그만 허용합니다. 누락·빈 값은 428 `if_match_required`, `*`·약한 태그·목록·반복 헤더·잘못된 형식은 400 `invalid_request`입니다. 이 가드는 아직 요청 경로에 연결되지 않았고 머신 쓰기 오퍼레이션은 계속 403입니다. 사람 요청의 선택적 조건은 유지됩니다.
 - 조건은 디렉터리가 쓰기 연산 안에서 직접 평가합니다(LDAP Assertion Control, RFC 4528, critical). 읽기-비교-쓰기 틈이 없어 같은 ETag로 동시에 쓰면 정확히 하나만 성공하고 나머지는 412입니다. 불일치는 412 `revision_conflict`이며 아무것도 쓰이지 않습니다.
 - 약한 태그(`W/`), 태그 목록, 따옴표 없는 값, 형식 오류, 반복된 `If-Match`는 400입니다. `POST /api/users/password`는 `If-Match`를 지원하지 않으며(RFC 3062 확장 연산에 조건을 실을 수 없음) 보내면 400입니다.
 - ETag는 디렉터리 내부 기록(비밀번호 정책의 실패한 바인드 기록, 선택적 lastbind)에도 바뀝니다. 이 경우 불필요한 412가 나올 수 있으며, 다시 읽고 재시도하면 됩니다. 그룹 구성원 변경은 구성원 사용자 항목의 ETag를 바꾸지 않습니다.
