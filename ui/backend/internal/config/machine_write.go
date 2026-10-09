@@ -31,9 +31,16 @@ type MachineWriteIdentity struct {
 // MachineWriteConfig separates data and lock identities (D3). Credential
 // writes require separate approval (Resolved Q1); they have no config here.
 type MachineWriteConfig struct {
-	Data        MachineWriteIdentity
-	LockEnabled bool
-	Lock        MachineWriteIdentity
+	Data                   MachineWriteIdentity
+	LockEnabled            bool
+	Lock                   MachineWriteIdentity
+	Subtrees               map[string][]string
+	Groups                 map[string][]string
+	PrivilegedGroups       []string
+	RateLimitRPS           int
+	RateLimitBurst         int
+	MaxConcurrency         int
+	AuditTargetDNPlaintext bool
 }
 
 func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m MachineConfig) (MachineWriteConfig, error) {
@@ -49,6 +56,9 @@ func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m Machin
 		return w, err
 	}
 	if w.LockEnabled, err = boolEnv(getenv, "MACHINE_WRITE_LOCK_ENABLED", false); err != nil {
+		return w, err
+	}
+	if err := loadMachineWriteBounds(getenv, cfg, m, &w); err != nil {
 		return w, err
 	}
 	if !w.LockEnabled {

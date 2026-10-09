@@ -119,3 +119,14 @@ Unit table covers absent/empty (428), wildcard/weak/list/repeated/malformed/unqu
 - Mutation allowing `*`: `TestMachineIfMatch/wildcard` fails with `missing rejection`; mutation restored.
 - Live LDAP is not claimed by this header parser unit; LDAP assertion evidence belongs to T-018/T-021.
 - Independent security review and final request-path integration remain pending.
+
+
+## T-012/T-019 bounds configuration and D23 quota prerequisite
+
+Startup parses bounded JSON client→DN-array maps for write subtrees and exact groups, an explicit privileged-group DN array, separate write RPS/burst/global limits and an opt-in audit target plaintext flag. Named schema aliases/OIDs/BER and ambiguous values fail closed; groups must be strict subtree descendants and outside the privileged deny set. Unknown/duplicate client keys, invalid arrays, trailing JSON and oversized data fail. Disabled writes ignore all subordinate values. The parsed data does not register/execute writes.
+
+D23 startup enforces current store quota constants: eligible nonempty-bounds clients×DefaultMaxPerSubject≤DefaultMaxRecords, with10 PASS/11 FAIL. Human records can still consume shared store capacity; this arithmetic is the accepted client-to-client gate, not a global reservation.
+
+Config/httpapi race passed after restoration (1.430s/12.838s before final audit-flag test; final GOTOOLCHAIN=go1.27.2 rerun recorded separately). Two real mutations fail: disabling aggregate quota admits11 clients; removing privileged-group denial accepts cn=ADMINS despite its deny list. Both restored. `GOTOOLCHAIN=go1.27.2 make check` exit0 with0 reachable vulnerabilities. Initial default installed Go1.27.1 scans failed with10 standard-library advisories; selector1.27.2 resolves this, while CI uses patched1.26.9 and production Dockerbuilder1.27.2. HTTP/executor/ACL/Helm wiring remains pending; T-012/T-019/T-014 are not marked complete by configuration alone.
+
+Final explicit `GOTOOLCHAIN=go1.27.2 GOMAXPROCS=4 go test -race ./internal/config ./internal/httpapi -count=1` passed (1.482s/13.880s), including plaintext opt-in/default/invalid-boolean tests.
