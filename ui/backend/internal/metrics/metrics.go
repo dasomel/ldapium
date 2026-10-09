@@ -64,6 +64,8 @@ type Options struct {
 	Codes []string
 	// Sessions reports the live session count for ldapium_ui_sessions_active.
 	Sessions func() int
+	// Revocation reports readiness and cumulative refresh outcomes when enabled.
+	Revocation func() (bool, uint64, uint64)
 }
 
 // Registry implements Recorder on a private prometheus.Registry.
@@ -116,6 +118,29 @@ func New(o Options) *Registry {
 	r.ldapDur = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "ldapium_ui_ldap_operation_duration_seconds", Help: "Directory operation latency, by operation.", Buckets: DefaultBuckets,
 	}, []string{"op"})
+
+	if o.Revocation != nil {
+		r.reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "ldapium_ui_machine_revocation_ready", Help: "Whether this process has a fresh revocation snapshot.",
+		}, func() float64 {
+			ready, _, _ := o.Revocation()
+			if ready {
+				return 1
+			}
+			return 0
+		}))
+		for _, outcome := range []string{"success", "failure"} {
+			r.reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+				Name: "ldapium_ui_machine_revocation_refresh_total", Help: "Revocation refresh outcomes.", ConstLabels: prometheus.Labels{"result": outcome},
+			}, func() float64 {
+				_, success, failure := o.Revocation()
+				if outcome == "success" {
+					return float64(success)
+				}
+				return float64(failure)
+			}))
+		}
+	}
 
 	r.reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		r.requests, r.duration, r.inFlight, r.apiErrors, r.logins, r.ldapOps, r.ldapDur)

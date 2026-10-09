@@ -132,3 +132,25 @@ func TestNopRecorderAcceptsEverything(t *testing.T) {
 	r.LoginFailure("x")
 	r.ObserveLDAP("bind", "ok", time.Second)
 }
+
+func TestRevocationMetricsFollowLiveState(t *testing.T) {
+	ready := false
+	success, failure := uint64(0), uint64(1)
+	r := New(Options{Revocation: func() (bool, uint64, uint64) { return ready, success, failure }})
+	body := scrape(t, r)
+	for _, expected := range []string{"ldapium_ui_machine_revocation_ready 0", "ldapium_ui_machine_revocation_refresh_total{result=\"failure\"} 1"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %s", expected)
+		}
+	}
+	ready, success = true, 2
+	body = scrape(t, r)
+	for _, expected := range []string{"ldapium_ui_machine_revocation_ready 1", "ldapium_ui_machine_revocation_refresh_total{result=\"success\"} 2"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %s", expected)
+		}
+	}
+	if strings.Contains(scrape(t, New(Options{})), "ldapium_ui_machine_revocation_") {
+		t.Fatal("disabled source emitted metrics")
+	}
+}

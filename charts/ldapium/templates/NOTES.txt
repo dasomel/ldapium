@@ -59,3 +59,16 @@ Management UI:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{- if eq .Values.replication.identity "dedicated" }}
+Dedicated replication uses a read-only identity and a caller-owned Secret.
+Finish prepare -> configuration gate -> ensure -> permission/data gate before switching nodes.
+Secret changes do not restart StatefulSet pods: use an explicit controlled rollout only after
+installing the new identity credential and verifying it on every node.
+{{- range .Values.networkPolicy.ingressFrom }}
+{{- if and (hasKey . "podSelector") (empty .podSelector) }}
+WARNING: networkPolicy.ingressFrom contains an empty podSelector; every pod in this namespace
+can reach LDAP. Restrict client selectors for dedicated replication deployments.
+{{- end }}
+{{- end }}
+{{- end }}
