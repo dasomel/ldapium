@@ -132,3 +132,10 @@ Unit table covers absent/empty (428), wildcard/weak/list/repeated/malformed/unqu
 - Mutation allowing `*`: `TestMachineIfMatch/wildcard` fails with `missing rejection`; mutation restored.
 - Live LDAP is not claimed by this header parser unit; LDAP assertion evidence belongs to T-018/T-021.
 - Independent security review and final request-path integration remain pending.
+
+
+## T-016 separate write limiter core (unwired)
+
+A dedicated bounded clientBudget instance enforces integer RPS/burst, one active writer per allowlisted client and a bounded nonblocking global channel. The read budget is separate. Unknown clients create no state; expired/canceled contexts allocate no reservation. Global capacity refusal releases client concurrency (the attempted request consumes its rate token, matching the existing request-budget convention). Reservations release exactly once; cancellation does not release an active writer until its handler exits.
+
+`go test -race ./internal/httpapi -count=1`: PASS (12.291s). Pure state tests cover per-client/global capacity, burst/refill, read/write independence, unknown-client state bounds, repeated release, panic/cancel/error exits and an expired deadline. Removing run's defer release produces three real failed assertions (panic/cancel/error leaked client slot), source restored and targeted suite PASS0.372s. No LDAP claims are made by this limiter unit. Configuration/HTTP/executor integration remains pending, so T-016 stays unchecked.
