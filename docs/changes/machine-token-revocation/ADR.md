@@ -1,6 +1,6 @@
-# ADR: 머신 토큰 즉시 폐기 — 오프라인 검증 + 디렉터리 폐기 목록(제안), introspection·API 키·mTLS는 보류 (D1–D12)
+# ADR: 머신 토큰 즉시 폐기 — 오프라인 검증 + 디렉터리 폐기 목록, introspection·API 키·mTLS는 보류 (D1–D12)
 
-- Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)` (Revision 2: T-001–T-004 실측, 3: 1차 BLOCKER 해결, 4: B4', 5: digest·연결 고정, 6: 4차 검토 비차단 반영) — [CHANGE.md](CHANGE.md)의 결정을 압축한 기록이다. 수용은 설계 방향에 대한 유지보수자 결정이고 T-005 보안 검토 관문은 Revision 5 검토에서 BLOCKER 없음으로 통과했다. 구현 없음.
+- Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)` (Revision 2: T-001–T-004 실측, 3: 1차 BLOCKER 해결, 4: B4', 5: digest·연결 고정, 6: 4차 검토 비차단 반영) — [CHANGE.md](CHANGE.md)의 결정을 압축한 기록이다. 수용은 설계 방향에 대한 유지보수자 결정이고 T-005 보안 검토 관문은 Revision 5 검토에서 BLOCKER 없음으로 통과했다. 기본 꺼짐 구현은 단계별 검증·병합 중이며, 완료 여부는 [TASKS.md](TASKS.md)와 PR별 증거를 따른다.
 - Owner: dasomel (유지보수자)
 - Related issue: [#286](https://github.com/dasomel/ldapium/issues/286) (닫지 않음), 선행 [#214](https://github.com/dasomel/ldapium/issues/214)
 - 위치 규약: 변경 패키지 안의 `ADR.md`([machine-principal-auth](../machine-principal-auth/ADR.md)와 같음). 근거·대안·검증 상태의 전문은 CHANGE.md, 확인 기록은 [EVIDENCE.md](EVIDENCE.md).
@@ -8,7 +8,7 @@
 
 ## Context
 
-ldapium은 Keycloak access token을 오프라인으로 검증하며 토큰·secret을 저장하지 않는다(부모 D1). 발급된 토큰은 `exp + skew`까지 유효하고(`ui/backend/internal/machineauth/claims.go:129,141`), Keycloak client 비활성화·secret 회전은 기발급 토큰을 폐기하지 않는다(부모 EVIDENCE §2.7). 현재의 긴급 차단은 allowlist 제거 + 모든 replica 교체뿐이다(`docs/machine-auth-operations.md`). #286은 롤아웃 없이 즉시 폐기하는 방식을 평가하고 비용(핫 패스 IdP 의존, 장애 시 fail-open/closed)을 기록할 것을 요구한다.
+ldapium은 Keycloak access token을 오프라인으로 검증하며 토큰·secret을 저장하지 않는다(부모 D1). 발급된 토큰은 `exp + skew`까지 유효하고(`ui/backend/internal/machineauth/claims.go:129,141`), Keycloak client 비활성화·secret 회전은 기발급 토큰을 폐기하지 않는다(부모 EVIDENCE §2.7). 부모 v1의 긴급 차단은 allowlist 제거 + 모든 replica 교체이다(`docs/machine-auth-operations.md`). #286은 롤아웃 없이 즉시 폐기하는 방식을 평가하고 비용(핫 패스 IdP 의존, 장애 시 fail-open/closed)을 기록할 것을 요구한다.
 
 ## Decisions
 

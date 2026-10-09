@@ -20,6 +20,21 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Optional LDAP machine-token revocation (#286), **default off**: validated tokens
+  are checked against a background snapshot before request budgets or directory
+  access. A revoked JTI or client cutoff returns `401 token_invalid`; missing,
+  invalid or expired snapshots return `503 unavailable` with `Retry-After` only
+  after token verification. The revocation subtree is protected from HTTP reads
+  and administrator writes. Initialize the sentinel and schedule the operator
+  heartbeat before enabling `MACHINE_REVOCATION_ENABLED` or the chart's
+  `ui.machineAuth.revocation.enabled`; keep each replica on a stable LDAP node.
+  The healthy propagation bound is `REFRESH + 2×5 s + replication delay`, subject
+  to the clock and replication assumptions. A partition eventually refuses
+  requests after sentinel freshness and snapshot grace expire. Disabling the
+  feature removes these revocations; use the allowlist rollout backstop when
+  rolling back. See [operations](docs/machine-auth-operations.md) and the
+  [change package](docs/changes/machine-token-revocation/CHANGE.md) for limits,
+  migration, evidence and outstanding acceptance checks.
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a
