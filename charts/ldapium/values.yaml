@@ -240,6 +240,9 @@ tls:
   ecName: ""
 
 replication:
+  # -- Credential/ACL mode: admin (default), prepare, dedicated. Dedicated needs
+  #    an operator-created identity, verified TLS CA and existingSecret.
+  identity: admin
   # -- Leave unset (commented out) to auto-enable replication when
   #    replicaCount > 1. Set explicitly to force it on or off regardless of
   #    replicaCount.
@@ -257,10 +260,11 @@ replication:
   interval: "00:00:00:10"
   # -- Optional override of the replication bind DN. Defaults (in the image)
   #    to LDAP_ADMIN_DN — deliberately, since the ACLs deny userPassword
-  #    reads to any other identity (see REPLICATION-CONTRACT.md D3).
+  #    reads to any other identity. Dedicated mode determines the reserved DN
+  #    from ldap.rootDN; custom bindDN is refused.
   bindDN: ""
-  # -- Optional Secret to source LDAP_REPLICATION_PASSWORD from, only needed
-  #    if bindDN above points at an identity other than the admin DN.
+  # -- Dedicated-only Secret holding the operator-created replication credential.
+  #    Never automatically generated. Admin/prepare must leave this empty.
   existingSecret: ""
   existingSecretKey: replication-password
 

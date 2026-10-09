@@ -159,6 +159,9 @@ jobs:
       - name: Replication identity ensure/retire operator command — #229 T-013
         run: ./scripts/test/test-replication-identity-ensure.sh ldapium:e2e
 
+      - name: Replication identity reconcile over verified TLS — #229 D67
+        run: ./scripts/test/test-replication-identity-reconcile.sh ldapium:e2e
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04

@@ -178,6 +178,29 @@
           }
         }
       }
+    },
+    "replication": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "prepare",
+            "dedicated"
+          ]
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindDN": {
+          "type": "string"
+        }
+      }
     }
   }
 }
