@@ -109,6 +109,12 @@ T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 s
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
 
 
+## T-014 subject/header prerequisite (partial stage)
+
+Core route middleware now refuses a verified machine principal without Idempotency-Key (428 `idempotency_key_required`), while human header-less requests retain their existing path. Machine record ownership uses `machine:` + issuer byte length + `:` + issuer + client ID, never the shared bind DN or token subject hash. Missing issuer/client fails closed. Tests exercise tuple collision, token renewal, client/client and human/machine store separation, and a client filling its quota without exhausting another client's quota. Existing human middleware tests remain unchanged. Error table/golden/OpenAPI enum and API/LLM documentation are synchronized.
+
+`go test -race ./internal/httpapi -count=1` passed. The machine write-operation table stays empty. Startup client quota capacity validation and authorization-before-replay integration remain T-014 opening gates; this stage does not mark T-014 complete. No LDAP-wire behavior is claimed by in-memory subject/store tests.
+
 ## T-018 atomic target-type constraint (partial)
 
 `WithMachineWriteConstraints` marks the future machine execution context. User Modify/Delete controls add `objectClass=inetOrgPerson`, group Modify/Delete controls add `objectClass=groupOfNames`, ANDed with the mandatory entryCSN. Human contexts preserve the old revision/unconditional controls. The marker is not connected to HTTP until T-013. This is not full T-018: protected-entry UUID comparison and read-identity member checks remain required.
