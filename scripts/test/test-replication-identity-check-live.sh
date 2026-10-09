@@ -82,6 +82,21 @@ changetype: modify
 delete: olcSyncrepl
 LDIF
 
+# LDAP -H URI lists permit plaintext fallback despite REQCERT=demand: live control.
+admin_bind_count() { docker logs "$name" 2>&1 | awk '/BIND dn="cn=admin,dc=example,dc=org"/{n++} END {print n+0}'; }
+unsafe_uri="ldaps://127.0.0.1:1 ldap://$name:389"
+before=$(admin_bind_count)
+docker exec -e LDAPTLS_REQCERT=demand "$name" ldapsearch -x -LLL -H "$unsafe_uri" -D "$admin" -y /tmp/admin.pw -b "$base" -s base dn >/dev/null
+sleep 1
+after=$(admin_bind_count)
+[ "$after" -gt "$before" ] || { echo 'FAIL plaintext URI-list control did not bind'; exit 1; }
+before="$after"
+result=0
+"$here/check-replication-identity.sh" --container "$name" --uri "$unsafe_uri" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --ca-file /certs/ca.pem >/dev/null 2>&1 || result=$?
+[ "$result" = 2 ] || { echo 'FAIL checker accepted URI-list plaintext fallback'; exit 1; }
+[ "$(admin_bind_count)" = "$before" ] || { echo 'FAIL checker sent administrator bind for unsafe URI list'; exit 1; }
+echo 'PASS: real plaintext fallback control, unsafe URI rejected before any administrator bind'
+
 # Hidden stability metadata is an evidence error, not a concurrent-write warning.
 docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
 dn: olcDatabase={1}mdb,cn=config

@@ -4,6 +4,7 @@ import base64
 import subprocess
 import sys
 from types import SimpleNamespace
+from replication_uri import valid_uri
 
 ATTRS = ('userpassword', 'objectclass', 'uid', 'cn', 'sn', 'mail')
 
@@ -112,8 +113,8 @@ def main():
   parser.add_argument('--attributes', nargs='+', default=list(ATTRS))
   args = parser.parse_args()
   targets = list(dict.fromkeys([args.uri, *args.peer]))
-  if any(not target.startswith('ldaps://') for target in targets):
-    parser.error('verified LDAPS is required')
+  if any(not valid_uri(target) for target in targets):
+    parser.error('one pinned verified LDAPS URI is required per target; lists and URI options are refused')
   args.attributes = [key.lower() for key in args.attributes]
   if any(key in ('*', '+', 'contextcsn', 'entrycsn') or not key.isalnum()
          for key in args.attributes):
