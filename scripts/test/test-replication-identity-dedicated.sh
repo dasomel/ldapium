@@ -403,6 +403,42 @@ EOF
   check "the refused writes changed nothing (carol still there, no evil)" "carol,absent" \
     "$(has_uid "$n1" carol && echo carol),$(lacks_uid "$n1" evil && echo absent || echo present-or-search-failed)"
 
+  # D59 peer inspection: selected-node equality requires a strict convergence gate.
+  # Default WARN remains an operator observation, never recovery acceptance evidence.
+  peer_check() {
+    "$(dirname "$0")/../check-replication-identity.sh" --container "$n1" \
+      --uri "ldaps://$n1:636" --peer "ldaps://$n2:636" --peer "ldaps://$n3:636" \
+      --base "$base" --admin-password-file /certs/adminpw \
+      --identity-password-file /certs/idpw --ca-file /certs/ca.pem "$@"
+  }
+  peer_check --config-password-file /certs/adminpw --dedicated --require-converged || { bad "healthy selected-node check failed"; exit 1; }
+  ded_pw="$badpw"
+  restart_node "$n3" dedicated
+  ded_pw="$idpw"
+  wait_ready "$n3" || { bad "n3 lag fixture never ready"; exit 1; }
+  docker exec -i "$n1" ldapmodify -x -H ldap://localhost -D "$admin" -y /certs/adminpw >/dev/null <<EOF
+dn: uid=carol,${base}
+changetype: modify
+replace: mail
+mail: peer-check-lag@example.org
+EOF
+  # shellcheck disable=SC2317,SC2329
+  mail_caught_up() {
+    local result
+    result=$(docker exec "$1" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /certs/adminpw -b "uid=carol,$base" -s base mail) || return 1
+    [[ "$result" == *'mail: peer-check-lag@example.org'* ]]
+  }
+  poll mail_caught_up "$n2" || { bad "n2 lag fixture update missing"; exit 1; }
+  if mail_caught_up "$n3"; then bad "bad-credential peer unexpectedly caught up"; exit 1; fi
+  peer_check || { bad "default deferred observation failed"; exit 1; }
+  peer_rc=0
+  peer_check --require-converged || peer_rc=$?
+  check "permanent peer lag closes strict convergence gate" "1" "$peer_rc"
+  restart_node "$n3" dedicated
+  wait_ready "$n3" || { bad "n3 never ready after peer lag fix"; exit 1; }
+  poll mail_caught_up "$n3" || { bad "n3 did not recover from peer lag"; exit 1; }
+  peer_check --config-password-file /certs/adminpw --dedicated --require-converged || { bad "recovered selected-node check failed"; exit 1; }
+
   # Wrong identity password on one consumer: it stalls with err=49, nothing is
   # written there or anywhere, the providers' data does not change.
   docker rm -f "$n3" >/dev/null

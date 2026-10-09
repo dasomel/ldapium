@@ -42,8 +42,45 @@ olcAccess: {0}to * by dn.exact="$identity" ssf=128 read by dn.exact="$identity" 
 add: olcLimits
 olcLimits: dn.exact="$identity" size=unlimited time=unlimited
 LDIF
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem --configuration-only
+# A runtime proxy-auth policy mutation must close the configuration gate.
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: cn=config
+changetype: modify
+add: olcAuthzPolicy
+olcAuthzPolicy: to
+LDIF
+result=0
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem --configuration-only || result=$?
+[ "$result" = 1 ] || { echo 'FAIL configuration checker accepted proxy authorization'; exit 1; }
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: cn=config
+changetype: modify
+delete: olcAuthzPolicy
+LDIF
+
 ri ensure --out /tmp/old.pw
-"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --ca-file /certs/ca.pem
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem
+
+# A stored consumer config is checked without claiming it connected to a live peer.
+credential=$(docker exec "$name" cat /tmp/old.pw)
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcSyncrepl
+olcSyncrepl: rid=001 provider=ldaps://localhost:1636 bindmethod=simple binddn="$identity" credentials="$credential" searchbase="$base" type=refreshAndPersist retry="60 +" tls_reqcert=demand tls_cacert=/certs/ca.pem
+LDIF
+unset credential
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem --configuration-only --dedicated
+printf '%s' 'differentCurrentCredential-0123456789AbCdEf' | docker exec -i "$name" sh -c 'cat > /tmp/other.pw'
+result=0
+"$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/other.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem --configuration-only --dedicated || result=$?
+[ "$result" = 1 ] || { echo 'FAIL configuration checker accepted wrong consumer fingerprint'; exit 1; }
+docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcSyncrepl
+LDIF
 
 # LDAP -H URI lists permit plaintext fallback despite REQCERT=demand: live control.
 admin_bind_count() { docker logs "$name" 2>&1 | awk '/BIND dn="cn=admin,dc=example,dc=org"/{n++} END {print n+0}'; }

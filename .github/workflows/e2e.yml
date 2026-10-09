@@ -162,6 +162,8 @@ jobs:
       - name: Replication identity stable-CSN visibility comparator — #229 T-014
         run: |
           python3 scripts/test/test-replication-identity-check.py
+          python3 scripts/test/test-replication-identity-config.py
+
           ./scripts/test/test-replication-identity-check-live.sh ldapium:e2e
 
       - name: Replication identity reconcile over verified TLS — #229 D67
