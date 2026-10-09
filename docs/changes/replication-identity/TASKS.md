@@ -37,7 +37,7 @@ cn=config·olcSyncrepl·기존 테스트가 그대로인 상태로 main에 들�
 ## Synchronize durable truth
 
 - [ ] `T-030` 규범 문서·운영 지침: `image/README.md`(env·모드·절차, `:300-309` 임시 slapd 서술 오류 수정, 위험: 잠금 제외·cn=config 평문 잔존·TLS 필수·mTLS 비공존), `charts/ldapium/README.md`, `docs/ha-profile.md`(contextCSN 알림 한계, 점검 계약과 **못 잡는 것**), `docs/migration.md`(prepare→G1→ensure→G2→dedicated·롤백·전체 소실 절차), 운영 런북(회전).
-- [ ] `T-031` ADR 작성(T-005 초안 확정).
+- [ ] `T-031` ADR written: [ADR.md](ADR.md) compresses accepted D50–D67 without granting implementation acceptance; maintainer completion review pending.
 - [ ] `T-032` 릴리스·마이그레이션·롤백·호환 노트: 신규 env/값, 이미지 롤아웃·`prepare` 완료 전 전환 금지, [generated-credentials](../generated-credentials/CHANGE.md)에 D43 후속(D56), `CHANGELOG*`.
 - [ ] `T-033` 포트폴리오/다운스트림 영향 검토 및 `docs/IMPLEMENTATION-STATUS.md`. 기본값 전환·SASL EXTERNAL·처음부터 dedicated인 신규 클러스터는 각각 별도 이슈로 등록.
 
