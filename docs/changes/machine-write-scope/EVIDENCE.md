@@ -115,6 +115,18 @@ Core route middleware now refuses a verified machine principal without Idempoten
 
 `go test -race ./internal/httpapi -count=1` passed. The machine write-operation table stays empty. Startup client quota capacity validation and authorization-before-replay integration remain T-014 opening gates; this stage does not mark T-014 complete. No LDAP-wire behavior is claimed by in-memory subject/store tests.
 
+## T-018 atomic target-type constraint (partial)
+
+`WithMachineWriteConstraints` marks the future machine execution context. User Modify/Delete controls add `objectClass=inetOrgPerson`, group Modify/Delete controls add `objectClass=groupOfNames`, ANDed with the mandatory entryCSN. Human contexts preserve the old revision/unconditional controls. The marker is not connected to HTTP until T-013. This is not full T-018: protected-entry UUID comparison and read-identity member checks remain required.
+
+Actual Go LDAP-wire test runs inside a fresh `ldapium:revocation-review` container, bound as `cn=writer` (not root). Wrong-type group→DeleteUser and user→DeleteGroup both return ErrRevisionConflict (LDAP122); correct PatchUser and AddMember succeed; missing machine revision is refused. Administrator readback confirms both wrong-type targets survive, correct mail/member values exist, forbidden mail absent. Credential scan passes. The fixture grants the writer broad non-secret writes deliberately to isolate the type control; it does not validate final least-privilege ACLs.
+
+- `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-type-live.py`: PASS, actual Go live test 0.02s plus post-write readback.
+- Mutation removing the class conjunct: live test fails `group through user deletion: <nil>` (the wrongly typed entry was deleted). Restored binary/source and final live rerun PASS.
+- `go test -race ./internal/ldapclient ./internal/httpapi -count=1`: PASS (4.987s / 12.687s).
+- `make check`: exit0, formatting/vet/build/test/chart/license/vulnerability checks passed (0 reachable vulnerabilities). Initial failure was missing frontend oxlint; `npm ci` installed pinned dependencies and the complete rerun passed.
+- Initial test binary had Darwin format; rebuilding with GOOS=linux corrected the container exec format failure. CI explicitly cross-builds Linux and runs the live path; no path filter added.
+
 ## T-012/T-018/T-019 pre-connect DN policy scaffold
 
 This unit has no request-path connection and does not complete the LDAP identity/type acceptance gates. `dnStrictlyWithinBase` refuses the boundary itself. `machineWritePolicy` separates creation-parent inclusion from target/member strict descendants, refuses protected identities and descendants, and requires exact group allowlist membership even inside allowed subtrees. The existing inclusive read guard is unchanged.

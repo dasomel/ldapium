@@ -104,7 +104,7 @@ func (c *client) UpdateGroup(ctx context.Context, dn string, in domain.GroupInpu
 		return fmt.Errorf("%w: cn is required", domain.ErrInvalidInput)
 	}
 
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "groupOfNames")
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (c *client) PatchGroup(ctx context.Context, dn string, p domain.GroupPatch,
 	if p.CN != nil && (p.CN.Clear || p.CN.Value == "") {
 		return fmt.Errorf("%w: cn cannot be removed", domain.ErrInvalidInput)
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "groupOfNames")
 	if err != nil {
 		return err
 	}
@@ -160,7 +160,7 @@ func (c *client) DeleteGroup(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "groupOfNames")
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (c *client) AddMember(ctx context.Context, groupDN, memberDN, ifMatch strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "groupOfNames")
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func (c *client) RemoveMember(ctx context.Context, groupDN, memberDN, ifMatch st
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "groupOfNames")
 	if err != nil {
 		return err
 	}
