@@ -241,6 +241,83 @@ All revocation drill checks passed: 18 checks in 23s.
 
 값 조건부 modify: 관리자가 sentinel `description`을 `delete: description`(옛 값 지정) + `add: description`(새 값)으로 갱신. 첫 쓰기 rc 0, 같은 옛 값을 쓰는 두 번째 쓰기는 **rc 16 `No such attribute`("modify/delete: description: no such value")**로 실패하고 값은 첫 쓰기 것(`ts=2`)으로 남음 → 동시에 도는 두 heartbeat는 조용히 덮어쓰지 못한다.
 
+## 10. T-013 writer — local real LDAP proof (2026-10-08)
+
+Implementation: `scripts/machine-revocation.sh` / `scripts/lib/machine_revocation.py`.
+Python 3 + OpenLDAP CLI on the operator host; optional Docker CLI transport uses
+`docker exec -i` and an in-container 0600 credential file. No credentials in argv.
+
+```sh
+docker build -t ldapium:revocation-review -f image/Dockerfile ./image
+LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-revocation-tool-live.py
+```
+
+Observed on the newly built image: init success, repeated init refusal, jti add,
+repeat-jti idempotency, existing-entry client/case collision refusal, identifier
+file newline/NUL/JWT rejection, cutoff
+replacement leaving exactly one cutoff; real concurrent sentinel modification
+returns `[0, 16, 0]` (one contender fails with `no such value`, rereads and retries).
+The first two modifications are synchronized by a host barrier; all LDAP replies
+come from slapd. No fake LDAP replies or in-memory directory is used.
+
+Actual LDAP rows are passed to `TestRevocationToolLiveSentinel`: Go
+`ParseSentinel`/`BuildSnapshot` validates the tool's generation/count/digest/time/
+retention; `Snapshot.Check` returns revoked for the written jti. The separately
+executed tool `retention` is compared with Go `Retention` at configuration ceilings.
+Fresh jti survives prune; non-device stray blocks add/heartbeat/remove/prune;
+real multi-valued and newline cn values block heartbeat. Explicit jti remove
+succeeds; sentinel removal fails; heartbeat succeeds after repair. Container logs
+contain no operator password. The uniquely named container is removed on exit.
+
+Initial failed attempt: the test supplied `LDAP_BASE_DN` instead of image
+`LDAP_ROOT_DN`; the image refused startup before any LDAP write. Corrected and
+rerun. This was a test-harness failure, not counted as runtime evidence.
+
+Not verified: actual aging past the 4440-second retention/prune boundary
+(`createTimestamp` is server-owned); Kubernetes CronJob execution; simultaneous
+writers on different multi-provider nodes. The tool is operator-only; API
+revocation enforcement remains absent until T-014/T-015.
+
+Full `make check` completed with exit 0 in this worktree: frontend lint/build,
+Go vet (including live tags)/tests/build, chart lint/schema/contracts, shellcheck,
+version/module checks, incident/tool fixtures, license inventory and govulncheck.
+The scan reported no reachable vulnerabilities. Race check separately passed:
+`go test -race -count=1 ./internal/config ./internal/machineauth ./internal/httpapi`.
+
+Mutation checks (local, each reverted before the final successful live rerun):
+
+- `MAX_TTL=3599` instead of 3600: `TestRevocationToolRetention` fails with
+  `tool retention 4439s != Go ceilings 1h14m0s`.
+- Remove the `device` objectClass guard: live heartbeat erroneously exits 0 for
+  a syntactically valid `jti-stray` non-device (`organizationalRole` plus
+  `extensibleObject`, valid cn/ou/timestamp); the test fails. This isolates the
+  class check from the other format checks.
+- Stop accepting rc 16 for a retry: actual slapd CAS collision raises an LDAP
+  rc 16 error and the live concurrency test fails.
+
+All three were detected (nonzero test exit), then the unmodified tool's full
+live script returned exit 0 again. Mutation outputs were saved under
+`/tmp/ldapium-revocation-mutation-{retention,device,cas}.log` during this run.
+
+### T-013 aged-entry fixture (2026-10-08)
+
+The full live tool test now stops its uniquely owned disposable LDAP container,
+uses `slapmodify -n 1` over its volumes to set two createTimestamp fixtures,
+restarts it and reads the stored timestamps back. A JTI at `ret+30 s` is pruned;
+a JTI at `ret-30 s` remains. The resulting count/digest/sentinel is validated by
+Go, then normal remove/heartbeat and credential-log checks pass. Exit 0.
+This is an offline-aged fixture, not a natural 4440-second wait or an exact
+one-second boundary measurement. The previous limitation is narrowed accordingly.
+
+Disabling `Directory.prune` caused the aged-entry absence assertion to fail
+(AssertionError for `jti-aged-jti`); source was restored and the whole live script
+passed again. Logs: `/tmp/ldapium-revocation-aged-live.log` and
+`/tmp/ldapium-revocation-mutation-prune.log`.
+
+### Real issuer identifier compatibility
+
+The enabled HTTP drill initially exposed that real Keycloak JTI identifiers contain a colon, while the tool's identifier whitelist excluded it. The whitelist now admits colon in the identifier file while keeping dots, newline and NUL forbidden. `LDAPIUM_IMAGE=ldapium:revocation-integration python3 scripts/test/test-machine-revocation-tool-live.py` passed, including colon add/remove, CAS recovery, Go digest/count cross-check and offline-aged prune fixture. The real Keycloak token was revoked on both unchanged UI replicas in 1.03 seconds after this correction.
+
 ## 11. T-014 source draft (2026-10-08)
 
 The LDAP source opens a fresh machine-bound connection per refresh. Sentinel / subtree / sentinel use that connection, a total five-second deadline, a server size limit of MAX_ENTRIES+2, and a one-entry streaming buffer. A changed sentinel is retried once within the original query budget. Fixed error messages prevent LDAP diagnostics from leaking into logs. Decoded retained rows are capped at 1 MiB; this does **not** bound go-ldap's allocation for an individual wire entry before decoding.
