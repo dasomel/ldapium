@@ -21,7 +21,7 @@ func TestMachineWriteIdentityLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	const base = "dc=example,dc=org"
-	cfg := config.Config{LDAPURL: "ldap://127.0.0.1", BaseDN: base, Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, BindDN: "cn=reader," + base, BindPassword: string(password)}}
+	cfg := config.Config{LDAPURL: "ldap://127.0.0.1", BaseDN: base, Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, RootDNs: []string{"cn=admin," + base}, BindDN: "cn=reader," + base, BindPassword: string(password)}}
 	r := NewWriteIdentityReader(cfg, []string{"cn=writer," + base})
 	if os.Getenv("LDAPIUM_WRITE_IDENTITY_DENIED_READ") == "1" {
 		if err := r.Check(context.Background(), "uid=baseline,"+base, "inetOrgPerson"); err == nil {
