@@ -238,3 +238,27 @@ If critical anomalies occur post-cutover:
        --force-empty
      ```
    - Verified continuously in `.github/workflows/backup-restore.yml`.
+
+### Restore credential reconciliation (dedicated replication)
+
+A backup made before replication credential rotation contains old identity password
+hashes. Stop all peers before restoring the chosen node. Start that node with
+`LDAP_REPLICATION_IDENTITY=dedicated` and the current replication Secret. Reconcile
+online as the directory administrator, inside the container where its configuration
+is available:
+
+```sh
+LDAPTLS_CACERT=/certs/ca.pem scripts/replication-identity.sh reconcile \
+  --uri ldaps://localhost:636 --base dc=example,dc=org \
+  --admin-password-file /run/secrets/admin \
+  --current-password-file /run/secrets/replication
+```
+
+The command adds a hash only when the current credential cannot bind, preserves old
+passwords, and verifies a TLS identity bind before success. It requires certificate
+verification (`LDAPTLS_REQCERT=demand`, the default). A failed command means peers
+must remain stopped. A successful bind alone does not prove complete directory
+replication: verify the restored node's ACLs and data before starting peers and
+comparing their data. This command does not automate peer isolation, full-loss
+restore, rotation, or removal of old credentials; those acceptance paths remain
+pending in the replication identity change package.

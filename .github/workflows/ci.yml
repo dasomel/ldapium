@@ -415,6 +415,9 @@ jobs:
           tar -xzf "$archive" -C /usr/local/bin kubeconform
           kubeconform -v
 
+      - name: Assert replication identity chart credential combinations
+        run: ./scripts/test/test-chart-replication-identity.sh
+
       - name: Validate rendered chart manifests
         run: ./scripts/verify-chart-schema.sh
 

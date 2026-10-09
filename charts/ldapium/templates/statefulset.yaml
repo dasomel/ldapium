@@ -192,13 +192,15 @@ spec:
             {{- if eq (include "ldapium.replicationEnabled" .) "true" }}
             - name: LDAP_REPLICATION_ENABLED
               value: "true"
+            - name: LDAP_REPLICATION_IDENTITY
+              value: {{ .Values.replication.identity | quote }}
             - name: LDAP_REPLICATION_PEERS
               value: {{ include "ldapium.replicationPeers" . | quote }}
             {{- if .Values.replication.bindDN }}
             - name: LDAP_REPLICATION_BIND_DN
               value: {{ .Values.replication.bindDN | quote }}
             {{- end }}
-            {{- if .Values.replication.existingSecret }}
+            {{- if eq .Values.replication.identity "dedicated" }}
             - name: LDAP_REPLICATION_PASSWORD
               valueFrom:
                 secretKeyRef:
