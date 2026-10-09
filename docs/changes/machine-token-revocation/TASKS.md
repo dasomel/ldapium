@@ -1,7 +1,7 @@
 # Tasks: 머신 토큰 즉시 폐기
 
 설계: [CHANGE.md](CHANGE.md) (Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)`) · 결정 기록: [ADR.md](ADR.md) · 증거: [EVIDENCE.md](EVIDENCE.md).
-**T-001–T-004(증거 단위)는 2026-10-07 완료([EVIDENCE.md](EVIDENCE.md) §4–§7); 나머지는 미착수이다. 설계 방향은 수용되었으나(Q1–Q10 결정은 CHANGE.md "Resolved questions") **T-005 보안 검토 관문은 Revision 5 검토(BLOCKER 없음)로 통과했고 Revision 6은 그 비차단 항목 반영이다.** Implement 단위는 아직 하나도 체크하지 않았다. 체크 표시는 실제로 끝난 것만 한다.
+T-001–T-005의 증거·설계 관문과 T-010–T-012 구현은 완료됐다. 기본 꺼짐 도구(#323), LDAP 소스·갱신(#325), HTTP 훅·보호 경로(#336), Helm 설정(#335)은 병합됐다. T-013–T-018의 전체 수용 여부는 아래 검수와 독립 검토·CI 증거로 판단하며, 구현 존재만으로 미완료 항목을 체크하지 않는다. 설계 방향과 T-005 Revision 5 보안 관문은 수용됐고 Revision 6은 비차단 항목 반영이다.
 구현은 기본 꺼짐으로 단계 병합한다. LDAP 항목·ACL·`image/` 변경이 생기면 `.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다.
 경로 접두: `m/` = `ui/backend/internal/machineauth/`, `h/` = `ui/backend/internal/httpapi/`, `c/` = `ui/backend/internal/config/`.
 각 항목의 "검수"는 그 항목의 PR이 통과해야 하는 수용 확인이다. 구현 PR은 Class D로 독립 검토(보안 검토)를 받는다.
