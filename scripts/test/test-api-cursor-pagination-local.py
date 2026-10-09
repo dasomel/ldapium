@@ -319,7 +319,9 @@ def verify_traversal(label, items, truth, key_field):
 
 def no_secrets(label, raws):
   blob = '\n'.join(raws).lower()
-  check('userpassword' not in blob and 'ssha' not in blob and fake_hash.lower() not in blob, label + ': a password attribute reached a page')
+  # D215-scan: opaque signed cursors can contain the random substring SSHA.
+  # Require the actual LDAP hash marker; still reject the seeded exact secret.
+  check('userpassword' not in blob and '{ssha}' not in blob and fake_hash.lower() not in blob, label + ': a password attribute reached a page')
   record(label, 'no userPassword / hash in %d pages' % len(raws))
 
 

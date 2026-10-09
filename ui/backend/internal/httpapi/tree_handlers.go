@@ -80,6 +80,9 @@ func (s *Server) handleMoveEntry(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.DN, req.NewParentDN); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.MoveEntry(c.Request().Context(), req.DN, req.NewParentDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
