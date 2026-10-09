@@ -22,8 +22,9 @@ import (
 type MachineConfig struct {
 	Enabled bool
 	// WriteEnabled is MACHINE_WRITE_ENABLED (machine-write-scope D1). It is
-	// always false in this unit: loadMachineWrite refuses to start with it on.
+	// parsed separately; identities are validated but the operation table is empty.
 	WriteEnabled bool
+	Write        MachineWriteConfig
 	// Revocation is MACHINE_REVOCATION_* (machine-token-revocation T-010):
 	// parsed and validated only, no consumer yet; zero when disabled.
 	Revocation RevocationConfig
@@ -239,6 +240,9 @@ func loadMachine(getenv func(string) string, cfg *Config) error {
 		return err
 	}
 
+	if m.Write, err = loadMachineWriteIdentities(getenv, *cfg, m); err != nil {
+		return err
+	}
 	cfg.Machine = m
 	return nil
 }

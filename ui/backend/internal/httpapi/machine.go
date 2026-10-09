@@ -58,12 +58,13 @@ const reservationMargin = time.Second
 
 // machineAuth is the runtime of the bearer path.
 type machineAuth struct {
-	verifier *machineauth.Verifier
-	keys     *machineauth.KeySet
-	ceilings map[string]map[string]bool
-	baseDN   string
-	exec     machineExec
-	cancel   context.CancelFunc
+	verifier   *machineauth.Verifier
+	keys       *machineauth.KeySet
+	ceilings   map[string]map[string]bool
+	baseDN     string
+	exec       machineExec
+	cancel     context.CancelFunc
+	revocation *machineRevocation
 
 	// authTimeout bounds the authentication phase (D31).
 	authTimeout time.Duration
@@ -175,6 +176,11 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 		return nil, errors.New("machine auth: the discovery document names a different issuer than MACHINE_OIDC_ISSUER_URL")
 	}
 	go keys.Run(ctx)
+	if m.Revocation.Enabled {
+		reader := ldapclient.NewRevocationReader(cfg, now)
+		ma.revocation = &machineRevocation{read: reader.Read, now: now, refresh: m.Revocation.Refresh}
+		go ma.revocation.run(ctx)
+	}
 	return ma, nil
 }
 
