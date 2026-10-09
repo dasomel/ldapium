@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Operator command for the dedicated replication identity (docs/changes/replication-identity,
-# #229, T-013 unit 1: `ensure` and `retire`). `rotate`, `reconcile` and `rollback-admin`
+# #229, T-013: `ensure`, `retire`, and `reconcile`). `rotate` and `rollback-admin`
 # are separate units and not implemented here.
 #
 #   ensure  Create cn=replication-policy,<base> and cn=replicator,<base> once, as ordinary
@@ -22,6 +22,7 @@ set -euo pipefail
 usage() {
   cat <<EOF
 Usage: $0 ensure --base DN --admin-password-file FILE --out FILE [--uri URI] [--admin-dn DN] [--root-dn DN]...
+       $0 reconcile --base DN --admin-password-file FILE --current-password-file FILE [--uri ldaps://HOST:636]
        $0 retire --base DN --admin-password-file FILE --yes [--uri URI] [--admin-dn DN]
 
   --uri        LDAP URI of any node (default ldaps://localhost:636; use ldap:// only on a trusted path)
@@ -38,7 +39,7 @@ die() { echo "replication-identity: $*" >&2; exit 1; }
 
 cmd="${1:-}"
 case "$cmd" in
-  ensure|retire) shift ;;
+  ensure|retire|reconcile) shift ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -48,6 +49,7 @@ base=""
 admin_dn=""
 pwfile=""
 out=""
+current_file=""
 yes=0
 extra_roots=()
 config_dir="/etc/openldap/slapd.d"   # image CONFIG_DIR
@@ -59,6 +61,7 @@ while [ $# -gt 0 ]; do
     --admin-password-file) pwfile="${2:?--admin-password-file needs a file}"; shift 2 ;;
     --root-dn) extra_roots+=("${2:?--root-dn needs a DN}"); shift 2 ;;
     --config-dir) config_dir="${2:?--config-dir needs a directory}"; shift 2 ;;
+    --current-password-file) current_file="${2:?--current-password-file needs a file}"; shift 2 ;;
     --out) out="${2:?--out needs a file}"; shift 2 ;;
     --yes) yes=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -70,7 +73,7 @@ done
 if [ -z "$pwfile" ] || [ ! -r "$pwfile" ]; then die "--admin-password-file must name a readable file"; fi
 case "$base" in *'"'*|*\\*|*$'\n'*) die "--base contains a character this command refuses" ;; esac
 [ -n "$admin_dn" ] || admin_dn="cn=admin,${base}"
-for t in ldapsearch ldapadd ldapdelete ldapwhoami slapdn slapcat; do command -v "$t" >/dev/null 2>&1 || die "$t is required"; done
+for t in ldapsearch ldapadd ldapdelete ldapmodify ldapwhoami slappasswd slapdn slapcat; do command -v "$t" >/dev/null 2>&1 || die "$t is required"; done
 
 iddn="cn=replicator,${base}"
 poldn="cn=replication-policy,${base}"
@@ -117,7 +120,42 @@ for r in "${roots[@]}"; do
   [ "$got" != "$want" ] || die "a rootDN equals the reserved replication identity DN ${iddn}; it would bypass the identity ACL (D65)"
 done
 
-if [ "$cmd" = ensure ]; then
+if [ "$cmd" = reconcile ]; then
+  # D67: the operator isolates the restored node before reconciling. This command never
+  # starts peers or deletes old hashes; failure leaves the cluster isolated for inspection.
+  case "$uri" in ldaps://*) ;; *) die "reconcile requires verified LDAPS" ;; esac
+  [ "${LDAPTLS_REQCERT:-demand}" = demand ] || die "reconcile requires LDAPTLS_REQCERT=demand"
+  export LDAPTLS_REQCERT=demand
+  if [ -z "$current_file" ] || [ ! -f "$current_file" ] || [ ! -r "$current_file" ]; then
+    die "--current-password-file must name a readable regular file"
+  fi
+  # Check exact bytes, including trailing LF/NUL, rather than shell command substitution.
+  total=$(wc -c < "$current_file" | tr -d ' ')
+  printable=$(LC_ALL=C tr -cd '\041-\176' < "$current_file" | wc -c | tr -d ' ')
+  distinct=$(LC_ALL=C fold -w1 < "$current_file" | sort -u | wc -l | tr -d ' ')
+  if [ "$total" != "$printable" ] || [ "$total" -lt 32 ] || [ "$distinct" -lt 10 ]; then
+    die "current credential fails byte hygiene (not proof of randomness)"
+  fi
+  cmp -s "$current_file" "$pwfile" && die "current replication credential must differ from administrator credential"
+  unsafe=$(LC_ALL=C tr -cd '\042\134' < "$current_file" | wc -c | tr -d ' ')
+  [ "$unsafe" = 0 ] || die "current credential contains quote or backslash unsupported by dedicated mode"
+  exists "$iddn" || die "identity missing; reconcile cannot create it"
+  exists "$poldn" || die "policy missing; reconcile cannot create it"
+  if ! ldapwhoami -x -H "$uri" -D "$iddn" -y "$current_file" >/dev/null 2>&1; then
+    hash=$(slappasswd -T "$current_file") || die "cannot hash current credential"
+    rc=0
+    ldapmodify "${ldap_args[@]}" >/dev/null 2>&1 <<EOF || rc=$?
+dn: ${iddn}
+changetype: modify
+add: userPassword
+userPassword: ${hash}
+EOF
+    unset hash
+    # D67: ambiguous/lost responses are resolved by the real bind, not write exit status.
+    ldapwhoami -x -H "$uri" -D "$iddn" -y "$current_file" >/dev/null 2>&1 || die "current credential does not bind after reconcile (modify rc ${rc}); keep peers stopped"
+  fi
+  echo "reconciled current credential; verified TLS identity bind. Keep peers stopped until the identity check passes."
+elif [ "$cmd" = ensure ]; then
   [ -n "$out" ] || die "--out is required (the generated password is written there, never printed)"
   if [ -e "$out" ] || [ -L "$out" ]; then die "--out ${out} already exists (or is a symlink); refusing to overwrite a credential file"; fi
   if exists "$iddn" || exists "$poldn"; then

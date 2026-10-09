@@ -57,3 +57,6 @@ validate ui-machine-auth --set ui.enabled=true --set-string "ui.session.secret=$
 	--set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":["directory.users.read"]}]' \
 	--set-string 'ui.machineAuth.ldapBindDN=uid=machine\,ou=system\,dc=example\,dc=org' \
 	--set-string ui.machineAuth.existingSecret=machine-ldap
+
+# Dedicated identity: TLS, caller-owned identity credential, and mode env.
+validate dedicated-identity --set replicaCount=3 --set replication.identity=dedicated --set replication.existingSecret=replication-identity --set tls.enabled=true --set tls.existingSecret=server-tls --set tls.caFile=/etc/openldap/tls/ca.crt

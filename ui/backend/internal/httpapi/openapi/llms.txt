@@ -53,3 +53,5 @@ In the OpenAPI document, `security: []` means public, operations with `x-admin: 
 - POST /api/users/password without `password` returns a server-generated `generatedPassword` once; treat it as a secret and never log it.
 - Destructive operations (DELETE users/groups/profiles/connections, entry move, Keycloak role operations, backup runs) are not reversible. Confirm intent before calling them and do not retry blindly.
 - Never assume a truncated list is complete. Prefer read-only calls unless the task requires a change.
+
+Machine write prerequisite (not wired; write operations remain forbidden): exactly one strong entryCSN If-Match tag. Missing/empty: 428 if_match_required. Wildcard, weak/list/repeated/malformed: 400 invalid_request. Human writes retain optional If-Match.

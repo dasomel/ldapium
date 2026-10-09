@@ -77,7 +77,11 @@ if ! go_raw=$(cd ui/backend && go_licenses csv ./... 2>"$go_err"); then
 	cat "$go_err" >&2
 	exit 2
 fi
-go_csv=$(printf '%s\n' "$go_raw" | grep -v '^github.com/dasomel/ldapium' | sort)
+# D-license-1: go-licenses sometimes treats the semantic /v3 suffix as a source
+# directory. This repository's license is at its root; canonicalize only that
+# known module so a transient upstream lookup cannot change the inventory URL.
+go_csv=$(printf '%s\n' "$go_raw" | grep -v '^github.com/dasomel/ldapium' | \
+	awk -F, 'BEGIN { OFS="," } $1 == "github.com/go-ldap/ldap/v3" { sub(/\/v3\/LICENSE$/, "/LICENSE", $2) } { print }' | sort)
 # license-checker reads ui/frontend/node_modules. Without it (a fresh checkout
 # or worktree) it exits quietly with a partial list, the regenerated inventory
 # silently loses dependencies, and --check then agrees with itself. Refuse.
