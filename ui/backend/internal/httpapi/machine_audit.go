@@ -86,6 +86,7 @@ type machineAuditState struct {
 	subjectFP string
 	operation string
 	bindDN    string
+	write     *machineWriteAuditFields
 }
 
 func auditStateOf(c echo.Context) *machineAuditState {
@@ -126,39 +127,6 @@ func (s *machineAuditState) setBindDN(dn string) {
 	if s != nil {
 		s.bindDN = dn
 	}
-}
-
-// machineEvent is the structured record. token_fingerprint and subject_fingerprint
-// are omitted when empty; bind_dn only appears when the request reached the
-// directory identity.
-type machineEvent struct {
-	Event              string `json:"event"`
-	Provider           string `json:"provider"`
-	Actor              string `json:"actor"`
-	RequestID          string `json:"request_id"`
-	Operation          string `json:"operation"`
-	Method             string `json:"method"`
-	Status             int    `json:"status"`
-	Result             string `json:"result"`
-	Reason             string `json:"reason"`
-	TokenFingerprint   string `json:"token_fingerprint,omitempty"`
-	SubjectFingerprint string `json:"subject_fingerprint,omitempty"`
-	BindDN             string `json:"bind_dn,omitempty"`
-}
-
-// machineEventInput is everything buildMachineEvent decides from. Nothing in
-// it is a token or a raw error.
-type machineEventInput struct {
-	RequestID   string
-	Method      string
-	Status      int
-	EnvelopeErr string // the response's error-envelope code, "" on success
-	Reason      string
-	Actor       string
-	SubjectFP   string
-	Operation   string
-	BindDN      string
-	TokenFP     string
 }
 
 // tokenFingerprint is the first 6 bytes of SHA-256 over the Authorization
@@ -205,6 +173,12 @@ func buildMachineEvent(in machineEventInput) machineEvent {
 		RequestID: in.RequestID, Operation: op, Method: in.Method, Status: in.Status,
 		Result: result, Reason: reason,
 		SubjectFingerprint: in.SubjectFP, BindDN: in.BindDN,
+	}
+	if in.Write != nil {
+		copy := *in.Write
+		ev.TargetFingerprint, ev.TargetDN = copy.TargetFingerprint, copy.TargetDN
+		ev.IdempotencyFingerprint, ev.LDAPResult = copy.IdempotencyFingerprint, copy.LDAPResult
+		ev.IfMatch, ev.Idempotent, ev.Replayed = &copy.IfMatch, &copy.Idempotent, &copy.Replayed
 	}
 	// A verified actor already identifies the caller; the token fingerprint is
 	// for the lines that have no verified identity.
@@ -265,7 +239,7 @@ func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
 				logMachineEvent(buildMachineEvent(machineEventInput{
 					RequestID: requestIDOf(c), Method: method, Status: http.StatusInternalServerError,
 					Reason: reasonInternal, Actor: st.actor, SubjectFP: st.subjectFP,
-					Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]),
+					Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]), Write: st.write,
 				}))
 			}()
 			if err = next(c); err != nil {
@@ -276,7 +250,7 @@ func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
 			logMachineEvent(buildMachineEvent(machineEventInput{
 				RequestID: requestIDOf(c), Method: method, Status: c.Response().Status,
 				EnvelopeErr: code, Reason: st.reason, Actor: st.actor, SubjectFP: st.subjectFP,
-				Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]),
+				Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]), Write: st.write,
 			}))
 			return err
 		}

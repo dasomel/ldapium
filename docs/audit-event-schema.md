@@ -596,3 +596,10 @@ record parses with `schemaVersion`/`seq`/`correlationId` present, and that
 the rootdn's and a self-service user's writes are attributed and classified
 distinctly — this is the one thing the fixture test cannot prove, since it
 never talks to a real `kubectl`/directory.
+
+
+### Machine write metadata prerequisite (T-015)
+
+The existing single `machine_access` event can carry additive write metadata: `target_dn_fingerprint`, optional operator-enabled `target_dn`, `if_match`/`idempotent` presence booleans, `idempotency_key_fingerprint`, optional numeric `ldap_result`, and `replayed`. Missing conditions are represented as false for writes. Unknown/unattempted LDAP results are omitted; replay does not fabricate a new LDAP result. Fingerprints contain12 hex characters, following the existing identity fingerprint convention. No request body, tag value, raw key, token or password is recorded. Read event JSON remains unchanged.
+
+This metadata setter is not connected to request execution in this stage. T-013 must initialize it before early write rejections and fill actual result/replay state; header/scope/validation/412/LDAP-denial/replay live evidence remains an opening gate. Plaintext target DNs require the operator option and a validated parseable DN; malformed/control-containing targets remain hash-only.

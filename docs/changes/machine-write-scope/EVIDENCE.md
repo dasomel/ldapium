@@ -119,3 +119,10 @@ Unit table covers absent/empty (428), wildcard/weak/list/repeated/malformed/unqu
 - Mutation allowing `*`: `TestMachineIfMatch/wildcard` fails with `missing rejection`; mutation restored.
 - Live LDAP is not claimed by this header parser unit; LDAP assertion evidence belongs to T-018/T-021.
 - Independent security review and final request-path integration remain pending.
+
+
+## T-015 write audit metadata core (unwired)
+
+The existing `machine_access` event adds optional write fields without creating a second log event. Target/idempotency-key fingerprints default to hash-only; plaintext target DN requires opt-in and validation. Presence booleans preserve false on writes and all new fields are absent on reads. Unknown result codes are omitted; replay state is explicit. DTO declarations moved into a separate small file to keep the original audit implementation below300 lines.
+
+`GOTOOLCHAIN=go1.27.2 GOMAXPROCS=4 go test -race ./internal/httpapi -count=1`: PASS (12.993s). Metadata table covers428,412/LDAP122,403/LDAP50,success/LDAP0,replay/no-LDAP; sentinel raw key/target absent by default, JSON roundtrip succeeds, plaintext opt-in/control rejection and read JSON compatibility pass, actual log writer emits exactly one newline and no sentinel key. HTTP/executor actual-result setters and early-write route initialization remain unconnected; T-015 is not checked complete and no write operation is opened.
