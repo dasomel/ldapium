@@ -93,6 +93,15 @@ check "limits default to the package values" has "$r" 'name: MACHINE_AUTH_FAILUR
 check "request timeout is rendered in seconds" has "$r" 'value: "10s"'
 check "grace period covers the request timeout (30 s floor)" has "$r" 'terminationGracePeriodSeconds: 30'
 
+check "revocation off emits no environment" lacks "$r" 'MACHINE_REVOCATION_'
+rrev=$(render "${on[@]}" --set ui.machineAuth.revocation.enabled=true)
+check "revocation on reaches backend" has "$rrev" 'name: MACHINE_REVOCATION_ENABLED'
+check "revocation base derives root DN" has "$rrev" 'value: "ou=revocations,ou=system,dc=example,dc=org"'
+refuses "revocation freshness gap" 'revocation.maxStaleSeconds' "${on[@]}" --set ui.machineAuth.revocation.enabled=true --set ui.machineAuth.revocation.refreshSeconds=20
+refuses "revocation entries cap" 'revocation.maxEntries' "${on[@]}" --set ui.machineAuth.revocation.maxEntries=2501
+refuses "revocation refresh range" 'revocation.refreshSeconds' "${on[@]}" --set ui.machineAuth.revocation.refreshSeconds=0
+refuses "revocation sentinel age range" 'revocation.sentinelMaxAgeSeconds' "${on[@]}" --set ui.machineAuth.revocation.sentinelMaxAgeSeconds=29
+
 # the whole chart: no secret value is created or printed
 whole=$(helm template t charts/ldapium "${base[@]}" "${on[@]}")
 without=$(helm template t charts/ldapium "${base[@]}")
