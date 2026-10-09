@@ -86,6 +86,13 @@ jobs:
       - name: HTTP revocation under actual LDAP peer partition
         run: python3 scripts/test/test-machine-http-partition.py
 
+      - name: Existing machine contracts with enabled empty revocation snapshots
+        run: |
+          set -eu
+          for script in test-machine-keycloak-live.py test-machine-keycloak-settings-live.py test-machine-jwks-live.py test-machine-revocation-drill.py; do
+            python3 scripts/test/test-machine-empty-revocation-compat.py "$script"
+          done
+
       # The scripts remove their own containers, volumes and networks even on failure (and print
       # scrubbed container logs first). The runner is fresh per job, so anything left under these
       # prefixes belongs to this run: list it and fail. `if: always()` makes it run after an earlier
