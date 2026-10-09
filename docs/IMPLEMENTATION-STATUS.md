@@ -126,6 +126,17 @@ Unit-tested only (no live run):
 
 Not verified anywhere: installing the chart with machine auth on a cluster, a real ingress in front of `X-Forwarded-For`, Helm pod replacement, the ACL on more than one LDAP node (#284); the combination with `LDAP_REPLICATION_IDENTITY=prepare` is unsupported (#277).
 
+Optional LDAP machine-token revocation (#286) is implemented **default off**:
+operator sentinel/heartbeat tooling (#323), background LDAP snapshots (#325),
+HTTP enforcement and protected subtree (#336), and chart configuration (#335)
+are merged. Two unchanged UI replicas and real LDAP/Keycloak live drills are
+tracked by #345/#349; enabled empty-snapshot compatibility by #350. These
+implementation stages do not close the package's remaining acceptance or
+alternative-credential/shared-limiter scope. See
+[revocation tasks](changes/machine-token-revocation/TASKS.md),
+[ADR](changes/machine-token-revocation/ADR.md), and
+[operations](machine-auth-operations.md) for evidence and rollback consequences.
+
 Known limitations and follow-ups: see "Known limitations and follow-ups" in `docs/changes/machine-principal-auth/TASKS.md`: #266 (human current-password attempts), #277/T-034/D30, #280 (fixed 10 s graceful shutdown), #284 (cluster install), #285 (machine write scope, non-goal), #286 (immediate revocation, API key, mTLS, non-goals), #287 (API docs page does not mark machine-callable operations), D25 unaudited server-level rejections, per-replica limits, opt-in scopes off by default. Requests the Go HTTP server rejects before any handler are in no log unless the ingress keeps an access log. Publishing the OpenForge status (T-033) is an external maintainer step after the audit PR merges.
 
 ## Operations / resilience
