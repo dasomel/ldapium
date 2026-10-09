@@ -2,6 +2,8 @@
 
 Last verified: 2026-09-14 against `main`, except the "External HTTP API" section, which was added 2026-10-06 against `main` at `6c118ac` from the audit in `docs/changes/CLOSE-OUT-2026-10.md` and the code, tests and PR history it cites (the live Docker scripts were not re-run for it).
 
+The dedicated replication detail below was added 2026-10-09 against main `3e1f342`; it is an exception to the original snapshot date above.
+
 This snapshot records features already merged to `main`. Open pull requests and issue-only roadmap items are intentionally excluded.
 
 ## Product boundary
@@ -18,6 +20,23 @@ ldapium packages upstream OpenLDAP 2.6.14 for modern Kubernetes/container operat
 - raw replication CSN discard evidence in the audit export with entryUUID objectId correlation
 - HA topology governance (D11-D13): Active-Active N-Way multi-provider, reference RPO/RTO SLAs, cross-site DR via backup shipping
 - Prometheus alert rules for replication lag, ContextCSN divergence, and exporter health
+
+### Dedicated replication identity status (2026-10-09)
+
+Verified against main `3e1f342`: the image supports opt-in `prepare` and
+`dedicated` modes, reserved read-only identity ACL/limits, verified LDAPS,
+consumer-only startup and fail-closed unsafe configuration checks. The operator
+provides `ensure`, `retire` and the current-credential `reconcile` primitive;
+the chart has explicit identity/Secret configuration. The default remains admin.
+See the [ADR](changes/replication-identity/ADR.md),
+[acceptance conditions](changes/replication-identity/CHANGE.md) and
+[remaining tasks](changes/replication-identity/TASKS.md).
+
+This is partial implementation, not complete dedicated-mode package acceptance.
+Rolling rotation, guarded rollback-admin, complete cross-node/configuration/canary
+checks, Kubernetes/restore acceptance matrix and periodic-check alerts remain
+outstanding. Shared administrator credential restriction D43 is retained. Open
+PR data-check/restore primitives are excluded from this merged-feature snapshot.
 
 ## TLS and authentication hardening
 

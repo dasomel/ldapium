@@ -256,3 +256,30 @@ and transparent:
    Exposing synthetic cluster membership heartbeats or peer state machines would require
    introducing a dedicated cluster coordination daemon. Per **D1**, ldapium deliberately
    refrains from adding third-party cluster orchestrators.
+
+### Replication identity data visibility check (partial operator primitive)
+
+`scripts/check-replication-identity.sh` compares an administrator view and the
+reserved read-only identity view over verified LDAPS. Run it from an operator
+host with Python 3 and ldapsearch, or use `--container` to execute ldapsearch in a
+local container (file and CA paths then refer to that container):
+
+```sh
+scripts/check-replication-identity.sh --container NODE --uri ldaps://NODE:636 \
+  --base dc=example,dc=org --admin-password-file /run/secrets/admin \
+  --identity-password-file /run/secrets/replication --ca-file /certs/ca.pem
+```
+
+It compares only `userPassword objectClass uid cn sn mail` by default. Use an
+explicit `--attributes` list to extend that coverage. A stable entryCSN with
+missing/different data fails immediately (exit 1); concurrent changes defer the
+entry for up to five passes and warn without failing if it remains unstable
+(exit 0). Failure to establish evidence returns 2. Errors and counts omit all
+attribute values and hashes. Empty administrator views are errors.
+
+This primitive does not inspect cn=config, enforce G1/G2, compare different nodes,
+check consumer credential fingerprints, or prove writes are safe. It also misses
+ACL faults outside the enumerated attributes, losses already present in the root
+view, changes between checks, and discarded multi-provider writes. Run the pending
+configuration and propagation gates before changing replication modes or resuming
+peers after a restore. The check must not be treated as package acceptance.
