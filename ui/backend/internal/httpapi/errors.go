@@ -93,6 +93,7 @@ const (
 	codeIdempotencyKeyReused      = "idempotency_key_reused"
 	codeIdempotencyOutcomeUnknown = "idempotency_outcome_unknown"
 	codeIdempotencyCapacity       = "idempotency_capacity"
+	codeIdempotencyKeyRequired    = "idempotency_key_required"
 	codeIdempotencyUnsupported    = "idempotency_unsupported"
 	// Keyset listing (#215).
 	codeCursorInvalid     = "cursor_invalid"
@@ -186,6 +187,7 @@ var codeTable = map[string]codeSpec{
 	codeIdempotencyKeyReused:      {http.StatusUnprocessableEntity, ""},
 	codeIdempotencyOutcomeUnknown: {http.StatusConflict, ""},
 	codeIdempotencyCapacity:       {http.StatusServiceUnavailable, idempotencyCapacityMessage},
+	codeIdempotencyKeyRequired:    {http.StatusPreconditionRequired, ""},
 	codeIdempotencyUnsupported:    {http.StatusUnprocessableEntity, ""},
 	codeCursorInvalid:             {http.StatusBadRequest, ""},
 	codeSizeLimitExceeded:         {http.StatusUnprocessableEntity, ""},
