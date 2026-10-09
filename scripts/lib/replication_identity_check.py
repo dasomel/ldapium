@@ -84,13 +84,27 @@ def search(args, dn, password):
   return parse_ldif(result.stdout)
 
 
+def read_password_file(args, path):
+  if args.container:
+    result = subprocess.run(['docker', 'exec', args.container, 'cat', path],
+                            capture_output=True, timeout=5)
+    if result.returncode:
+      raise ValueError('credential file unreadable')
+    return result.stdout
+  with open(path, 'rb') as file:
+    return file.read()
+
+
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--uri', required=True)
   parser.add_argument('--base', required=True)
   parser.add_argument('--admin-dn')
   parser.add_argument('--admin-password-file', required=True)
-  parser.add_argument('--identity-password-file', required=True)
+  parser.add_argument('--identity-password-file')
+  parser.add_argument('--config-password-file')
+  parser.add_argument('--configuration-only', action='store_true')
+  parser.add_argument('--dedicated', action='store_true')
   parser.add_argument('--ca-file', required=True)
   parser.add_argument('--container')
   parser.add_argument('--attributes', nargs='+', default=list(ATTRS))
@@ -102,7 +116,42 @@ def main():
          for key in args.attributes):
     parser.error('attributes must be an explicit data-attribute list')
   args.admin_dn = args.admin_dn or 'cn=admin,' + args.base
+  if not args.configuration_only and not args.identity_password_file:
+    parser.error('--identity-password-file required for data visibility')
+  if args.configuration_only and not args.config_password_file:
+    parser.error('--config-password-file required for configuration inspection')
+  if args.dedicated and (not args.config_password_file or not args.identity_password_file):
+    parser.error('--dedicated requires config and current identity password files')
   try:
+    if args.config_password_file:
+      from replication_identity_config import FIELDS, configuration
+      from types import SimpleNamespace
+      cfg_args = SimpleNamespace(**vars(args))
+      cfg_args.base = 'cn=config'
+      cfg_args.attributes = FIELDS
+      config_rows = search(cfg_args, 'cn=admin,cn=config', args.config_password_file)
+      password = None
+      if args.dedicated:
+        password = read_password_file(args, args.identity_password_file)
+        if password == read_password_file(args, args.admin_password_file):
+          print('FAIL: replication credential equals administrator credential', file=sys.stderr)
+          return 1
+      try:
+        consumers = configuration(config_rows, args.base, args.dedicated, password)
+      except ValueError:
+        print('FAIL: identity configuration predicates did not pass', file=sys.stderr)
+        return 1
+      data_args = SimpleNamespace(**vars(args))
+      data_args.attributes = ['authzTo', 'authzFrom']
+      delegation = search(data_args, args.admin_dn, args.admin_password_file)
+      if not delegation:
+        raise ValueError('root view empty')
+      if any(item.get('authzto') or item.get('authzfrom') for item in delegation.values()):
+        print('FAIL: delegated data authorization is present', file=sys.stderr)
+        return 1
+      print('PASS: configuration predicates and %d consumer credential fingerprints' % consumers)
+      if args.configuration_only:
+        return 0
     for attempt in range(5):
       first = search(args, args.admin_dn, args.admin_password_file)
       if not first:
