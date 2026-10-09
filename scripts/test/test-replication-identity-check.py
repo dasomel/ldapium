@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
 
 spec = importlib.util.spec_from_file_location('check', Path(__file__).parents[1] / 'lib/replication_identity_check.py')
 check = importlib.util.module_from_spec(spec)
@@ -13,6 +16,17 @@ def row(csn=b'1', pw=b'hash'):
 
 
 class StableCheck(unittest.TestCase):
+  def test_one_verified_ldaps_uri_only(self):
+    for uri in ('ldaps://node', 'ldaps://node.example:636', 'ldaps://127.0.0.1:636', 'ldaps://[::1]:636'):
+      self.assertTrue(check.valid_uri(uri), uri)
+    for uri in ('ldap://node:389', 'ldaps://dead:636 ldap://real:389',
+                'ldaps://dead:636\tldaps://real:636', 'ldaps://user:password@node',
+                'ldaps://node/', 'ldaps://node?option=x', 'ldaps://node#x',
+                'ldaps://node:0', 'ldaps://node:65536', 'ldaps://node:',
+                'ldaps://node:garbage', 'ldaps://-node', 'ldaps://node..example',
+                'ldaps://node%20ldap', 'ldaps://'):
+      self.assertFalse(check.valid_uri(uri), uri)
+
   def test_equal(self):
     self.assertEqual(check.compare(row(), row(), row()), (0, 0))
 

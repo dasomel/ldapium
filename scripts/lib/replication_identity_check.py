@@ -3,6 +3,7 @@ import argparse
 import base64
 import subprocess
 import sys
+from replication_uri import valid_uri
 
 ATTRS = ('userpassword', 'objectclass', 'uid', 'cn', 'sn', 'mail')
 
@@ -94,8 +95,8 @@ def main():
   parser.add_argument('--container')
   parser.add_argument('--attributes', nargs='+', default=list(ATTRS))
   args = parser.parse_args()
-  if not args.uri.startswith('ldaps://'):
-    parser.error('verified LDAPS is required')
+  if not valid_uri(args.uri):
+    parser.error('one pinned verified LDAPS URI required; lists/options refused')
   args.attributes = [key.lower() for key in args.attributes]
   if any(key in ('*', '+', 'contextcsn', 'entrycsn') or not key.isalnum()
          for key in args.attributes):
