@@ -165,6 +165,9 @@ func (s *Server) handlePatchUser(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.revocationWriteGuard(dn); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.PatchUser(c.Request().Context(), dn, patch, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
@@ -182,6 +185,9 @@ func (s *Server) handlePatchGroup(c echo.Context) error {
 	}
 	ifMatch, err := ifMatchCSN(c)
 	if err != nil {
+		return err
+	}
+	if err := s.revocationWriteGuard(dn); err != nil {
 		return err
 	}
 	if err := currentSession(c).Bound.PatchGroup(c.Request().Context(), dn, patch, ifMatch); err != nil {

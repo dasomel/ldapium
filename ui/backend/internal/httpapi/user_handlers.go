@@ -39,6 +39,9 @@ func (s *Server) handleCreateUser(c echo.Context) error {
 		}
 	}
 
+	if err := s.revocationWriteGuard(s.cfg.UserCreateBase); err != nil {
+		return err
+	}
 	dn, err := currentSession(c).Bound.CreateUser(c.Request().Context(), s.cfg.UserCreateBase, domain.UserInput{
 		UID:                req.UID,
 		CN:                 req.CN,
@@ -77,6 +80,9 @@ func (s *Server) handleUpdateUser(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.DN); err != nil {
+		return err
+	}
 	err = currentSession(c).Bound.UpdateUser(c.Request().Context(), req.DN, domain.UserInput{
 		CN:                 req.CN,
 		SN:                 req.SN,
@@ -103,6 +109,9 @@ func (s *Server) handleDeleteUser(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(dn); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.DeleteUser(c.Request().Context(), dn, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
@@ -154,6 +163,9 @@ func (s *Server) handleSetPassword(c echo.Context) error {
 		}
 	}
 
+	if err := s.revocationWriteGuard(req.DN); err != nil {
+		return err
+	}
 	sess := currentSession(c)
 	limiterKey := sess.ID + "\x00" + normalizeDN(req.DN)
 	allowed, retryAfter, finish := s.passwordLimiter.begin(limiterKey)
@@ -199,6 +211,9 @@ func (s *Server) handleUnlockUser(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.DN); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.Unlock(c.Request().Context(), req.DN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
@@ -225,6 +240,9 @@ func (s *Server) handleLockUser(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.DN); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.Lock(c.Request().Context(), req.DN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}

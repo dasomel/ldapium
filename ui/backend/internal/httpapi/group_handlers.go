@@ -29,6 +29,9 @@ func (s *Server) handleCreateGroup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
+	if err := s.revocationWriteGuard(s.cfg.GroupCreateBase); err != nil {
+		return err
+	}
 	dn, err := currentSession(c).Bound.CreateGroup(c.Request().Context(), s.cfg.GroupCreateBase, domain.GroupInput{
 		CN:          req.CN,
 		Description: req.Description,
@@ -56,6 +59,9 @@ func (s *Server) handleUpdateGroup(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.DN); err != nil {
+		return err
+	}
 	err = currentSession(c).Bound.UpdateGroup(c.Request().Context(), req.DN, domain.GroupInput{
 		CN:          req.CN,
 		Description: req.Description,
@@ -77,6 +83,9 @@ func (s *Server) handleDeleteGroup(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(dn); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.DeleteGroup(c.Request().Context(), dn, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
@@ -97,6 +106,9 @@ func (s *Server) handleAddMember(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.GroupDN, req.MemberDN); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.AddMember(c.Request().Context(), req.GroupDN, req.MemberDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
@@ -117,6 +129,9 @@ func (s *Server) handleRemoveMember(c echo.Context) error {
 		return err
 	}
 
+	if err := s.revocationWriteGuard(req.GroupDN, req.MemberDN); err != nil {
+		return err
+	}
 	if err := currentSession(c).Bound.RemoveMember(c.Request().Context(), req.GroupDN, req.MemberDN, ifMatch); err != nil {
 		return respondErr(c, err)
 	}
