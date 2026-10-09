@@ -435,6 +435,8 @@ signature work and so has `actor=unknown` plus the token fingerprint, or a verif
 client's rate/concurrency budget, which names the actor; also replaces
 `bad_header` when the throttle refuses a source), `bind_failed`, `capacity` (no
 global LDAP slot, or no global authentication slot: 503),
+`revoked` (authenticated token revoked: 401), `revocation_unavailable`
+(authenticated caller, missing or stale revocation snapshot: 503),
 `deadline`, `canceled`, `request_rejected`, `upstream_error`, `internal` (panic).
 A value outside the set is replaced by one derived from the response.
 
