@@ -2,6 +2,7 @@
 import hashlib
 import re
 import shlex
+from replication_uri import valid_uri
 
 FIELDS = ('olcSuffix', 'olcRootDN', 'olcAccess', 'olcLimits', 'olcSyncrepl',
           'olcTLSVerifyClient', 'olcAuthzRegexp', 'olcAuthIDRewrite', 'olcAuthzPolicy')
@@ -65,7 +66,7 @@ def configuration(rows, base, dedicated=False, password=None):
         raise ValueError('consumer identity differs')
       if fields.get('tls_reqcert') != 'demand' or not fields.get('tls_cacert'):
         raise ValueError('consumer certificate verification missing')
-      if not fields.get('provider', '').startswith('ldaps://'):
+      if not valid_uri(fields.get('provider', '')):
         raise ValueError('consumer provider is not LDAPS')
       credential = fields.get('credentials', '').encode()
       if (len(credential) < 32 or len(set(credential)) < 10 or

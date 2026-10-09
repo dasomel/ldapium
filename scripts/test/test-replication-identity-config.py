@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
 
 spec = importlib.util.spec_from_file_location('config', Path(__file__).parents[1] / 'lib/replication_identity_config.py')
 config = importlib.util.module_from_spec(spec)
@@ -48,7 +51,7 @@ class ConfigCheck(unittest.TestCase):
 
   def test_unverified_provider(self):
     data = rows(); key = b'olcDatabase={1}mdb,cn=config'
-    for old, new in [(b'ldaps://', b'ldap://'), (b'tls_reqcert=demand', b'tls_reqcert=never')]:
+    for old, new in [(b'ldaps://', b'ldap://'), (b'tls_reqcert=demand', b'tls_reqcert=never'), (b'provider=ldaps://node:636', b'provider="ldaps://dead:636 ldap://real:389"')]:
       data[key]['olcsyncrepl'] = tuple(value.replace(old, new) for value in rows()[key]['olcsyncrepl'])
       with self.assertRaises(ValueError): config.configuration(data, BASE, True, PW)
 
