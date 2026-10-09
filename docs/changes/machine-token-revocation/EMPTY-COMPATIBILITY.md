@@ -13,7 +13,9 @@ feature-off rollback behavior.
 The source adds background binds. Request-bind assertions therefore count real
 LDAP accesslog bind sessions, excluding only sessions with an observed search
 on the revocation base. They do not claim the raw total bind count is unchanged.
-Missing bind session identifiers or accesslog errors fail the test. Source
+Missing bind session identifiers or accesslog errors fail the test. Initial asynchronous refresh completion is observed through a loopback-only
+fixture metrics port; it no longer assumes a fixed one-second delay. The
+wrong-password contract may complete with a recorded refresh failure. Source
 results, HTTP responses and tokens are never fabricated.
 
 Observed with real Keycloak `26.7.4`, freshly built

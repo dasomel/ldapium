@@ -9,7 +9,7 @@ import pathlib
 import re
 import runpy
 import sys
-import time
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
@@ -40,12 +40,24 @@ def start(self, name, ldap_url, env, hold_secrets, *args, **kwargs):
   if configured.get('MACHINE_AUTH_ENABLED') == 'true':
     configured.update({'MACHINE_REVOCATION_ENABLED': 'true', 'MACHINE_REVOCATION_REFRESH': '60s',
                        'MACHINE_REVOCATION_MAX_STALE': '180s', 'MACHINE_REVOCATION_SENTINEL_MAX_AGE': '1h',
-                       'MACHINE_REVOCATION_BASE_DN': BASE})
+                       'MACHINE_REVOCATION_BASE_DN': BASE, 'METRICS_ADDR': '0.0.0.0:9090'})
+    kwargs['extra_docker'] = tuple(kwargs.get('extra_docker', ())) + ('-p', '127.0.0.1::9090')
   api = original_start(self, name, ldap_url, configured, hold_secrets, *args, **kwargs)
   if configured.get('MACHINE_AUTH_ENABLED') == 'true' and kwargs.get('wait', True):
-    # Initial source refresh is asynchronous. It must complete before contracts
-    # exercise valid tokens; no token or source result is fabricated here.
-    time.sleep(1)
+    # D3: observe completion instead of assuming one second is enough. Cost:
+    # a loopback-only fixture metrics port; escape hatch: direct feature-off runs.
+    # The wrong-password contract intentionally completes with refresh failure.
+    port = self.published_port(name, '9090/tcp')
+    ensure(port, 'fixture metrics port unavailable')
+    def refreshed():
+      try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/metrics', timeout=1) as response:
+          metrics = response.read().decode()
+        return any(float(value) > 0 for value in re.findall(
+          r'^ldapium_ui_machine_revocation_refresh_total\{result="(?:success|failure)"\} (\S+)$', metrics, re.M))
+      except (OSError, ValueError):
+        return False
+    self.wait_until(refreshed, 'first actual revocation refresh completion', 15)
   return api
 
 
