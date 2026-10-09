@@ -7001,6 +7001,7 @@
               "forbidden",
               "idempotency_capacity",
               "idempotency_key_conflict",
+              "idempotency_key_required",
               "idempotency_key_reused",
               "idempotency_outcome_unknown",
               "idempotency_unsupported",

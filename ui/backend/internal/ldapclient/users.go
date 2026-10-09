@@ -165,7 +165,7 @@ func (c *client) UpdateUser(ctx context.Context, dn string, in domain.UserInput,
 		return fmt.Errorf("%w: cn and sn are required", domain.ErrInvalidInput)
 	}
 
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "inetOrgPerson")
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (c *client) PatchUser(ctx context.Context, dn string, p domain.UserPatch, i
 	if (p.CN != nil && (p.CN.Clear || p.CN.Value == "")) || (p.SN != nil && (p.SN.Clear || p.SN.Value == "")) {
 		return fmt.Errorf("%w: cn and sn cannot be removed", domain.ErrInvalidInput)
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "inetOrgPerson")
 	if err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func (c *client) DeleteUser(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "inetOrgPerson")
 	if err != nil {
 		return err
 	}
@@ -363,7 +363,7 @@ func (c *client) Unlock(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "inetOrgPerson")
 	if err != nil {
 		return err
 	}
@@ -410,7 +410,7 @@ func (c *client) Lock(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctrls, err := revisionControls(ifMatch)
+	ctrls, err := writeRevisionControls(ctx, ifMatch, "inetOrgPerson")
 	if err != nil {
 		return err
 	}

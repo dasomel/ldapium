@@ -109,6 +109,24 @@ T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 s
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
 
 
+## T-014 subject/header prerequisite (partial stage)
+
+Core route middleware now refuses a verified machine principal without Idempotency-Key (428 `idempotency_key_required`), while human header-less requests retain their existing path. Machine record ownership uses `machine:` + issuer byte length + `:` + issuer + client ID, never the shared bind DN or token subject hash. Missing issuer/client fails closed. Tests exercise tuple collision, token renewal, client/client and human/machine store separation, and a client filling its quota without exhausting another client's quota. Existing human middleware tests remain unchanged. Error table/golden/OpenAPI enum and API/LLM documentation are synchronized.
+
+`go test -race ./internal/httpapi -count=1` passed. The machine write-operation table stays empty. Startup client quota capacity validation and authorization-before-replay integration remain T-014 opening gates; this stage does not mark T-014 complete. No LDAP-wire behavior is claimed by in-memory subject/store tests.
+
+## T-018 atomic target-type constraint (partial)
+
+`WithMachineWriteConstraints` marks the future machine execution context. User Modify/Delete controls add `objectClass=inetOrgPerson`, group Modify/Delete controls add `objectClass=groupOfNames`, ANDed with the mandatory entryCSN. Human contexts preserve the old revision/unconditional controls. The marker is not connected to HTTP until T-013. This is not full T-018: protected-entry UUID comparison and read-identity member checks remain required.
+
+Actual Go LDAP-wire test runs inside a fresh `ldapium:revocation-review` container, bound as `cn=writer` (not root). Wrong-type group→DeleteUser and user→DeleteGroup both return ErrRevisionConflict (LDAP122); correct PatchUser and AddMember succeed; missing machine revision is refused. Administrator readback confirms both wrong-type targets survive, correct mail/member values exist, forbidden mail absent. Credential scan passes. The fixture grants the writer broad non-secret writes deliberately to isolate the type control; it does not validate final least-privilege ACLs.
+
+- `LDAPIUM_IMAGE=ldapium:revocation-review python3 scripts/test/test-machine-write-type-live.py`: PASS, actual Go live test 0.02s plus post-write readback.
+- Mutation removing the class conjunct: live test fails `group through user deletion: <nil>` (the wrongly typed entry was deleted). Restored binary/source and final live rerun PASS.
+- `go test -race ./internal/ldapclient ./internal/httpapi -count=1`: PASS (4.987s / 12.687s).
+- `make check`: exit0, formatting/vet/build/test/chart/license/vulnerability checks passed (0 reachable vulnerabilities). Initial failure was missing frontend oxlint; `npm ci` installed pinned dependencies and the complete rerun passed.
+- Initial test binary had Darwin format; rebuilding with GOOS=linux corrected the container exec format failure. CI explicitly cross-builds Linux and runs the live path; no path filter added.
+
 ## T-018 read-identity / server identity proof (partial)
 
 `WriteIdentityReader` uses M to base-read requested targets and each configured protected identity on one fresh connection/node. It requires server `entryDN`, validated `entryUUID`, and the required inetOrgPerson/groupOfNames class; compares UUIDs with protected identities; re-resolves protected entries for each check rather than trusting a stale cache. The constructor derives M/root/backup/profile/service protection and accepts all enabled writer identities from the trusted caller. Missing protected identities fail closed. Canonical naming types/ASCII/unambiguous values are checked before LDAP. Root DNs outside BaseDN cannot be reached by a strict target and are not queried. The image's optional fixed admin/replicator DNs are lexically denied even when no such entry exists.
