@@ -109,6 +109,19 @@ T-002 live memberOf evidence: `LDAPIUM_IMAGE=ldapium:revocation-review python3 s
 Separate live refint evidence: the fixture then grants the writer deletion of the one baseline user (entry + parent children), while all other user attributes stay read-only. Direct removal of a second user’s manager reference returns rc50. Deleting the referenced baseline user succeeds, and an administrator read confirms refint removed manager from the second user. Final full script exits 0 with credential-log scan clean. This observes configured refint behavior and does not claim the future machine write ACL is validated.
 
 
+## T-012/T-018/T-019 pre-connect DN policy scaffold
+
+This unit has no request-path connection and does not complete the LDAP identity/type acceptance gates. `dnStrictlyWithinBase` refuses the boundary itself. `machineWritePolicy` separates creation-parent inclusion from target/member strict descendants, refuses protected identities and descendants, and requires exact group allowlist membership even inside allowed subtrees. The existing inclusive read guard is unchanged.
+
+D26 canonical `uid/cn/ou/dc` naming types and reproducible ASCII values deliberately reject LDAP schema aliases/OIDs, BER hex values, repeated/edge whitespace and unsupported naming types. Positive tests retain case-insensitive spelling, escaped ASCII and multivalued RDN support. Invalid protected policy fails closed.
+
+`go test -race ./internal/httpapi -count=1`: PASS (13.187s). Initial BER test failed because go-ldap decodes the hex value into a normal string; rejecting BER notation before parsing made it pass. Live server identity/entryUUID comparison, closed attribute whitelist, bind selection and configuration wiring remain pending. No T-012/T-018/T-019 completion boxes are checked by this scaffold.
+
+
+T-012 closed-body field guard added to this scaffold: data-only create accepts only uid/cn/sn/givenName/mail/department/organization/organizationalUnit, patch adds dn and excludes uid/password, membership accepts only groupDn/memberDn, user delete accepts no body. Unknown operations deny. Duplicate/case-colliding keys, operational LDAP attributes, objectClass, password (even empty), userPassword, memberOf and privilege fields are refused; human handlers remain unchanged. DTO value validation still belongs to the existing handlers. This helper remains unwired until T-013.
+
+Full httpapi race passed (12.734s; final restored rerun also passed). Two mutations were detected: replacing strict descendant with inclusive ancestry admits the boundary (two failed assertions), and adding password to create's allowlist admits the empty secret field and sentinel password (two failed assertions). Both restored. Logs `/tmp/ldapium-write-boundary-mutation.log`, `/tmp/ldapium-write-password-mutation.log`.
+
 ## T-017 machine If-Match prerequisite
 
 `machineIfMatch` is intentionally not wired until T-013. The write-operation table stays empty.
