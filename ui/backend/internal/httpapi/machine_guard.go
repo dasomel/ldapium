@@ -46,7 +46,7 @@ func dnWithinBase(base, dn string) bool {
 // machineDNGuard refuses a DN outside BASE_DN for a machine request, before
 // any directory search is issued. Human sessions are never affected.
 func (s *Server) machineDNGuard(c echo.Context, dn string) error {
-	if !isMachineRequest(c) || dnWithinBase(s.cfg.BaseDN, dn) {
+	if !isMachineRequest(c) || (dnWithinBase(s.cfg.BaseDN, dn) && !protectedRevocationDN(s.machine.revocationBaseDN, dn, false)) {
 		return nil
 	}
 	auditStateOf(c).setReason(reasonScope)

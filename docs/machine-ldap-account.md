@@ -374,3 +374,36 @@ printf "dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {%s}\nolcAcces
 $EXEC rm -f /tmp/.pw-admin /tmp/.pw-machine /tmp/.pw-machine-new
 rm -f machine.pw machine.new.pw
 ```
+
+## Revocation subtree (staged #286 T-013)
+
+The reserved writer subtree is `ou=revocations,ou=system,<root>`, a single-valued
+`organizationalUnit`. It holds only direct `device` children: `cn=sentinel`
+(`ou: revocations`, one `serialNumber` generation and one `description` with
+entries/digest/ts/ret), `cn=jti-<identifier>` and immutable
+`cn=cutoff-<client>-<nonce>` (each with one `ou` client id). `createTimestamp` is
+server-owned; no expiry or memo attribute is used. Maintenance is performed by
+[`scripts/machine-revocation.sh`](../scripts/machine-revocation.sh), outside the UI.
+The API consumer and request-path restrictions are still pending; writing an
+entry alone has no effect on authentication today.
+
+For `B=<root>`, the existing machine read rule already covers this subtree,
+including search/read of `createTimestamp`, `modifyTimestamp`, `serialNumber`
+and `description`; the leading secret deny still applies. If `B` is narrower,
+insert an additional `M` read rule **after** `to dn.subtree=B` and **before** the
+machine `to * ... none` rule (replace the illustrative DN values):
+
+```ldif
+olcAccess: to dn.subtree="ou=revocations,ou=system,dc=example,dc=org" by dn.exact="uid=machine,ou=system,dc=example,dc=org" read by * break
+```
+
+This is an additional ordered value, not a replacement of the whole ACL. Read
+`olcAccess` first and calculate indices; with #277's replication identity rule
+at `{0}`, the machine secret/read/deny rules occupy `{1}`–`{3}` before insertion
+(§5.1). Inserting this read value shifts the machine deny and all following
+indices by one. Keep the secret deny first among machine rules and keep the
+replication rule at `{0}`. Check both the subtree search and sentinel base read
+as M with the exact attributes/filter the consumer will use; also rerun the
+secret-read and direct-write denial checks. An rc 0 search with no entries does
+not prove the consumer can read the subtree. Retain the original ACL values for
+rollback, and do not grant M write access to revocation entries.

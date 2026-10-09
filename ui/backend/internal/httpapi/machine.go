@@ -58,13 +58,14 @@ const reservationMargin = time.Second
 
 // machineAuth is the runtime of the bearer path.
 type machineAuth struct {
-	verifier   *machineauth.Verifier
-	keys       *machineauth.KeySet
-	ceilings   map[string]map[string]bool
-	baseDN     string
-	exec       machineExec
-	cancel     context.CancelFunc
-	revocation *machineRevocation
+	verifier         *machineauth.Verifier
+	keys             *machineauth.KeySet
+	ceilings         map[string]map[string]bool
+	baseDN           string
+	revocationBaseDN string
+	exec             machineExec
+	cancel           context.CancelFunc
+	revocation       *machineRevocation
 
 	// authTimeout bounds the authentication phase (D31).
 	authTimeout time.Duration
@@ -157,6 +158,7 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 				SAPrefix:      m.SAUsernamePrefix,
 				MaxTTL:        m.MaxTTL,
 				Skew:          m.ClockSkew,
+				RequireJTI:    m.Revocation.Enabled,
 			},
 			Algs: algs,
 			Keys: keys,
@@ -177,6 +179,7 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 	}
 	go keys.Run(ctx)
 	if m.Revocation.Enabled {
+		ma.revocationBaseDN = m.Revocation.BaseDN
 		reader := ldapclient.NewRevocationReader(cfg, now)
 		ma.revocation = &machineRevocation{read: reader.Read, now: now, refresh: m.Revocation.Refresh}
 		go ma.revocation.run(ctx)
@@ -335,6 +338,21 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	}
 	// From here on the identity is verified, so it is what the audit line names.
 	st.setActor(p)
+	// D8: check only authenticated principals, before reserving client capacity.
+	// An unavailable snapshot fails closed; disabling revocation removes this hook.
+	if m.revocation != nil {
+		switch m.revocation.check(p.ClientID, p.IssuedAt, p.JTI) {
+		case machineauth.DecisionRevoked:
+			st.forceReason(reasonRevoked)
+			tk.fail()
+			c.Response().Header().Set(echo.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
+			return apiErr(http.StatusUnauthorized, codeTokenInvalid, "invalid bearer token")
+		case machineauth.DecisionUnavailable:
+			st.forceReason(reasonRevocationUnavailable)
+			c.Response().Header().Set(echo.HeaderRetryAfter, "1")
+			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication unavailable")
+		}
+	}
 	// Step (5): only now, with a verified client, is its budget touched.
 	releaseClient, retry, ok := m.budget.acquire(p.ClientID)
 	if !ok {
@@ -365,7 +383,7 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 	// LDAP connection either. The handlers repeat the check (machineDNGuard) so
 	// the boundary also holds for a route reached any other way.
 	if op.ID == "getEntry" || op.ID == "listTree" {
-		if dn := c.QueryParam("dn"); dn != "" && validate.DN(dn) == nil && !dnWithinBase(m.baseDN, dn) {
+		if dn := c.QueryParam("dn"); dn != "" && validate.DN(dn) == nil && (!dnWithinBase(m.baseDN, dn) || protectedRevocationDN(m.revocationBaseDN, dn, false)) {
 			st.setReason(reasonScope)
 			return apiErr(http.StatusForbidden, codeScopeDenied, msgDNOutsideBase)
 		}
