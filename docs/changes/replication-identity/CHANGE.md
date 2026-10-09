@@ -406,3 +406,14 @@ This verifies the existing implementation and fixes its test harness. It does
 not implement rotate/reconcile/rollback-admin operator commands, total-loss
 restore, periodic/cross-node checks, Kubernetes/Helm acceptance or D43 relaxation.
 Issue #229 remains open.
+
+### D59 implementation clarification: diagnostic observation versus strict gate
+
+The default five-pass instability outcome remains WARN/exit 0. Selected-node
+comparison accepts repeated `--peer` pinned-node URLs and runs node-local identity
+visibility plus anchor/root comparisons. The opt-in `--require-converged` gate
+returns 1 when comparisons remain unstable after five passes; permanently lagged
+peers cannot count as a successful gate. Cost: sustained legitimate writes may
+also fail that strict gate; retry in a quiet interval. This is an additive
+read-only operator predicate, not package recovery/rotation acceptance. Membership
+is operator-supplied and local/slapdn/canary/complete acceptance remains pending.

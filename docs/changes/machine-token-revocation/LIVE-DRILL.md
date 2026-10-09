@@ -46,3 +46,12 @@ Mutation: a separately built UI image with only the post-verification revocation
 removed failed this same drill at its first valid-JWT/missing-sentinel check: timed out
 waiting for both replicas to return 503. `/tmp/ldapium-live-revocation-mutation.log`.
 The production implementation was untouched by the mutation.
+
+ACL denial is injected and restored with offline `slapmodify` on the disposable
+LDAP volume. CI run 37929754840 stalled in a live `olcAccess` replacement with
+active snapshot readers; the fixture now bounds the stop/configuration commands
+and avoids that concurrent configuration path. Both UI container IDs remain
+unchanged. A real machine-identity search must return LDAP success and zero
+entries under the denial before the HTTP fail-closed assertion; this is not an
+outage-only substitute. This fixture does not prove concurrent runtime ACL
+reconfiguration reliability.

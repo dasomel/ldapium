@@ -105,6 +105,9 @@ func (s *Server) idempotent(next echo.HandlerFunc, password bool) echo.HandlerFu
 		req := c.Request()
 		values := req.Header.Values(headerIdempotencyKey)
 		if len(values) == 0 {
+			if isMachineRequest(c) {
+				return apiErr(http.StatusPreconditionRequired, codeIdempotencyKeyRequired, "Idempotency-Key is required for machine writes")
+			}
 			return next(c)
 		}
 		key, err := idempotency.ParseKey(values)
@@ -136,7 +139,11 @@ func (s *Server) idempotent(next echo.HandlerFunc, password bool) echo.HandlerFu
 
 		query := req.URL.Query().Encode() // sorted by key
 		sess := currentSession(c)
-		d := s.idem.Begin(sess.DN, key, []byte(req.Method), []byte(c.Path()+"?"+query), canon)
+		subject, err := machineIdempotencySubject(c, s.cfg.Machine.IssuerURL, sess.DN)
+		if err != nil {
+			return err
+		}
+		d := s.idem.Begin(subject, key, []byte(req.Method), []byte(c.Path()+"?"+query), canon)
 		switch d.Kind {
 		case idempotency.KindReplay:
 			return replayIdempotent(c, d.Result)

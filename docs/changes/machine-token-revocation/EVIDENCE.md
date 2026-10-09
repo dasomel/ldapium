@@ -340,6 +340,16 @@ Validation: `make check` exited 0 (frontend lint/build, backend formatting/vet i
 
 Mutation evidence: discarding the previous snapshot on refresh failure is detected by `TestRevocationRefreshRetainsSnapshotAndExpires`; disabling credential backoff is detected by `TestRevocationCredentialBackoffAndRegression`. Both produced actual test assertions (`--- FAIL`), not build failures; source restored afterward. Logs: `/tmp/ldapium-source-mutation-{discard-old,no-backoff}.log`.
 
+### T-014 additional actual LDAP wire evidence
+
+D63: the fixture uses actual slapd peers and transparent TCP forwarding; no LDAP replies are fabricated. Each refresh connection selects one peer and remains pinned. A separate client bridge and byte-only relay preserve access when the peer replication bridge is physically disconnected, including on Colima. Cost: two disposable relay containers; remove the relay when client bridge publication is consistent across Docker platforms.
+
+The live Go tests exercise an intervening sentinel write (one connection, six searches), retain the original freshness timestamp, reject three rows under a two-row cap, and reject a decoded response above 1 MiB with 1000 bounded rows below the 2500-row cap. The replica test physically disconnects the replication network, alternates healthy/lagged/healthy connections, refuses generation regression, waits for real sentinel aging beyond 30 seconds, reconnects, and observes catch-up. The API credentials workflow runs these tests against its freshly built image and repository revocation tool.
+
+These checks cover source behavior; HTTP authorization and two UI replicas require the separate Keycloak drill. The decoded byte limit does not establish a pre-decoding transport allocation limit for a malicious oversized BER packet. Full issue acceptance remains tied to the remaining review evidence.
+
+Observed local command: `LDAPIUM_IMAGE=ldapium:revocation-review LDAPIUM_REVOCATION_TOOL=/tmp/ldapium-revocation-tool/scripts/machine-revocation.sh go test -tags live ./internal/ldapclient -run '^TestRevocationReaderLive(TornRetry|WireBounds|ReplicaPartition)$' -count=1 -v`: PASS, package 68.191s (torn 1.82s, bounds 6.87s, partition 59.20s). Evidence: `/tmp/ldapium-source-live-bounds-final.log`; `go vet -tags live ./internal/ldapclient` passed. An earlier partition attempt using direct published server ports failed on Colima after bridge removal; the transparent client relay resolved that platform routing limitation, and the final run above includes physical peer-network disconnection.
+
 ## 12. HTTP enforcement and protected subtree (T-015 implementation)
 
 Plan: connect the immutable snapshot immediately after successful JWT verification, require JTI only when enabled, refuse protected machine reads before execution, and guard every API mutation target/creation parent including DN-valued membership. The LDAP refresh protocol, schema, write credentials, and chart remain separate units.

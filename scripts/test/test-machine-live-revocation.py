@@ -9,6 +9,7 @@ import datetime
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -123,11 +124,32 @@ def main():
   dbdn = next(line[4:] for line in db.splitlines() if line.startswith('dn: '))
   old = ldap.config_tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', dbdn, '-s', 'base', 'olcAccess']).stdout
   acl = [line[len('olcAccess: '):] for line in old.splitlines() if line.startswith('olcAccess: ')]
-  rule = f'{{0}}to dn.subtree="{BASE}" by dn.exact="{MACHINE_DN}" none by * break'
-  ensure(ldap.config_tool('ldapmodify', [], f'dn: {dbdn}\nchangetype: modify\nadd: olcAccess\nolcAccess: {rule}\n').returncode == 0)
+  def install_acl(values):
+    # D4: a live olcAccess replacement stalled slapd in CI run 37929754840.
+    # Inject the fault offline, then prove the real ACL response. Cost: LDAP
+    # restarts (UI IDs stay fixed); escape hatch: a separate runtime ACL drill.
+    ensure(live.run(['docker', 'stop', '-t', '1', ldap.name], timeout=15).returncode == 0)
+    ldif = f'dn: {dbdn}\nchangetype: modify\nreplace: olcAccess\n' + ''.join(
+      f'olcAccess: {{{index}}}' + re.sub(r'^\{[0-9]+\}', '', value) + '\n'
+      for index, value in enumerate(values))
+    result = live.run(['docker', 'run', '--rm', '-i', '--volumes-from', ldap.name,
+                       '--entrypoint', 'slapmodify', live.ldap_image,
+                       '-F', '/etc/openldap/slapd.d', '-n', '0'], input=ldif, timeout=30)
+    ensure(result.returncode == 0, 'offline ACL fixture failed')
+    ensure(live.run(['docker', 'start', ldap.name], timeout=15).returncode == 0)
+    live.wait_until(lambda: ldap.admin_tool('ldapsearch', ['-b', BASE_DN, '-s', 'base']).returncode == 0,
+                    'ACL fixture LDAP restart', 30)
+
+  # Entry search permits traversal; withheld filter/data attributes make a
+  # successful search return zero entries, distinct from a transport outage.
+  install_acl([f'to dn.subtree="{BASE}" attrs=entry by dn.exact="{MACHINE_DN}" search by * break',
+               f'to dn.subtree="{BASE}" by dn.exact="{MACHINE_DN}" none by * break', *acl])
+  hidden = ldap.tool('ldapsearch', ['-LLL', '-b', BASE, '(objectClass=*)', 'cn'],
+                     MACHINE_DN, '/tmp/.pw-machine')
+  ensure(hidden.returncode == 0 and not any(line.startswith(('dn:', 'dn::')) for line in hidden.stdout.splitlines()),
+         'ACL fixture must return LDAP success with zero entries')
   status(newer, 503)
-  restore = f'dn: {dbdn}\nchangetype: modify\nreplace: olcAccess\n' + ''.join('olcAccess: ' + a + '\n' for a in acl)
-  ensure(ldap.config_tool('ldapmodify', [], restore).returncode == 0)
+  install_acl(acl)
   tool('heartbeat')
   status(newer, 200)
   live.check(True, 'ACL-hidden revocation snapshot refuses authenticated callers and recovers')
