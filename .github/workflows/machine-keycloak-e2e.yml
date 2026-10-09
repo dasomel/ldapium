@@ -83,6 +83,9 @@ jobs:
       - name: Live LDAP revocation (unchanged replicas, sentinel freshness, fail-closed recovery)
         run: python3 scripts/test/test-machine-live-revocation.py
 
+      - name: HTTP revocation under actual LDAP peer partition
+        run: python3 scripts/test/test-machine-http-partition.py
+
       - name: Existing machine contracts with enabled empty revocation snapshots
         run: |
           set -eu
@@ -105,7 +108,7 @@ jobs:
               *) fmt='{{.Name}}' ;;
             esac
             # shellcheck disable=SC2086
-            out=$(docker $kind --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --filter name=ldapium-mlr- --format "$fmt")
+            out=$(docker $kind --filter name=ldapium-mk- --filter name=ldapium-mks- --filter name=ldapium-mj- --filter name=ldapium-md- --filter name=ldapium-mlr- --filter name=ldapium-mhp- --format "$fmt")
             if [ -n "$out" ]; then
               echo "::error::leftover docker objects ($kind):"
               echo "$out"
