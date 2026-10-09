@@ -300,3 +300,20 @@ instead of guessed; use the full slapdn operator inspection for those deployment
 It checks configured credentials, not credentials retained by already-connected
 consumer sessions, and does not prove that each configured peer is reachable or
 replicates. The remaining cross-node, canary and restore checks still apply.
+
+Add one `--peer ldaps://PINNED-NODE:636` per additional node to compare each
+identity/root view and each selected root snapshot against the `--uri` anchor.
+Every URI must resolve to one stable node, such as a StatefulSet Pod DNS name;
+load-balanced service URLs cannot prove this sampling contract. Configuration
+predicates/fingerprints are checked on each selected node when their flags are
+supplied. The supplied credential files must bind on every selected node; shared
+administrator credential restriction D43 still applies.
+
+The default remains diagnostic WARN/exit 0 when CSNs keep changing for five
+passes. Use `--require-converged` for an explicit operator gate: persistent CSN
+mismatch/lag after five passes returns 1. This can also fail a healthy cluster
+under sustained writes; retry in a quiet interval. A WARN is never proof that a
+restore or rotation gate passed. The tool covers only selected nodes/attributes
+and does not discover omitted members, issue a canary, or prove live session
+credentials. `--configuration-only` cannot be combined with the data-convergence
+flag because configuration predicates do not establish replication convergence.

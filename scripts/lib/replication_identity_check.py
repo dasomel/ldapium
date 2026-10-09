@@ -3,6 +3,7 @@ import argparse
 import base64
 import subprocess
 import sys
+from types import SimpleNamespace
 from replication_uri import valid_uri
 
 ATTRS = ('userpassword', 'objectclass', 'uid', 'cn', 'sn', 'mail')
@@ -99,6 +100,8 @@ def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--uri', required=True)
   parser.add_argument('--base', required=True)
+  parser.add_argument('--peer', action='append', default=[])
+  parser.add_argument('--require-converged', action='store_true')
   parser.add_argument('--admin-dn')
   parser.add_argument('--admin-password-file', required=True)
   parser.add_argument('--identity-password-file')
@@ -109,12 +112,15 @@ def main():
   parser.add_argument('--container')
   parser.add_argument('--attributes', nargs='+', default=list(ATTRS))
   args = parser.parse_args()
-  if not valid_uri(args.uri):
-    parser.error('one pinned verified LDAPS URI required; lists/options refused')
+  targets = list(dict.fromkeys([args.uri, *args.peer]))
+  if any(not valid_uri(target) for target in targets):
+    parser.error('one pinned verified LDAPS URI is required per target; lists and URI options are refused')
   args.attributes = [key.lower() for key in args.attributes]
   if any(key in ('*', '+', 'contextcsn', 'entrycsn') or not key.isalnum()
          for key in args.attributes):
     parser.error('attributes must be an explicit data-attribute list')
+  if args.configuration_only and args.require_converged:
+    parser.error('configuration-only cannot establish data convergence')
   args.admin_dn = args.admin_dn or 'cn=admin,' + args.base
   if not args.configuration_only and not args.identity_password_file:
     parser.error('--identity-password-file required for data visibility')
@@ -124,48 +130,70 @@ def main():
     parser.error('--dedicated requires config and current identity password files')
   try:
     if args.config_password_file:
-      from replication_identity_config import FIELDS, configuration
-      from types import SimpleNamespace
-      cfg_args = SimpleNamespace(**vars(args))
-      cfg_args.base = 'cn=config'
-      cfg_args.attributes = FIELDS
-      config_rows = search(cfg_args, 'cn=admin,cn=config', args.config_password_file)
-      password = None
-      if args.dedicated:
-        password = read_password_file(args, args.identity_password_file)
-        if password == read_password_file(args, args.admin_password_file):
-          print('FAIL: replication credential equals administrator credential', file=sys.stderr)
+      for target in targets:
+        node_args = SimpleNamespace(**vars(args))
+        node_args.uri = target
+        from replication_identity_config import FIELDS, configuration
+        cfg_args = SimpleNamespace(**vars(node_args))
+        cfg_args.base = 'cn=config'
+        cfg_args.attributes = FIELDS
+        config_rows = search(cfg_args, 'cn=admin,cn=config', args.config_password_file)
+        password = None
+        if args.dedicated:
+          password = read_password_file(node_args, args.identity_password_file)
+          if password == read_password_file(node_args, args.admin_password_file):
+            print('FAIL: replication credential equals administrator credential', file=sys.stderr)
+            return 1
+        try:
+          consumers = configuration(config_rows, args.base, args.dedicated, password)
+        except ValueError:
+          print('FAIL: identity configuration predicates did not pass', file=sys.stderr)
           return 1
-      try:
-        consumers = configuration(config_rows, args.base, args.dedicated, password)
-      except ValueError:
-        print('FAIL: identity configuration predicates did not pass', file=sys.stderr)
-        return 1
-      data_args = SimpleNamespace(**vars(args))
-      data_args.attributes = ['authzTo', 'authzFrom']
-      delegation = search(data_args, args.admin_dn, args.admin_password_file)
-      if not delegation:
-        raise ValueError('root view empty')
-      if any(item.get('authzto') or item.get('authzfrom') for item in delegation.values()):
-        print('FAIL: delegated data authorization is present', file=sys.stderr)
-        return 1
-      print('PASS: configuration predicates and %d consumer credential fingerprints' % consumers)
-      if args.configuration_only:
-        return 0
+        data_args = SimpleNamespace(**vars(node_args))
+        data_args.attributes = ['authzTo', 'authzFrom']
+        delegation = search(data_args, args.admin_dn, args.admin_password_file)
+        if not delegation:
+          raise ValueError('root view empty')
+        if any(item.get('authzto') or item.get('authzfrom') for item in delegation.values()):
+          print('FAIL: delegated data authorization is present', file=sys.stderr)
+          return 1
+        print('PASS: configuration predicates and %d consumer credential fingerprints' % consumers)
+    if args.configuration_only:
+      return 0
     for attempt in range(5):
-      first = search(args, args.admin_dn, args.admin_password_file)
-      if not first:
+      anchor_first = search(args, args.admin_dn, args.admin_password_file)
+      if not anchor_first:
         raise ValueError('empty root view cannot establish evidence')
-      visible = search(args, 'cn=replicator,' + args.base, args.identity_password_file)
-      second = search(args, args.admin_dn, args.admin_password_file)
-      failed, pending = compare(first, visible, second, args.attributes)
+      failed, pending, node_first_views = 0, 0, []
+      for target in targets:
+        node_args = SimpleNamespace(**vars(args))
+        node_args.uri = target
+        first = search(node_args, args.admin_dn, args.admin_password_file)
+        if not first:
+          raise ValueError('empty peer root view cannot establish evidence')
+        visible = search(node_args, 'cn=replicator,' + args.base, args.identity_password_file)
+        second = search(node_args, args.admin_dn, args.admin_password_file)
+        bad, deferred = compare(first, visible, second, args.attributes)
+        failed += bad
+        pending += deferred
+        node_first_views.append(first)
+      anchor_second = search(args, args.admin_dn, args.admin_password_file)
+      for view in node_first_views:
+        bad, deferred = compare(anchor_first, view, anchor_second, args.attributes)
+        failed += bad
+        pending += deferred
       if failed:
-        print('FAIL: %d stable entries differ' % failed, file=sys.stderr)
+        print('FAIL: %d stable entry comparisons differ' % failed, file=sys.stderr)
         return 1
       if not pending:
-        print('PASS: %d stable entries checked' % len(first))
+        print('PASS: %d stable entries compared across %d selected nodes' % (len(anchor_first), len(targets)))
         return 0
-    print('WARN: %d entries remained unstable after 5 reads' % pending)
+    # D59: strict gates may fail during sustained healthy writes; retry after a
+    # quiet interval. Default WARN is diagnostic, never restore/rotation acceptance.
+    if args.require_converged:
+      print('FAIL: %d comparisons did not converge in 5 passes' % pending, file=sys.stderr)
+      return 1
+    print('WARN: %d comparisons remained unstable after 5 passes' % pending)
     return 0
   except (ValueError, OSError, subprocess.TimeoutExpired):
     print('ERROR: directory check could not establish evidence', file=sys.stderr)
