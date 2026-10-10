@@ -36,6 +36,9 @@ type machineDeps struct {
 	// authTimeout replaces machineAuthTimeout (tests prove the fail-closed path
 	// without waiting ten real seconds).
 	authTimeout time.Duration
+	// revocationRead replaces the LDAP snapshot reader, so tests drive the real
+	// constructor path (policy, base DN, refresher goroutine) without a directory.
+	revocationRead revocationRead
 }
 
 type serverOption func(*Server)
@@ -181,7 +184,11 @@ func newMachineAuth(cfg config.Config, d *machineDeps, dialer ldapclient.Dialer)
 	if m.Revocation.Enabled {
 		ma.revocationBaseDN = m.Revocation.BaseDN
 		reader := ldapclient.NewRevocationReader(cfg, now)
-		ma.revocation = &machineRevocation{read: reader.Read, now: now, refresh: m.Revocation.Refresh}
+		read := revocationRead(reader.Read)
+		if d != nil && d.revocationRead != nil {
+			read = d.revocationRead
+		}
+		ma.revocation = &machineRevocation{read: read, now: now, refresh: m.Revocation.Refresh}
 		go ma.revocation.run(ctx)
 	}
 	return ma, nil

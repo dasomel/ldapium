@@ -19,6 +19,13 @@ MAX_STALE = 600
 MIN_RETENTION = MAX_TTL + 3 * MAX_SKEW + MAX_REFRESH + MAX_STALE
 MAX_RETENTION = 86400
 MAX_VALUE_BYTES = 512
+# The replica's MACHINE_REVOCATION_MAX_ENTRIES range is 1-2500 (default 2000). A
+# tool cap above the replica's makes every replica refresh fail (503), so the tool
+# refuses anything above the documented replica maximum.
+MAX_ENTRIES_LIMIT = 2500
+# Config accepts more client ids than this; only these need no DN escaping, so the
+# slapd-returned DN still equals the expected one (D3). Others cannot get a cutoff.
+CLIENT_PATTERN = r'[A-Za-z0-9_.:-]+'
 
 
 class Error(Exception):
@@ -61,6 +68,13 @@ def parse_ldif(data):
     if entry:
       entries.append(entry)
   return entries
+
+
+def check_client(client):
+  if not client.isascii() or not re.fullmatch(CLIENT_PATTERN, client):
+    raise Error('client id must match [A-Za-z0-9_.:-]+ (ASCII, no DN-special characters); '
+                'a cutoff cannot be written for other client ids with this tool')
+  return client
 
 
 def rdn(value):
@@ -193,12 +207,16 @@ def main():
   p.add_argument('--container', help='execute LDAP CLI inside this local container')
   p.add_argument('--kind', choices=['jti', 'cutoff'])
   p.add_argument('--id-file', help='jti identifier file (never a bearer token)')
-  p.add_argument('--client', help='client id metadata; required for add')
+  p.add_argument('--client', help='client id metadata; required for add; only [A-Za-z0-9_.:-]+ is accepted')
   p.add_argument('--cn', help='exact entry cn for remove; sentinel is forbidden')
   p.add_argument('--retention', type=int, default=MIN_RETENTION)
-  p.add_argument('--max-entries', type=int, default=2000)
+  p.add_argument('--max-entries', type=int, default=2000,
+                 help='entry cap, 1-%d (the replica maximum; keep it <= the replicas MACHINE_REVOCATION_MAX_ENTRIES)' % MAX_ENTRIES_LIMIT)
   a = p.parse_args()
-  if not MIN_RETENTION <= a.retention <= MAX_RETENTION or not 1 <= a.max_entries <= 2500:
+  if a.max_entries > MAX_ENTRIES_LIMIT:
+    raise Error('--max-entries %d exceeds the replica maximum %d: replicas would fail every refresh (503)'
+                % (a.max_entries, MAX_ENTRIES_LIMIT))
+  if not MIN_RETENTION <= a.retention <= MAX_RETENTION or a.max_entries < 1:
     raise Error('invalid retention or entry cap')
   if a.command == 'retention':
     print(a.retention)
@@ -221,8 +239,7 @@ def main():
     raise Error('sentinel missing: run init first')
   if a.command == 'add':
     client = single([a.client] if a.client else [])
-    if not client.isascii() or not re.fullmatch(r'[A-Za-z0-9_.:-]+', client):
-      raise Error('client must be an ASCII identifier')
+    check_client(client)
     if a.kind == 'jti':
       if not a.id_file:
         raise Error('jti requires --id-file')

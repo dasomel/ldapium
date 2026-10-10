@@ -81,6 +81,8 @@ type harnessOpt struct {
 	jwksHook func()
 	// authTimeout replaces machineAuthTimeout.
 	authTimeout time.Duration
+	// revocationRead replaces the revocation snapshot reader of the real constructor.
+	revocationRead revocationRead
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -146,6 +148,8 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 		now:     func() time.Time { return hNow },
 
 		authTimeout: opt.authTimeout,
+
+		revocationRead: opt.revocationRead,
 	}
 	if opt.now != nil {
 		deps.now = opt.now
