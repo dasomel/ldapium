@@ -153,6 +153,15 @@ ldapium은 Keycloak이 발급한 access token을 **오프라인으로** 검증�
 
 **보존 기간(단일 공식)**: `ret = MaxTTL + 3×skew + REFRESH + MAX_STALE`. 도출: 폐기 시점 C에 존재하는 토큰은 `iat ≤ C + skew`이고 검증기가 `exp − iat > MaxTTL`을 거부하므로(`claims.go:129`) `exp ≤ C + skew + MaxTTL`, 그 토큰은 `now > exp + skew`(`claims.go:141`)에서 만료로 거부된다 — 즉 `C + MaxTTL + 2×skew` 이후이며, 3번째 `skew`는 sentinel `ts`가 skew만큼 미래일 수 있는 여유, `REFRESH + MAX_STALE`는 replica별 스냅샷이 최악으로 늦은 경우의 여유. **운영자가 쓴 `expires`는 쓰지도 믿지도 않는다**(오타·단위 오류가 조용히 폐기를 풀 수 있음, B2). 도구는 설정 **상한값**(1 h, 60 s, 60 s, 10 m → 3600 + 180 + 60 + 600 = 4440 s)을 `ret` 하한으로 쓴다(운영자는 늘릴 수만 있다). **jti 항목의 정리(삭제)는 도구(heartbeat)만 한다**; replica는 항목을 나이로 건너뛰지 않고 sentinel의 `ts`·`ret`로 정한 서버 필터가 돌려준 항목을 모두 판정에 쓰며 digest로 검증한다. cutoff 항목은 정리하지 않는다.
 
+**보존 기간 상수 표 (단일 출처, T-012가 약속하고 T-013이 추가).** 아래 표가 공식 `ret = MaxTTL + 3×skew + REFRESH + MAX_STALE`의 숫자 정본이다. 코드 `machineauth.Retention`은 Go 테스트 `TestRetentionConstantsTable`이 이 표를 파싱해 공식 결과와 비교하고, 도구(`scripts/lib/machine_revocation.py`의 최소 보존 4440 s)와 운영 문서도 이 숫자를 따른다. 행을 바꾸면 테스트가 어긋남을 알린다. 열은 초 단위이고 `RET-` 행만 파싱된다.
+
+| 행 | MaxTTL | skew | REFRESH | MAX_STALE | ret |
+|---|---|---|---|---|---|
+| `RET-CEILING` (설정 상한값: 도구의 `ret` 하한, 운영자는 늘릴 수만 있음) | 3600 | 60 | 60 | 600 | 4440 |
+| `RET-DEFAULT` (설정 기본값: MaxTTL 10 m, skew 30 s, REFRESH 5 s, MAX_STALE `max(3×REFRESH, REFRESH+5 s)`=15 s) | 600 | 30 | 5 | 15 | 710 |
+
+도구는 기본으로 `RET-CEILING`(4440 s)을 쓴다. replica는 자기 설정으로 계산한 `ret`보다 짧은 sentinel을 거부하므로(REQ-013 (v)) 상한값은 어떤 설정에서도 안전하다.
+
 ### 위협 모델 (이 패키지가 다루는 부분)
 
 | 위협 | 시나리오 | 통제 | 잔여 위험 |
