@@ -797,6 +797,43 @@ ui:
     #    terminationGracePeriodSeconds is raised to cover it (max(30, value+15)).
     requestTimeoutSeconds: 10
 
+    # -- Machine WRITE scope (machine-write-scope, #285). OFF by default; off
+    #    renders nothing. On requires ui.machineAuth.enabled, ui.idempotency.enabled
+    #    and exactly ONE UI replica (ui.replicaCount=1: the idempotency store is
+    #    process memory; persistent store is a separate change), otherwise the
+    #    render fails. Bind passwords are Secret references only; each identity
+    #    must differ from the read identity (ldapBindDN) and from each other.
+    #    There is no credential (W_cred) identity: unknown keys are refused.
+    #    Setting this opens no operation by itself.
+    write:
+      enabled: false
+      # -- W_data: users/groups general attributes and membership.
+      data:
+        bindDN: ""
+        existingSecret: ""
+        existingSecretKey: machine-ldap-write-data-password
+      # -- W_lock: lock attribute only. Optional, separately enabled.
+      lock:
+        enabled: false
+        bindDN: ""
+        existingSecret: ""
+        existingSecretKey: machine-ldap-write-lock-password
+      # -- Per-client write subtree ceilings (strict descendants of ldap.rootDN),
+      #    required non-empty when write is on. Each client must be in allowedClients.
+      #      - client: svc-provisioning
+      #        dns: ["ou=people,dc=example,dc=org"]
+      subtrees: []
+      # -- Per-client writable group DNs (inside that client's subtree), required
+      #    non-empty when write is on; each client needs a subtrees entry.
+      groups: []
+      # -- Groups machines may never modify, required non-empty when write is on.
+      privilegedGroups: []
+      # -- Write budget, separate from the read budget (per UI pod).
+      limits:
+        rps: 1
+        burst: 2
+        globalSlots: 2
+
   # Keycloak OIDC SSO. Disabled preserves the LDAP bind login flow exactly.
   # Enabling SSO makes the UI SSO-only: LDAP passwords are never accepted by
   # the UI login endpoint. This chart configures a confidential OIDC client;
