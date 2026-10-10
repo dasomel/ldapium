@@ -41,6 +41,11 @@ type MachineWriteConfig struct {
 	Groups           []MachineWriteClientDNs
 	PrivilegedGroups []string
 	Limits           MachineWriteLimits
+	// AuditPlainTargetDN is MACHINE_WRITE_AUDIT_TARGET_DN (Resolved Q4, D6): the
+	// write audit line carries the target DN in plaintext next to its
+	// fingerprint. Default false (fingerprint only); read only when
+	// MACHINE_WRITE_ENABLED is on.
+	AuditPlainTargetDN bool
 }
 
 func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m MachineConfig) (MachineWriteConfig, error) {
@@ -53,6 +58,9 @@ func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m Machin
 	}
 	var err error
 	if w.Data, err = machineWriteIdentity(getenv, "MACHINE_WRITE_DATA", cfg, m); err != nil {
+		return w, err
+	}
+	if w.AuditPlainTargetDN, err = boolEnv(getenv, "MACHINE_WRITE_AUDIT_TARGET_DN", false); err != nil {
 		return w, err
 	}
 	if w.LockEnabled, err = boolEnv(getenv, "MACHINE_WRITE_LOCK_ENABLED", false); err != nil {
