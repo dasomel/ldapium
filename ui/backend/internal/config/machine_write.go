@@ -34,6 +34,13 @@ type MachineWriteConfig struct {
 	Data        MachineWriteIdentity
 	LockEnabled bool
 	Lock        MachineWriteIdentity
+	// Subtrees/Groups are per-client write ceilings and writable groups,
+	// PrivilegedGroups the deny set, Limits the write budget (T-012/T-016/T-019).
+	// Inert: no operation consumes them yet.
+	Subtrees         []MachineWriteClientDNs
+	Groups           []MachineWriteClientDNs
+	PrivilegedGroups []string
+	Limits           MachineWriteLimits
 }
 
 func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m MachineConfig) (MachineWriteConfig, error) {
