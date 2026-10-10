@@ -212,6 +212,31 @@ def main():
   status(newer, 200)
   live.check(True, 'offline age: heartbeat prunes past-ret JTI without downtime; near-TTL JTI remains revoked after prune')
 
+  # AC-008 / T-017 (h): with entries of different ages and ONLY heartbeats running, no 503 ever appears.
+  # Natural aging past ret (>= 4440s, MIN_RETENTION; the tool accepts no smaller value) cannot be waited
+  # for live, so the aged rows above are the accelerated fixture; the N-pinned-to-ts rule is also unit-tested.
+  def sentinel_row():
+    out = ldap.admin_tool('ldapsearch', ['-LLL', '-b', sentinel, '-s', 'base', 'serialNumber', 'description']).stdout
+    return (int(next(l.split(': ', 1)[1] for l in out.splitlines() if l.startswith('serialNumber: '))),
+            next(l.split(': ', 1)[1] for l in out.splitlines() if l.startswith('description: ')))
+  gen_before, desc_before = sentinel_row()
+  ensure(desc_before.startswith('entries=1;'), 'sentinel must count exactly the retained near-TTL JTI: ' + desc_before)
+  seen = {200: 0, 401: 0}
+  for _ in range(4):
+    tool('heartbeat')
+    for _ in range(4):
+      for api in apis:
+        a = api.machine(newer, '/api/users?limit=1')[0]
+        b = api.machine(original, '/api/users?limit=1')[0]
+        ensure((a, b) == (200, 401), f'outage or wrong verdict while only heartbeats run: newer={a} original={b}')
+        seen[a] += 1
+        seen[b] += 1
+      time.sleep(0.5)
+  gen_after, desc_after = sentinel_row()
+  ensure(gen_after > gen_before, f'heartbeat did not advance the sentinel generation ({gen_before} -> {gen_after})')
+  ensure(desc_after.startswith('entries=1;'), 'sentinel entry count changed unexpectedly: ' + desc_after)
+  live.check(True, f'AC-008: 4 heartbeat-only cycles with aged rows pruned: {seen[200]}x200 / {seen[401]}x401, zero 503, generation {gen_before}->{gen_after}')
+
   # Actual active-entry cap failure, independent of the operator's preventive cap.
   overflow = []
   for n in range(11):
@@ -226,10 +251,29 @@ def main():
   live.check(True, 'active entry overflow fails closed on both replicas and recovers')
 
   # No heartbeat: even successful reads cannot indefinitely refresh an old sentinel.
-  status(newer, 503, 42)
+  # T-017 (h): 200 until SENTINEL_MAX_AGE (30s), then 503 within MAX_STALE (6s) + REFRESH (1s) + poll slack.
+  # ts is truncated to whole seconds, hence the 1s allowance on the lower bound.
+  hb_start = time.monotonic()
   tool('heartbeat')
   status(newer, 200)
-  live.check(True, 'stopped heartbeat reaches sentinel-age plus stale failure and recovers')
+  first_503 = None
+  while first_503 is None:
+    waited = time.monotonic() - hb_start
+    ensure(waited <= 45, 'heartbeat stopped but the machine API is still not 503 after 45s')
+    codes = [api.machine(newer, '/api/users?limit=1')[0] for api in apis]
+    ensure(all(c in (200, 503) for c in codes), f'unexpected statuses while heartbeat is stopped: {codes}')
+    if all(c == 503 for c in codes):
+      first_503 = waited
+    else:
+      ensure(not any(c == 503 for c in codes) or waited >= 29, f'503 before SENTINEL_MAX_AGE elapsed ({waited:.1f}s)')
+      time.sleep(0.5)
+  print(f'OBS heartbeat stopped: both replicas 503 after {first_503:.1f}s (SENTINEL_MAX_AGE 30s + MAX_STALE 6s)', flush=True)
+  ensure(first_503 >= 29, f'503 before SENTINEL_MAX_AGE elapsed ({first_503:.1f}s)')
+  ensure(first_503 <= 30 + 6 + 1 + 6, f'503 later than SENTINEL_MAX_AGE+MAX_STALE+REFRESH+slack ({first_503:.1f}s)')
+  ensure(all(api.machine(newer, '/api/users?limit=1')[0] == 503 for api in apis), '503 must persist while the heartbeat stays stopped')
+  tool('heartbeat')
+  status(newer, 200)
+  live.check(True, 'stopped heartbeat: 200 until SENTINEL_MAX_AGE, 503 (not 200) within MAX_STALE after, recovery when heartbeat resumes')
   other = 'svc-not-allowed'
   other_secret = live.secret('client-' + os.urandom(18).hex())
   kc.create_client(realm, other, other_secret, scopes=READER)

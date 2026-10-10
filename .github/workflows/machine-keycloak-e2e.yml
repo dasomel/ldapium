@@ -83,6 +83,9 @@ jobs:
       - name: Live LDAP revocation (unchanged replicas, sentinel freshness, fail-closed recovery)
         run: python3 scripts/test/test-machine-live-revocation.py
 
+      - name: Client cutoff boundary (server createTimestamp, skew)
+        run: python3 scripts/test/test-machine-cutoff-boundary.py
+
       - name: HTTP revocation under actual LDAP peer partition
         run: python3 scripts/test/test-machine-http-partition.py
 
