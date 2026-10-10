@@ -243,6 +243,9 @@ func loadMachine(getenv func(string) string, cfg *Config) error {
 	if m.Write, err = loadMachineWriteIdentities(getenv, *cfg, m); err != nil {
 		return err
 	}
+	if err = loadMachineWriteScope(getenv, *cfg, m, &m.Write); err != nil {
+		return err
+	}
 	cfg.Machine = m
 	return nil
 }
