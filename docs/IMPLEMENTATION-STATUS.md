@@ -129,10 +129,12 @@ Not verified anywhere: installing the chart with machine auth on a cluster, a re
 Optional LDAP machine-token revocation (#286) is implemented **default off**:
 operator sentinel/heartbeat tooling (#323), background LDAP snapshots (#325),
 HTTP enforcement and protected subtree (#336), and chart configuration (#335)
-are merged. Two unchanged UI replicas and real LDAP/Keycloak live drills are
-tracked by #345/#349; enabled empty-snapshot compatibility by #350. These
-implementation stages do not close the package's remaining acceptance or
-alternative-credential/shared-limiter scope. See
+are merged, with live cutoff-boundary, heartbeat-stop and heartbeat-only aging
+drills and wiring regression tests (#356, #357, #359). The independent security
+review found no blocker; the Codex critic round was not run. Alternative
+credentials (#360), shared limiters (#361) and an introspection backstop (#362)
+are separate open issues; non-blocking items are listed under "Known
+follow-ups" in the package's CHANGE.md. See
 [revocation tasks](changes/machine-token-revocation/TASKS.md),
 [ADR](changes/machine-token-revocation/ADR.md), and
 [operations](machine-auth-operations.md) for evidence and rollback consequences.

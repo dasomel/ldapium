@@ -34,7 +34,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   feature removes these revocations; use the allowlist rollout backstop when
   rolling back. See [operations](docs/machine-auth-operations.md) and the
   [change package](docs/changes/machine-token-revocation/CHANGE.md) for limits,
-  migration, evidence and outstanding acceptance checks.
+  migration, evidence and known follow-ups. Live drills (cutoff boundary,
+  heartbeat stop, heartbeat-only aging) run in `machine-keycloak-e2e.yml`.
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a

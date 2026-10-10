@@ -355,3 +355,89 @@ Observed local command: `LDAPIUM_IMAGE=ldapium:revocation-review LDAPIUM_REVOCAT
 Plan: connect the immutable snapshot immediately after successful JWT verification, require JTI only when enabled, refuse protected machine reads before execution, and guard every API mutation target/creation parent including DN-valued membership. The LDAP refresh protocol, schema, write credentials, and chart remain separate units.
 
 `go test -race ./internal/httpapi -count=1` passed (12.200s), and `make check` passed. HTTP tests cover revoked/initially unavailable/stale/invalid callers, JTI absence, one closed audit reason with no token material, authentication failure accounting, untouched client budget, both tree/entry base and child reads, and administrator mutations including creation parents, password, PATCH, membership values and ancestor moves with zero bound-client calls. Pure DN tests include commonName/organizationalUnitName/domainComponent and numeric OID aliases. Disabled-path existing HTTP regressions pass. Further enabled-path live bearer/LDAP drill and independent security review are pending. No complete task acceptance is claimed.
+
+## 13. T-017 live drills and mutation proof (2026-10-11)
+
+Drills landed in PR #359 (merged 2026-10-10, CI green on all checks): `scripts/test/test-machine-cutoff-boundary.py` is wired into `machine-keycloak-e2e.yml`, and `scripts/test/test-machine-live-revocation.py` is extended with the heartbeat-stop and AC-008 checks. The record below was taken on local images built from the lane worktree before the PR.
+
+### 13.1 Drills run (images `ldapium:l286a2`, `ldapium-ui:l286a2` built from this worktree)
+
+- `scripts/test/test-machine-cutoff-boundary.py` (new, wired into `machine-keycloak-e2e.yml`): T is the
+  server-stamped `createTimestamp` of the cutoff entry, skew 5 s. Tokens are real Keycloak claims re-signed
+  with an imported realm key, differing only in `iat`/`exp`/`jti`. The verdict is read from the audit
+  `reason`, not only from the status. 9 checks in 19 s.
+
+  | iat | status | audit reason |
+  | --- | --- | --- |
+  | T-1, T, T+skew-1 | 401 | revoked |
+  | T+skew | 401 | revoked |
+  | T+skew+1, T+skew+2 | 200 | ok |
+  | other client at T, T+skew | 200 | ok |
+
+- `scripts/test/test-machine-live-revocation.py` (extended): 17 checks in 102 s.
+  - Heartbeat stopped: both replicas stay 200 until SENTINEL_MAX_AGE (30 s) and are both 503 after 35.7 s
+    (30 s + MAX_STALE 6 s); the assertions bound it between 29 s and 43 s. 503 persists, then the next
+    heartbeat restores 200.
+  - AC-008: after the aged JTI rows are pruned, 4 heartbeat-only cycles with 32 requests per token gave
+    32x200 (newer token) and 32x401 (retained near-TTL JTI), zero 503, and sentinel generation 13 -> 17
+    with `entries=1`.
+
+### 13.2 Mutation proof (scratch copy of `ui/`, source restored and diffed identical after each)
+
+| # | Mutation | Unit result | Live drill result |
+| --- | --- | --- | --- |
+| M1 | revocation hook disabled (`machine.go`, `if m.revocation != nil && false`) | `TestMachineRevocationHook` FAIL | cutoff-boundary FAIL (`iat=T-1` not revoked); live-revocation FAIL (no 503 before the sentinel exists) |
+| M2 | digest comparison skipped (`machineauth/revocation.go`) | `TestBuildSnapshot_SwappedEntryDigest` FAIL | both drills PASS: not detected live |
+| M3 | stale snapshot returns OK (`Check` ignores MaxStale) | `TestMachineRevocationHook`, `TestRevocationRefreshRetainsSnapshotAndExpires`, `TestCheck_Staleness`, `TestCheck_StalenessMeasuredFromQueryStart` FAIL | live-revocation FAIL (timed out waiting for 503); cutoff-boundary PASS (does not exercise staleness) |
+| M4 | cutoff off by one (`!iat.After(T+skew)` -> `iat.Before(T+skew)`) | `TestCheck_CutoffBoundary` FAIL | cutoff-boundary FAIL at `iat=T+skew` (not revoked); live-revocation PASS (zero skew, not at boundary) |
+
+M4's first cutoff-boundary run hit a Docker port-programming error at container start (infrastructure, not a
+mutation verdict). It was rerun alone and failed on the assertion above.
+
+### 13.3 Not exercisable live
+
+- M2 (digest) is not caught by the Keycloak drills. The same-count-replacement case is covered by the
+  Go `-tags live` test `TestRevocationReaderLive*` and the unit test above, not by these drills.
+- AC-008 with natural aging cannot be waited for live: the tool refuses `--retention` below 4440 s
+  (`MIN_RETENTION`), and there is no test override. The aged rows are produced by an offline
+  `createTimestamp` fixture (existing), and the N-pinned-to-ts rule is unit-tested
+  (`TestBuildSnapshot_CountPinnedToSentinelTS`).
+
+### 13.4 Wiring mutations (PR #357)
+
+PR #357 (merged 2026-10-10) added `TestMachineRevocationWiringEnabled`, which drives the real `newMachineAuth` path. Three scratch mutations of `machine.go` (source restored after each) now fail it:
+
+| # | Mutation of `machine.go` | Result |
+| --- | --- | --- |
+| W1 | `RequireJTI` off | `TestMachineRevocationWiringEnabled` FAIL |
+| W2 | revocation base DN unset | `TestMachineRevocationWiringEnabled` FAIL |
+| W3 | snapshot refresher not started | `TestMachineRevocationWiringEnabled` FAIL |
+
+The same PR makes the tool refuse `--max-entries` above 2500 and client ids outside `[A-Za-z0-9_.:-]`.
+
+### 13.5 Remaining honest gap
+
+The digest mutation (M2) is caught only by unit and Go `-tags live` reader tests, not by the Keycloak drills. Natural aging cannot be exercised live because the tool minimum retention is 4440 s.
+
+## 14. T-020 independent security review (2026-10-11)
+
+Scope: the enforcement code (hook, protected subtree, refresher, tool). Reviewer: `security-reviewer` agent, read-only, with scratch mutations. **Result: NO BLOCKER.** The Codex critic round was **not run** because Codex was out of quota; this review is a single-vendor round.
+
+Checked and found sound:
+
+- No fail-open or data-exposure path found.
+- 13 protected-DN spellings all resolve to protected.
+- Every administrator write handler calls `revocationWriteGuard`.
+- Machine `getEntry` and `listTree` are guarded twice.
+
+Non-blocking findings:
+
+| Finding | Status |
+| --- | --- |
+| Wiring untested | Fixed by PR #357 (section 13.4) |
+| Tool and replica entry caps mismatched | Fixed by PR #357 |
+| Disabled-feature rollback leaves the subtree readable via machine `getEntry` and writable by administrators | Documented in PR #356 (`docs/machine-auth-operations.md`) |
+| Tool client-id charset narrower than the config accepts | Documented |
+| Refresher backoff after a bind failure grows to 15 minutes, so a 503 outage can outlast the password fix | Open, see CHANGE.md "Known follow-ups" |
+| `audit.read` scope can read revocation writes through accesslog | Open, see "Known follow-ups" |
+| `machineWritePolicy.Protected` must include the revocations DN when #285 wires machine writes | Open, see "Known follow-ups" |

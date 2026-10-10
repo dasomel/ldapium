@@ -1,7 +1,7 @@
 # Tasks: 머신 토큰 즉시 폐기
 
 설계: [CHANGE.md](CHANGE.md) (Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)`) · 결정 기록: [ADR.md](ADR.md) · 증거: [EVIDENCE.md](EVIDENCE.md).
-T-001–T-005의 증거·설계 관문과 T-010–T-012 구현은 완료됐다. 기본 꺼짐 도구(#323), LDAP 소스·갱신(#325), HTTP 훅·보호 경로(#336), Helm 설정(#335)은 병합됐다. T-013–T-016·T-018은 2026-10-11 main 감사에서 코드·테스트·CI 배선 증거로 체크했다. T-017(드릴 공백)·T-020(독립 검토)·T-021·T-022는 미완료이며, 구현 존재만으로 미완료 항목을 체크하지 않는다. 설계 방향과 T-005 Revision 5 보안 관문은 수용됐고 Revision 6은 비차단 항목 반영이다.
+T-001–T-005의 증거·설계 관문과 T-010–T-012 구현은 완료됐다. 기본 꺼짐 도구(#323), LDAP 소스·갱신(#325), HTTP 훅·보호 경로(#336), Helm 설정(#335)은 병합됐다. T-013–T-016·T-018은 2026-10-11 main 감사에서 코드·테스트·CI 배선 증거로 체크했다. T-017(PR #357·#359), T-020(security-reviewer, BLOCKER 없음; Codex critic 미실행), T-021, T-022는 2026-10-11 close-out에서 체크했다. 비차단 후속은 아래 "Known follow-ups"에 있다. 설계 방향과 T-005 Revision 5 보안 관문은 수용됐고 Revision 6은 비차단 항목 반영이다.
 구현은 기본 꺼짐으로 단계 병합한다. LDAP 항목·ACL·`image/` 변경이 생기면 `.agents/skills/ldapium-directory-change/SKILL.md`를 먼저 로드한다.
 경로 접두: `m/` = `ui/backend/internal/machineauth/`, `h/` = `ui/backend/internal/httpapi/`, `c/` = `ui/backend/internal/config/`.
 각 항목의 "검수"는 그 항목의 PR이 통과해야 하는 수용 확인이다. 구현 PR은 Class D로 독립 검토(보안 검토)를 받는다.
@@ -41,14 +41,29 @@ T-001–T-005의 증거·설계 관문과 T-010–T-012 구현은 완료됐다. 
 - [x] `T-016` (REQ-005, D12) Helm: `charts/ldapium` `ui.machineAuth.revocation.*` 값·렌더(기본 꺼짐 렌더는 이전과 바이트 동일), `charts/ldapium/README.md`, `test-chart-machine-auth.sh` 확장.
       검수: 꺼짐 렌더 diff 0, 켠 렌더 필수 값 검증.
       구현·증거(2026-10-11 감사, main `ce1af17`): `charts/ldapium/values.yaml`의 `ui.machineAuth.revocation.*`, `templates/ui-deployment.yaml:36,396-` 렌더, `scripts/test/test-chart-machine-auth.sh:96-100`(꺼짐 렌더에 `MACHINE_REVOCATION_` 없음·켠 렌더·maxStale 검증), `charts/ldapium/README.md`.
-- [ ] `T-017` (REQ-011, AC-001–AC-004, AC-007) 라이브 드릴·CI: 기존 `test-machine-revocation-drill.py`를 확장하거나 새 스크립트로 (a) jti 폐기가 2 replica에서 상한 안에 401·컨테이너 ID 불변, (b) cutoff 경계(서버 `createTimestamp` 기준), (c) slapd 중지 → `MAX_STALE` 후 503, 복구, (d) 형식 오류·상한 초과 항목, (e) 폐기+allowlist 조합, (f) `createTimestamp+MaxTTL+3×skew` 경계 근처 jti 항목이 조기 정리되지 않음, (g) rc 0·0항목(ACL 좁힘)과 분리된 노드가 fail closed, sentinel 세대 역행 거부, **(h) 항목이 `ret`를 넘겨 나이를 먹어도 heartbeat만으로 정지 없음(AC-008), heartbeat 정지 시 `SENTINEL_MAX_AGE`+`MAX_STALE` 뒤 503**. CI job `machine bearer auth (real Keycloak)`에 편입(job 이름·path 필터 불변). 전 컨테이너 로그 secret scan.
+- [x] `T-017` (REQ-011, AC-001–AC-004, AC-007) 라이브 드릴·CI: 기존 `test-machine-revocation-drill.py`를 확장하거나 새 스크립트로 (a) jti 폐기가 2 replica에서 상한 안에 401·컨테이너 ID 불변, (b) cutoff 경계(서버 `createTimestamp` 기준), (c) slapd 중지 → `MAX_STALE` 후 503, 복구, (d) 형식 오류·상한 초과 항목, (e) 폐기+allowlist 조합, (f) `createTimestamp+MaxTTL+3×skew` 경계 근처 jti 항목이 조기 정리되지 않음, (g) rc 0·0항목(ACL 좁힘)과 분리된 노드가 fail closed, sentinel 세대 역행 거부, **(h) 항목이 `ret`를 넘겨 나이를 먹어도 heartbeat만으로 정지 없음(AC-008), heartbeat 정지 시 `SENTINEL_MAX_AGE`+`MAX_STALE` 뒤 503**. CI job `machine bearer auth (real Keycloak)`에 편입(job 이름·path 필터 불변). 전 컨테이너 로그 secret scan.
       검수: 단계별 응답 표와 시각, 최대 지연 ≤ 문서화된 상한 수식, 변이 시험(훅 제거 시 드릴 실패).
+      구현·증거(2026-10-11 close-out): PR #359(병합, CI 통과) — `scripts/test/test-machine-cutoff-boundary.py`를 `machine-keycloak-e2e.yml`에 편입, `test-machine-live-revocation.py` 확장(heartbeat 정지 시 `SENTINEL_MAX_AGE`+`MAX_STALE` 뒤 503, AC-008 heartbeat만으로 정지 없음). PR #357(병합): 실제 `newMachineAuth` 경로의 배선 회귀 테스트와 배선 변이 3건. 변이 결과는 [EVIDENCE §13](EVIDENCE.md). **남은 정직한 공백**: digest 변이(M2)는 Keycloak 드릴이 못 잡고 단위·Go live-reader 테스트만 잡는다. 자연 노화(AC-008)는 도구 최소 보존 기간이 4440 s라 라이브로 기다릴 수 없다(오프라인 `createTimestamp` fixture와 단위 `TestBuildSnapshot_CountPinnedToSentinelTS`로 대체).
 - [x] `T-018` (AC-005) 호환 회귀: 기능 꺼짐·켠 상태(항목 없음) 모두 기존 단위·계약·e2e·드릴(c) 무변경 통과.
       검수: CI 전체 통과.
 
 ## Verify and close
       구현·증거(2026-10-11 감사, main `ce1af17`): `scripts/test/test-machine-empty-revocation-compat.py`가 기능 켠(항목 없음) 상태로 기존 드릴·계약 스크립트 4건을 재실행(CI `machine-keycloak-e2e.yml:89-94`, job `machine bearer auth (real Keycloak)`), 꺼짐 회귀는 `TestMachine_*`·`make check`. 이 감사에서 CI 전체 실행을 새로 관측하지는 않았고 배선만 확인함.
-- [ ] `T-020` 독립 검토: security-reviewer + Codex critic(위 계약)로 구현 PR 검토, 변이 시험 결과 첨부.
-- [ ] `T-021` 문서 동기화: 부모 [CHANGE.md](../machine-principal-auth/CHANGE.md) Non-goals·D7·위협 모델의 "introspection 후속" 문구에 이 패키지 링크, [IMPLEMENTATION-STATUS](../../IMPLEMENTATION-STATUS.md), 릴리스 노트.
-      진행(2026-10-11): 부모 CHANGE의 Non-goals·D7·위협 모델 링크, `docs/IMPLEMENTATION-STATUS.md` 항목, `CHANGELOG.md` 항목은 이미 있다. 릴리스 노트 확정과 `docs/machine-auth-operations.md` 최종 문구 확인은 T-017·T-020 결과 뒤에 한다.
-- [ ] `T-022` 이슈 처리: #286은 모든 수용 조건(ADR + 라이브 드릴)이 충족되기 전에는 "Related to #286 (not closing yet)"로 연결. 옵션 C·D, A2, 공유 limiter에 남는 범위는 집중된 후속 이슈로 분리(AGENTS.md "Issue tracker convention").
+- [x] `T-020` 독립 검토: security-reviewer + Codex critic(위 계약)로 구현 PR 검토, 변이 시험 결과 첨부.
+      결과(2026-10-11): security-reviewer 1회(읽기 전용, scratch 변이) — **BLOCKER 없음**, fail-open·데이터 노출 경로 미발견. **Codex critic 라운드는 Codex 할당량 소진으로 실행하지 않았다**(단일 벤더 검토). 발견·조치는 [EVIDENCE §14](EVIDENCE.md), 비차단 미해결 항목은 "Known follow-ups".
+- [x] `T-021` 문서 동기화: 부모 [CHANGE.md](../machine-principal-auth/CHANGE.md) Non-goals·D7·위협 모델의 "introspection 후속" 문구에 이 패키지 링크, [IMPLEMENTATION-STATUS](../../IMPLEMENTATION-STATUS.md), 릴리스 노트.
+      진행(2026-10-11): 부모 CHANGE의 Non-goals·D7·위협 모델 링크, `docs/IMPLEMENTATION-STATUS.md` 항목, `CHANGELOG.md` 항목은 이미 있다. close-out(2026-10-11): 부모 CHANGE Non-goals 문구가 이 패키지를 구현됨(기본 꺼짐)·후속 #360–#362로 가리키게 고쳤고, `CHANGELOG.md`·`IMPLEMENTATION-STATUS.md`의 "남은 수용" 문구를 현재 상태로 정정했다. 운영 문서의 heartbeat·롤백 주의는 PR #356.
+- [x] `T-022` 이슈 처리: #286은 모든 수용 조건(ADR + 라이브 드릴)이 충족되기 전에는 "Related to #286 (not closing yet)"로 연결. 옵션 C·D, A2, 공유 limiter에 남는 범위는 집중된 후속 이슈로 분리(AGENTS.md "Issue tracker convention").
+      결과(2026-10-11): 수용 조건(옵션별 비용이 있는 ADR, 롤아웃 없이 모든 replica에서 폐기 토큰이 상한 안에 실패함을 보인 라이브 드릴)이 충족돼 #286은 이 close-out PR 병합과 함께 닫는다(PR 본문 `Closes #286`; 이 문서 작성 시점에는 열림). 남은 범위는 후속 이슈로 분리돼 있다: [#360](https://github.com/dasomel/ldapium/issues/360)(API 키·mTLS), [#361](https://github.com/dasomel/ldapium/issues/361)(replica 공유 rate limit), [#362](https://github.com/dasomel/ldapium/issues/362)(introspection 백스톱) — 모두 열림.
+
+## Known follow-ups
+
+T-020 검토의 비차단 항목 중 미해결인 것. 각각 아직 이슈가 없으며 필요 시 집중된 이슈로 분리한다.
+
+- bind 실패(rc 49) 뒤 갱신 백오프가 최대 15 m까지 늘어, 머신 비밀번호를 고친 뒤에도 최대 15 m 동안 503이 이어질 수 있다.
+- `audit.read` scope로 accesslog를 통해 폐기 쓰기 내용을 읽을 수 있다.
+- #285가 머신 쓰기를 연결할 때 `machineWritePolicy.Protected`에 revocations DN을 반드시 넣어야 한다.
+- 기능을 끄는 롤백은 revocations 서브트리를 머신 `getEntry`로 읽히게 하고 관리자 쓰기를 허용한다(`docs/machine-auth-operations.md`에 문서화).
+- 도구의 client id 문자 집합(`[A-Za-z0-9_.:-]`)이 설정이 받는 집합보다 좁다(문서화).
+- digest 변이와 자연 노화는 라이브 드릴로 검증되지 않는다(T-017 공백).
+- Codex critic 라운드 미실행(T-020).
