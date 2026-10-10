@@ -25,6 +25,11 @@ class Error(Exception):
   pass
 
 
+def above_warn_threshold(count, max_entries):
+  # T-013/AC-008: strictly more than 80% of the cap; integer math, no rounding.
+  return count * 5 > max_entries * 4
+
+
 def single(values):
   if len(values) != 1 or not values[0] or len(values[0].encode()) > MAX_VALUE_BYTES:
     raise Error('attribute must have exactly one bounded, nonempty value')
@@ -166,7 +171,7 @@ class Directory:
                  or timestamp(single(e['createtimestamp'])) >= ts - self.args.retention]
       if len(entries) > self.args.max_entries:
         raise Error('entry cap exceeded; sentinel not published')
-      if len(entries) * 5 > self.args.max_entries * 4:
+      if above_warn_threshold(len(entries), self.args.max_entries):
         print('WARN: revocations exceed 80% of the entry cap', file=sys.stderr)
       gen = str(int(single(sent['serialnumber'])) + 1)
       desc = 'entries=%d;digest=%s;ts=%d;ret=%d' % (len(entries), digest(entries), ts, self.args.retention)

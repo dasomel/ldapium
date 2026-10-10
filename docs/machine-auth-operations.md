@@ -7,14 +7,16 @@
 > 이 절차의 라이브 드릴(`scripts/test/test-machine-revocation-drill.py`, 실제 Keycloak·slapd, revision당 UI replica 2개, 이전 컨테이너 0개 확인, 같은 토큰 401, 진행 중 요청 정상 종료)은 CI job `machine bearer auth (real Keycloak)`에서 실행됩니다(TASKS T-027). replica는 docker 컨테이너이며 Helm/pod가 아니고 `terminationGracePeriodSeconds`는 `docker stop -t 15`로 대체했습니다.
 > 아래 절차는 코드와 차트를 읽어 확인했고(근거를 각 항목에 적었습니다), 위 드릴이 docker replica에서 실행했습니다. Kubernetes 클러스터(Helm 롤아웃)에서는 한 번도 실행해 보지 않았습니다(후속 #284).
 
-## 1. 핵심: 토큰은 즉시 폐기되지 않는다
+## 1. 핵심: 토큰은 기본적으로 즉시 폐기되지 않는다
 
-ldapium은 토큰을 저장하지 않고 요청마다 서명과 claim만 검증합니다(introspection 없음). 그러므로:
+**기능이 꺼져 있을 때(기본, `MACHINE_REVOCATION_ENABLED=false`)**: ldapium은 토큰을 저장하지 않고 요청마다 서명과 claim만 검증합니다(introspection 없음). 그러므로:
 
 - **Keycloak client를 비활성화하거나 secret을 회전해도 이미 발급된 access token은 만료까지 검증을 통과합니다**(실제 Keycloak 26.7.4 관측,
   [EVIDENCE §2.7](changes/machine-principal-auth/EVIDENCE.md)). 막히는 것은 **새 토큰 발급**뿐입니다.
 - 서버 쪽 조치를 하지 않았을 때의 최대 노출은 **남은 토큰 수명 + `MACHINE_CLOCK_SKEW`**(기본 10분 상한 + 30초 이내)입니다.
 - 따라서 긴급 차단의 1차 수단은 **ldapium의 설정을 바꿔 모든 replica를 교체**하는 것이고, Keycloak 조치는 그 다음의 보조 수단입니다.
+
+**기능이 켜져 있을 때(`MACHINE_REVOCATION_ENABLED=true`, 아래 "LDAP revocation writer" 절 준비 후)**: 검증을 통과한 토큰은 LDAP 폐기 스냅샷으로 한 번 더 검사되어, 폐기 항목을 기록하면 롤아웃 없이 모든 replica에서 401이 됩니다. 단 상한은 아래 절의 조건부 수식이 성립할 때만 유효하고, 스냅샷이 없거나 오래되면 인증된 요청은 503으로 닫힙니다. 설정 변경 + replica 교체(2절)는 이 경우에도 **백스톱**으로 유지합니다.
 
 ## 2. 긴급 차단 (토큰 유출·오용 의심)
 
@@ -87,11 +89,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HDR" https://ldapium.example.com
    - kind 클러스터의 ingress-nginx에서 실측(`scripts/test/test-chart-machine-auth-kind.sh`): 컨트롤러 ConfigMap에 `use-forwarded-headers: "true"`를 켜고 `proxy-real-ip-cidr`를 제한하지 않으면(기본 0.0.0.0/0) 클라이언트가 보낸 위조 `X-Forwarded-For`가 그대로 신뢰되어 IP 실패 throttle이 우회됩니다(위조값마다 새 IP, 10회 모두 401, 429 없음). `proxy-real-ip-cidr`를 실제 상위 프록시 대역으로 제한하면 예산이 유지됩니다. 기본 설정(`use-forwarded-headers` 꺼짐)은 헤더를 덮어써 안전합니다.
 4. limiter는 replica별 상태입니다(전역 한도가 아님). replica 수만큼 한도가 늘어납니다.
 
-## LDAP revocation writer (staged #286 T-013)
+## LDAP revocation writer (#286 T-013)
 
-The operator tool exists; **the request enforcement hook remains a separate staged unit**.
-Until the request hook is shipped, recording an entry does not invalidate a token.
-The existing allowlist removal and replica replacement procedure remains the backstop.
+The operator tool is the only supported writer of `ou=revocations`. A recorded entry
+invalidates a token only on replicas running with `MACHINE_REVOCATION_ENABLED=true`
+(Helm `ui.machineAuth.revocation.enabled`, default off); with the feature off, entries are
+ignored. The allowlist removal and replica replacement procedure (section 2) remains the backstop.
 
 Run `scripts/machine-revocation.sh` on an operator host with Python 3 and the
 OpenLDAP CLI (`ldapsearch`, `ldapadd`, `ldapmodify`, `ldapdelete`). Use verified
@@ -135,8 +138,13 @@ retention are changed atomically by deleting the exact old attribute values and
 adding the new values. rc 16 means another writer won; the tool rereads,
 recalculates and retries at most eight times. Exhaustion exits nonzero.
 
-Schedule `heartbeat` substantially more often than `SENTINEL_MAX_AGE` (future
-consumer default 5 minutes), e.g. every minute, and alert on nonzero status. A
+Schedule `heartbeat` at no more than one third of `SENTINEL_MAX_AGE`
+(`MACHINE_REVOCATION_SENTINEL_MAX_AGE`, default 300 s, range 30 s to 1 h), e.g. every
+minute for the default, and alert on nonzero status. Each run prunes expired jti entries and
+republishes the sentinel, so a quiet deployment whose entries age past the retention period
+keeps a fresh sentinel. If heartbeats stop, authenticated machine requests answer 503 after
+about `SENTINEL_MAX_AGE + MAX_STALE` (default about 5 m 15 s); that is intended fail-closed
+behavior, not a bug. A
 CronJob uses an operator tools image containing Python 3, the OpenLDAP CLI, and
 both `scripts/machine-revocation.sh` and `scripts/lib/machine_revocation.py`:
 
@@ -173,8 +181,12 @@ spec:
 
 Supply trusted CA configuration and mount permissions for the image's operator
 UID. This example is not installed by Helm; the stock LDAPium image has no Python
-writer runtime. It carries an admin credential, so restrict access to the Job
-and its Secret. Monitor the heartbeat and directory capacity before API rollout.
+writer runtime. The credential comes from a Secret file (`--password-file`), never from
+argv or an environment variable, and `defaultMode: 0400` must be readable by that UID.
+It carries an admin credential, so restrict access to the Job and its Secret.
+Monitor the heartbeat and directory capacity before API rollout. `concurrencyPolicy:
+Forbid` avoids overlapping runs; a rare overlap with an operator command loses the
+sentinel compare-and-set (rc 16) and is retried by the tool.
 
 For a client incident: (1) block issuance at the IdP and **confirm** new
 `client_credentials` requests fail, repeating the check across the IdP nodes;
@@ -183,10 +195,35 @@ previously issued token returns 401 on every API replica; (4) apply the allowlis
 and replica replacement backstop. Under healthy replication, synchronized clocks
 (NTP), successful refreshes and the configured query budgets, the planned
 visibility bound is `REFRESH + 2 × 5s + replication delay`. This is a conditional
-bound, not a measured guarantee for an arbitrary cluster. A partitioned LDAP
-node may serve old data until sentinel aging forces unavailability. IdP issuance
-propagation and skew beyond `MACHINE_CLOCK_SKEW` remain exposure windows; use
-known-jti revocation and the backstop together if those windows are unacceptable.
+bound, not a measured guarantee for an arbitrary cluster. `REFRESH` is
+`MACHINE_REVOCATION_REFRESH` (default 5 s) and 5 s is the per-refresh query budget; while
+refreshes fail the bound becomes `max(that value, MAX_STALE)`, measured from the
+query start. The premises are P1 (the heartbeat runs on schedule) and P2 (every replica
+reads one stable LDAP node, or read-your-writes holds, and replication delay is shorter
+than `SENTINEL_MAX_AGE`). If P1 or P2 breaks the bound does not hold; a lagging node shows
+up as fail closed within `SENTINEL_MAX_AGE`. Round-robin LDAP URLs break P2 and may make
+503 flicker. A partitioned LDAP node may serve old data until sentinel aging forces
+unavailability.
+
+Clocks: cutoff time T is the directory server's `createTimestamp`, and a token is revoked
+when `iat <= T + MACHINE_CLOCK_SKEW`. This assumes NTP-synchronized IdP, directory and
+API clocks; skew beyond `MACHINE_CLOCK_SKEW` can let a token issued after T pass. Normal
+tokens issued within `T` to `T + skew` are over-revoked (fail closed) and a fresh token
+fixes that.
+
+Remaining windows (D7): (i) issuance blocking may not have propagated to every IdP
+node when you confirm step (1), so repeat the confirmation at least twice; (ii) IdP-to-
+directory skew beyond `MACHINE_CLOCK_SKEW`. Use known-jti revocation and the backstop
+together if those windows are unacceptable. Issuing a cutoff before issuance is blocked
+lets the client fetch a new token whose `iat` is later than T, which then passes.
+
+Rollback caveat: setting `MACHINE_REVOCATION_ENABLED=false` ignores all entries, so
+**every earlier revocation is lifted** and those tokens are accepted again until they
+expire; combine with the allowlist backstop when rolling back during an incident. It also
+turns off the API guard on `ou=revocations` (`revocationWriteGuard` returns nil when the
+feature is off), so administrator writes through the UI API into that subtree are permitted
+again. Do not let the UI API write there; keep using this tool only, and re-run `heartbeat`
+before re-enabling so the sentinel is fresh and any stray entry is found.
 
 ### Write identity configuration stage (machine-write-scope T-011)
 
