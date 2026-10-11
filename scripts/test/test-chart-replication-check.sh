@@ -95,6 +95,6 @@ cp tests/prometheus/replication_check_test.yaml "$work/"
 if command -v promtool >/dev/null 2>&1; then
   (cd "$work" && promtool check rules replication_check_rules.yaml && promtool test rules replication_check_test.yaml)
 else
-  docker run --rm --entrypoint /bin/promtool -v "$work:/tests" -w /tests prom/prometheus:v3.7.3 test rules replication_check_test.yaml
+  docker run --rm --user "$(id -u):$(id -g)" --entrypoint /bin/promtool -v "$work:/tests" -w /tests prom/prometheus:v3.7.3 test rules replication_check_test.yaml
 fi
 echo 'ALL PASS: replication check chart (render, refusals, script copies, promtool)'
