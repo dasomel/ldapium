@@ -5,20 +5,24 @@
 #
 #   olcAccess {0}      replication identity rule
 #   olcAccess {1}-{3}  the three machine read rules (M)
-#   olcAccess {4}-{10} the seven W_data rules   (write-data.ldif)
-#   olcAccess {11}-{15} the five W_lock rules   (write-lock.ldif)
-#   olcAccess {16}..   the image's own rules, in their original order
+#   olcAccess {4}-{11} the eight W_data rules   (write-data.ldif)
+#   olcAccess {12}-{17} the six W_lock rules    (write-lock.ldif)
+#   olcAccess {18}..   the image's own rules, in their original order
 #
 # It shows with ldapmodify as W_data / W_lock that the allowed attribute set works, that
 # representative refusals come back as insufficient access (50), that M stays read-only,
 # that the fragments' documented limits really are limits (objectClass value add passes),
 # and that the documented rollback restores the original olcAccess byte for byte.
+# The guide's shell commands (4.2 install, 7 rollback) are CUT OUT of the guide and run
+# as written, and the guide's LDIF blocks are compared as whole blocks with the fixtures,
+# so neither can drift from what is tested. All passwords here are throwaway test values.
 # This is a SMALL smoke, not the T-021 proof: it is NOT wired into CI, opens no
 # operation, and does not exercise the application guard (client caps, protected DNs,
 # target types), which is the only protection for those.
 #
 # Usage: scripts/test/test-machine-write-acl-smoke.sh [image]
-#   image defaults to ldapium:e2e. Requires Docker. MWACL_TIMEOUT (seconds, default 120)
+#   image defaults to ldapium:e2e. Requires Docker. MWACL_FIX_DIR overrides the fixture
+#   directory (used to show that a mutated fragment FAILS the smoke). MWACL_TIMEOUT (seconds, default 120)
 #   bounds every wait. Resources are named ldapium-mwacl-* and only those are removed on exit.
 set -euo pipefail
 
@@ -31,6 +35,7 @@ idpw="mwaclIdentityPw-Jh6Gf3Dd9Sa2Qw8Er5Ty1Ui4Op7Lk0"
 mpw="mwaclMachinePw-Nn4Bb7Vv1Cc9Xx3Zz6Aa2Ss5Dd8Ff0"
 wdpw="mwaclWriteDataPw-Qa3Ws8Ed2Rf6Tg9Yh1Uj5Ik7Ol4"
 wlpw="mwaclWriteLockPw-Pl8Ok3Ij6Uh9Yg2Tf5Rd1Es4Wa7"
+# throwaway test values: never reuse
 hpw="mwaclHumanPw-Aa1-Bb2-Cc3"
 newpw="mwaclNewPw-Zz9-Yy8-Xx7"
 base="dc=example,dc=org"
@@ -48,8 +53,23 @@ ldapi='ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi'
 net="ldapium-mwacl-net-${suffix}"
 certs="ldapium-mwacl-certs-${suffix}"
 c="ldapium-mwacl-${suffix}"
-fix="${repo}/scripts/test/fixtures/machine-acl"
+envfile="$(mktemp)" # 0600: keeps the admin password out of argv
+fix="${MWACL_FIX_DIR:-${repo}/scripts/test/fixtures/machine-acl}"
 guide="${repo}/docs/machine-write-account.md"
+
+# The names the guide's commands use (exported only so the eval'd guide commands and
+# linters both see them used).
+EXEC="docker exec -i ${c}"
+MACHINE_DN="$mdn"
+WDATA_DN="$wddn"
+WLOCK_DN="$wldn"
+SYSTEM_DN="$sysdn"
+REPL_DN="$iddn"
+MAIN_DB_DN="$maindb"
+CFG_URI="$ldapi"
+ROOT_DN="$base"
+WRITE_DN="$wrdn"
+export EXEC MACHINE_DN WDATA_DN WLOCK_DN SYSTEM_DN REPL_DN MAIN_DB_DN CFG_URI ROOT_DN WRITE_DN
 
 fail=0
 ok() { printf 'PASS: %s\n' "$1"; }
@@ -64,6 +84,7 @@ cleanup() {
   if ! docker rm -fv "$c" >/dev/null 2>&1; then echo "cleanup: container ${c} not removed" >&2; fi
   if ! docker volume rm -f "${c}-cfg" "${c}-data" "$certs" >/dev/null 2>&1; then echo "cleanup: volumes not removed" >&2; fi
   if ! docker network rm "$net" >/dev/null 2>&1; then echo "cleanup: network ${net} not removed" >&2; fi
+  rm -f "$envfile"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -80,16 +101,25 @@ poll() {
 # shellcheck disable=SC2317,SC2329 # invoked through poll
 ready() { docker exec "$c" ldapwhoami -x -H ldap://localhost >/dev/null 2>&1; }
 
-# The fixtures and the guide must carry the same LDIF: every non-comment fixture line
-# is a whole line of the guide.
+# The fixtures and the guide must carry the same LDIF: the guide's Nth ```ldif block is
+# the fixture's non-comment text, compared as a WHOLE block.
+guide_ldif() { awk -v k="$1" '/^```ldif$/ { n++; on=(n == k); next } /^```$/ { on=0; next } on' "$guide"; }
+n=0
 for f in write-data.ldif write-lock.ldif; do
-  missing=0
-  while IFS= read -r line; do
-    if ! grep -qxF -- "$line" "$guide"; then missing=$((missing + 1)); printf 'not in the guide: %s\n' "$line" >&2; fi
-  done < <(awk '!/^#/ && NF' "${fix}/${f}")
-  check "${f}: every LDIF line is embedded verbatim in the guide" "0" "$missing"
+  n=$((n + 1))
+  check "${f}: the guide embeds the fixture as one identical block" "$(awk '!/^#/' "${fix}/${f}")" "$(guide_ldif "$n")"
 done
+# The guide's shell blocks, run as written (cwd = the fixture directory, as the guide says).
+guide_sh() { awk -v re="$1" '/^```sh$/ { on=1; buf=""; next } /^```$/ { if (on && buf ~ re) { printf "%s", buf; exit } on=0; next } on { buf = buf $0 "\n" }' "$guide"; }
+install_cmd="$(guide_sh 'PRESENT=')"
+rollback_cmd="$(guide_sh 'FIRST=')"
+if [ -z "$install_cmd" ] || [ -z "$rollback_cmd" ]; then echo "cannot cut the install/rollback commands out of ${guide}" >&2; exit 1; fi
+ok "install (4.2) and rollback (7) commands extracted from the guide"
+# The reserved replication DN the index arithmetic and the REPL_DN deny rule rely on.
+check "image/entrypoint.sh still reserves cn=replicator,<root> (ri_dn)" "1" \
+  "$(awk 'index($0, "ri_dn=\"cn=replicator,${LDAP_ROOT_DN}\"") { n++ } END { print n + 0 }' "${repo}/image/entrypoint.sh")"
 
+printf 'LDAP_ADMIN_PASSWORD=%s\n' "$pw" >"$envfile"
 docker network create "$net" >/dev/null
 docker volume create "$certs" >/dev/null
 docker volume create "${c}-cfg" >/dev/null
@@ -103,14 +133,14 @@ start_node() { # mode (admin|prepare)
   if ! docker rm -f "$c" >/dev/null 2>&1; then :; fi
   docker run -d --name "$c" --network "$net" --hostname "$c" \
     -v "${c}-cfg:/etc/openldap/slapd.d" -v "${c}-data:/var/lib/openldap/data" -v "${certs}:/certs:ro" \
-    -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" \
+    -e LDAP_ROOT_DN="$base" --env-file "$envfile" \
     -e LDAP_REPLICATION_ENABLED=true -e LDAP_SERVER_ID=1 -e LDAP_REPLICATION_PEERS="ldap://${c}:389" \
     -e LDAP_TLS_ENABLED=true -e LDAP_TLS_CERT_FILE=/certs/c.pem -e LDAP_TLS_KEY_FILE=/certs/k.pem \
     -e LDAP_REPLICATION_IDENTITY="$1" "$image" >/dev/null
   poll ready || { bad "node never ready (mode $1)"; docker logs "$c" 2>&1 | tail -n 15 >&2; return 1; }
   # -y uses the whole file as the password: no trailing newline
   local p
-  for p in admin:"$pw" machine:"$mpw" wdata:"$wdpw" wlock:"$wlpw" human:"$hpw"; do
+  for p in admin:"$pw" machine:"$mpw" wdata:"$wdpw" wlock:"$wlpw" human:"$hpw" id:"$idpw"; do
     printf '%s' "${p#*:}" | docker exec -i "$c" sh -c "umask 077; cat > /tmp/.pw-${p%%:*}"
   done
 }
@@ -141,32 +171,19 @@ acl_norm() { acl_list | sed -e 's/^olcAccess: {[0-9]*}//'; }
 shift_ldif() { # base file
   awk -v b="$1" '/^olcAccess: \{[0-9]+\}/ { s=$0; sub(/^olcAccess: \{/,"",s); i=s+0; sub(/^[0-9]+\}/,"",s); print "olcAccess: {" (i+b) "}" s; next } { print }' "$2"
 }
-compute_base() { # guide 4.2
-  docker exec -i -e MACHINE_DN="$mdn" -e WDATA_DN="$wddn" -e WLOCK_DN="$wldn" -e ROOT_DN="$base" -e MAIN_DB_DN="$maindb" -e CFG_URI="$ldapi" "$c" \
-    sh -c 'ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess' \
-    | awk -v m="dn.exact=\"$mdn\"" -v r="dn.exact=\"cn=replicator,$base\"" -v d="dn.exact=\"$wddn\"" -v l="dn.exact=\"$wldn\"" \
-      '/^olcAccess: \{[0-9]+\}/ { if (stop) next; if (index($0,m) || index($0,r) || index($0,d) || index($0,l)) n++; else stop=1 } END { print n+0 }'
-}
 sub_tokens() { # WRITE_DN as $1
   sed -e "s|@MACHINE_DN@|${mdn}|g" -e "s|@ALLOWED_DN@|${base}|g" -e "s|@WDATA_DN@|${wddn}|g" -e "s|@WLOCK_DN@|${wldn}|g" \
-    -e "s|@WRITE_DN@|$1|g" -e "s|@SYSTEM_DN@|${sysdn}|g" -e "s|@MAIN_DB_DN@|${maindb}|g"
+    -e "s|@WRITE_DN@|$1|g" -e "s|@SYSTEM_DN@|${sysdn}|g" -e "s|@REPL_DN@|${iddn}|g" -e "s|@MAIN_DB_DN@|${maindb}|g"
 }
 cfg_apply() { docker exec -i "$c" ldapmodify -x -H "$ldapi" -D cn=admin,cn=config -y /tmp/.pw-admin >/dev/null; }
-apply_w() { # fixture write_dn
-  local b
-  b="$(compute_base)"
-  shift_ldif "$b" "${fix}/$1" | sub_tokens "$2" | cfg_apply
+# The guide's commands, as written. Output (stdout+stderr) is returned for the checks.
+# shellcheck disable=SC2030,SC2031 # the guide command runs in a subshell on purpose
+apply_w() { # fixture who write_dn
+  (cd "$fix" && export FRAG="$1" WHO="$2" WRITE_DN="$3" && eval "$install_cmd") 2>&1
 }
-rollback_w() { # dn k   (guide 7)
-  local first
-  first="$(docker exec -i "$c" ldapsearch -x -H "$ldapi" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$maindb" -s base olcAccess \
-    | awk -v x="dn.exact=\"$1\"" -v k="$2" '/^olcAccess: \{[0-9]+\}/ { if (index($0,x)) { s=$0; sub(/^olcAccess: \{/,"",s); i=s+0; if (n == 0) f=i; l=i; n++ } } END { if (n == k && l - f == k - 1) print f }')"
-  if [ -z "$first" ]; then echo "refusing: the rules of $1 are not $2 contiguous values" >&2; return 1; fi
-  {
-    printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\n' "$maindb"
-    local i=$((first + $2 - 1))
-    while [ "$i" -ge "$first" ]; do printf 'olcAccess: {%s}\n' "$i"; i=$((i - 1)); done
-  } | cfg_apply
+# shellcheck disable=SC2030,SC2031
+rollback_w() { # who k
+  (cd "$fix" && export WHO="$1" K="$2" && eval "$rollback_cmd") 2>&1
 }
 
 seed() {
@@ -257,19 +274,23 @@ shift_ldif 1 "${fix}/main-database.ldif" | sub_tokens "$base" | cfg_apply
 check "M read rules at {1} {2} {3}" "1 2 3" "$(acl_idx "$mdn")"
 with_machine="$(acl_norm)"
 
-check "compute_base before any W rule counts replication + M" "4" "$(compute_base)"
-apply_w write-data.ldif "$wrdn"
-check "W_data rules at {4}..{10}" "4 5 6 7 8 9 10" "$(acl_idx "$wddn")"
-check "compute_base now also counts the W_data rules" "11" "$(compute_base)"
-apply_w write-lock.ldif "$wrdn"
-check "W_lock rules at {11}..{15}" "11 12 13 14 15" "$(acl_idx "$wldn")"
-check "replication rule still at {0}, M rules still at {1} {2} {3}" "0|1 2 3" "$(acl_idx "$iddn")|$(acl_idx "$mdn")"
+out="$(apply_w write-data.ldif "$wddn" "$wrdn")"
+check "guide 4.2 computed BASE=4 (replication + M) for W_data" "4" "$(printf '%s\n' "$out" | sed -n 's/^BASE=//p')"
+check "W_data rules at {4}..{11}" "4 5 6 7 8 9 10 11" "$(acl_idx "$wddn")"
+acl_w1="$(acl_norm)"
+out="$(apply_w write-data.ldif "$wddn" "$wrdn")"
+case "$out" in *"refusing: "*) ok "a second W_data apply is refused by the guide's own check" ;; *) bad "a second W_data apply was not refused: $out" ;; esac
+check "... and the olcAccess did not change (no duplicate rules)" "$acl_w1" "$(acl_norm)"
+out="$(apply_w write-lock.ldif "$wldn" "$wrdn")"
+check "guide 4.2 computed BASE=12 (also counting W_data) for W_lock" "12" "$(printf '%s\n' "$out" | sed -n 's/^BASE=//p')"
+check "W_lock rules at {12}..{17}" "12 13 14 15 16 17" "$(acl_idx "$wldn")"
+check "replication rule still at {0} (plus the REPL_DN deny rules {5} {13}), M rules still at {1} {2} {3}" "0 5 13|1 2 3" "$(acl_idx "$iddn")|$(acl_idx "$mdn")"
 check "the image's own rules follow, unchanged and in order" "$original" "$(acl_norm | awk -v a="$wddn" -v b="$wldn" -v m="$mdn" -v r="$iddn" 'index($0, "dn.exact=\"" a "\"") == 0 && index($0, "dn.exact=\"" b "\"") == 0 && index($0, "dn.exact=\"" m "\"") == 0 && index($0, "dn.exact=\"" r "\"") == 0')"
 acl_installed="$(acl_norm)"
 docker restart "$c" >/dev/null
 poll ready || bad "node never ready after restart"
 check "restart (prepare) keeps the whole olcAccess unchanged" "$acl_installed" "$(acl_norm)"
-check "restart keeps the identity rule at {0}" "0" "$(acl_idx "$iddn")"
+check "restart keeps the identity rule at {0} (and the two deny rules)" "0 5 13" "$(acl_idx "$iddn")"
 
 echo "=== W_data ==="
 wd() { mod_as "$wddn" /tmp/.pw-wdata; }
@@ -412,8 +433,33 @@ dn: ${mdn}
 changetype: delete
 EOF
 )"
-check "W_data does not read userPassword / memberOf / pwdAccountLockedTime of a user" "0" \
-  "$(cnt '^(userPassword|memberOf|pwdAccountLockedTime):' search_as "$wddn" /tmp/.pw-wdata "$people" '(uid=alice)' userPassword memberOf pwdAccountLockedTime)"
+check "W_data does not read userPassword / memberOf of a user" "0" \
+  "$(cnt '^(userPassword|memberOf):' search_as "$wddn" /tmp/.pw-wdata "$people" '(uid=alice)' userPassword memberOf)"
+# A REAL locked entry (a never-locked user would make the read checks vacuous): the admin locks dave.
+admin_mod() { local rc=0; docker exec -i "$c" ldapmodify -x -H ldap://localhost -D "$admin" -y /tmp/.pw-admin >/dev/null 2>&1 || rc=$?; echo "$rc"; }
+check "admin creates dave and locks him (pwdAccountLockedTime)" "0" "$(admin_mod <<EOF
+dn: uid=dave,${people}
+changetype: add
+objectClass: inetOrgPerson
+uid: dave
+cn: dave
+sn: dave
+userPassword: ${hpw}
+
+dn: uid=dave,${people}
+changetype: modify
+add: pwdAccountLockedTime
+pwdAccountLockedTime: 20260101000000Z
+EOF
+)"
+check "control: admin reads dave's pwdAccountLockedTime" "1" \
+  "$(cnt '^pwdAccountLockedTime:' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "uid=dave,${people}" pwdAccountLockedTime)"
+check "W_data does NOT read dave's pwdAccountLockedTime" "0" \
+  "$(cnt '^pwdAccountLockedTime:' search_as "$wddn" /tmp/.pw-wdata "$people" '(uid=dave)' pwdAccountLockedTime)"
+check "W_lock reads dave's pwdAccountLockedTime (it owns that attribute)" "1" \
+  "$(cnt '^pwdAccountLockedTime:' search_as "$wldn" /tmp/.pw-wlock "$people" '(uid=dave)' pwdAccountLockedTime)"
+check "W_lock does NOT read userPassword" "0" \
+  "$(cnt '^userPassword:' search_as "$wldn" /tmp/.pw-wlock "$people" '(uid=dave)' userPassword)"
 check "control: admin does read alice's userPassword and memberOf" "2" \
   "$(cnt '^(userPassword|memberOf):' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "$people" '(uid=alice)' userPassword memberOf)"
 check "W_data reads nothing outside the write subtree (noSuchObject 32)" "32" \
@@ -474,6 +520,38 @@ pwdAccountLockedTime: 20260101000000Z
 EOF
 )"
 
+echo "=== documented limit: ModifyDN (rename AND move across containers) passes the ACL ==="
+check "W_data creates carol" "0" "$(wd <<EOF
+dn: uid=carol,${people}
+changetype: add
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: carol
+cn: carol
+sn: carol
+EOF
+)"
+check "W_data renames and MOVES carol into another container (0): the app must never expose rename/move" "0" "$(wd <<EOF
+dn: uid=carol,${people}
+changetype: modrdn
+newrdn: uid=carol2
+deleteoldrdn: 1
+newsuperior: ${groups}
+EOF
+)"
+check "W_data deletes the moved entry" "0" "$(wd <<EOF
+dn: uid=carol2,${groups}
+changetype: delete
+EOF
+)"
+check "admin deletes dave" "0" "$(admin_mod <<EOF
+dn: uid=dave,${people}
+changetype: delete
+EOF
+)"
+
 echo "=== W_data deletes the user ==="
 check "W_data deletes the leaf user" "0" "$(wd <<EOF
 dn: uid=bob,${people}
@@ -515,13 +593,14 @@ description: self
 EOF
 )"
 check "replication identity (TLS) still reads alice's userPassword hash" "1" \
-  "$(cnt '^userPassword' docker exec -i -e LDAPTLS_CACERT=/certs/c.pem -e LDAPTLS_REQCERT=never "$c" ldapsearch -x -LLL -H ldaps://localhost -D "$iddn" -w "$idpw" -b "$base" '(uid=alice)' userPassword)"
+  "$(cnt '^userPassword' docker exec -i -e LDAPTLS_CACERT=/certs/c.pem -e LDAPTLS_REQCERT=never "$c" ldapsearch -x -LLL -H ldaps://localhost -D "$iddn" -y /tmp/.pw-id -b "$base" '(uid=alice)' userPassword)"
 
 echo "=== rollback (guide 7): W_lock then W_data; M and identity rules untouched ==="
-check "second rollback of a not-installed fragment refuses (rc 1)" "1" "$(rc_of rollback_w "uid=nobody,${sysdn}" 5)"
-rollback_w "$wldn" 5
-check "W_lock rolled back: W_data rules still contiguous" "4 5 6 7 8 9 10" "$(acl_idx "$wddn")"
-rollback_w "$wddn" 7
+out="$(rollback_w "uid=nobody,${sysdn}" 6)"
+case "$out" in *"refusing: "*) ok "rollback of a not-installed fragment refuses" ;; *) bad "rollback of a not-installed fragment did not refuse: $out" ;; esac
+rollback_w "$wldn" 6 >/dev/null
+check "W_lock rolled back: W_data rules still contiguous" "4 5 6 7 8 9 10 11" "$(acl_idx "$wddn")"
+rollback_w "$wddn" 8 >/dev/null
 check "W_data rolled back: olcAccess equals the state before the write fragments (byte for byte)" "$with_machine" "$(acl_norm)"
 check "W_data no longer writes (50)" "50" "$(wd <<EOF
 dn: uid=alice,${people}
@@ -532,7 +611,7 @@ EOF
 )"
 
 echo "=== write subtree widened to the root: the SYSTEM_DN backstop still protects the accounts ==="
-apply_w write-data.ldif "$base"
+apply_w write-data.ldif "$wddn" "$base" >/dev/null
 check "W_data (root subtree) still writes inside the former subtree" "0" "$(wd <<EOF
 dn: uid=alice,${people}
 changetype: modify
@@ -554,6 +633,18 @@ replace: sn
 sn: x
 EOF
 )"
+check "backstop: the replication identity entry is refused (50), not shielded by SYSTEM_DN" "50" "$(wd <<EOF
+dn: ${iddn}
+changetype: modify
+replace: description
+description: x
+EOF
+)"
+check "backstop: deleting the replication identity entry is refused (50)" "50" "$(wd <<EOF
+dn: ${iddn}
+changetype: delete
+EOF
+)"
 check "backstop: W_lock entry still refused (50)" "50" "$(wd <<EOF
 dn: ${wldn}
 changetype: modify
@@ -561,7 +652,7 @@ replace: sn
 sn: x
 EOF
 )"
-rollback_w "$wddn" 7
+rollback_w "$wddn" 8 >/dev/null
 check "rolled back again: original image rules + identity + M only" "$with_machine" "$(acl_norm)"
 check "identity-only state equals what prepare produced" "$with_identity" "$(acl_norm | awk -v m="$mdn" 'index($0, "dn.exact=\"" m "\"") == 0')"
 

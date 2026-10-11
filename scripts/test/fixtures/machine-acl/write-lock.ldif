@@ -6,6 +6,8 @@
 #   @WLOCK_DN@    the dedicated lock account (outside the write subtree)
 #   @WRITE_DN@    the write subtree: the union of every client's write cap
 #   @SYSTEM_DN@   the container that holds M, W_data, W_lock: a deny backstop
+#   @REPL_DN@     the replication identity entry (cn=replicator,<root>): the same
+#                 backstop as in write-data.ldif
 #   @MAIN_DB_DN@  the config entry of the main database
 #
 # W_lock may set and clear exactly one attribute, pwdAccountLockedTime, and reads
@@ -17,25 +19,29 @@
 # defined order. Indices start at {0}; the guide shifts them.
 #
 #   {0} anything under @SYSTEM_DN@                       none
-#   {1} secrets, other pwd* state, memberOf              none
-#   {2} pwdAccountLockedTime inside @WRITE_DN@           write
-#   {3} everything else inside @WRITE_DN@                read
-#   {4} everything else                                  none
+#   {1} the replication identity entry @REPL_DN@         none
+#   {2} secrets, other pwd* state, memberOf              none
+#   {3} pwdAccountLockedTime inside @WRITE_DN@           write
+#   {4} everything else inside @WRITE_DN@                read
+#   {5} everything else                                  none
 dn: @MAIN_DB_DN@
 changetype: modify
 add: olcAccess
 olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
   by dn.exact="@WLOCK_DN@" none
   by * break
-olcAccess: {1}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+olcAccess: {1}to dn.exact="@REPL_DN@"
   by dn.exact="@WLOCK_DN@" none
   by * break
-olcAccess: {2}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
+olcAccess: {2}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WLOCK_DN@" none
+  by * break
+olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
   by dn.exact="@WLOCK_DN@" write
   by * break
-olcAccess: {3}to dn.subtree="@WRITE_DN@"
+olcAccess: {4}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WLOCK_DN@" read
   by * break
-olcAccess: {4}to *
+olcAccess: {5}to *
   by dn.exact="@WLOCK_DN@" none
   by * break
