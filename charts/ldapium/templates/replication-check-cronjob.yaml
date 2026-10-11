@@ -125,4 +125,9 @@ spec:
             - name: tls
               secret:
                 secretName: {{ .Values.tls.existingSecret }}
+                # Only the CA: the check never needs the server private key.
+                defaultMode: 0444
+                items:
+                  - key: {{ base .Values.tls.caFile }}
+                    path: {{ base .Values.tls.caFile }}
 {{- end }}

@@ -60,6 +60,9 @@ has "$on" 'app.kubernetes.io/component: replication-check'
 has "$on" 'alert: LDAPiumReplicationCheckFailed'
 lacks "$on" '- --canary'
 lacks "$on" 'chart-test-password'
+cron=$(render "${dedicated[@]}" "${check[@]}" --show-only templates/replication-check-cronjob.yaml)
+lacks "$cron" 'tls.key'
+has "$cron" 'path: ca.crt'
 # The NetworkPolicy admits the check pod on 636 only.
 policy=$(render "${dedicated[@]}" "${check[@]}" "${extras[@]}" --show-only templates/networkpolicy.yaml)
 has "$policy" 'app.kubernetes.io/component: replication-check'
@@ -73,6 +76,7 @@ refuse "${dedicated[@]}" --set replication.check.enabled=true
 refuse "${dedicated[@]}" "${check[@]}" --set-string replication.check.image.tag=
 refuse "${check[@]}" --set replication.identity=prepare
 refuse "${dedicated[@]}" "${check[@]}" --set replication.check.schedule=
+refuse "${dedicated[@]}" "${check[@]}" --set replication.check.failedJobsHistoryLimit=0
 
 # The scripts shipped in the ConfigMap are the ones the operator runs.
 for name in replication_identity_check.py replication_identity_config.py replication_uri.py; do

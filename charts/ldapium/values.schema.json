@@ -407,7 +407,7 @@
             },
             "failedJobsHistoryLimit": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 1
             },
             "activeDeadlineSeconds": {
               "type": "integer",

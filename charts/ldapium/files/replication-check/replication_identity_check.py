@@ -4,6 +4,7 @@ import base64
 import os
 import secrets
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -162,18 +163,30 @@ def canary(args, targets):
         return False
       time.sleep(1)
     return True
-  tool_run(args, ['ldapadd', *credentials], ldif)
+  arrived = readable = gone = finished = False
+  previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the Job deadline still runs the cleanup
   try:
-    arrived = wait(True, args.admin_dn, args.admin_password_file)
-    readable = arrived and wait(True, 'cn=replicator,' + args.base, args.identity_password_file)
-  finally:
     try:
-      tool_run(args, ['ldapdelete', *credentials, dn])
-      gone = wait(False, args.admin_dn, args.admin_password_file)
-    except (ValueError, subprocess.TimeoutExpired):
-      gone = False
+      # The add may be applied even when its response is lost, so cleanup is owed from the attempt on.
+      tool_run(args, ['ldapadd', *credentials], ldif)
+      arrived = wait(True, args.admin_dn, args.admin_password_file)
+      readable = arrived and wait(True, 'cn=replicator,' + args.base, args.identity_password_file)
+      finished = True
+    finally:
+      try:
+        try:
+          tool_run(args, ['ldapdelete', *credentials, dn])
+        except ValueError as error:
+          if not str(error).endswith('(code 32)'):  # noSuchObject: the add never landed
+            raise
+        gone = wait(False, args.admin_dn, args.admin_password_file)
+      except (ValueError, OSError, subprocess.TimeoutExpired):
+        gone = False
+      if not (gone and finished):
+        print('ERROR: canary entry %s may remain; remove it manually if present' % dn, file=sys.stderr)
+  finally:
+    signal.signal(signal.SIGTERM, previous)
   if not gone:
-    print('ERROR: canary entry %s could not be removed or its deletion did not replicate; remove it manually' % dn, file=sys.stderr)
     return 2
   if not arrived:
     print('FAIL: canary entry did not replicate to every selected node within %ds' % args.canary_timeout, file=sys.stderr)

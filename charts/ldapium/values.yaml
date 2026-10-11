@@ -294,6 +294,8 @@ replication:
     #    propagation. A directory WRITE by the administrator; off by default.
     canary: false
     successfulJobsHistoryLimit: 1
+    # -- Minimum 1: a failed Job that is pruned at once never reaches kube-state-metrics, so the alert
+    #    could not fire.
     failedJobsHistoryLimit: 3
     # -- Kills a stuck run so it cannot hold the Forbid slot forever.
     activeDeadlineSeconds: 600
