@@ -238,7 +238,8 @@ elif [ "$cmd" = rotate ]; then
         *) continue ;;
       esac
       bd=$(printf '%s' "$val" | sed -n 's/.*binddn="\([^"]*\)".*/\1/p')
-      [ -n "$bd" ] && [ "$(dn_norm "$bd" || true)" = "$want" ] || continue
+      [ -n "$bd" ] || continue
+      [ "$(dn_norm "$bd" || true)" = "$want" ] || continue
       rows=$((rows + 1))
       cred=$(printf '%s' "$val" | sed -n 's/.* credentials="\([^"]*\)".*/\1/p')
       if [ "$(printf '%s' "$cred" | sha256sum | cut -d' ' -f1)" = "$newfp" ]; then hit=$((hit + 1)); fi
