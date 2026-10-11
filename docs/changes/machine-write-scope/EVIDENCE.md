@@ -184,3 +184,32 @@ What changed: `machineWriteOps` (`httpapi/machine_write_scopes.go`) registers ex
 - D8e leaf-only delete, live (drill step A, 61 checks after this addition, `All machine write drill checks passed: 61 checks in 57s.`): `deleteUser` on a user that has a child entry -> **409 `conflict`** (slapd refuses the non-leaf delete; generic conflict body, audit `outcome":"ldap_refused"`), entry and child intact; on a group DN and on a container DN under the ceiling -> **403 `scope_denied` "target is not permitted for machine writes"** (audit `outcome":"denied_protected"`, refused before any bind, so these two are stopped by the pre-connect target policy, not by the class assertion; the assertion stays the second line and is covered at `ldapclient` level by T-018); a plain leaf user -> 204 and gone.
 - Runtime prerequisite check also requires a client with both a write subtree and an opened write scope (`hasWriter`, rows "no client holds an opened write scope" / "write scope only on a client without a subtree"). The audit flag is set by `machineAuditMiddleware` itself when it is built.
 
+
+## T-004 live measurements (2026-10-11, #378)
+
+Script: `scripts/test/test-machine-write-t004-live.py` (reproducible; real slapd with the accesslog overlay, the package's `write-data.ldif` W_data fragment applied after the three M rules, the normal UI image and Keycloak for the replay step).
+Images built from this branch: `docker build -t ldapium:t004 -f image/Dockerfile ./image`, `docker build -t ldapium-ui:t004 -f ui/Dockerfile ./ui`.
+
+```text
+$ LDAPIUM_IMAGE=ldapium:t004 LDAPIUM_UI_IMAGE=ldapium-ui:t004 python3 scripts/test/test-machine-write-t004-live.py
+...
+All T-004 measurement checks passed: 28 checks in 22s.
+```
+
+Failures during development, kept: run 1 used a `uid=` RDN for a `groupOfNames` Add (rc 65, naming violation: my test bug, fixed to `cn=`); `ldappasswd` returns rc 1 (not 50) with `Result: Insufficient access (50)` in its text, so the check reads the text.
+
+| Item | Measured (real output) | Decision it bears on |
+|---|---|---|
+| 1 accesslog, direct | Add/Modify/Delete by W_data each leave `reqType`, `reqDN=<target>`, `reqAuthzID: uid=machine-write-data,ou=system,...` (plain DN, no `dn:` prefix), `reqResult: 0`; the refused Modify (objectClass replace) is logged too with `reqResult: 50`; `reqMod` carries the attribute values written (so a password written through the app would be in `reqMod`; none is, D15) | D4 confirmed: slapd attributes by compartment (W_data) only |
+| 1 accesslog, via the UI | createUser/patchUser/deleteUser through the five operations: one `reqAuthzID` value, W_data; the client id is not in slapd, only in the app audit line | D4/D6 confirmed |
+| 2 non-leaf / container | `ldapdelete` of a user with a child: `rc 66 Operation not allowed on non-leaf (66) ... subordinate objects must be deleted first`; same for the non-empty container `ou=people`; an EMPTY container inside the write subtree is deletable by W_data (rc 0); W_data can also Add an `organizationalUnit` under a user | REQ-010 confirmed; D8e (app class assertion for containers) is required, the ACL cannot tell a container from a user |
+| 3 memberOf / refint | W_data cannot write `memberOf` (`rc 19 memberOf: no user modification allowed`, schema, and ACL `none`), cannot read it, yet a permitted group `member` Add updates `memberOf` on the user and deleting a member user removes it from the group `member` (refint) | T-002 overlay facts confirmed under the real W_data fragment |
+| 4 entryCSN assertion | `!assert=(&(entryCSN=<current>)(objectClass=inetOrgPerson))` as W_data: current -> rc 0; stale entryCSN -> `122 Assertion Failed`, no change; wrong objectClass half -> 122; `(userPassword=*)` (no access) -> 122 (no oracle); stale assertion on Delete -> 122, entry stays | D19/D21 confirmed: the AND filter is evaluated for W_data, ACL `read` on the rest is enough for the operational `entryCSN` |
+| 5 objectClass (D18) | Add with `objectClass: inetOrgPerson` rc 0 under the `add` level; Modify REPLACE and DELETE-value of objectClass rc 50; **Modify ADD of an objectClass value (`extensibleObject`) rc 0**; Add of a `groupOfNames` with `member=cn=admin,...` under the user subtree rc 0 | D18(a) confirmed (the `add` level exists and works). **Contradicts the D18 sentence that objectClass cannot be written by Modify**: value-add passes the ACL, so the closed-attribute app guard is the only barrier (D18(b) fallback already names this); same limit as EVIDENCE-acl.md |
+| 5 Password Modify | `ldappasswd` as W_data on a managed user: `Insufficient access (50)`; the user did not get the password. Caveat: the message is `Must supply old password ...`, so a ppolicy rule may be what answers; EVIDENCE-acl.md is the ACL proof that `userPassword` writes are refused with 50 | T-004 item 5 (v2c): not a password-stage proof |
+| 6 replay after restart | same process: replay 201 `Idempotent-Replayed=true`. After `docker restart` of the UI: the same createUser key (entry deleted meanwhile) -> **201 re-executed**, no `Idempotent-Replayed`, entry exists again; create with a fresh key while it exists -> 409 `already_exists`; patch key replayed with the pre-restart `If-Match` -> 412, mail unchanged; delete key replayed with the pre-restart tag against the re-created entry -> 412, entry stays | D9 confirmed exactly: restart turns replay into re-execution; `If-Match` (412) and DN uniqueness (409) are the second line |
+| 6 (new finding) | deleteUser when the target no longer exists (same key or a new key, any tag) -> **503 `unavailable`**, audit `reason=upstream_error`, not 404: `WriteIdentityReader.Check` cannot resolve the missing target and reports a directory error (`machine_write_identity.go:161-166`) | not a decision change; a retrying client sees a retryable 503 for a permanent condition after a restart replay. Follow-up candidate, not changed here |
+
+Rotation/lockout on in-flight and next requests (item 2 of T-004) is not repeated: `EVIDENCE-drill.md` measured it (next write 503 on every replica, in-flight write completes, `MACHINE_REQUEST_TIMEOUT` bound, D24 lockout and the no-lockout policy).
+
+Not verified here: multi-node replication behaviour of W writes (accesslog per node); the Password Modify refusal as an ACL-only proof; a Kubernetes restart (a pod restart is the same empty memory store, but not run).
