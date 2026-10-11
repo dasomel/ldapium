@@ -86,6 +86,9 @@ CI placement: `e2e.yml` runs parts `cluster`, `pair`, `proxy` (~2.5 min); `repli
 operator `ensure` -> dedicated; K1 deleted pod-0 returns Ready while 1 and 2 serve; K2 all pods deleted at once, pod-0
 starts alone and becomes Ready without peers, all pods recover with identical users and hash, no err=49; K3 data claim
 of pod-1 lost with its config claim kept: see below.
+Limit of K2 (Codex review): the script asserts the final Ready state and identical data of all pods, not that pod-0
+became Ready before any peer was running again, so "Ready without peers" is not proven by this run alone; it rests on
+the dedicated tests' peers-down wipe (`-dedicated.sh`).
 
 ### Finding: data volume lost, config volume kept (AC-004)
 
