@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Operator command for the dedicated replication identity (docs/changes/replication-identity,
-# #229, T-013: `ensure`, `retire`, `reconcile`, and `rotate`).
+# #229, T-013: `ensure`, `retire`, `reconcile`, `rotate`, and `rollback-admin`).
 #
 #   ensure  Create cn=replication-policy,<base> and cn=replicator,<base> once, as ordinary
 #           replicated writes with the admin DN, and hand the generated credential over in a
@@ -21,6 +21,12 @@
 #           R4 one value, new binds: done. Re-running resumes at the derived step. The old value
 #           is never removed while the gate is closed. --new-password-file is generated (0600)
 #           when it does not exist yet and reused on every re-run.
+#   rollback-admin
+#           Gate before returning to administrator replication (D66): refuses unless every node
+#           (--uri plus every --peer) answers the administrator password, holds the suffix entry
+#           (non-empty) and is not resyncing (same contextCSN set and entry count on every
+#           node, unchanged between two samples). Changes nothing; on success it prints the
+#           remaining operator steps (chart values / environment, DN and Secret together).
 #   retire  Delete both entries. Dedicated nodes lose their bind: consumers stall with rc 49
 #           until the entry is recreated, so --yes is required.
 #
@@ -32,6 +38,7 @@ usage() {
 Usage: $0 ensure --base DN --admin-password-file FILE --out FILE [--uri URI] [--admin-dn DN] [--root-dn DN]...
        $0 reconcile --base DN --admin-password-file FILE --current-password-file FILE [--uri ldaps://HOST:636]
        $0 rotate --base DN --admin-password-file FILE --new-password-file FILE [--peer ldaps://HOST:636]... [--uri ldaps://HOST:636] [--config-password-file FILE]
+       $0 rollback-admin --base DN --admin-password-file FILE [--peer ldaps://HOST:636]... [--uri ldaps://HOST:636]
        $0 retire --base DN --admin-password-file FILE --yes [--uri URI] [--admin-dn DN]
 
   --uri        LDAP URI of any node (default ldaps://localhost:636; use ldap:// only on a trusted path)
@@ -40,7 +47,7 @@ Usage: $0 ensure --base DN --admin-password-file FILE --out FILE [--uri URI] [--
                slapcat -n 0 (run inside the container); when that is impossible the
                command refuses unless every rootDN is supplied here (operator-asserted)
   --config-dir slapd.d directory read offline with slapcat (default /etc/openldap/slapd.d)
-  --peer URI   rotate: another node (repeatable); list EVERY node of the cluster
+  --peer URI   rotate/rollback-admin: another node (repeatable); list EVERY node of the cluster
   --config-password-file FILE   rotate: password of cn=admin,cn=config (default: --admin-password-file)
   --new-password-file FILE      rotate: new replication credential (created 0600 when missing)
                                 rotate exit codes: 0 done or progressed, 3 waiting for consumers, 1 refused/failed
@@ -52,7 +59,7 @@ die() { echo "replication-identity: $*" >&2; exit 1; }
 
 cmd="${1:-}"
 case "$cmd" in
-  ensure|retire|reconcile|rotate) shift ;;
+  ensure|retire|reconcile|rotate|rollback-admin) shift ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -302,6 +309,41 @@ EOT
   else
     die "${iddn} holds ${count} values and the new credential does not bind; --new-password-file is not this rotation's credential (or the write has not replicated here); refusing to modify"
   fi
+elif [ "$cmd" = rollback-admin ]; then
+  require_verified_tls
+  nodes=("$uri" ${peers[@]+"${peers[@]}"})
+  sample() { # node -> "<sorted contextCSN values>|<entry count>"
+    local o c d
+    o=$(ldapsearch -x -H "$1" -D "$admin_dn" -y "$pwfile" -LLL -o ldif-wrap=no -b "$base" -s base contextCSN 2>/dev/null) || return 1
+    c=$(sed -n 's/^contextCSN: //p' <<<"$o" | sort | tr '\n' ',')
+    d=$(ldapsearch -x -H "$1" -D "$admin_dn" -y "$pwfile" -LLL -b "$base" -s sub '(objectClass=*)' 1.1 2>/dev/null) || return 1
+    printf '%s|%s\n' "$c" "$(grep -c '^dn:' <<<"$d" || true)"
+  }
+  for n in "${nodes[@]}"; do
+    ldapwhoami -x -H "$n" -D "$admin_dn" -y "$pwfile" >/dev/null 2>&1 || die "the administrator password is not valid on ${n} (D62); a consumer would stall with rc 49 after the switch. Refusing"
+    r=0
+    ldapsearch -x -H "$n" -D "$admin_dn" -y "$pwfile" -LLL -b "$base" -s base dn >/dev/null 2>&1 || r=$?
+    case "$r" in 0) ;; 32) die "${n} is empty (no ${base} entry); administrator mode would mint a new DIT there (E8). Let it resync under dedicated first. Refusing" ;; *) die "cannot read ${base} on ${n}; refusing" ;; esac
+  done
+  # Two samples a moment apart: a node that is still receiving entries changes between them, and
+  # contextCSN alone is not trusted (the entry count must agree too).
+  first=(); second=()
+  for n in "${nodes[@]}"; do
+    s=$(sample "$n") || die "cannot sample ${n}; refusing"
+    case "$s" in '|'*|*'|0') die "${n} reports no contextCSN or no entries; it is empty or has not started to sync. Refusing" ;; esac
+    first+=("$s")
+  done
+  sleep 2
+  for n in "${nodes[@]}"; do
+    s=$(sample "$n") || die "cannot sample ${n}; refusing"
+    second+=("$s")
+  done
+  for i in "${!nodes[@]}"; do
+    [ "${first[$i]}" = "${second[$i]}" ] || die "${nodes[$i]} changed between two samples: it is still resyncing or being written. Refusing"
+    [ "${first[$i]}" = "${first[0]}" ] || die "${nodes[$i]} differs from ${nodes[0]} in contextCSN values or entry count: it is resyncing or lagging. Refusing"
+  done
+  echo "rollback gate passed on ${#nodes[@]} node(s): suffix present, administrator password valid, contextCSN set and entry count identical and stable."
+  echo "Next (operator): set the chart values / environment to identity=admin so the DN AND the replication Secret leave together (D66), restart nodes one at a time with sid 1 last, then verify writes in both directions."
 elif [ "$cmd" = ensure ]; then
   [ -n "$out" ] || die "--out is required (the generated password is written there, never printed)"
   if [ -e "$out" ] || [ -L "$out" ]; then die "--out ${out} already exists (or is a symlink); refusing to overwrite a credential file"; fi
