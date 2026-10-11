@@ -10,6 +10,11 @@ on:
       - "charts/**"
       - ".github/fixtures/replication-offline-seed-values.yaml"
       - ".github/workflows/replication-chaos-e2e.yml"
+      - "scripts/replication-identity.sh"
+      - "scripts/check-replication-identity.sh"
+      - "scripts/lib/replication_*.py"
+      - "scripts/test/test-replication-identity.sh"
+      - "scripts/test/test-replication-identity-k8s.sh"
   push:
     branches: [main]
     # Not a required check, so skip it on docs-only pushes to main.
@@ -634,3 +639,38 @@ jobs:
       - name: Uninstall
         if: always()
         run: helm uninstall directory --namespace directory || true
+
+  # Dedicated replication identity (docs/changes/replication-identity, #353, T-020..T-024): the
+  # same lane as the admin-mode chaos above. Docker part: hard kill and a network partition of
+  # dedicated consumers under writes, plus a wiped data volume with a surviving config volume.
+  # Kubernetes part: chart upgrades admin -> prepare -> dedicated, a deleted pod-0, every pod
+  # deleted at once (OrderedReady), and a lost data claim with a surviving config claim.
+  replication-identity-dedicated:
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: heavy-e2e-lane-c-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t ldapium:chaos image
+
+      - name: Dedicated identity chaos (kill, partition, data-volume loss)
+        run: RIDU_ONLY=chaos ./scripts/test/test-replication-identity.sh ldapium:chaos
+
+      - name: Create cluster
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: identity
+
+      - name: Load image
+        run: kind load docker-image ldapium:chaos --name identity
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Dedicated identity on a StatefulSet (OrderedReady recovery, data-claim loss)
+        run: ./scripts/test/test-replication-identity-k8s.sh ldapium:chaos
