@@ -298,7 +298,7 @@ RFC 원문 확인(rfc-editor.org 텍스트에서 해당 문장 직접 확인): R
 - #285가 머신 쓰기를 연결할 때 `machineWritePolicy.Protected`에 revocations DN을 넣어야 한다.
 - 기능을 끄는 롤백은 서브트리를 머신 `getEntry`로 읽히게 하고 관리자 쓰기를 허용한다(문서화; #363에서 가드 상시 유지는 하지 않기로 결정, 아래 D-363c).
 - digest 변이와 자연 노화는 라이브로 검증되지 않았다. Codex critic 라운드는 할당량 때문에 실행하지 않았다.
-- 범위 밖으로 분리: [#360](https://github.com/dasomel/ldapium/issues/360) API 키·mTLS, [#361](https://github.com/dasomel/ldapium/issues/361) 공유 rate limit, [#362](https://github.com/dasomel/ldapium/issues/362) introspection 백스톱.
+- 범위 밖으로 분리: [#360](https://github.com/dasomel/ldapium/issues/360) API 키·mTLS, [#361](https://github.com/dasomel/ldapium/issues/361) 공유 rate limit, [#362](https://github.com/dasomel/ldapium/issues/362) introspection 백스톱. 결정 기록(제안): [FOLLOWUP-DECISIONS.md](FOLLOWUP-DECISIONS.md)(D13–D15, 유지보수자 수용 대기).
 
 ## Follow-up decisions (#363)
 
