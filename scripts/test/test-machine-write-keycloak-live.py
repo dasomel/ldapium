@@ -462,7 +462,10 @@ def main():
   th.join(45)
   live.check(holder.get('r', (0,))[0] == 201 and entry_exists('uid=slot-held,' + PEOPLE), f'[F] the held write completes after the stall is released ({holder.get("r", (0,))[0]})')
   live.wait_until(lambda: proxy.open == 0, 'LDAP connections to return to the baseline', 15)
-  live.check(create(PX, ptok, 'slot-after')[0] == 201 and proxy.open == 0, '[F] the write slot and the connections are back at the baseline: the next write works, no connection left open')
+  after_ok = create(PX, ptok, 'slot-after')[0] == 201
+  # the proxy sees the close a moment after the response, so poll instead of sampling once
+  live.wait_until(lambda: proxy.open == 0, 'the connection of the next write to close', 15)
+  live.check(after_ok and proxy.open == 0, '[F] the write slot and the connections are back at the baseline: the next write works, no connection left open')
 
   # ======== G. sentinel scan =================================================================================
   time.sleep(0.5)
