@@ -9,10 +9,9 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/idempotency"
 )
 
-// machine-write-scope T-011/T-012/T-016/T-019: inert write configuration. It is
-// parsed and validated only when MACHINE_WRITE_ENABLED is on and nothing
-// consumes it until T-013 registers an operation (machineWriteOps stays empty),
-// so no value here can open a write path.
+// machine-write-scope T-011/T-012/T-016/T-019/T-013: write configuration. It is
+// parsed and validated only when MACHINE_WRITE_ENABLED is on (when off nothing
+// here is read), and the switch refuses itself when a prerequisite is missing.
 
 const (
 	machineWriteMaxDNsPerClient = 16
@@ -50,6 +49,9 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 	}
 	var err error
 	if w.Subtrees, err = parseMachineWriteClientDNs("MACHINE_WRITE_SUBTREES", getenv("MACHINE_WRITE_SUBTREES"), known); err != nil {
+		return err
+	}
+	if err := checkWriteHasWriter(m, w.Subtrees); err != nil {
 		return err
 	}
 	if w.Groups, err = parseMachineWriteClientDNs("MACHINE_WRITE_GROUPS", getenv("MACHINE_WRITE_GROUPS"), known); err != nil {
@@ -92,6 +94,33 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 		return n.err
 	}
 	return w.CheckIdempotencyQuota()
+}
+
+// checkWriteHasWriter is the T-013 self-refusal for "enabled but nothing can
+// write": MACHINE_WRITE_ENABLED=true needs at least one client that has both a
+// MACHINE_WRITE_SUBTREES ceiling and an opened write scope in its
+// MACHINE_ALLOWED_CLIENTS ceiling. Otherwise startup fails instead of running with
+// the switch on and every write answering 403.
+func checkWriteHasWriter(m MachineConfig, subtrees []MachineWriteClientDNs) error {
+	if len(subtrees) == 0 {
+		return fmt.Errorf("MACHINE_WRITE_ENABLED requires MACHINE_WRITE_SUBTREES for at least one client")
+	}
+	open := map[string]bool{}
+	for _, s := range MachineWriteOpenScopes {
+		open[s] = true
+	}
+	ceiling := map[string]bool{}
+	for _, c := range m.Clients {
+		for _, s := range c.Scopes {
+			ceiling[c.ID] = ceiling[c.ID] || open[s]
+		}
+	}
+	for _, e := range subtrees {
+		if ceiling[e.ID] {
+			return nil
+		}
+	}
+	return fmt.Errorf("MACHINE_WRITE_ENABLED requires a MACHINE_WRITE_SUBTREES client whose MACHINE_ALLOWED_CLIENTS ceiling names a write scope")
 }
 
 // checkWriteCeilingStrict is the D20 rule: a ceiling is a strict descendant of

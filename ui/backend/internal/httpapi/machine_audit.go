@@ -126,9 +126,9 @@ func (s *machineAuditState) setActor(p *machineauth.Principal) {
 	}
 }
 
-// setWrite records the write facts of this request (machine-write-scope D6). No
-// write operation is registered yet (machineWriteOps is empty), so nothing calls
-// it outside tests; the later operation-opening unit does.
+// setWrite records the write facts of this request (machine-write-scope D6). The
+// write pipeline calls it (machine_write_pipeline.go) once a machine write operation
+// of machineWriteOps reaches its audit step.
 func (s *machineAuditState) setWrite(w machineWriteInput) {
 	if s != nil {
 		s.write = &w
@@ -363,6 +363,7 @@ func reasonFromResponse(status int, envelopeCode, method string) string {
 func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
 	// Plaintext target DN only when writes are on and the operator asked (Q4).
 	plainDN := s.cfg.Machine.WriteEnabled && s.cfg.Machine.Write.AuditPlainTargetDN
+	s.machineAuditOn = true
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) (err error) {
 			req := c.Request()

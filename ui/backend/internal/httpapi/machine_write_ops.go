@@ -18,8 +18,8 @@ const (
 
 // machineWriteOp is a machineOp plus what the write pipeline needs to know
 // about it. The catalog below is data, not a grant: an operation is reachable
-// only when it is ALSO listed in the opened table (machineWriteOps, empty in
-// production; T-013 is the only unit that fills it).
+// only when it is ALSO listed in the opened table (machineWriteOps, the five
+// first-ship operations; T-013 is the only unit that fills it).
 type machineWriteOp struct {
 	machineOp
 	Compartment string // "data" | "lock": which W identity binds (D3)

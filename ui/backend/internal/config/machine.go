@@ -83,9 +83,9 @@ var MachineReadScopes = []string{
 }
 
 // MachineWriteScopes is the write scope vocabulary (machine-write-scope D7: one
-// scope per operation, no wildcard). T-010 only declares the names: no write
-// operation is open yet, so a client ceiling naming one is refused at startup
-// (parseMachineClients) instead of being silently accepted and doing nothing.
+// scope per operation, no wildcard). Declaring a name opens nothing: only the
+// scopes in MachineWriteOpenScopes are accepted in a client ceiling
+// (parseMachineClients) and they act only with MACHINE_WRITE_ENABLED on.
 var MachineWriteScopes = []string{
 	"directory.users.create",
 	"directory.users.update",
@@ -98,6 +98,18 @@ var MachineWriteScopes = []string{
 	"directory.groups.members.add",
 	"directory.groups.members.remove",
 	"directory.users.password.write",
+}
+
+// MachineWriteOpenScopes are the write scopes of the operations T-013 opens
+// (Resolved Q2, appendix A). A test in httpapi keeps this list equal to the
+// scopes of machineWriteOps; a ceiling naming any other write scope (lock,
+// group create/update/delete, password) is refused at startup.
+var MachineWriteOpenScopes = []string{
+	"directory.users.create",
+	"directory.users.update",
+	"directory.users.delete",
+	"directory.groups.members.add",
+	"directory.groups.members.remove",
 }
 
 // MachineScopes is the closed set of scopes the server understands: the read
@@ -291,16 +303,14 @@ func sortedAlgs() []string {
 	return out
 }
 
-// machineWriteScopesOpen is false in every default and release build: a client
-// ceiling that names a write scope is a start-up error (machine-write-scope
-// T-010) until T-013 opens the operations. Only the drill-only build tag sets
-// it (machine_write_drill.go).
-var machineWriteScopesOpen = false
-
 // parseMachineClients parses "clientId=scope,scope;clientId2=scope" (D3).
 // Entries are separated by ';', scopes by ','. Unknown scopes, a duplicate
 // client, an empty scope list and wildcards are startup errors: the ceiling
-// must be explicit.
+// must be explicit. A write scope of an opened operation (MachineWriteOpenScopes)
+// is accepted whatever MACHINE_WRITE_ENABLED says: with the switch off it grants
+// nothing (the write pipeline is not built, every write is 403), which is what
+// lets the emergency "write-only redeploy" (machine-auth-operations.md) flip only
+// that flag. Any other write scope is a start-up error.
 func parseMachineClients(raw string) ([]MachineClient, error) {
 	known := map[string]bool{}
 	for _, s := range MachineReadScopes {
@@ -309,6 +319,10 @@ func parseMachineClients(raw string) ([]MachineClient, error) {
 	writeScopes := map[string]bool{}
 	for _, s := range MachineWriteScopes {
 		writeScopes[s] = true
+	}
+	openScopes := map[string]bool{}
+	for _, s := range MachineWriteOpenScopes {
+		openScopes[s] = true
 	}
 	var out []MachineClient
 	seen := map[string]bool{}
@@ -333,8 +347,8 @@ func parseMachineClients(raw string) ([]MachineClient, error) {
 			if s == "" {
 				continue
 			}
-			if writeScopes[s] && !machineWriteScopesOpen {
-				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope, but no write operation is available yet (machine-write-scope T-010)")
+			if writeScopes[s] && !openScopes[s] {
+				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope that no operation uses yet (machine-write-scope T-026/T-030)")
 			}
 			if !known[s] && !writeScopes[s] {
 				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS contains an unknown scope (known: %s)", strings.Join(MachineReadScopes, ", "))

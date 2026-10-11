@@ -14,7 +14,8 @@ type machineWriteConstraintKey struct{}
 // WithMachineWriteConstraints enables D19/B1 atomic target-type assertions.
 // Cost: mandatory revisions for machine writes; escape hatch: disable writes.
 // Human callers never set this marker and retain their existing controls.
-// T-013 must set it after pre-connect and read-identity checks have succeeded.
+// The machine write pipeline (httpapi/machine_write_pipeline.go) sets it after the
+// pre-connect and read-identity checks have succeeded.
 func WithMachineWriteConstraints(ctx context.Context) context.Context {
 	return context.WithValue(ctx, machineWriteConstraintKey{}, true)
 }

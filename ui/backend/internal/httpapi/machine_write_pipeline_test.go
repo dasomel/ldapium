@@ -284,10 +284,30 @@ func wantCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code str
 
 // ---- production stays closed ------------------------------------------------
 
-func TestWritePipeline_ProductionTableEmptyEverythingIs403(t *testing.T) {
+// T-013: the production table (no injected table) holds exactly the five
+// first-ship operations. They reach the pipeline (not the scope gate); every
+// other write route (PUT, group create/update/delete, lock, password) is still
+// 403 scope_denied before any bind, whatever the token carries.
+func TestWritePipeline_ProductionTableHasExactlyTheFiveOperations(t *testing.T) {
 	w := writeHarness(t, nil, nil) // no injected table: what production runs
-	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 0 || len(machineWriteOps) != 0 {
-		t.Fatalf("production table not empty: %+v", w.s.machine.write)
+	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 5 || len(machineWriteOps) != 5 {
+		t.Fatalf("production table is not the five operations: %+v", w.s.machine.write)
+	}
+	open := map[string]bool{}
+	for _, op := range machineWriteOps {
+		open[op.Method+" "+op.Route] = true
+	}
+	for _, r := range protectedRoutes(t, w.s) {
+		if r.Method == "GET" || open[r.Method+" "+r.Route] {
+			continue
+		}
+		rec := w.do(r.Method, r.URL, bearer(w.fullToken()))
+		if rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied {
+			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+		}
+	}
+	if w.dir.binds() != 0 || len(w.ident.callList()) != 0 || w.s.idem.Len() != 0 || w.stages() != "" {
+		t.Fatalf("a closed write reached binds=%d ident=%v idem=%d stages=%q", w.dir.binds(), w.ident.callList(), w.s.idem.Len(), w.stages())
 	}
 	for _, r := range []wreqSpec{
 		{method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"B","sn":"B"}`},
@@ -297,10 +317,9 @@ func TestWritePipeline_ProductionTableEmptyEverythingIs403(t *testing.T) {
 		{method: "DELETE", path: "/api/groups/members?groupDn=" + url.QueryEscape(wTeam) + "&memberDn=" + url.QueryEscape(wBob)},
 	} {
 		r.headers = okHeaders()
-		wantCode(t, w.send(r), 403, codeScopeDenied)
-	}
-	if w.dir.binds() != 0 || len(w.ident.callList()) != 0 || w.s.idem.Len() != 0 || w.stages() != "" {
-		t.Fatalf("a closed write reached binds=%d ident=%v idem=%d stages=%q", w.dir.binds(), w.ident.callList(), w.s.idem.Len(), w.stages())
+		if rec := w.send(r); rec.Code == 403 && errBody(t, rec).Code == codeScopeDenied {
+			t.Errorf("%s %s is not open: %d %s", r.method, r.path, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -440,6 +459,27 @@ func TestWritePipeline_PreReadDenialAndFailuresDoNotBurnTheKey(t *testing.T) {
 				t.Fatalf("retry with the same key: %d %s", rec.Code, rec.Body)
 			}
 		})
+	}
+}
+
+// The identity pre-read and the write share one MACHINE_REQUEST_TIMEOUT; a slow
+// pre-read must not restart the deadline for the write (#285 PR review).
+func TestWritePipeline_DeadlineCoversPreReadAndWrite(t *testing.T) {
+	const timeout = 2 * time.Second
+	w := writeHarness(t, func(c *config.Config) { c.Machine.RequestTimeout = timeout }, catalogOps())
+	w.ident.fn = func(string, string) error { time.Sleep(300 * time.Millisecond); return nil }
+	start := time.Now()
+	if rec := w.patch(wBob, okHeaders()); rec.Code != 204 {
+		t.Fatalf("write: %d %s", rec.Code, rec.Body)
+	}
+	w.dir.mu.Lock()
+	defer w.dir.mu.Unlock()
+	if len(w.dir.ctxs) != 1 {
+		t.Fatalf("write calls = %d, want 1", len(w.dir.ctxs))
+	}
+	dl, ok := w.dir.ctxs[0].Deadline()
+	if !ok || dl.After(start.Add(timeout+100*time.Millisecond)) {
+		t.Fatalf("write deadline %v is beyond the request start + timeout (%v): the pre-read restarted it", time.Until(dl), timeout)
 	}
 }
 

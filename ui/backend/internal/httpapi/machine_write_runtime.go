@@ -10,13 +10,61 @@ import (
 
 // machineWriteRuntime holds the write-side objects built from the validated
 // configuration (T-012/T-016/T-018/T-019). It is constructed only when
-// MACHINE_WRITE_ENABLED is on. Only the write pipeline consults it, and it
-// matches no request while machineWriteOps is empty, so T-013 is the only unit
-// that can make it matter.
+// MACHINE_WRITE_ENABLED is on. Only the write pipeline consults it.
 type machineWriteRuntime struct {
 	policies map[string]machineWritePolicy
 	limiter  *machineWriteLimiter
 	identity *ldapclient.WriteIdentityReader
+}
+
+// checkMachineWritePrerequisites is the T-013 self-refusal: the switch that opens
+// machine writes fails start-up unless idempotency is active, the write audit is
+// installed, the write limits are set, the W_data identity is configured and at
+// least one client has a write ceiling. A flag that is off by default does not
+// protect the operator who turns it on, so the check lives next to the table
+// that grants. Config validation (config/machine_write*.go) catches the same
+// gaps earlier for a deployment; this one is the last line for any other caller.
+func checkMachineWritePrerequisites(cfg config.Config, idempotency, audit bool) error {
+	w := cfg.Machine.Write
+	switch {
+	case !cfg.Machine.Enabled:
+		return errors.New("machine writes require machine auth")
+	case !idempotency:
+		return errors.New("machine writes require the idempotency store (UI_IDEMPOTENCY_ENABLED)")
+	case !audit:
+		return errors.New("machine writes require the machine access audit")
+	case w.Limits.RPS < 1 || w.Limits.Burst < 1 || w.Limits.GlobalSlots < 1:
+		return errors.New("machine writes require the write limits (MACHINE_WRITE_RATE_LIMIT_RPS, MACHINE_WRITE_RATE_LIMIT_BURST, MACHINE_WRITE_GLOBAL_SLOTS)")
+	case w.Data.BindDN == "" || w.Data.BindPassword == "":
+		return errors.New("machine writes require the MACHINE_WRITE_DATA bind identity")
+	case len(w.Subtrees) == 0:
+		return errors.New("machine writes require MACHINE_WRITE_SUBTREES for at least one client")
+	case !hasWriter(cfg.Machine):
+		return errors.New("machine writes require a MACHINE_WRITE_SUBTREES client whose MACHINE_ALLOWED_CLIENTS ceiling names an opened write scope")
+	}
+	return nil
+}
+
+// hasWriter is the runtime twin of config.checkWriteHasWriter, so a construction
+// path that does not go through config.Load cannot turn the switch on with nobody
+// able to write: some client has both a write subtree and an opened write scope.
+func hasWriter(m config.MachineConfig) bool {
+	open := map[string]bool{}
+	for _, s := range config.MachineWriteOpenScopes {
+		open[s] = true
+	}
+	scoped := map[string]bool{}
+	for _, c := range m.Clients {
+		for _, s := range c.Scopes {
+			scoped[c.ID] = scoped[c.ID] || open[s]
+		}
+	}
+	for _, e := range m.Write.Subtrees {
+		if scoped[e.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // newMachineWriteRuntime returns nil when writes are off: nothing is built and

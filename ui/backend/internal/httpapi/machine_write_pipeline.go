@@ -69,7 +69,7 @@ type machineWritePipeline struct {
 
 // newMachineWritePipeline returns nil when the write runtime is off, so with
 // MACHINE_WRITE_ENABLED unset no table is consulted at all. The opened table is
-// machineWriteOps (empty) unless a test injects its own through machineDeps.
+// machineWriteOps (five operations, T-013) unless a test injects its own through machineDeps.
 func (s *Server) newMachineWritePipeline(dialer ldapclient.Dialer) (*machineWritePipeline, error) {
 	rt := s.machineWrite
 	if rt == nil {
@@ -410,6 +410,10 @@ func (r *wreq) execute(c echo.Context) error {
 			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity check unavailable")
 		}
 	}
+	// runAs derives its own timeout from the request context: handing it ours
+	// keeps the M pre-read and the write inside ONE MACHINE_REQUEST_TIMEOUT
+	// (emergency-block and shutdown-grace bounds), not two back to back.
+	c.SetRequest(c.Request().WithContext(ctx))
 	return r.w.exec.runAs(c, r.p, id.BindDN, id.BindPassword, func(c echo.Context) error {
 		c.Set(definitiveKey, false) // from here on a 5xx may hide an applied write
 		c.Set(machineIdempotencyDoneKey, true)

@@ -11,9 +11,8 @@ name: Machine bearer auth E2E (real Keycloak)
 #   - test-machine-jwks-live.py: key rotation with overlap, floods, hostile issuer responses and
 #     discovery recovery behind a counting proxy in front of Keycloak.
 #   - test-machine-revocation-drill.py: emergency revocation and rollback across replicas.
-#   - test-machine-write-drill.py (#285, T-022): the machine WRITE emergency block, the in-flight window and the
-#     W_* lockout, on a DRILL-ONLY UI image (Go build tag machinewritedrill, built only in this job, never pushed;
-#     scripts/test/test-machine-write-drill-guard.py keeps the tag out of every default and release build).
+#   - test-machine-write-drill.py (#285, T-022/T-013): the machine WRITE emergency block, the in-flight window and the
+#     W_* lockout on the normal UI image (writes are opened by T-013 and stay off unless MACHINE_WRITE_ENABLED).
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
 
 on:
@@ -43,8 +42,6 @@ env:
   KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.7.4
   LDAPIUM_IMAGE: ldapium:machine-e2e
   LDAPIUM_UI_IMAGE: ldapium-ui:machine-e2e
-  # Drill-only image for test-machine-write-drill.py: local to this job, never tagged for or pushed to a registry.
-  LDAPIUM_UI_DRILL_IMAGE: ldapium-ui:machine-drill
 
 jobs:
   machine-keycloak:
@@ -70,9 +67,6 @@ jobs:
       - name: Build UI image
         run: docker build -t "$LDAPIUM_UI_IMAGE" ui
 
-      - name: Build the DRILL-ONLY UI image (machine write operations registered; never pushed)
-        run: docker build --build-arg GO_TAGS=machinewritedrill -t "$LDAPIUM_UI_DRILL_IMAGE" ui
-
       - name: Pull the pinned Keycloak image
         run: docker pull "$KEYCLOAK_IMAGE"
 
@@ -97,11 +91,7 @@ jobs:
       - name: HTTP revocation under actual LDAP peer partition
         run: python3 scripts/test/test-machine-http-partition.py
 
-      - name: Machine write emergency-block drill (drill-only image, two replicas, in-flight window, W_* lockout)
-        env:
-          # the drill needs BOTH images: the tagged one under test and the default one that must stay closed
-          LDAPIUM_UI_DEFAULT_IMAGE: ${{ env.LDAPIUM_UI_IMAGE }}
-          LDAPIUM_UI_IMAGE: ${{ env.LDAPIUM_UI_DRILL_IMAGE }}
+      - name: Machine write emergency-block drill (normal image, two replicas, in-flight window, W_* lockout)
         run: python3 scripts/test/test-machine-write-drill.py
 
       - name: Existing machine contracts with enabled empty revocation snapshots

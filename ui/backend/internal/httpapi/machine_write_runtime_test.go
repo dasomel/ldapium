@@ -71,14 +71,18 @@ func TestMachineWriteSettingsOffKeepV1Byte(t *testing.T) {
 			denied++
 		}
 	}
-	if denied != 37 || len(machineWriteOps) != 0 || set.dialer.binds.Load() != 0 {
-		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 0, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
+	// With writes off all 37 non-read operations are 403: the 32 on the deny list
+	// and the five registered writes, which are only reachable with the switch on.
+	if denied != 37 || len(machineWriteOps) != 5 || set.dialer.binds.Load() != 0 {
+		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 5, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
 	}
 }
 
-// Enabled and fully configured: the objects exist, nothing is registered, and
-// every write is still refused before execution.
-func TestMachineWriteRuntimeEnabledStaysClosed(t *testing.T) {
+// Enabled and fully configured: the objects exist and exactly the five
+// registered operations get past the scope gate (the stub requests are then
+// rejected by the pipeline for lack of body, key or If-Match); every other write
+// route stays 403 before execution and no bind happens.
+func TestMachineWriteRuntimeEnabledOpensOnlyTheFive(t *testing.T) {
 	h := newHarness(t, harnessOpt{cfg: func(c *config.Config) {
 		w := writeRuntimeConfig(true)
 		c.IdempotencyEnabled = true
@@ -88,19 +92,32 @@ func TestMachineWriteRuntimeEnabledStaysClosed(t *testing.T) {
 	if h.s.machineWrite == nil || h.s.machineWrite.limiter == nil || h.s.machineWrite.identity == nil || len(h.s.machineWrite.policies) != 2 {
 		t.Fatalf("runtime not built: %+v", h.s.machineWrite)
 	}
+	open := map[string]bool{}
+	for _, op := range machineWriteOps {
+		open[op.Method+" "+op.Route] = true
+	}
 	token := h.fullToken()
-	writes := 0
+	closed, opened := 0, 0
 	for _, r := range protectedRoutes(t, h.s) {
 		if r.Method == "GET" {
 			continue
 		}
-		if rec := h.do(r.Method, r.URL, bearer(token)); rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied {
-			t.Errorf("%s %s: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+		rec := h.do(r.Method, r.URL, bearer(token))
+		scopeDenied := rec.Code == 403 && errBody(t, rec).Code == codeScopeDenied
+		if open[r.Method+" "+r.Route] {
+			opened++
+			if scopeDenied {
+				t.Errorf("opened %s %s refused at the scope gate: %s", r.Method, r.Route, rec.Body)
+			}
+			continue
 		}
-		writes++
+		closed++
+		if !scopeDenied {
+			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+		}
 	}
-	if writes == 0 || len(machineWriteOps) != 0 || h.dialer.binds.Load() != 0 {
-		t.Fatalf("writes=%d ops=%d binds=%d", writes, len(machineWriteOps), h.dialer.binds.Load())
+	if opened != 5 || closed == 0 || h.dialer.binds.Load() != 0 {
+		t.Fatalf("opened=%d closed=%d binds=%d", opened, closed, h.dialer.binds.Load())
 	}
 }
 

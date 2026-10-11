@@ -1,7 +1,7 @@
 # ldapium HTTP API
 
 ldapium 웹 콘솔이 사용하는 `/api` JSON API를 스크립트와 AI 에이전트가 쓸 수 있도록 정리한 문서입니다.
-기본 인증은 **세션 쿠키**입니다. 선택(기본 꺼짐)으로 Keycloak 서비스 계정의 bearer 토큰을 읽기 전용 GET 8개에 한해 받을 수 있습니다([머신 bearer 인증](#머신-bearer-인증-기본-꺼짐)). 그 기능을 켜지 않은 서버의 동작은 달라지지 않습니다.
+기본 인증은 **세션 쿠키**입니다. 선택(기본 꺼짐)으로 Keycloak 서비스 계정의 bearer 토큰을 읽기 전용 GET 8개와, 별도 스위치(`MACHINE_WRITE_ENABLED`, 기본 꺼짐)가 켜진 경우 단건 쓰기 5개에 한해 받을 수 있습니다([머신 bearer 인증](#머신-bearer-인증-기본-꺼짐)). 그 기능을 켜지 않은 서버의 동작은 달라지지 않습니다.
 
 - 기계 판독용 명세 (OpenAPI 3.1, 실행 중인 빌드와 항상 일치): `GET /api/v1/openapi.json`
 - AI용 요약 인덱스: `GET /llms.txt`
@@ -14,7 +14,7 @@ ldapium 웹 콘솔이 사용하는 `/api` JSON API를 스크립트와 AI 에이�
 |---|---|
 | Base | 콘솔과 같은 origin, 경로 `/api` |
 | 형식 | 요청/응답 모두 JSON (`Content-Type: application/json`) |
-| 인증 | 쿠키 `ldapium_session` (HttpOnly, SameSite=Lax). 선택(기본 꺼짐): 읽기 전용 GET 8개에 한한 머신 bearer — [머신 bearer 인증](#머신-bearer-인증-기본-꺼짐) |
+| 인증 | 쿠키 `ldapium_session` (HttpOnly, SameSite=Lax). 선택(기본 꺼짐): 읽기 전용 GET 8개(+ 별도 스위치로 쓰기 5개)에 한한 머신 bearer — [머신 bearer 인증](#머신-bearer-인증-기본-꺼짐) |
 | 권한 | LDAP 모드: 로그인한 DN의 ACL. SSO 모드: 서비스 계정의 ACL |
 
 OpenAPI 문서의 표식: `security: []` = 공개, `x-admin: true` (+ `x-required-role`) = 관리자 DN 필요, 그 외 = 세션 필요.
@@ -315,11 +315,13 @@ UI 백엔드 프로세스의 Prometheus 지표(`ldapium_ui_*`: 요청 수·지�
 
 ## 머신 bearer 인증 (기본 꺼짐)
 
-> 읽기 전용 v1이며 **기본 꺼짐**입니다. 쓰기·비밀번호·백업·프로파일은 어떤 경우에도 머신으로 호출할 수 없습니다. 인증된 머신 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로 요청마다 bind해 실행됩니다. 운영자 문서: [Keycloak client 설정](machine-keycloak-client.md) · [LDAP 계정과 ACL](machine-ldap-account.md) · [롤백·긴급 차단·호환성](machine-auth-operations.md). 설계와 결정: [`CHANGE.md`](changes/machine-principal-auth/CHANGE.md), [`ADR.md`](changes/machine-principal-auth/ADR.md). **실제 Keycloak을 띄운 라이브 e2e와 release 게이트는 이 문서 작성 시점에 병합되지 않았습니다**([`IMPLEMENTATION-STATUS.md`](IMPLEMENTATION-STATUS.md)).
+> 인증은 **기본 꺼짐**이고, 머신 **쓰기**는 별도 스위치 `MACHINE_WRITE_ENABLED`(역시 기본 꺼짐)가 켜진 서버에서만 아래 5개 오퍼레이션에 열립니다. 비밀번호·백업·프로파일·잠금·그룹 생성/수정/삭제·`PUT`·`entry/move`는 어떤 경우에도 머신으로 호출할 수 없습니다. 인증된 머신 읽기 요청은 전용 읽기 전용 LDAP 계정(`MACHINE_LDAP_BIND_DN`)으로, 쓰기 요청은 별도 쓰기 계정(`MACHINE_WRITE_DATA_BIND_DN`)으로 요청마다 bind해 실행됩니다. 운영자 문서: [Keycloak client 설정](machine-keycloak-client.md) · [LDAP 계정과 ACL](machine-ldap-account.md) · [롤백·긴급 차단·호환성](machine-auth-operations.md). 설계와 결정: [`CHANGE.md`](changes/machine-principal-auth/CHANGE.md), [`ADR.md`](changes/machine-principal-auth/ADR.md). **실제 Keycloak을 띄운 라이브 e2e와 release 게이트는 이 문서 작성 시점에 병합되지 않았습니다**([`IMPLEMENTATION-STATUS.md`](IMPLEMENTATION-STATUS.md)).
 
 켜지 않으면(`MACHINE_AUTH_ENABLED` 미설정) `Authorization` 헤더는 완전히 무시되고 기존 동작·응답은 달라지지 않습니다. 켜면 Keycloak 서비스 계정 access token(`client_credentials`)을 `Authorization: Bearer <jwt>`로 보낼 수 있습니다.
 
-- **허용 오퍼레이션 8개(모두 GET):** `listUsers`(`directory.users.read`), `listGroups`(`directory.groups.read`), `listTree`(`directory.tree.read`), `getEntry`(`directory.entry.read`), `listPasswordPolicies`(`directory.policies.read`), `getMonitor`(`server.monitor.read`), 그리고 opt-in `listAuditActions`(`audit.read`)·`getServerSettings`(`server.settings.read`). OpenAPI에서 이 8개만 `security`에 `machineBearer`와 `x-machine-scope`를 가집니다. 나머지 보호 오퍼레이션 37개(쓰기·비밀번호·백업·프로파일·`entry/move`·`getMe`)는 어떤 scope로도 403 `scope_denied`입니다.
+- **허용 읽기 오퍼레이션 8개(모두 GET):** `listUsers`(`directory.users.read`), `listGroups`(`directory.groups.read`), `listTree`(`directory.tree.read`), `getEntry`(`directory.entry.read`), `listPasswordPolicies`(`directory.policies.read`), `getMonitor`(`server.monitor.read`), 그리고 opt-in `listAuditActions`(`audit.read`)·`getServerSettings`(`server.settings.read`). OpenAPI에서 이 8개와 아래 쓰기 5개만 `security`에 `machineBearer`와 `x-machine-scope`를 가집니다. 쓰기 스위치가 켜져 있으면 추가로 아래 5개 쓰기 오퍼레이션도 `machineBearer`와 `x-machine-scope`를 가집니다(OpenAPI 선언은 스위치와 무관). 나머지 보호 오퍼레이션 32개(`PUT` 사용자·비밀번호·잠금/해제·그룹 생성/수정/삭제·백업·프로파일·`entry/move`·`getMe`)는 어떤 scope로도 403 `scope_denied`이고, **쓰기 스위치가 꺼져 있으면 5개 쓰기도 403 `scope_denied`**입니다(기본).
+- **허용 쓰기 오퍼레이션 5개(`MACHINE_WRITE_ENABLED=true`일 때만):** `createUser`(`directory.users.create`, **비밀번호 없이**: 본문에 `password`가 있으면 거부), `patchUser`(`directory.users.update`), `deleteUser`(`directory.users.delete`, 컨테이너·리프가 아닌 항목은 거부), `addGroupMember`(`directory.groups.members.add`), `removeGroupMember`(`directory.groups.members.remove`). 모두 단건이며 client별 `MACHINE_WRITE_SUBTREES`의 **엄격한 하위**만 쓸 수 있고(상한 자신 거부), 보호 DN(`M`·쓰기 계정·관리자·서비스 계정·rootdn·복제 신원·특권 그룹)과 `MACHINE_WRITE_GROUPS`에 없는 그룹은 연결 이전에 403입니다. `Idempotency-Key`는 필수(없으면 428 `idempotency_key_required`)이고, 그룹 멤버 추가·제거(`addGroupMember`/`removeGroupMember`)는 client별 `MACHINE_WRITE_GROUPS`에 있는 그룹에만 허용되며 목록이 비어 있으면 그 client의 멤버 추가·제거는 전부 403입니다(안전한 기본값). `deleteUser`는 리프 사용자 항목만 지웁니다(자식이 있는 항목은 LDAP이 거부, 그룹·컨테이너 DN은 대상 클래스 단언으로 거부). `createUser`를 뺀 4개는 정확히 하나의 강한 `entryCSN` `If-Match`가 필수입니다(없으면 428 `if_match_required`, `*`·약한 태그·여러 값은 400 `invalid_request`, 불일치 412). 쓰기 예산은 읽기와 분리됩니다(`MACHINE_WRITE_RATE_LIMIT_RPS`/`_BURST`/`MACHINE_WRITE_GLOBAL_SLOTS`, client당 동시 쓰기 1; 초과 429 `machine_rate_limited`). 감사 줄에는 쓰기 필드가 붙습니다([`audit-event-schema.md`](audit-event-schema.md)).
+- **쓰기 스위치는 스스로 거부합니다:** `MACHINE_WRITE_ENABLED=true`는 `MACHINE_AUTH_ENABLED`, `UI_IDEMPOTENCY_ENABLED`(단일 replica), `MACHINE_WRITE_DATA_BIND_DN`/`_PASSWORD`, 쓰기 한도, 한 client 이상의 `MACHINE_WRITE_SUBTREES`와 쓰기 scope가 든 `MACHINE_ALLOWED_CLIENTS` 상한 중 하나라도 없으면 기동 실패합니다. 스위치가 꺼져 있으면 `MACHINE_WRITE_*`는 읽지도 검증하지도 않고, 상한의 쓰기 scope는 아무것도 허용하지 않습니다(긴급 차단은 이 플래그만 끄는 재배포). 위 5개에 속하지 않는 쓰기 scope(잠금·그룹 생성/수정/삭제·비밀번호)를 상한에 적으면 스위치와 무관하게 기동 실패합니다. 쓰기 ACL·긴급 차단 절차: [`machine-write-account.md`](machine-write-account.md), [`machine-auth-operations.md`](machine-auth-operations.md).
 - **유효 권한 = 토큰 scope ∩ 서버의 client 상한**(`MACHINE_ALLOWED_CLIENTS`=`clientId=scope,scope;…`).
 - **쿠키와 bearer는 섞지 않습니다.** 유효 형식의 `Authorization`과 `ldapium_session` 쿠키가 함께 오면 400, 형식이 틀리거나 `Authorization` 줄이 둘 이상이면 쿠키 유무와 무관하게 401 `token_invalid`(쿠키 폴백 없음), 로그인·로그아웃·SSO 4개 경로에 `Authorization`이 있으면 400입니다. bearer 요청은 `Set-Cookie`를 받지 않고 CORS는 확장되지 않습니다(프리플라이트의 `authorization`은 허용 헤더가 아님). 상태 변경 요청의 `Origin` 게이트는 그대로 가장 바깥입니다.
 - **검증 실패는 401**(`token_invalid`, 순수 만료만 `token_expired`), **서명 키 조회 장애는 503 + `Retry-After`**, 정상 조회 뒤의 알 수 없는 `kid`는 401입니다. 토큰 정책(`aud` 정확 멤버십, `azp`==`client_id`, 서비스 계정 판별, 수명 상한·skew, `alg` allowlist)과 JWKS 상태 기계는 CHANGE.md가 정본입니다.
@@ -365,7 +367,7 @@ list의 `cursor`는 토큰을 갱신해도 이어집니다(issuer+client에 묶�
 | 400 `invalid_request` | 유효 형식 `Authorization`과 `ldapium_session` 쿠키를 함께 보냄(쿠키 이름이 있으면 값·개수와 무관), 또는 로그인·로그아웃·SSO 4개 경로에 `Authorization`을 보냄. 쿠키는 발행·삭제되지 않음 | 쿠키를 빼고 |
 | 401 `token_invalid` | 토큰이 검증을 통과하지 못함: 서명·`alg`·`typ`·`kid`·`iss`·`aud`·`azp`/`client_id`·서비스 계정 규칙·`scope`·시간 규칙·수명 상한, 허용 목록 밖 client, 알 수 없는 `kid`(키를 정상 조회한 뒤), 또는 형식이 틀렸거나 둘 이상인 `Authorization`(쿠키로 폴백하지 않음). 본문은 사유를 말하지 않고(사유는 감사 로그의 `reason`), 검증 실패 응답에는 `WWW-Authenticate: Bearer error="invalid_token"`가 붙음 | 아니오(토큰·설정을 고친 뒤) |
 | 401 `token_expired` | 다른 규칙은 모두 통과했고 `exp`(+`MACHINE_CLOCK_SKEW`)만 지남 | 새 토큰으로 |
-| 403 `scope_denied` | 토큰은 유효하지만 (a) 허용 8개가 아닌 오퍼레이션·비-GET(HEAD 포함)·미등록 경로, (b) 필요한 scope가 토큰 scope ∩ 서버 client 상한에 없음, (c) `getEntry`/`listTree`의 `dn`이 `LDAP_BASE_DN` 밖(`cn=accesslog`·`cn=config`·`cn=Monitor` 포함). bind·핸들러 실행 전에 거부됨 | 아니오 |
+| 403 `scope_denied` | 토큰은 유효하지만 (a) 허용 오퍼레이션(읽기 8개, 쓰기 스위치가 켜진 경우 쓰기 5개)이 아닌 오퍼레이션·쓰기 스위치가 꺼진 서버의 비-GET(HEAD 포함)·미등록 경로, (b) 필요한 scope가 토큰 scope ∩ 서버 client 상한에 없음, (c) `getEntry`/`listTree`의 `dn`이 `LDAP_BASE_DN` 밖(`cn=accesslog`·`cn=config`·`cn=Monitor` 포함). bind·핸들러 실행 전에 거부됨 | 아니오 |
 | 429 `machine_rate_limited` | (a) 같은 IP의 실패가 한도(기본 60초에 10회)에 도달 — 서명·JWKS 작업 **이전**에 거부되므로 유효 토큰도 걸림, (b) 검증된 client의 rate/burst/동시 실행 한도. `Retry-After` 정수 초가 항상 있음 | `Retry-After` 후 |
 | 503 `unavailable` | (a) 서명 키(JWKS/discovery) 조회 불가 또는 backoff 중 — `Retry-After`, (b) 전역 인증 동시성 또는 전역 LDAP 슬롯 소진 — `Retry-After: 1`, (c) 머신 LDAP bind 실패·디렉터리 중단·`MACHINE_REQUEST_TIMEOUT` 초과(다른 신원으로 폴백하지 않음) | `Retry-After` 후 |
 | 422 `size_limit_exceeded` | `listTree`의 자식이 1000개를 넘음(머신 요청만. 잘라 내지 않고 거부) | 아니오 |

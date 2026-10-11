@@ -42,7 +42,7 @@ const en = {
   'apiDocs.authSession': 'session',
   'apiDocs.authAdmin': 'admin',
   'apiDocs.machine': 'Machine-callable',
-  'apiDocs.machineBody': 'Operations marked "machine-callable" also accept a machine bearer token carrying the shown scope, but only when the server enables machine auth (off by default). Otherwise they remain session-only.',
+  'apiDocs.machineBody': 'Operations marked "machine-callable" also accept a machine bearer token carrying the shown scope, but only when the server enables machine auth (off by default). Write operations additionally need the separate machine write switch (also off by default). Otherwise they remain session-only.',
   'apiDocs.machineHint': 'Machine-callable: accepts a machine bearer token with this scope when the server enables machine auth (off by default).',
   'apiDocs.parameters': 'Parameters',
   'apiDocs.requestBody': 'Request body',

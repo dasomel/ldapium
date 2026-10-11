@@ -9,7 +9,7 @@ import (
 // D18/D25: machine writes use a closed DTO field set. LDAP operational,
 // objectClass and secret values cannot be injected through ignored JSON keys.
 // Cost: canonical JSON field spelling required; escape hatch: disable writes.
-// This helper is not connected until the T-013 executor/authorization gates.
+// The write pipeline calls it before any bind.
 func machineWriteBodyAllowed(operation string, raw []byte) bool {
 	if len(raw) > maxIdempotencyRequestBody {
 		return false

@@ -50,9 +50,12 @@ type Server struct {
 	machine     *machineAuth
 	machineTest *machineDeps
 	// machineWrite is built only when MACHINE_WRITE_ENABLED is on. Only the write
-	// pipeline (machine_write_pipeline.go) reads it, and it matches nothing while
-	// machineWriteOps is empty.
+	// pipeline (machine_write_pipeline.go) reads it.
 	machineWrite *machineWriteRuntime
+	// machineAuditOn is set by machineAuditMiddleware itself when it is built, so it
+	// is true only if the audit wrapper exists; the write switch refuses to start
+	// without it (T-013).
+	machineAuditOn bool
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
 	apiRoutes     []*echo.Route
@@ -150,6 +153,9 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 		}
 		s.echo.Use(s.machineMiddleware())
 		if cfg.Machine.WriteEnabled {
+			if err = checkMachineWritePrerequisites(cfg, s.idem != nil, s.machineAuditOn); err != nil {
+				return nil, err
+			}
 			if s.machineWrite, err = newMachineWriteRuntime(cfg, time.Now); err != nil {
 				return nil, err
 			}
