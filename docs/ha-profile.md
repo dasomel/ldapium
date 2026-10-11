@@ -317,3 +317,24 @@ restore or rotation gate passed. The tool covers only selected nodes/attributes
 and does not discover omitted members, issue a canary, or prove live session
 credentials. `--configuration-only` cannot be combined with the data-convergence
 flag because configuration predicates do not establish replication convergence.
+
+### Replication identity limits (what the alerts and the check do not cover)
+
+With `LDAP_REPLICATION_IDENTITY=dedicated` the `LDAPiumReplicationLag` and
+`LDAPiumContextCSNDivergence` alerts keep their meaning but gain a blind spot: they
+compare `contextCSN`, and the reserved identity can be bound successfully while its
+ACL hides an attribute, so a consumer can hold an equal `contextCSN` and still lack
+data (`userPassword` hashes first). An identity that cannot bind at all (rc 49 after a
+wrong Secret, a deleted entry or a restore from before a rotation) stalls replication,
+and that does show as lag, but only after writes occur; the exporter has no consumer
+state metric. The data visibility check above is the only detector for the first case,
+and nothing runs it periodically yet: a scheduled check CronJob with a
+`kube_job_status_failed` alert and promtool test is split out of the first
+implementation (see
+[TASKS.md](changes/replication-identity/TASKS.md), T-017). Not covered by the
+check today: reading the local database offline with `slapcat` instead of over LDAPS,
+discovering cluster members (the operator lists every `--peer`; an omitted node is
+silently unchecked), a canary write proving live propagation, attributes outside the
+`--attributes` list, writes discarded by last-write-wins, and credentials held by
+already-established consumer sessions. Running the check also requires the
+administrator credential (D43 is unchanged).

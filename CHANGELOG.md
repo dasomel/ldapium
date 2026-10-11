@@ -371,6 +371,17 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   Rollback: set `off` and restart once before moving to an image that predates
   the setting; the rule lives in `cn=config` and an older image would not
   remove it.
+- Admin-mode startup now logs a WARNING when `LDAP_REPLICATION_PASSWORD(_FILE)`
+  differs from the admin password while replication binds as the admin DN: peers
+  reject that bind (rc 49) and replication stalls silently (#355, proposed in
+  `docs/changes/replication-identity/CHANGE.md`). A log line only; the start is
+  never refused, and `cn=config`/`olcSyncrepl` stay byte-identical (a custom
+  `LDAP_REPLICATION_BIND_DN` with a password does not warn).
+- Documentation (#354): the replication identity transition (prepare, check,
+  ensure, check, dedicated, rollback, total-loss recovery) is in
+  `docs/migration.md`; the limits of the contextCSN alerts and the data check are
+  in `docs/ha-profile.md`. `rotate`, `rollback-admin` and the periodic check
+  remain unimplemented.
 
 ### Helm chart
 

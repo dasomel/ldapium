@@ -239,6 +239,62 @@ If critical anomalies occur post-cutover:
      ```
    - Verified continuously in `.github/workflows/backup-restore.yml`.
 
+### Dedicated replication identity transition (opt-in, partial)
+
+By default every node replicates as the directory administrator with the shared admin
+password. `LDAP_REPLICATION_IDENTITY` (chart: `replication.identity`) moves an existing
+multi-provider cluster to the read-only identity `cn=replicator,<root>` in three modes:
+`admin` (default, unchanged), `prepare` (installs the identity ACL and limits, still
+replicates as admin) and `dedicated` (consumer-only, binds as the identity over verified
+LDAPS). Design and limits: [change package](changes/replication-identity/CHANGE.md) and
+[ADR](changes/replication-identity/ADR.md). This is a partial implementation: `rotate` and
+`rollback-admin` do not exist yet, and the restored-cluster and Kubernetes acceptance
+paths are not verified (see [IMPLEMENTATION-STATUS](IMPLEMENTATION-STATUS.md)).
+
+Preconditions: TLS enabled with a CA that verifies every peer certificate
+(`LDAP_TLS_ENABLED`, `LDAP_TLS_CA_FILE`; chart `tls.*`), no `LDAP_TLS_MUTUAL_AUTH`, no
+stored `olcAuthzRegexp`/`olcAuthIDRewrite`, `olcAuthzPolicy` unset or `none`, no entry
+carrying `authzTo`/`authzFrom`, and `LDAP_ADMIN_DN` different from the reserved DN. The
+image refuses `prepare` and `dedicated` at startup when any of these fails. Do not switch
+nodes to `dedicated` before every node has completed `prepare`.
+
+1. **prepare.** Roll every node to `LDAP_REPLICATION_IDENTITY=prepare` one at a time,
+   without any `LDAP_REPLICATION_PASSWORD(_FILE)` (refused: the nodes still replicate as
+   admin). `prepare` refuses a pre-existing `cn=replicator` entry (run `retire --yes`
+   first) and refuses to bootstrap a new serverID 1 (new clusters start in `admin`).
+2. **G1, configuration gate (before the identity exists).** On each node run
+   `scripts/check-replication-identity.sh --configuration-only --config-password-file ...`
+   (plus `--uri`, `--base`, `--admin-password-file`, `--ca-file`; one pinned `--peer` per
+   other node). It must print `PASS`; any `FAIL` means stop.
+3. **ensure.** Once, as the administrator against a live node:
+   `scripts/replication-identity.sh ensure --base <root> --admin-password-file ... --out <new 0600 file>`.
+   It creates the policy and identity entries as replicated writes and writes a generated
+   credential to `--out` (refuses if the entry exists or the reserved DN is a rootDN).
+   Store that file as the caller-owned replication Secret; the chart never generates it.
+4. **G2, permission and propagation gate.** Run the check with
+   `--identity-password-file` and `--require-converged` against all nodes (`--peer`);
+   exit 0 means the identity can read the enumerated attributes (including
+   `userPassword` hashes) on every selected node. Exit 1 or 2 blocks the switch.
+5. **dedicated.** Set `replication.identity=dedicated`, `replication.existingSecret`
+   (chart) or `LDAP_REPLICATION_IDENTITY=dedicated` plus `LDAP_REPLICATION_PASSWORD_FILE`
+   (image), and leave `LDAP_REPLICATION_BIND_DN` empty (the mode decides DN and Secret
+   together). Restart nodes one at a time and re-run the check with `--dedicated` after
+   each. A wrong credential stalls that consumer with rc 49 rather than failing loudly.
+   Shared administrator credential restriction D43 stays in force.
+6. **Rollback.** There is no `rollback-admin` command yet. Roll back by hand only when
+   every node holds data and none is resynchronizing, and the admin password is valid on
+   all peers: switch DN and Secret together to `admin` (the chart refuses a leftover
+   `replication.existingSecret`), and never start an empty serverID 1 in `admin` mode
+   (it would bootstrap a new directory tree). `prepare` after `dedicated` is refused;
+   roll back through `admin`.
+7. **Total data loss (D63).** The identity entry lives only in the directory, so peers
+   cannot rebuild it. With a backup: stop all peers, `restore.sh` onto one node, start it
+   as `dedicated` with the current Secret, run `reconcile` (next section), verify, then
+   start the others empty so they resynchronize. Without a backup, rebuild as a new
+   cluster (`admin` -> `prepare` -> `ensure` -> `dedicated`). The restore primitive is
+   exercised by `scripts/test/test-replication-identity-restore.sh`; the full
+   operator orchestration is not.
+
 ### Restore credential reconciliation (dedicated replication)
 
 A backup made before replication credential rotation contains old identity password
