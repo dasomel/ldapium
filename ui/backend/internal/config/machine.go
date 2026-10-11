@@ -291,6 +291,12 @@ func sortedAlgs() []string {
 	return out
 }
 
+// machineWriteScopesOpen is false in every default and release build: a client
+// ceiling that names a write scope is a start-up error (machine-write-scope
+// T-010) until T-013 opens the operations. Only the drill-only build tag sets
+// it (machine_write_drill.go).
+var machineWriteScopesOpen = false
+
 // parseMachineClients parses "clientId=scope,scope;clientId2=scope" (D3).
 // Entries are separated by ';', scopes by ','. Unknown scopes, a duplicate
 // client, an empty scope list and wildcards are startup errors: the ceiling
@@ -327,10 +333,10 @@ func parseMachineClients(raw string) ([]MachineClient, error) {
 			if s == "" {
 				continue
 			}
-			if writeScopes[s] {
+			if writeScopes[s] && !machineWriteScopesOpen {
 				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope, but no write operation is available yet (machine-write-scope T-010)")
 			}
-			if !known[s] {
+			if !known[s] && !writeScopes[s] {
 				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS contains an unknown scope (known: %s)", strings.Join(MachineReadScopes, ", "))
 			}
 			if !dup[s] {

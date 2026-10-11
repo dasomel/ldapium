@@ -133,6 +133,13 @@ jobs:
       - run: go build ./...
         env:
           GOFLAGS: -mod=readonly
+      # Artifact check for the drill-only build tag (#285 T-022): inspects the built default
+      # binary (go version -m build settings and the marker string) and, as a mirror, the
+      # tagged binary, so the check cannot pass vacuously. Complements the source guard.
+      - name: Default server carries no drill build tag or marker (artifact check)
+        run: ../../scripts/test/test-machine-write-drill-artifact.sh
+        env:
+          GOFLAGS: -mod=readonly
 
       # A dependency substituted for something else has to fail the build, not
       # produce a warning nobody reads. Tampering with one recorded hash is the
@@ -253,6 +260,14 @@ jobs:
 
       - name: Machine write chart assertions
         run: ./scripts/test/test-chart-machine-write.sh
+
+      # The drill-only Go build tag must stay out of every default and release build
+      # (#285, T-022). The self-test mutates a copy of the repository and requires each
+      # mutation (tag in a Dockerfile default, release workflow, Makefile, chart, ...) to fail.
+      - name: Machine write drill-only build tag guard
+        run: python3 scripts/test/test-machine-write-drill-guard.py
+      - name: Machine write drill-only build tag guard (mutation self-test)
+        run: python3 scripts/test/test-machine-write-drill-guard.py --self-test
 
       # The chart deliberately refuses to render without an admin password
       # (the image refuses to start without one), so every template call must
