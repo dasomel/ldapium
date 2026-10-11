@@ -178,6 +178,16 @@ jobs:
       - name: Dedicated replication backup/restore reconciliation — #229 D63
         run: ./scripts/test/test-replication-identity-restore.sh ldapium:e2e
 
+      # E1-E17 assertion table (docs/changes/replication-identity/EVIDENCE.md). The chaos part and the
+      # Kubernetes script run in replication-chaos-e2e.yml (image ldapium:chaos).
+      - name: Replication identity unified verification, 3-node cluster — #353
+        run: RIDU_ONLY=cluster ./scripts/test/test-replication-identity.sh ldapium:e2e
+
+      - name: Replication identity unified verification, E1/E8 pair and E17 proxy — #353
+        run: |
+          RIDU_ONLY=pair ./scripts/test/test-replication-identity.sh ldapium:e2e
+          RIDU_ONLY=proxy ./scripts/test/test-replication-identity.sh ldapium:e2e
+
   e2e:
     name: install + helm test (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
