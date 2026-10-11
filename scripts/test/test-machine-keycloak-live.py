@@ -360,7 +360,10 @@ def main():
       if op.get('security') == []:
         continue
       concrete = path.replace('{id}', 'abc123').replace('{name}', 'abc123')
-      (allowed if any('machineBearer' in s for s in op.get('security', [])) else denied).append((method.upper(), concrete))
+      # The five machine write operations (#285) declare machineBearer too, but this
+      # run has MACHINE_WRITE_ENABLED off: for it they stay never-allowed (scope_denied).
+      open_read = method == 'get' and any('machineBearer' in s for s in op.get('security', []))
+      (allowed if open_read else denied).append((method.upper(), concrete))
   check(len(allowed) == 8 and len(denied) == 37, f'openapi.json classifies {len(allowed)} allowed + {len(denied)} never-allowed protected operations (8 + 37)')
   for label, api, _ in modes:
     def denied_batch(api=api):
