@@ -9,6 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
 )
 
@@ -88,6 +89,7 @@ type machineAuditState struct {
 	subjectFP string
 	operation string
 	bindDN    string
+	write     *machineWriteInput // set only by a write operation (T-015); nil on every v1 line
 }
 
 func auditStateOf(c echo.Context) *machineAuditState {
@@ -124,6 +126,15 @@ func (s *machineAuditState) setActor(p *machineauth.Principal) {
 	}
 }
 
+// setWrite records the write facts of this request (machine-write-scope D6). No
+// write operation is registered yet (machineWriteOps is empty), so nothing calls
+// it outside tests; the later operation-opening unit does.
+func (s *machineAuditState) setWrite(w machineWriteInput) {
+	if s != nil {
+		s.write = &w
+	}
+}
+
 func (s *machineAuditState) setBindDN(dn string) {
 	if s != nil {
 		s.bindDN = dn
@@ -146,6 +157,71 @@ type machineEvent struct {
 	TokenFingerprint   string `json:"token_fingerprint,omitempty"`
 	SubjectFingerprint string `json:"subject_fingerprint,omitempty"`
 	BindDN             string `json:"bind_dn,omitempty"`
+	// Present only on a write operation's line; the v1 shape is unchanged.
+	*machineWriteFields
+}
+
+// machineWriteFields are the documented write audit fields (D6, REQ-007). The
+// set is pinned by a golden test: a field added here without being documented
+// in docs/audit-event-schema.md fails it. None of them can hold a token, a
+// password, a request body value or an Idempotency-Key value.
+type machineWriteFields struct {
+	WriteScope         string `json:"write_scope"`
+	Compartment        string `json:"compartment"`
+	TargetKind         string `json:"target_kind"`
+	TargetDNFP         string `json:"target_dn_fingerprint,omitempty"`
+	TargetDN           string `json:"target_dn,omitempty"` // only with MACHINE_WRITE_AUDIT_TARGET_DN
+	Outcome            string `json:"outcome"`
+	IdempotencySubject string `json:"idempotency_subject_fingerprint,omitempty"`
+	IfMatch            bool   `json:"if_match"`
+	LDAPResult         *int   `json:"ldap_result,omitempty"`
+}
+
+// Closed vocabularies of the write fields. A value outside them is logged as
+// writeUnknown (or derived, for the outcome), never as given.
+const (
+	writeUnknown = "unknown"
+
+	outcomeApplied            = "applied"
+	outcomePreconditionFailed = "precondition_failed" // 412 / 428 on If-Match
+	outcomeReplayed           = "replayed"            // stored idempotent result returned
+	outcomeLDAPRefused        = "ldap_refused"        // the directory answered with a non-success result
+	outcomeDeniedGuard        = "denied_guard"        // subtree / group / attribute guard
+	outcomeDeniedProtected    = "denied_protected"    // protected DN or target-type assertion
+	outcomeOutcomeUnknown     = "outcome_unknown"     // sent, result not seen (idempotency_outcome_unknown)
+	outcomeRejected           = "rejected"            // any other refusal before the directory
+)
+
+var machineWriteOutcomes = map[string]bool{
+	outcomeApplied: true, outcomePreconditionFailed: true, outcomeReplayed: true, outcomeLDAPRefused: true,
+	outcomeDeniedGuard: true, outcomeDeniedProtected: true, outcomeOutcomeUnknown: true, outcomeRejected: true,
+}
+
+var machineWriteScopes = func() map[string]bool {
+	m := map[string]bool{}
+	for _, sc := range config.MachineWriteScopes {
+		m[sc] = true
+	}
+	return m
+}()
+
+var (
+	machineWriteCompartments = map[string]bool{"data": true, "lock": true}
+	machineWriteTargetKinds  = map[string]bool{"user": true, "group": true}
+)
+
+// machineWriteInput is what a write operation tells the audit wrapper. Subject
+// is the idempotency principal string (never the key), TargetDN the DN the
+// request names; both are hashed or dropped by buildMachineEvent.
+type machineWriteInput struct {
+	Scope       string
+	Compartment string
+	TargetKind  string
+	TargetDN    string
+	Outcome     string
+	Subject     string
+	IfMatch     bool
+	LDAPResult  *int
 }
 
 // machineEventInput is everything buildMachineEvent decides from. Nothing in
@@ -161,6 +237,10 @@ type machineEventInput struct {
 	Operation   string
 	BindDN      string
 	TokenFP     string
+	// Write is nil for every v1 line. PlainTargetDN is MACHINE_WRITE_AUDIT_TARGET_DN
+	// and is honoured only together with Write.
+	Write         *machineWriteInput
+	PlainTargetDN bool
 }
 
 // tokenFingerprint is the first 6 bytes of SHA-256 over the Authorization
@@ -208,12 +288,48 @@ func buildMachineEvent(in machineEventInput) machineEvent {
 		Result: result, Reason: reason,
 		SubjectFingerprint: in.SubjectFP, BindDN: in.BindDN,
 	}
+	if in.Write != nil {
+		ev.machineWriteFields = buildWriteFields(*in.Write, in.Status, in.PlainTargetDN)
+	}
 	// A verified actor already identifies the caller; the token fingerprint is
 	// for the lines that have no verified identity.
 	if actor == machineActorUnknown {
 		ev.TokenFingerprint = in.TokenFP
 	}
 	return ev
+}
+
+func buildWriteFields(w machineWriteInput, status int, plainDN bool) *machineWriteFields {
+	pick := func(v string, set map[string]bool) string {
+		if set[v] {
+			return v
+		}
+		return writeUnknown
+	}
+	f := &machineWriteFields{
+		WriteScope:         pick(w.Scope, machineWriteScopes),
+		Compartment:        pick(w.Compartment, machineWriteCompartments),
+		TargetKind:         pick(w.TargetKind, machineWriteTargetKinds),
+		TargetDNFP:         fingerprintIdentity(w.TargetDN),
+		Outcome:            w.Outcome,
+		IdempotencySubject: fingerprintIdentity(w.Subject),
+		IfMatch:            w.IfMatch,
+		LDAPResult:         w.LDAPResult,
+	}
+	if plainDN {
+		f.TargetDN = w.TargetDN
+	}
+	if !machineWriteOutcomes[f.Outcome] {
+		switch {
+		case status < http.StatusBadRequest:
+			f.Outcome = outcomeApplied
+		case status == http.StatusPreconditionFailed:
+			f.Outcome = outcomePreconditionFailed
+		default:
+			f.Outcome = outcomeRejected
+		}
+	}
+	return f
 }
 
 // reasonFromResponse derives the reason for a response nobody labelled: the
@@ -245,6 +361,8 @@ func reasonFromResponse(status int, envelopeCode, method string) string {
 // final status of every request that carries an Authorization header. A panic
 // is logged as a 500 and re-raised for Recover.
 func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
+	// Plaintext target DN only when writes are on and the operator asked (Q4).
+	plainDN := s.cfg.Machine.WriteEnabled && s.cfg.Machine.Write.AuditPlainTargetDN
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) (err error) {
 			req := c.Request()
@@ -268,6 +386,7 @@ func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
 					RequestID: requestIDOf(c), Method: method, Status: http.StatusInternalServerError,
 					Reason: reasonInternal, Actor: st.actor, SubjectFP: st.subjectFP,
 					Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]),
+					Write: st.write, PlainTargetDN: plainDN,
 				}))
 			}()
 			if err = next(c); err != nil {
@@ -279,6 +398,7 @@ func (s *Server) machineAuditMiddleware() echo.MiddlewareFunc {
 				RequestID: requestIDOf(c), Method: method, Status: c.Response().Status,
 				EnvelopeErr: code, Reason: st.reason, Actor: st.actor, SubjectFP: st.subjectFP,
 				Operation: st.operation, BindDN: st.bindDN, TokenFP: tokenFingerprint(values[0]),
+				Write: st.write, PlainTargetDN: plainDN,
 			}))
 			return err
 		}

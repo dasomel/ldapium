@@ -425,6 +425,34 @@ by `TestMachineAudit_ServerLevelRejectionsAreNotAudited`.
 | `subject_fingerprint` | the verified token subject, hashed; only with a verified actor |
 | `bind_dn` | the machine LDAP account, only when the request reached the execution step |
 
+### Write fields (machine-write-scope D6, REQ-007)
+
+A machine **write** request adds the fields below to the same single line (the
+one-line rule, early returns included, is unchanged: the wrapper still emits it).
+They appear only when a write operation recorded them; every v1 line and every
+refusal before a write operation was reached keeps the v1 shape. No write
+operation is open yet (`machineWriteOps` is empty, every machine write is 403),
+so today the fields are produced only by tests; they are the contract the
+operation-opening unit (T-013) must fill. `operation` carries the operation id.
+
+| Field | Meaning |
+| --- | --- |
+| `write_scope` | the write scope the operation required (closed set: the `directory.*` write scopes), else `unknown` |
+| `compartment` | `data` or `lock` (the `W_*` identity class), else `unknown` |
+| `target_kind` | `user` or `group`, else `unknown` |
+| `target_dn_fingerprint` | first 8 bytes of SHA-256 over the target DN, hex (the same fingerprint the human audit lines use). Always present when a target is named. |
+| `target_dn` | the target DN in plaintext, **only** when the operator sets `MACHINE_WRITE_AUDIT_TARGET_DN=true` (default false, Resolved Q4; read only when `MACHINE_WRITE_ENABLED=true`). With it on the log is as sensitive as the directory's DN space. |
+| `outcome` | closed set: `applied`, `precondition_failed` (If-Match 412/428), `replayed` (stored idempotent result), `ldap_refused`, `denied_guard` (subtree/group/attribute guard), `denied_protected` (protected DN or target-type assertion), `outcome_unknown`, `rejected`; an unknown value is derived from the status |
+| `idempotency_subject_fingerprint` | fingerprint of the idempotency principal (the client), **never** the `Idempotency-Key` value |
+| `if_match` | whether an `If-Match` header was present (the value is never logged) |
+| `ldap_result` | the directory result code when the request reached the directory, otherwise absent |
+
+`replayed` from D6 is carried by `outcome=replayed` instead of a separate field.
+Never in the line: the token, passwords, request body values, the
+`Idempotency-Key` or `If-Match` value. The set is pinned by
+`TestMachineWriteAudit_FieldNamesGolden`, which fails when a field is added to the
+line without being listed here.
+
 `reason` values: `ok`, `bad_header`, `mixed_credentials`, `bearer_not_accepted`
 (Authorization on a login/SSO path), `ignored_public`, `not_api`, `not_found`,
 `origin_mismatch`, `preflight`, the verifier's own reasons (`format`, `alg`,

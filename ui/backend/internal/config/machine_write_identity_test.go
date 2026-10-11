@@ -97,3 +97,24 @@ func TestMachineWriteIdentityRejectsReorderedMultivaluedRDN(t *testing.T) {
 		t.Fatal("reordered root RDN accepted")
 	}
 }
+
+// Resolved Q4: the plaintext target DN in the write audit line is an operator
+// option, off by default, and read only behind MACHINE_WRITE_ENABLED.
+func TestMachineWriteAuditTargetDNOption(t *testing.T) {
+	cfg, err := Load(writeIdentityEnv(nil))
+	if err != nil || cfg.Machine.Write.AuditPlainTargetDN {
+		t.Fatalf("default must be fingerprint only: %v", err)
+	}
+	cfg, err = Load(writeIdentityEnv(map[string]string{"MACHINE_WRITE_AUDIT_TARGET_DN": "true"}))
+	if err != nil || !cfg.Machine.Write.AuditPlainTargetDN {
+		t.Fatalf("option not honoured: %v", err)
+	}
+	if _, err = Load(writeIdentityEnv(map[string]string{"MACHINE_WRITE_AUDIT_TARGET_DN": "maybe"})); err == nil {
+		t.Fatal("a malformed value must fail startup")
+	}
+	// Write off: the option is not read, so even garbage is ignored.
+	cfg, err = Load(machineEnv(map[string]string{"MACHINE_WRITE_AUDIT_TARGET_DN": "garbage"}))
+	if err != nil || cfg.Machine.Write.AuditPlainTargetDN {
+		t.Fatalf("option read while MACHINE_WRITE_ENABLED is off: %v", err)
+	}
+}
