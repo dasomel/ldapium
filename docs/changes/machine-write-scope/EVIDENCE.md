@@ -212,4 +212,4 @@ Failures during development, kept: run 1 used a `uid=` RDN for a `groupOfNames` 
 
 Rotation/lockout on in-flight and next requests (item 2 of T-004) is not repeated: `EVIDENCE-drill.md` measured it (next write 503 on every replica, in-flight write completes, `MACHINE_REQUEST_TIMEOUT` bound, D24 lockout and the no-lockout policy).
 
-Not verified here: multi-node replication behaviour of W writes (accesslog per node); the Password Modify refusal as an ACL-only proof; a Kubernetes restart (a pod restart is the same empty memory store, but not run).
+Not verified here: a userPassword value-prefix oracle (no substring rule to probe); multi-node replication behaviour of W writes (accesslog per node); the Password Modify refusal as an ACL-only proof; a Kubernetes restart (a pod restart is the same empty memory store, but not run).
