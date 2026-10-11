@@ -237,7 +237,9 @@ patchUser(`cn, sn, givenName, mail, departmentNumber, o, ou` Replace), 그룹 �
 $EXEC ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess
 ```
 
-기대: `[복제 신원 규칙] · M 3개 · W_data 8개 · [W_lock 6개] · 이미지 기존 규칙(원래 순서)`. `W_data` DN이 들어간 값은 **정확히 8개**이고 연속이다.
+기대: `[복제 신원 규칙] · M 3개 · W_data 8개 · [W_lock 6개] · 이미지 기존 규칙(원래 순서)`. 이 순서를 눈으로 대조하는 대신 읽기 전용 점검 스크립트
+[`scripts/check-machine-write-acl.sh`](../scripts/check-machine-write-acl.sh)를 **모든 노드**에서 돌린다(`--container`/`--kube-pod`/`--input`, 사용법은 스크립트 머리말).
+순서·누락·중복·비밀 속성 `none`·보호 항목 도달 불가 중 하나라도 어긋나면 비0으로 끝나고, 읽지 못했을 때도 통과로 처리하지 않는다(T-023). `W_data` DN이 들어간 값은 **정확히 8개**이고 연속이다.
 `W_lock`은 정확히 6개다. 읽은 순서가 다르면 규칙을 쓰지 말고 7절로 되돌린다.
 
 ### 6.2 쓰기 계정으로 직접 확인 (허용과 거부)
