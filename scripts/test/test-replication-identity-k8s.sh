@@ -138,7 +138,13 @@ USER 999:999
 DOCKERFILE
 kind load docker-image "$check_image" --name "$kind_name" >/dev/null
 cron="${full}-replication-check"
-helm_set --set replication.check.enabled=true --set replication.check.image.repository="${check_image%:*}" \
+# The Jobs below are created by hand from the CronJob and are owned by it. A scheduled run (the default
+# every-30-minutes schedule fires mid-test when the clock crosses :00/:30) finishing after them makes
+# the CronJob controller prune them by the history limit and `kubectl get job` answers NotFound, which
+# showed up as "timeout" (CI, 13:30:00). Never schedule (31 Feb) and keep every manual Job.
+helm_set --set-string replication.check.schedule="0 0 31 2 *" \
+  --set replication.check.successfulJobsHistoryLimit=20 --set replication.check.failedJobsHistoryLimit=20 \
+  --set replication.check.enabled=true --set replication.check.image.repository="${check_image%:*}" \
   --set-string replication.check.image.tag="${check_image##*:}" --set replication.check.image.pullPolicy=Never
 check "K4: the CronJob exists" "$cron" "$(kubectl -n "$ns" get cronjob "$cron" -o jsonpath='{.metadata.name}')"
 check "K4: no password in the pod template (env or args)" "0" \
@@ -146,9 +152,14 @@ check "K4: no password in the pod template (env or args)" "0" \
 # run_check <job>: create a Job from the CronJob and wait for it to finish; prints complete|failed|timeout
 # shellcheck disable=SC2317,SC2329 # invoked through poll
 finished() { [ -n "$(kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}{.status.failed}')" ]; }
+# dump_job <job>: pod state and logs of a Job that never finished, on stderr (the log holds no password)
+dump_job() {
+  kubectl -n "$ns" get pods -l "job-name=$1" -o wide >&2 2>&1 || true
+  kubectl -n "$ns" logs "job/$1" --all-containers --tail=40 >&2 2>&1 || true
+}
 run_check() {
   kubectl -n "$ns" create job "$1" --from="cronjob/${cron}" >/dev/null
-  poll finished "$1" || { echo timeout; return; }
+  poll finished "$1" || { dump_job "$1"; echo timeout; return; }
   if [ "$(kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}')" = 1 ]; then echo complete; else echo failed; fi
 }
 # job_log <job> <needle>: yes when the Job's log contains the needle and neither password
