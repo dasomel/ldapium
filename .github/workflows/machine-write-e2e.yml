@@ -1,0 +1,91 @@
+name: Machine write E2E (real Keycloak)
+
+# Release gate for the machine WRITE scope (#378 / #285, change package docs/changes/machine-write-scope, T-025):
+# the five first-ship operations against a REAL Keycloak, a real slapd prepared with the documented W_data/W_lock
+# ACL fragments, and the production UI image (no drill build) with MACHINE_WRITE_ENABLED=true.
+#   - test-machine-write-keycloak-live.py: positive and negative tokens, scope / client ceiling / subtree / protected
+#     DN / group / attribute denials, the W_data ACL backstop, 428 / 412 / idempotent replay, one audit line per
+#     request with the write fields, write budget and single write slot, secret scan of all container logs.
+#   - test-machine-write-drill.py: the emergency block (password rotation, write-only redeploy, in-flight window,
+#     W_* lockout) on the same production image.
+# It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
+
+on:
+  # No paths filter, deliberately: release-critical checks must always report
+  # (see e2e.yml for why a path-filtered check can block merging).
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: machine-write-e2e-${{ github.event.pull_request.number || github.sha }}
+  # PR runs cancel superseded runs of themselves; push/dispatch runs are grouped
+  # per commit SHA and never cancel each other (see machine-keycloak-e2e.yml).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Exact tag, same pin as machine-keycloak-e2e.yml: a failure here must not be ambiguous between
+  # "this integration broke" and "upstream changed under us". The scripts read it from KEYCLOAK_IMAGE.
+  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.7.4
+  LDAPIUM_IMAGE: ldapium:machine-write-e2e
+  LDAPIUM_UI_IMAGE: ldapium-ui:machine-write-e2e
+
+jobs:
+  machine-write:
+    name: machine write (real Keycloak)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's
+    # migration-dryrun job for the full rationale.
+    concurrency:
+      group: heavy-e2e-lane-b-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build server image
+        run: docker build -t "$LDAPIUM_IMAGE" image
+
+      # The normal build: the write operations are registered in every build and act only with
+      # MACHINE_WRITE_ENABLED=true, so this is the image that ships.
+      - name: Build UI image
+        run: docker build -t "$LDAPIUM_UI_IMAGE" ui
+
+      - name: Pull the pinned Keycloak image
+        run: docker pull "$KEYCLOAK_IMAGE"
+
+      - name: Machine write (positive and negative tokens, ceilings, 428/412/replay, audit, limits, secret scan)
+        run: python3 scripts/test/test-machine-write-keycloak-live.py
+
+      - name: Machine write emergency-block drill (production image, two replicas, in-flight window, W_* lockout)
+        run: python3 scripts/test/test-machine-write-drill.py
+
+      # The scripts remove their own containers, volumes and networks even on failure. The runner is
+      # fresh per job, so anything left under these prefixes belongs to this run: list it and fail.
+      - name: Fail on leftover docker objects
+        if: always()
+        run: |
+          set -u
+          leaks=0
+          for kind in "ps -a" "volume ls" "network ls"; do
+            case "$kind" in
+              "ps -a") fmt='{{.Names}} {{.Status}}' ;;
+              *) fmt='{{.Name}}' ;;
+            esac
+            # shellcheck disable=SC2086
+            out=$(docker $kind --filter name=ldapium-mwk- --filter name=ldapium-mwd- --format "$fmt")
+            if [ -n "$out" ]; then
+              echo "::error::leftover docker objects ($kind):"
+              echo "$out"
+              leaks=1
+            fi
+          done
+          [ "$leaks" -eq 0 ]

@@ -152,7 +152,7 @@ jobs:
       # real check-run on this repo's own main before writing this).
       #
       # Known limitation, shared with the "required checks" step above: all
-      # six of these trigger on `push: branches: [main]`, the same push
+      # seven of these trigger on `push: branches: [main]`, the same push
       # that put this commit on main, not on the tag. Tagging fast enough to
       # race ahead of them — upgrade/backup e2e can run 10-20 minutes — makes
       # this step correctly fail a release that would otherwise be fine, not
@@ -171,6 +171,7 @@ jobs:
             "backup → verify → corrupt-check → restore"
             "3-node backup → bad delete → restore → resync"
             "machine bearer auth (real Keycloak)"
+            "machine write (real Keycloak)"
           )
           missing=0
           for context in "${release_critical[@]}"; do
@@ -181,7 +182,7 @@ jobs:
           done
 
           [ "$missing" -eq 0 ] || exit 1
-          echo "all release-critical checks (vulnerability scan, upgrade/backup e2e, machine bearer auth (real Keycloak)) succeeded on $SHA"
+          echo "all release-critical checks (vulnerability scan, upgrade/backup e2e, machine bearer auth (real Keycloak), machine write (real Keycloak)) succeeded on $SHA"
 
   build-server:
     name: Build server image
