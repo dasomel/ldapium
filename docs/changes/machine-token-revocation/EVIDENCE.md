@@ -332,7 +332,7 @@ go test -tags live ./internal/ldapclient -run TestRevocationReaderLive -count=1 
 
 Observed: missing sentinel refused; init then empty snapshot accepted; tool-written JTI revoked and removal restored OK; real bad password returned rc49 classification; generation regression refused; unpublished row caused count mismatch; multivalued cn was malformed; hidden sentinel and clock-injected stale sentinel were refused; stopped LDAP failed refresh and old snapshot expired; restart recovered after restoring the disposable ACL, publishing heartbeat, and rereading Docker's dynamically reassigned host port. No token/credential values were printed. The harness initially failed because of an incorrect ldapi socket/auth choice, then because its old Docker host port was reused after restart; both were corrected before claiming recovery.
 
-State-machine race tests verify retain/expire/recover, max-generation propagation, 60 s to 15 m credential backoff, reset on success, cancellation, and cumulative counters. Metrics appear only when the source is enabled, on the existing private metrics listener. The request path is unchanged (T-015).
+State-machine race tests verify retain/expire/recover, max-generation propagation, 60 s to 4 m (was 15 m, #363) credential backoff, reset on success, cancellation, and cumulative counters. Metrics appear only when the source is enabled, on the existing private metrics listener. The request path is unchanged (T-015).
 
 Status at the draft: L4 node alternation, a real partition/lagged replica, torn-sentinel retry, response-size/entry-cap and CI integration with the T-013 tool were not yet verified. Update 2026-10-11 (main `ce1af17` audit): the torn-retry, wire-bounds and replica-partition live tests below are now wired into CI (`api-credentials-e2e.yml`), so T-014 is checked. Still not verified: L4 round-robin alternation as a dedicated test (documented as an unsupported limitation instead) and the independent security review (T-020). This evidence does not complete #286: T-017 drill gaps, T-020, T-021 and T-022 remain open.
 
@@ -438,6 +438,6 @@ Non-blocking findings:
 | Tool and replica entry caps mismatched | Fixed by PR #357 |
 | Disabled-feature rollback leaves the subtree readable via machine `getEntry` and writable by administrators | Documented in PR #356 (`docs/machine-auth-operations.md`) |
 | Tool client-id charset narrower than the config accepts | Documented |
-| Refresher backoff after a bind failure grows to 15 minutes, so a 503 outage can outlast the password fix | Open, see CHANGE.md "Known follow-ups" |
-| `audit.read` scope can read revocation writes through accesslog | Open, see "Known follow-ups" |
+| Refresher backoff after a bind failure grows to 15 minutes, so a 503 outage can outlast the password fix | Fixed in #363 (cap 4 m, floor 60 s), see CHANGE.md D-363a |
+| `audit.read` scope can read revocation writes through accesslog | Fixed in #363 (machine accesslog filter), see CHANGE.md D-363b |
 | `machineWritePolicy.Protected` must include the revocations DN when #285 wires machine writes | Open, see "Known follow-ups" |

@@ -27,6 +27,9 @@ func (s *Server) handleGetAuditActions(c echo.Context) error {
 	if err != nil {
 		return respondErr(c, err)
 	}
+	if isMachineRequest(c) {
+		events = dropRevocationEvents(events, s.machine.revocationBaseDN)
+	}
 	if events == nil {
 		events = make([]domain.AuditEvent, 0)
 	}

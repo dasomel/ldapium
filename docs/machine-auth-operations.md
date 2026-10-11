@@ -222,7 +222,7 @@ Rollback caveat: setting `MACHINE_REVOCATION_ENABLED=false` ignores all entries,
 expire; combine with the allowlist backstop when rolling back during an incident. It also
 turns off the API guard on `ou=revocations` (`revocationWriteGuard` returns nil when the
 feature is off), so administrator writes through the UI API into that subtree are permitted
-again. Do not let the UI API write there; keep using this tool only, and re-run `heartbeat`
+again. Deciding not to keep the guard on when the feature is off (D-363c): the protected DN comes from `MACHINE_REVOCATION_*`, which is deliberately not read while disabled, and a default-path guard would change administrator write behavior for every deployment. Do not let the UI API write there; keep using this tool only, and re-run `heartbeat`
 before re-enabling so the sentinel is fresh and any stray entry is found.
 
 ### Write identity configuration stage (machine-write-scope T-011)
@@ -233,7 +233,9 @@ While the write switch is off, subordinate write variables are not read. While t
 
 ### Revocation source implementation stage (T-014)
 
-With `MACHINE_REVOCATION_ENABLED=true`, the source refreshes using the machine LDAP identity. Its readiness is observable on the private metrics listener as `ldapium_ui_machine_revocation_ready`; `ldapium_ui_machine_revocation_refresh_total{result="success"|"failure"}` counts refresh outcomes. No series is emitted when disabled. A failed refresh retains the last complete snapshot until its query-start age exceeds `MAX_STALE`. Invalid machine credentials back off from 60 seconds to 15 minutes; a successful refresh resets the backoff. LDAP diagnostics and identifiers are omitted from refresh error logs.
+With `MACHINE_REVOCATION_ENABLED=true`, the source refreshes using the machine LDAP identity. Its readiness is observable on the private metrics listener as `ldapium_ui_machine_revocation_ready`; `ldapium_ui_machine_revocation_refresh_total{result="success"|"failure"}` counts refresh outcomes. No series is emitted when disabled. A failed refresh retains the last complete snapshot until its query-start age exceeds `MAX_STALE`. Invalid machine credentials back off from 60 seconds (a fixed floor, so the shared machine DN is never retried faster and the default ppolicy lockout of 5 failures stays out of reach of the refresher) doubling to a 4 minute cap, so after the password is fixed the 503s last at most about 4 minutes; a successful refresh resets the backoff. There is no faster retry on purpose: restarting the pod forces an immediate attempt. LDAP diagnostics and identifiers are omitted from refresh error logs.
+
+`audit.read` and revocation (D-363b): `listAuditActions` and the `recentLogs` of `getMonitor` drop accesslog events whose `reqDN` is inside the revocation subtree (or cannot be parsed canonically) for machine callers, so the revoked ids and cutoffs written by the tool are not readable through the machine path. Administrator sessions still see them. A page can therefore hold fewer events than `limit`; this applies only while `MACHINE_REVOCATION_ENABLED=true`.
 
 When revocation is enabled, every verified bearer token needs a nonempty JTI and is checked before the client budget or LDAP execution. A revoked token returns 401; an absent or stale snapshot returns 503 with Retry-After: 1. Invalid tokens cannot probe snapshot readiness. Machine entry/tree reads and API writes by human administrators refuse the protected revocation subtree, including DN naming aliases and moves of an ancestor. The full multi-replica live drill remains required before production acceptance. The 1 MiB guard bounds retained decoded search data; one oversized entry can be allocated by the LDAP decoder before the guard runs. A refresh uses one connection to one node; round-robin URLs can still alternate snapshots between refreshes, so production replica/partition acceptance remains required.
 

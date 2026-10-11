@@ -57,7 +57,7 @@ func TestRevocationRefreshRetainsSnapshotAndExpires(t *testing.T) {
 func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	now := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	r := &machineRevocation{refresh: time.Second, now: func() time.Time { return now }, read: func(context.Context, uint64) (*machineauth.Snapshot, error) { return nil, domain.ErrInvalidCredentials }}
-	for _, delay := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute} {
+	for _, delay := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 4 * time.Minute, 4 * time.Minute} {
 		if got := r.update(context.Background()); got != delay {
 			t.Fatalf("%v != %v", got, delay)
 		}
@@ -68,8 +68,30 @@ func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	}
 	r.read = func(context.Context, uint64) (*machineauth.Snapshot, error) { return revocationFixture(t, now, 1), nil }
 	r.update(context.Background())
-	if r.generation != 2 || r.status().Failures != 7 {
+	if r.generation != 2 || r.status().Failures != 6 {
 		t.Fatal(r.status())
+	}
+}
+
+func TestNextRevocationBackoffBounds(t *testing.T) {
+	if revocationBackoffMin < time.Minute || revocationBackoffMax > 5*time.Minute || revocationBackoffMax < revocationBackoffMin {
+		t.Fatal(revocationBackoffMin, revocationBackoffMax)
+	}
+	for _, prev := range []time.Duration{-time.Second, 0, time.Second, 59 * time.Second} {
+		if got := nextRevocationBackoff(prev); got != revocationBackoffMin {
+			t.Fatalf("%v -> %v: below the floor", prev, got)
+		}
+	}
+	prev := time.Duration(0)
+	for i := 0; i < 20; i++ {
+		got := nextRevocationBackoff(prev)
+		if got < revocationBackoffMin || got > revocationBackoffMax || got < prev {
+			t.Fatalf("%v -> %v", prev, got)
+		}
+		prev = got
+	}
+	if prev != revocationBackoffMax || nextRevocationBackoff(time.Duration(1<<62)) != revocationBackoffMax {
+		t.Fatal(prev)
 	}
 }
 

@@ -11,6 +11,34 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
 )
 
+// D-363a: bind-failure backoff is bounded on both sides.
+//   - Floor (revocationBackoffMin, 60 s): a wrong machine password must never be
+//     retried faster than this. The default ppolicy locks the shared machine DN
+//     after 5 failures for 900 s, and that lock also blocks the request path, so
+//     the floor is a safety bound and is not tunable.
+//   - Cap (revocationBackoffMax, 4 min): the former 15 min cap let a corrected
+//     password leave up to 15 min of 503. 4 min bounds that outage while the
+//     schedule stays 60 s, 120 s, 240 s, ... (never below the floor).
+//
+// A health-triggered retry (retry as soon as the password changes) was rejected:
+// the refresher cannot observe a Secret change, and a faster retry would
+// undercut the floor.
+const (
+	revocationBackoffMin = time.Minute
+	revocationBackoffMax = 4 * time.Minute
+)
+
+// nextRevocationBackoff returns the delay after another bind failure.
+func nextRevocationBackoff(prev time.Duration) time.Duration {
+	if prev < revocationBackoffMin {
+		return revocationBackoffMin
+	}
+	if prev >= revocationBackoffMax/2 {
+		return revocationBackoffMax
+	}
+	return prev * 2
+}
+
 type revocationRead func(context.Context, uint64) (*machineauth.Snapshot, error)
 
 // D6: one writer publishes complete immutable snapshots. Failure preserves
@@ -63,14 +91,7 @@ func (r *machineRevocation) update(ctx context.Context) time.Duration {
 		// Never log a server diagnostic: it may contain directory/credential data.
 		log.Printf("ERROR machine revocation refresh failed")
 		if errors.Is(err, domain.ErrInvalidCredentials) {
-			if r.backoff == 0 {
-				r.backoff = time.Minute
-			} else {
-				r.backoff *= 2
-			}
-			if r.backoff > 15*time.Minute {
-				r.backoff = 15 * time.Minute
-			}
+			r.backoff = nextRevocationBackoff(r.backoff)
 		}
 		// A transport failure does not clear credential backoff; only success does.
 		if r.backoff > 0 {

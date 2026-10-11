@@ -23,5 +23,8 @@ func (s *Server) handleGetMonitorStats(c echo.Context) error {
 	if err != nil {
 		return respondErr(c, err)
 	}
+	if isMachineRequest(c) && stats != nil {
+		stats.RecentLogs = dropRevocationEvents(stats.RecentLogs, s.machine.revocationBaseDN)
+	}
 	return c.JSON(http.StatusOK, stats)
 }
