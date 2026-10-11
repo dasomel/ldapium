@@ -23,6 +23,8 @@
 | `B` (`$ALLOWED_DN`) | 머신이 읽을 수 있는 subtree. 기본은 `LDAP_BASE_DN`(루트 전체) |
 | `MAIN_DB_DN` | 메인 DB의 설정 항목, 보통 `olcDatabase={1}mdb,cn=config` (아래에서 조회) |
 
+`M`은 **읽기 전용**으로 남는다. 머신 쓰기(`MACHINE_WRITE_ENABLED`)는 별도의 쓰기 신원 `W_data`를 쓰며 그 ACL은 [machine-write-account.md](machine-write-account.md)가 `M` 규칙 **뒤**에 놓는다. `M`에는 쓰기 규칙을 주지 않는다.
+
 규칙 3개(5절)를 적용하면 `M`은:
 
 - `B` 안의 항목·속성을 **읽기만** 한다(검색·비교).

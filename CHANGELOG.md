@@ -36,6 +36,22 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   [change package](docs/changes/machine-token-revocation/CHANGE.md) for limits,
   migration, evidence and known follow-ups. Live drills (cutoff boundary,
   heartbeat stop, heartbeat-only aging) run in `machine-keycloak-e2e.yml`.
+- Optional machine-principal writes (#285, #372, #378), **default off**
+  (`MACHINE_WRITE_ENABLED`, a switch separate from `MACHINE_AUTH_ENABLED`). Five
+  single-entry operations open to a verified Keycloak client: `createUser`
+  (without a password), `patchUser`, `deleteUser` (leaf users only),
+  `addGroupMember`, `removeGroupMember`. Each client has a write-subtree ceiling
+  (strict descendants only), a group allow-list and a separate write budget;
+  `Idempotency-Key` is required (428 `idempotency_key_required`) and all but
+  `createUser` need exactly one strong `entryCSN` `If-Match` (428
+  `if_match_required`). Writes bind per request as a dedicated LDAP identity
+  (`MACHINE_WRITE_DATA_BIND_DN`) behind the ACL in
+  [machine-write-account.md](docs/machine-write-account.md); the switch refuses to
+  start without idempotency, a single replica and the write identity.
+  Emergency block and measured limits: [operations](docs/machine-auth-operations.md).
+  Design and evidence: [change package](docs/changes/machine-write-scope/CHANGE.md).
+  The idempotency store is in memory, so a restart turns a replay into a
+  re-execution (`If-Match` and entry uniqueness remain the second line).
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a

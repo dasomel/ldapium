@@ -1,6 +1,6 @@
 # ADR: 머신 주체 쓰기 범위 (D1, D3, D4, D5, D9, D19–D22, D26)
 
-- Status: `Proposed` — [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정을 요약한 초안이다. CHANGE.md는 2026-10-07 유지보수자 결정으로 수용되었다(보안 검토 BLOCKER 4건 해소). 구현 단위가 병합되면 `Accepted`로 승격한다(T-050).
+- Status: `Proposed` — [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정을 요약한 초안이다. CHANGE.md는 2026-10-07 유지보수자 결정으로 수용되었다(보안 검토 BLOCKER 4건 해소). 구현 단위가 병합되면 `Accepted`로 승격한다(T-050). 2026-10-11 현재 D1/D3/D4/D5/D9/D19–D22/D26은 main에 구현되어 있고(T-013, 기본 꺼짐) 실측 증거가 있다([EVIDENCE.md](EVIDENCE.md) "T-004 live measurements": D4 귀속은 slapd `reqAuthzID`=W_data, D9 재시작 시 재실행은 실측 확인; D18은 Modify의 objectClass 값 ADD가 ACL을 통과하는 한계가 확인됨, CHANGE.md 표시). **승격(`Accepted`)은 유지보수자 결정으로 남긴다.**
 - Owner: 유지보수자(결정 기록: 대화)
 - Related issue: [#285](https://github.com/dasomel/ldapium/issues/285)(닫지 않음). 연관: #277(병합), #286(병행 구현 중)
 - 위치 규약: 이 저장소에는 별도 ADR 디렉터리가 없고 변경 패키지 안의 `ADR.md`로 둔다([api-conditional-writes ADR](../api-conditional-writes/ADR.md)와 같음). 근거·대안·위협 모델 전문은 CHANGE.md에 있다.
