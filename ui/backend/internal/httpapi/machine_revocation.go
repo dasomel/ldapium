@@ -11,6 +11,23 @@ import (
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
 )
 
+// D-363a: credential-failure backoff is a constant, lockout-safe interval.
+// The default ppolicy (image/entrypoint.sh: pwdMaxFailure 5, pwdFailureCountInterval
+// 900 s) locks the shared machine DN after 5 failures inside 900 s, and that lock
+// also blocks the request path. At a constant spacing of 300 s any 900 s window
+// holds at most 4 failures (e.g. t=0,300,600,900), so one replica can never lock
+// the DN; the earlier 60,120,240,480,900 s ladder put 5 inside the window. The
+// former 15 min cap is gone: a corrected password now costs at most 5 min of 503.
+// Not tunable on purpose. With R replicas the spacing is effectively 300/R s, so
+// a multi-replica deployment needs a lockout-exempt policy for the machine DN
+// (docs/machine-auth-operations.md). A health-triggered retry was rejected: the
+// refresher cannot observe a Secret change and a faster retry undercuts the floor.
+const revocationBackoff = 5 * time.Minute
+
+// nextRevocationBackoff is the delay after another credential failure; it is
+// constant so the lockout bound above does not depend on the failure history.
+func nextRevocationBackoff(time.Duration) time.Duration { return revocationBackoff }
+
 type revocationRead func(context.Context, uint64) (*machineauth.Snapshot, error)
 
 // D6: one writer publishes complete immutable snapshots. Failure preserves
@@ -63,14 +80,7 @@ func (r *machineRevocation) update(ctx context.Context) time.Duration {
 		// Never log a server diagnostic: it may contain directory/credential data.
 		log.Printf("ERROR machine revocation refresh failed")
 		if errors.Is(err, domain.ErrInvalidCredentials) {
-			if r.backoff == 0 {
-				r.backoff = time.Minute
-			} else {
-				r.backoff *= 2
-			}
-			if r.backoff > 15*time.Minute {
-				r.backoff = 15 * time.Minute
-			}
+			r.backoff = nextRevocationBackoff(r.backoff)
 		}
 		// A transport failure does not clear credential backoff; only success does.
 		if r.backoff > 0 {

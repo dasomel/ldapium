@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/labstack/echo/v4"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // D9: schema naming aliases must not bypass the protected subtree. Unknown
@@ -60,4 +62,27 @@ func (s *Server) revocationWriteGuard(dns ...string) error {
 		}
 	}
 	return nil
+}
+
+// D-363b: a machine caller with audit.read must not read the writes to the
+// revocation subtree back out of cn=accesslog (the revoked jti/client ids and
+// cutoffs are the tool's private state). Events whose reqDN is inside the
+// subtree, is missing its reqDN, or is unparseable/non-canonical (fail closed),
+// are dropped; the logged search filter of the rest is blanked, because a subtree
+// search above the revocation base can carry a revoked jti/client id in its
+// filter (redactFilter does not mask cn values). Human sessions are unaffected.
+// Cost: a page can hold fewer than `limit` events.
+func dropRevocationEvents(events []domain.AuditEvent, base string) []domain.AuditEvent {
+	if base == "" {
+		return events
+	}
+	kept := make([]domain.AuditEvent, 0, len(events))
+	for _, e := range events {
+		if e.Raw.ReqDN == "" || protectedRevocationDN(base, e.Raw.ReqDN, false) {
+			continue
+		}
+		e.Raw.Filter = ""
+		kept = append(kept, e)
+	}
+	return kept
 }

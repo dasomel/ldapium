@@ -57,7 +57,7 @@ func TestRevocationRefreshRetainsSnapshotAndExpires(t *testing.T) {
 func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	now := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	r := &machineRevocation{refresh: time.Second, now: func() time.Time { return now }, read: func(context.Context, uint64) (*machineauth.Snapshot, error) { return nil, domain.ErrInvalidCredentials }}
-	for _, delay := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute} {
+	for _, delay := range []time.Duration{revocationBackoff, revocationBackoff, revocationBackoff, revocationBackoff, revocationBackoff} {
 		if got := r.update(context.Background()); got != delay {
 			t.Fatalf("%v != %v", got, delay)
 		}
@@ -68,8 +68,26 @@ func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	}
 	r.read = func(context.Context, uint64) (*machineauth.Snapshot, error) { return revocationFixture(t, now, 1), nil }
 	r.update(context.Background())
-	if r.generation != 2 || r.status().Failures != 7 {
+	if r.generation != 2 || r.status().Failures != 6 {
 		t.Fatal(r.status())
+	}
+}
+
+// D-363a: with the default ppolicy (5 failures in 900 s) one replica must never
+// land five failed binds inside any 900 s window.
+func TestRevocationBackoffNeverLocksDefaultPolicy(t *testing.T) {
+	const maxFailure, window = 5, 900 * time.Second
+	var at []time.Duration
+	var prev, now time.Duration
+	for i := 0; i < 40; i++ {
+		at = append(at, now)
+		prev = nextRevocationBackoff(prev)
+		now += prev
+	}
+	for i := 0; i+maxFailure-1 < len(at); i++ {
+		if at[i+maxFailure-1]-at[i] <= window {
+			t.Fatalf("%d failures within %v starting at failure %d", maxFailure, window, i)
+		}
 	}
 }
 

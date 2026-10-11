@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 const revocationBaseTest = "ou=revocations,ou=system,dc=example,dc=org"
@@ -78,5 +80,30 @@ func TestRevocationAdditionalAdminWrites(t *testing.T) {
 				t.Fatalf("status=%d calls=%v body=%s", got.Code, rc.calls, got.Body.String())
 			}
 		})
+	}
+}
+
+func TestDropRevocationEvents(t *testing.T) {
+	ev := func(dn string) domain.AuditEvent { return domain.AuditEvent{Raw: domain.AuditRaw{ReqDN: dn}} }
+	in := []domain.AuditEvent{
+		ev("cn=jti-x," + revocationBaseTest),
+		ev(revocationBaseTest),
+		ev("OU=Revocations,ou=system,dc=example,dc=org"),
+		ev("commonName=jti-x,organizationalUnitName=revocations,ou=system,domainComponent=example,dc=org"),
+		ev("not a dn"),
+		ev("uid=x,ou=users,dc=example,dc=org"),
+		ev("ou=system,dc=example,dc=org"),
+		ev(""),
+	}
+	in[5].Raw.Filter = "(cn=jti-revoked-1)"
+	got := dropRevocationEvents(in, revocationBaseTest)
+	if len(got) != 2 || got[0].Raw.ReqDN != "uid=x,ou=users,dc=example,dc=org" || got[1].Raw.ReqDN != "ou=system,dc=example,dc=org" || got[0].Raw.Filter != "" {
+		t.Fatalf("%+v", got)
+	}
+	if len(dropRevocationEvents(in, "")) != len(in) {
+		t.Fatal("feature off must not filter")
+	}
+	if got := dropRevocationEvents(nil, revocationBaseTest); got == nil || len(got) != 0 {
+		t.Fatal("nil input must yield an empty non-nil slice")
 	}
 }
