@@ -1,0 +1,128 @@
+{{- /*
+Periodic replication identity check (docs/changes/replication-identity, T-017, #375).
+
+Runs scripts/lib/replication_identity_check.py (shipped in the ConfigMap next to this file) against
+every pod over the headless Service: stable-CSN data comparison between the administrator's view and
+the dedicated identity's view, the identity configuration predicates and the consumer credential
+fingerprints, and replication provider membership. It writes nothing unless replication.check.canary
+is true.
+
+SECRETS: this CronJob mounts the ADMINISTRATOR Secret (the check reads the directory as the
+administrator and reads cn=config as cn=admin,cn=config) in addition to the replication Secret.
+That is a second place the administrator credential lives; gate it with RBAC on this namespace and
+keep the Job history short. Passwords are mounted as 0400 files and passed with -y, never in env or
+arguments, and the script prints counts and fixed messages only.
+
+RESULTS: the exit code is the verdict (0 pass, 1 defect, 2 evidence could not be established). A
+non-zero exit fails the Job (backoffLimit 0, so a failure is final and not retried into a pass), which
+is what kube_job_status_failed and the LDAPiumReplicationCheckFailed alert read. The one-line reason
+is in the Job's pod log: kubectl logs job/<name>.
+*/ -}}
+{{- if .Values.replication.check.enabled }}
+{{- $peers := splitList "," (include "ldapium.replicationPeers" .) }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "ldapium.fullname" . }}-replication-check
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.replicationCheck.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.replication.check.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.replication.check.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.replication.check.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.replication.check.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "ldapium.replicationCheck.selectorLabels" . | nindent 12 }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.replication.check.podSecurityContext | nindent 12 }}
+          containers:
+            - name: check
+              image: {{ printf "%s:%s" .Values.replication.check.image.repository (required "replication.check.image.tag is required" .Values.replication.check.image.tag) | quote }}
+              imagePullPolicy: {{ .Values.replication.check.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.replication.check.securityContext | nindent 16 }}
+              command: ["python3", "/opt/ldapium-check/replication_identity_check.py"]
+              args:
+                - --uri
+                - {{ index $peers 0 | quote }}
+                {{- range $peer := rest $peers }}
+                - --peer
+                - {{ $peer | quote }}
+                {{- end }}
+                - --base
+                - {{ .Values.ldap.rootDN | quote }}
+                - --admin-dn
+                - {{ .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) | quote }}
+                - --admin-password-file
+                - /etc/ldapium-check/admin-password
+                - --identity-password-file
+                - /etc/ldapium-check/replication-password
+                - --config-password-file
+                - /etc/ldapium-check/admin-password
+                - --dedicated
+                - --ca-file
+                - {{ .Values.tls.caFile | quote }}
+                {{- if .Values.replication.check.requireConverged }}
+                - --require-converged
+                {{- end }}
+                {{- if .Values.replication.check.canary }}
+                - --canary
+                {{- end }}
+              env:
+                # /opt/ldapium-check is a read-only ConfigMap mount; do not try to write bytecode there.
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              volumeMounts:
+                - name: scripts
+                  mountPath: /opt/ldapium-check
+                  readOnly: true
+                - name: credentials
+                  mountPath: /etc/ldapium-check
+                  readOnly: true
+                - name: tls
+                  mountPath: /etc/openldap/tls
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.replication.check.resources | nindent 16 }}
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ include "ldapium.fullname" . }}-replication-check
+            - name: credentials
+              projected:
+                defaultMode: 0400
+                sources:
+                  - secret:
+                      name: {{ include "ldapium.adminSecretName" . }}
+                      items:
+                        - key: {{ .Values.auth.existingSecretKey }}
+                          path: admin-password
+                          mode: 0400
+                  - secret:
+                      name: {{ .Values.replication.existingSecret }}
+                      items:
+                        - key: {{ .Values.replication.existingSecretKey }}
+                          path: replication-password
+                          mode: 0400
+            - name: tls
+              secret:
+                secretName: {{ .Values.tls.existingSecret }}
+{{- end }}

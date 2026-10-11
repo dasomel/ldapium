@@ -421,6 +421,9 @@ jobs:
       - name: Assert replication identity chart credential combinations
         run: ./scripts/test/test-chart-replication-identity.sh
 
+      - name: Assert replication check CronJob chart, alert rule and script copies — #375 T-017
+        run: ./scripts/test/test-chart-replication-check.sh
+
       - name: Validate rendered chart manifests
         run: ./scripts/verify-chart-schema.sh
 

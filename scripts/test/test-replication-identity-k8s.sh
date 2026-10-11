@@ -9,9 +9,14 @@
 #      the others follow, data and hashes are intact on every pod
 #   K3 the DATA claim of pod-1 is lost while its CONFIG claim survives: the pod crash-loops (refusal,
 #      nothing created, peers untouched); deleting BOTH claims recovers it from the peers
+#   K4 (#375, T-017) replication.check.enabled: the chart CronJob runs the check with --remote in a
+#      derived image (server image + python3) against all 3 pods; a run passes, a userPassword ACL
+#      ahead of the identity rule on pod-0 fails the Job (the signal kube_job_status_failed carries), the next run passes again,
+#      and the opt-in canary run leaves no entry behind. Needs a kind context (the image is loaded).
 #
 # Usage: scripts/test/test-replication-identity-k8s.sh [image]   (default ldapium:e2e, imagePullPolicy Never)
 #   RIDK8S_TIMEOUT (seconds, default 300) bounds every wait. The namespace ridk8s-* is removed on exit.
+#   RIDK8S_ONLY=check runs the setup and K4 only.
 set -euo pipefail
 # Never pipe into `grep -q` (SIGPIPE + pipefail): match captured variables.
 
@@ -21,6 +26,7 @@ tag="${image##*:}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 chart="$(cd "$here/.." && pwd)/charts/ldapium"
 timeout_s="${RIDK8S_TIMEOUT:-300}"
+only="${RIDK8S_ONLY:-all}"
 ns="ridk8s-$$"
 rel=rid
 full=rid-ldapium
@@ -119,6 +125,65 @@ for i in 0 2; do poll has_uid "$(pod "$i")" carol || bad "dedicated: carol never
 check "dedicated: the chart renders no administrator replication credential (env)" "0" \
   "$(kubectl -n "$ns" get pod "$(pod 0)" -o jsonpath='{.spec.containers[?(@.name=="openldap")].env[*].name}' | tr ' ' '\n' | grep -c -x 'LDAP_REPLICATION_BIND_DN' || true)"
 want_hash="$(hash_of "$(pod 0)" alice)"
+
+echo "== K4: replication.check CronJob (derived image, --remote over the headless Service)"
+ctx="$(kubectl config current-context)"
+case "$ctx" in kind-*) kind_name="${ctx#kind-}" ;; *) bad "K4: the current context '$ctx' is not a kind cluster, cannot load the check image"; exit 1 ;; esac
+check_image="ridk8s-check:$$"
+docker build -q -t "$check_image" - >/dev/null <<DOCKERFILE
+FROM ${image}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+USER 999:999
+DOCKERFILE
+kind load docker-image "$check_image" --name "$kind_name" >/dev/null
+cron="${full}-replication-check"
+helm_set --set replication.check.enabled=true --set replication.check.image.repository="${check_image%:*}" \
+  --set-string replication.check.image.tag="${check_image##*:}" --set replication.check.image.pullPolicy=Never
+check "K4: the CronJob exists" "$cron" "$(kubectl -n "$ns" get cronjob "$cron" -o jsonpath='{.metadata.name}')"
+check "K4: no password in the pod template (env or args)" "0" \
+  "$(kubectl -n "$ns" get cronjob "$cron" -o json | grep -c -e "$pw" -e "$(cat "$work/idpw")" || true)"
+# run_check <job>: create a Job from the CronJob and wait for it to finish; prints complete|failed|timeout
+# shellcheck disable=SC2317,SC2329 # invoked through poll
+finished() { [ -n "$(kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}{.status.failed}')" ]; }
+run_check() {
+  kubectl -n "$ns" create job "$1" --from="cronjob/${cron}" >/dev/null
+  poll finished "$1" || { echo timeout; return; }
+  if [ "$(kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}')" = 1 ]; then echo complete; else echo failed; fi
+}
+# job_log <job> <needle>: yes when the Job's log contains the needle and neither password
+job_log() {
+  local l
+  l="$(kubectl -n "$ns" logs "job/$1" 2>&1)"
+  case "$l" in *"$pw"*) echo leak; return ;; esac
+  case "$l" in *"$2"*) echo yes ;; *) printf '%s\n' "$l" | head -n 6 >&2; echo no ;; esac
+}
+check "K4: a healthy run completes" "complete" "$(run_check chk1)"
+check "K4: its log shows the passes" "yes" "$(job_log chk1 'selected nodes')"
+lxi "$(pod 0)" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -w "$pw" >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to attrs=userPassword by dn.exact="${iddn}" none by * break
+LDIF
+# The ACL goes in front of the identity rule, so the configuration gate (which runs first) names it.
+check "K4: a userPassword ACL ahead of the identity rule on pod-0 fails the Job" "failed" "$(run_check chk2)"
+check "K4: ... with the fixed configuration message in its log" "yes" "$(job_log chk2 'identity configuration predicates did not pass')"
+lxi "$(pod 0)" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -w "$pw" >/dev/null <<LDIF
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcAccess
+olcAccess: {0}to attrs=userPassword by dn.exact="${iddn}" none by * break
+LDIF
+check "K4: the next run completes again" "complete" "$(run_check chk3)"
+helm_set --set replication.check.canary=true
+check "K4: a canary run completes" "complete" "$(run_check chk4)"
+check "K4: ... and leaves no canary entry on any pod" "0:0:0" \
+  "$(for i in 0 1 2; do asearch "$(pod "$i")" -b "$base" '(cn=ridcheck-*)' dn | grep -c '^dn:' || true; done | tr '\n' ':' | sed 's/:$//')"
+helm_set --set replication.check.canary=false
+if [ "$only" = check ]; then
+  if [ "$fail" = 0 ]; then echo 'ALL PASS: replication check CronJob on a StatefulSet'; exit 0; else exit 1; fi
+fi
 
 echo "== K1: pod-0 deleted: Ready again without waiting for peers"
 kubectl -n "$ns" delete pod "$(pod 0)" --wait=true >/dev/null

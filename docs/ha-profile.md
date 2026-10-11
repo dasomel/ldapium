@@ -314,9 +314,53 @@ passes. Use `--require-converged` for an explicit operator gate: persistent CSN
 mismatch/lag after five passes returns 1. This can also fail a healthy cluster
 under sustained writes; retry in a quiet interval. A WARN is never proof that a
 restore or rotation gate passed. The tool covers only selected nodes/attributes
-and does not discover omitted members, issue a canary, or prove live session
-credentials. `--configuration-only` cannot be combined with the data-convergence
-flag because configuration predicates do not establish replication convergence.
+and does not prove live session credentials. `--configuration-only` cannot be
+combined with the data-convergence flag because configuration predicates do not
+establish replication convergence.
+
+**Local read, membership, canary (#375, T-014).** With `--config-password-file` the
+check also validates membership: every provider named in a selected node's own
+`olcSyncrepl` values must be one of the checked targets, otherwise it fails (exit 1,
+count only). A node that is neither passed nor named by any checked node's
+configuration stays invisible, so the operator list (or the chart's rendered peer
+list) is still the authority. `--local` reads the `--uri` node with `slapcat`
+(inside `--container`, as the `ldap` user, else on the host) instead of an
+administrator bind; peers are still read over LDAPS and the identity view is always
+a bind. `--canary` writes one throwaway `cn=ridcheck-<random>` entry (class
+`applicationProcess`, no credentials) on the `--uri` node as the administrator,
+requires every selected node to show it and the identity to read it within
+`--canary-timeout` seconds (default 30), deletes it and requires the deletion to
+reach every node. It is a directory write, off by default; a canary that cannot be
+removed prints its DN and returns 2. All three are exercised on three real nodes
+by `scripts/test/test-replication-identity-check-cluster.sh`.
+
+### Scheduled check (Helm CronJob)
+
+`replication.check.enabled=true` renders a CronJob (default every 30 minutes, `Forbid`,
+`backoffLimit: 0`) that runs the check against every pod over the headless Service
+with `--dedicated --config-password-file --require-converged` (and `--canary` when
+`replication.check.canary=true`). Requirements and behavior:
+
+- `replication.identity=dedicated` (the check reads as the identity) and an image that
+  has `python3` and `ldapsearch`: set `replication.check.image.repository`/`tag`. The
+  server image has no Python and the chart does not change it; derive one:
+  `FROM ghcr.io/dasomel/ldapium:<tag>`, `USER root`,
+  `RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*`,
+  `USER 999:999`.
+- The scripts come from a ConfigMap (copies of `scripts/lib/replication_*.py`, kept
+  identical by `scripts/test/test-chart-replication-check.sh`).
+- **The CronJob mounts the administrator Secret** (`auth.existingSecret` key) next to the
+  replication Secret and the TLS Secret, as 0400 files read with `-y`. That is a second
+  holder of the administrator credential (D43 unchanged): restrict RBAC on the namespace.
+- The NetworkPolicy admits the check pod on 636.
+- **Where results show:** the Job's status (`kubectl -n NS get jobs`; exit 0 pass, 1 defect,
+  2 evidence could not be established, both non-zero fail the Job) and its pod log
+  (`kubectl -n NS logs job/NAME`: counts and fixed messages, never values or hashes).
+  With `metrics.prometheusRule.enabled`, `LDAPiumReplicationCheckFailed` fires while the
+  newest failed run started after the newest successful completion
+  (`kube_job_status_failed`/`start_time`/`completion_time`, needs kube-state-metrics);
+  the rule is unit-tested with promtool in `tests/prometheus/replication_check_test.yaml`.
+- `kubectl -n NS create job --from=cronjob/NAME-replication-check manual-1` runs it on demand.
 
 ### Replication identity limits (what the alerts and the check do not cover)
 
@@ -327,14 +371,11 @@ ACL hides an attribute, so a consumer can hold an equal `contextCSN` and still l
 data (`userPassword` hashes first). An identity that cannot bind at all (rc 49 after a
 wrong Secret, a deleted entry or a restore from before a rotation) stalls replication,
 and that does show as lag, but only after writes occur; the exporter has no consumer
-state metric. The data visibility check above is the only detector for the first case,
-and nothing runs it periodically yet: a scheduled check CronJob with a
-`kube_job_status_failed` alert and promtool test is split out of the first
-implementation (see
-[TASKS.md](changes/replication-identity/TASKS.md), T-017). Not covered by the
-check today: reading the local database offline with `slapcat` instead of over LDAPS,
-discovering cluster members (the operator lists every `--peer`; an omitted node is
-silently unchecked), a canary write proving live propagation, attributes outside the
-`--attributes` list, writes discarded by last-write-wins, and credentials held by
-already-established consumer sessions. Running the check also requires the
+state metric. The data visibility check above is the only detector for the first case;
+`replication.check.enabled` runs it periodically (see Scheduled check). Not covered by
+the check: members that no checked node's configuration names and the operator did not
+list, attributes outside the `--attributes` list, writes discarded by last-write-wins,
+and credentials held by already-established consumer sessions. The `--local` path has
+no Kubernetes plumbing: inside a pod run it with `kubectl exec`, the CronJob always
+uses the remote path. Running the check also requires the
 administrator credential (D43 is unchanged).

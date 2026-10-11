@@ -267,6 +267,55 @@ replication:
   #    Never automatically generated. Admin/prepare must leave this empty.
   existingSecret: ""
   existingSecretKey: replication-password
+  # -- Periodic replication identity check (docs/changes/replication-identity, T-017). A CronJob runs
+  #    scripts/lib/replication_identity_check.py against every pod: stable-CSN data comparison between
+  #    the administrator's view and the dedicated identity's view, identity configuration predicates,
+  #    consumer credential fingerprints and provider membership. Needs replication.identity=dedicated.
+  #    Results: the Job's exit status (kubectl get jobs; kube_job_status_failed feeds the
+  #    LDAPiumReplicationCheckFailed alert when metrics.prometheusRule.enabled) and its pod log
+  #    (kubectl logs job/<name>: counts and fixed messages, never credentials or hashes).
+  #    SECURITY: the CronJob mounts the ADMINISTRATOR Secret as well as the replication Secret (the check
+  #    reads the directory as the administrator and cn=config as cn=admin,cn=config); restrict RBAC on
+  #    the namespace accordingly.
+  check:
+    enabled: false
+    # -- Cron schedule, cluster local time. Default: every 30 minutes.
+    schedule: "*/30 * * * *"
+    # -- An image with python3 and ldapsearch (OpenLDAP client). REQUIRED when enabled: the server
+    #    image carries ldapsearch but no python3 and this chart does not add it. See
+    #    charts/ldapium/README.md for a derived image.
+    image:
+      repository: ""
+      tag: ""
+      pullPolicy: IfNotPresent
+    # -- Strict gate: fail when entries stay unstable for five passes. false only warns (exit 0).
+    requireConverged: true
+    # -- Also write, observe and delete one throwaway cn=ridcheck-* entry per run to prove
+    #    propagation. A directory WRITE by the administrator; off by default.
+    canary: false
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+    # -- Kills a stuck run so it cannot hold the Forbid slot forever.
+    activeDeadlineSeconds: 600
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+    podSecurityContext:
+      fsGroup: 999
+      fsGroupChangePolicy: OnRootMismatch
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      readOnlyRootFilesystem: true
+      seccompProfile:
+        type: RuntimeDefault
 
 seed:
   # -- Mounts values below as a ConfigMap at LDAP_SEED_DIR (/opt/ldifs),

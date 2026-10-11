@@ -271,6 +271,9 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `replication.interval` | `00:00:00:10` | → `LDAP_REPLICATION_INTERVAL`. |
 | `replication.bindDN` | `""` | → `LDAP_REPLICATION_BIND_DN` (defaults to the admin DN in the image — see design contract D3). |
 | `replication.existingSecret` / `existingSecretKey` | `""` / `replication-password` | Dedicated-only: the caller-owned Secret with the operator-created replication credential (required when `replication.identity=dedicated`, refused otherwise). |
+| `replication.check.enabled` | `false` | Periodic replication identity check CronJob (see "Scheduled replication identity check"). Needs `replication.identity=dedicated` and `replication.check.image.*`. |
+| `replication.check.schedule` / `requireConverged` / `canary` | `*/30 * * * *` / `true` / `false` | Cron schedule; strict five-pass convergence gate; opt-in directory write (one throwaway entry per run). |
+| `replication.check.image.repository` / `tag` / `pullPolicy` | `""` / `""` / `IfNotPresent` | Required when enabled: an image with `python3` and `ldapsearch`. |
 | `seed.enabled` | `false` | Mount `seed.ldifs` as a ConfigMap at `LDAP_SEED_DIR`, applied once on the first bootstrap of the node that creates the base DIT (a failed seed rolls back and retries on the next start; replicas skip seeding and receive the data by replication). This project ships no sample data by default. |
 | `seed.ldifs` | `{}` | Map of filename → LDIF content. |
 | `persistence.config.size` / `persistence.data.size` | `1Gi` / `2Gi` | PVC sizes for `slapd.d` and `mdb` data respectively. |
@@ -1004,6 +1007,7 @@ and nothing here has verified it — check it against your own metric.
 | `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
 | `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
 | `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds`, for 10m | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
+| `LDAPiumReplicationCheckFailed` | the newest replication identity check Job failed (started after the newest successful one) for `replicationCheckFailureFor` (default 5m); **only rendered when `replication.check.enabled`**, needs kube-state-metrics | `kubectl logs job/<fullname>-replication-check-<id>` has the fixed reason (stable entries differ, identity configuration, unreachable node). Unit-tested in `tests/prometheus/replication_check_test.yaml`. |
 | `LDAPiumTLSCertificateExpiringSoon` | the expiry metric is inside `tlsExpiryWarningSeconds` | Renew and restart — see the TLS section. **Only rendered when `tlsCertificateExpirationExpr` is set**; there is no built-in certificate metric, so leaving it empty means no expiry alerting at all. |
 | `LDAPiumMDBUsageHigh` | mdb pages exceed 80% of the map for 15m | `ldap.dbMaxSize` is the map size, and it cannot be grown while slapd is running. Plan the restart before the directory hits the ceiling, because hitting it fails writes outright. |
 
@@ -1393,3 +1397,25 @@ the chart refuses rendering. Existing custom bind-DN deployments that used the
 replication Secret must explicitly migrate rather than silently binding the
 administrator with the wrong credential. Keep `networkPolicy.ingressFrom` limited
 to known clients; its default empty `podSelector` permits every namespace-local pod.
+
+### Scheduled replication identity check
+
+`replication.check.enabled=true` renders a CronJob (`<fullname>-replication-check`, default
+every 30 minutes) that runs `scripts/check-replication-identity.sh`'s Python core against every
+pod over the headless Service: stable-CSN data comparison between the administrator's and the
+dedicated identity's views, the identity configuration predicates, consumer credential
+fingerprints and provider membership, with `--require-converged` (set
+`replication.check.requireConverged=false` for warn-only). `replication.check.canary=true`
+adds a canary write (one `cn=ridcheck-*` entry, replicated and deleted again). Details:
+[docs/ha-profile.md](../../docs/ha-profile.md).
+
+- Needs `replication.identity=dedicated` (the render fails otherwise) and an image with
+  `python3` plus `ldapsearch`. The server image has no Python, so build one:
+  `FROM ghcr.io/dasomel/ldapium:<tag>`, `USER root`, `RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*`, `USER 999:999`.
+- **The CronJob holds the administrator Secret** (mounted 0400, read with `-y`) as well as the
+  replication and TLS Secrets. Restrict RBAC on the namespace; keep `failedJobsHistoryLimit` small.
+- **Results:** Job status (`kubectl get jobs`: exit 0 pass, 1 defect, 2 no evidence, non-zero
+  fails the Job) and the pod log (counts and fixed messages only). With
+  `metrics.prometheusRule.enabled`, `LDAPiumReplicationCheckFailed` fires on a failed run.
+- The NetworkPolicy admits the check pod on 636. Run once on demand:
+  `kubectl create job --from=cronjob/<fullname>-replication-check manual-1`.
