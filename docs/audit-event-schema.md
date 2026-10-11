@@ -430,10 +430,10 @@ by `TestMachineAudit_ServerLevelRejectionsAreNotAudited`.
 A machine **write** request adds the fields below to the same single line (the
 one-line rule, early returns included, is unchanged: the wrapper still emits it).
 They appear only when a write operation recorded them; every v1 line and every
-refusal before a write operation was reached keeps the v1 shape. No write
-operation is open yet (`machineWriteOps` is empty, every machine write is 403),
-so today the fields are produced only by tests; they are the contract the
-operation-opening unit (T-013) must fill. `operation` carries the operation id.
+refusal before a write operation was reached keeps the v1 shape. The five
+first-ship operations are registered in `machineWriteOps` (T-013) and act only
+with `MACHINE_WRITE_ENABLED=true` (default off; off, every machine write is 403
+and no write field is emitted). `operation` carries the operation id.
 
 | Field | Meaning |
 | --- | --- |
