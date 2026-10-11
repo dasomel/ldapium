@@ -78,7 +78,7 @@ ldapium은 Keycloak이 발급한 access token을 **오프라인으로** 검증�
 
 ### `AC-004` — 잘못된/과대 항목
 - When 형식 오류 항목(다중 `ou`, 잘못된 접두어), 항목 수 상한 초과, 응답 크기 초과, **rc 0인데 sentinel 없음(빈 응답 포함: ACL 좁힘·뒤처진/새 노드)**, 항목 수 ≠ sentinel의 N, sentinel 세대 역행, sentinel `ts`가 `SENTINEL_MAX_AGE`보다 오래됨(분리된 노드), `ret`가 replica 요구보다 짧음이 생긴다.
-- Then 해당 갱신은 실패(ERROR 로그, 카운터), 직전 스냅샷은 `MAX_STALE`까지만 유지, 그 뒤 검증을 통과한 요청은 503. 항목을 고치거나 노드가 따라잡으면 다음 갱신에서 복구. 어떤 경우에도 폐기 항목이 **무시되어 통과**되지 않으며 rc 0이라는 사실만으로 갱신이 성공하지 않는다. 갱신 중 LDAP bind가 실패(rc 49)하면 재시도를 백오프(최소 60 s, 두 배씩 4 m 상한; #363 D-363a)해 머신 DN의 ppolicy 잠금(기본 5회 실패/900 s)을 피한다.
+- Then 해당 갱신은 실패(ERROR 로그, 카운터), 직전 스냅샷은 `MAX_STALE`까지만 유지, 그 뒤 검증을 통과한 요청은 503. 항목을 고치거나 노드가 따라잡으면 다음 갱신에서 복구. 어떤 경우에도 폐기 항목이 **무시되어 통과**되지 않으며 rc 0이라는 사실만으로 갱신이 성공하지 않는다. 갱신 중 LDAP bind가 실패(rc 49)하면 재시도를 5 m 고정 간격(#363 D-363a)으로 백오프해 머신 DN의 ppolicy 잠금(기본 5회 실패/900 s)을 피한다.
 
 ### `AC-005` — 기본 꺼짐·호환
 - 폐기 기능을 켜지 않은 배포의 기존 단위·계약·e2e·드릴이 무변경 통과. 켠 배포에서도 폐기 항목이 없으면 기존 허용/거부 결과가 동일(`TestMachine_*` 회귀).
@@ -177,7 +177,7 @@ ldapium은 Keycloak이 발급한 access token을 **오프라인으로** 검증�
 | 뒤처지거나 분리된 provider를 읽음 / 빈 응답 | bind·조회는 성공(rc 0)하지만 폐기 항목이 없거나 오래됨 → 폐기 토큰 통과 | sentinel(건수·세대 역행 금지·ts 신선도, REQ-013): 위반 시 갱신 실패 → `MAX_STALE` 후 fail closed | `SENTINEL_MAX_AGE`(기본 5 m, 초 단위가 아님)까지의 노출: 뒤처진 노드의 sentinel `ts`가 아직 신선하다고 판정되는 시간(전제 P1·P2, REQ-001); 재시작한 replica는 세대 기억이 없음(REQ-013 (iii)), 도구가 sentinel을 안 올리면 정지로 드러남 |
 | 운영자 오기입 `expires` | 단위·오타로 jti 폐기가 조기 해제 | `expires`를 쓰지 않음, 보존은 `createTimestamp` 기반 도출(D2) | 도구가 설정 상한값보다 짧게 보존하지 못하게 해야 함(T-013) |
 | 머신 계정으로 폐기 목록 열람 | `getEntry`/`listTree`로 revoked client id·jti 읽음 | 메모 제거 + 머신 경로 revocations 서브트리 API 거부(T-015: `dnWithinBase(BaseDN, dn)`(`machine_guard.go:34,49`)는 revocations도 통과시키므로 `getEntry`의 `dn`·`listTree`의 base에 명시 검사 필요) + UI 관리자 쓰기 경로의 해당 서브트리 쓰기 거부(sentinel·항목 삭제 방지) | `ldapsearch -D $MACHINE_DN`로는 읽힘(ACL상 필수) — 저위험 |
-| 갱신 bind 반복 실패 | 잘못된 머신 비밀번호로 5 s마다 bind → ppolicy 잠금 | rc 49 백오프(60 s→4 m) | 요청 경로 bind는 별개로 잠금 위험(기존, 운영 문서 13절) |
+| 갱신 bind 반복 실패 | 잘못된 머신 비밀번호로 5 s마다 bind → ppolicy 잠금 | rc 49 백오프(5 m 고정) | 요청 경로 bind는 별개로 잠금 위험(기존, 운영 문서 13절) |
 
 ### 장애 모드 요약 (fail-closed vs fail-open)
 
@@ -293,7 +293,7 @@ RFC 원문 확인(rfc-editor.org 텍스트에서 해당 문장 직접 확인): R
 
 비차단·미해결(T-020 검토 및 T-017 공백). 상세와 증거는 [TASKS.md](TASKS.md)의 같은 이름 절과 [EVIDENCE §13–§14](EVIDENCE.md).
 
-- (해결, #363) 갱신 백오프 상한을 4 m로 낮췄다. 바닥 60 s는 ppolicy 잠금 방지를 위해 고정.
+- (해결, #363) 갱신 백오프를 5 m 고정 간격으로 바꿨다(ppolicy 잠금 방지).
 - (해결, #363) 머신 `audit.read` 결과에서 revocations 서브트리 accesslog 이벤트를 제외한다.
 - #285가 머신 쓰기를 연결할 때 `machineWritePolicy.Protected`에 revocations DN을 넣어야 한다.
 - 기능을 끄는 롤백은 서브트리를 머신 `getEntry`로 읽히게 하고 관리자 쓰기를 허용한다(문서화; #363에서 가드 상시 유지는 하지 않기로 결정, 아래 D-363c).
@@ -302,6 +302,6 @@ RFC 원문 확인(rfc-editor.org 텍스트에서 해당 문장 직접 확인): R
 
 ## Follow-up decisions (#363)
 
-- **D-363a 백오프**: 바닥 60 s(고정, 더 빠른 재시도 금지: 기본 ppolicy는 5회 실패에 900 s 잠금이고 요청 경로 bind도 막힌다), 상한 15 m에서 4 m로 하향(`revocationBackoffMax`). 비밀번호 수정 뒤 503은 최대 약 4 m. 헬스 트리거 재시도는 채택하지 않았다: Secret 변경을 관측할 수 없고 바닥을 깰 수 있다. 비용: 잘못된 비밀번호가 계속되면 4 m마다 실패 bind 1회가 계속된다(누적 잠금 여부는 ppolicy 설정에 좌우, 기존과 동일).
-- **D-363b audit.read**: 머신 호출자의 `listAuditActions`와 `getMonitor.recentLogs`에서 `reqDN`이 revocations 서브트리 안이거나 정규형으로 파싱되지 않는 accesslog 이벤트를 제외한다(`dropRevocationEvents`). 관리자 세션은 그대로. 비용: 페이지가 `limit`보다 적을 수 있음.
+- **D-363a 백오프**: rc 49 뒤 재시도 간격을 5 m 고정으로 한다. 기본 ppolicy(5회 실패/900 s)에서 900 s 창에는 최대 4회만 들어가므로 한 replica는 머신 DN을 잠글 수 없다(이전 60→120→240→480→900 s 사다리는 창 안에 5회가 들어갔다, Codex 검토). 15 m 상한은 없애 비밀번호 수정 뒤 503은 최대 약 5 m. 헬스 트리거 재시도는 채택하지 않았다: Secret 변경을 관측할 수 없고 간격을 깬다. 비용/한계: replica R개면 실효 간격이 300/R s라 다중 replica에서는 머신 DN에 잠금 면제 정책이 필요하다. 잘못된 비밀번호가 계속되면 5 m마다 실패 bind 1회가 이어진다.
+- **D-363b audit.read**: 머신 호출자의 `listAuditActions`와 `getMonitor.recentLogs`에서 `reqDN`이 revocations 서브트리 안이거나 정규형으로 파싱되지 않거나 비어 있는 accesslog 이벤트를 제외하고 남은 이벤트의 로그 필터는 비운다(`dropRevocationEvents`; 상위 base 검색 필터에 jti가 실릴 수 있음). 관리자 세션은 그대로. 비용: 페이지가 `limit`보다 적을 수 있음.
 - **D-363c 롤백 가드**: 가드 상시 유지는 **구현하지 않는다**. 보호 DN은 기능이 꺼지면 읽지 않는 `MACHINE_REVOCATION_*`에서 오며, 기본 DN으로 항상 막으면 모든 배포의 관리자 쓰기 동작이 바뀐다. 운영 문서에 결정과 대안(UI API로 쓰지 않기, 재활성화 전 `heartbeat`)을 적었다.

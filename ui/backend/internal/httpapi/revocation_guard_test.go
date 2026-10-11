@@ -95,8 +95,9 @@ func TestDropRevocationEvents(t *testing.T) {
 		ev("ou=system,dc=example,dc=org"),
 		ev(""),
 	}
+	in[5].Raw.Filter = "(cn=jti-revoked-1)"
 	got := dropRevocationEvents(in, revocationBaseTest)
-	if len(got) != 3 || got[0].Raw.ReqDN != "uid=x,ou=users,dc=example,dc=org" || got[1].Raw.ReqDN != "ou=system,dc=example,dc=org" || got[2].Raw.ReqDN != "" {
+	if len(got) != 2 || got[0].Raw.ReqDN != "uid=x,ou=users,dc=example,dc=org" || got[1].Raw.ReqDN != "ou=system,dc=example,dc=org" || got[0].Raw.Filter != "" {
 		t.Fatalf("%+v", got)
 	}
 	if len(dropRevocationEvents(in, "")) != len(in) {

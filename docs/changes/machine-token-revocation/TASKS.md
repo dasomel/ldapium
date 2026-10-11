@@ -60,7 +60,7 @@ T-001–T-005의 증거·설계 관문과 T-010–T-012 구현은 완료됐다. 
 
 T-020 검토의 비차단 항목 중 미해결인 것. 각각 아직 이슈가 없으며 필요 시 집중된 이슈로 분리한다.
 
-- (해결, #363) 갱신 백오프 상한 4 m, 바닥 60 s 고정 — CHANGE.md D-363a.
+- (해결, #363) 갱신 백오프 5 m 고정 간격 — CHANGE.md D-363a.
 - (해결, #363) 머신 `audit.read`에서 revocations accesslog 제외 — CHANGE.md D-363b.
 - #285가 머신 쓰기를 연결할 때 `machineWritePolicy.Protected`에 revocations DN을 반드시 넣어야 한다.
 - 기능을 끄는 롤백은 revocations 서브트리를 머신 `getEntry`로 읽히게 하고 관리자 쓰기를 허용한다(`docs/machine-auth-operations.md`에 문서화; #363 결정: 가드 상시 유지 안 함, CHANGE.md D-363c).

@@ -57,7 +57,7 @@ func TestRevocationRefreshRetainsSnapshotAndExpires(t *testing.T) {
 func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	now := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	r := &machineRevocation{refresh: time.Second, now: func() time.Time { return now }, read: func(context.Context, uint64) (*machineauth.Snapshot, error) { return nil, domain.ErrInvalidCredentials }}
-	for _, delay := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 4 * time.Minute, 4 * time.Minute} {
+	for _, delay := range []time.Duration{revocationBackoff, revocationBackoff, revocationBackoff, revocationBackoff, revocationBackoff} {
 		if got := r.update(context.Background()); got != delay {
 			t.Fatalf("%v != %v", got, delay)
 		}
@@ -73,25 +73,21 @@ func TestRevocationCredentialBackoffAndRegression(t *testing.T) {
 	}
 }
 
-func TestNextRevocationBackoffBounds(t *testing.T) {
-	if revocationBackoffMin < time.Minute || revocationBackoffMax > 5*time.Minute || revocationBackoffMax < revocationBackoffMin {
-		t.Fatal(revocationBackoffMin, revocationBackoffMax)
+// D-363a: with the default ppolicy (5 failures in 900 s) one replica must never
+// land five failed binds inside any 900 s window.
+func TestRevocationBackoffNeverLocksDefaultPolicy(t *testing.T) {
+	const maxFailure, window = 5, 900 * time.Second
+	var at []time.Duration
+	var prev, now time.Duration
+	for i := 0; i < 40; i++ {
+		at = append(at, now)
+		prev = nextRevocationBackoff(prev)
+		now += prev
 	}
-	for _, prev := range []time.Duration{-time.Second, 0, time.Second, 59 * time.Second} {
-		if got := nextRevocationBackoff(prev); got != revocationBackoffMin {
-			t.Fatalf("%v -> %v: below the floor", prev, got)
+	for i := 0; i+maxFailure-1 < len(at); i++ {
+		if at[i+maxFailure-1]-at[i] <= window {
+			t.Fatalf("%d failures within %v starting at failure %d", maxFailure, window, i)
 		}
-	}
-	prev := time.Duration(0)
-	for i := 0; i < 20; i++ {
-		got := nextRevocationBackoff(prev)
-		if got < revocationBackoffMin || got > revocationBackoffMax || got < prev {
-			t.Fatalf("%v -> %v", prev, got)
-		}
-		prev = got
-	}
-	if prev != revocationBackoffMax || nextRevocationBackoff(time.Duration(1<<62)) != revocationBackoffMax {
-		t.Fatal(prev)
 	}
 }
 
