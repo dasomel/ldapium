@@ -5,6 +5,7 @@
 - Related issue: [#285](https://github.com/dasomel/ldapium/issues/285)(닫지 않음). 선행: [#214](https://github.com/dasomel/ldapium/issues/214) 머신 주체 인증 v1(읽기 전용). 연관: [#277](https://github.com/dasomel/ldapium/issues/277)(ACL 순서), [#286](https://github.com/dasomel/ldapium/issues/286)(즉시 폐기·대체 자격 증명)
 - Status: `Accepted (2026-10-07, maintainer decision recorded in the conversation; security review: 4 blockers found and resolved in this revision)` — **설계 문서다. 이 패키지는 코드·ACL·Helm·스크립트·`openapi.json`을 바꾸지 않는다.** 수용은 설계 수용이며 구현 단위(TASKS `Implement`)는 아직 하나도 착수·완료되지 않았다. 열 번째 질문까지의 결정은 아래 "Resolved questions", 보안 검토 반영 이력은 "Revision"에 있다.
 - 작성일: 2026-10-07
+- 후속 단계(v2b 그룹·잠금, v2c 비밀번호 구획, T-026/T-030/T-031): [machine-write-scope-v2](../machine-write-scope-v2/CHANGE.md)(#379, Proposed).
 - 형식: [machine-principal-auth](../machine-principal-auth/CHANGE.md)(읽기 전용 v1)와 [api-conditional-writes](../api-conditional-writes/CHANGE.md)(If-Match·Idempotency-Key)를 따른다. 코드 주장은 파일:줄(작업 트리 `main` b0ada28 기준)로 인용하고, 확인하지 못한 것은 "미검증"으로 표시한다.
 
 > v1의 비목표를 그대로 승계한다: "쓰기 오퍼레이션, 비밀번호 오퍼레이션, 백업, 애플리케이션 프로파일, entry/move 허용"([machine-principal-auth CHANGE.md "Non-goals"](../machine-principal-auth/CHANGE.md)). 이 패키지는 그중 **사용자·그룹 쓰기와 비밀번호**만 다루고, 나머지(백업, 프로파일, `moveEntry`)는 이 패키지에서도 **영구 거부**로 유지한다(D2). v1 allowlist를 제자리에서 넓히지 않고, 거부 목록은 결정 기록이 있을 때만 줄어든다(#285 수용 조건).
