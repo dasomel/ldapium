@@ -21,7 +21,7 @@ Port-forward and test a bind:
 {{- if gt (int .Values.replicaCount) 1 }}
 
 Replication is multi-provider (every replica accepts writes; see
-REPLICATION-CONTRACT.md in the repo for the design). Check convergence with:
+docs/ha-profile.md in the repo for the design). Check convergence with:
   kubectl -n {{ .Release.Namespace }} exec {{ include "ldapium.fullname" . }}-0 -- \
     ldapsearch -x -H ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi -b cn=config olcServerID
 {{- end }}

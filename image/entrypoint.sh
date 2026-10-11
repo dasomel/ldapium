@@ -884,6 +884,12 @@ if [ "$LDAP_REPLICATION_ENABLED" = "true" ] || [ "$LDAP_REPLICATION_ENABLED" = "
       LDAP_REPLICATION_PASSWORD=$(cat "$LDAP_REPLICATION_PASSWORD_FILE")
     fi
     LDAP_REPLICATION_PASSWORD="${LDAP_REPLICATION_PASSWORD:-$LDAP_ADMIN_PASSWORD}"
+    # #355 (proposed): a distinct password with the admin bind DN stalls every consumer
+    # with rc 49 (peers check the admin DN against their own rootpw). Warn, never refuse:
+    # a custom LDAP_REPLICATION_BIND_DN + password remains a supported combination.
+    if [ "$LDAP_REPLICATION_BIND_DN" = "$LDAP_ADMIN_DN" ] && [ "$LDAP_REPLICATION_PASSWORD" != "$LDAP_ADMIN_PASSWORD" ]; then
+      log "WARNING: LDAP_REPLICATION_PASSWORD differs from the admin password while replication binds as the admin DN; peers will reject the bind (rc 49) and replication will stall. Unset it, or set LDAP_REPLICATION_BIND_DN to a dedicated account."
+    fi
   fi
   [ -n "$LDAP_REPLICATION_PASSWORD" ] || die "LDAP_REPLICATION_PASSWORD resolved empty"
   case "$LDAP_REPLICATION_PASSWORD" in

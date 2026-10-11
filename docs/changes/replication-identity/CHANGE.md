@@ -417,3 +417,40 @@ peers cannot count as a successful gate. Cost: sustained legitimate writes may
 also fail that strict gate; retry in a quiet interval. This is an additive
 read-only operator predicate, not package recovery/rotation acceptance. Membership
 is operator-supplied and local/slapdn/canary/complete acceptance remains pending.
+
+### Decision proposal 2026-10-11 (#355): admin-mode replication password and the D43 relaxation
+
+Status: **Proposed — maintainer acceptance pending.** Nothing below is accepted until the
+maintainer marks it so; the warning in (1) is implemented as a proposal-conformant change
+and is trivially reverted.
+
+**(1) `LDAP_REPLICATION_PASSWORD` set in `admin` mode (T-010 deferral, REQ-015).**
+Observation (`image/entrypoint.sh`, replication-password resolution): with
+`LDAP_REPLICATION_IDENTITY=admin` and no `LDAP_REPLICATION_BIND_DN`, syncrepl binds as the
+admin DN with the distinct `LDAP_REPLICATION_PASSWORD`. Peers check the admin DN against
+their own `olcRootPW`, so every consumer stalls with rc 49 and nothing at startup says so.
+
+| Option | Effect | Cost |
+|---|---|---|
+| A. Refuse the start (the original T-010 text) | Closes the silent stall | Breaks the documented use of a custom `LDAP_REPLICATION_BIND_DN` + `LDAP_REPLICATION_PASSWORD`, adds a failure path to the default mode (D58 says `admin` stays unchanged) |
+| B. Loud startup WARNING, no refusal (**recommended**) | The stall is named in the container log of every affected node; custom bind DN + password stays silent and supported | A warning can be ignored; `cn=config` and `olcSyncrepl` are byte-identical to before |
+| C. Do nothing | — | The stall stays silent |
+
+Recommendation: B. Implemented: `image/entrypoint.sh` logs one `WARNING` when the mode is
+`admin`, the effective bind DN equals `LDAP_ADMIN_DN` and the effective replication
+password differs from the admin password (compared in the shell, never printed).
+Evidence: `scripts/test/test-replication-identity-env.sh` starts a real node four ways
+(distinct password: warns and starts; no password, equal password, custom bind DN +
+password: no warning) and, given a base image, still shows `cn=config` and `olcSyncrepl`
+identical to the previous image. Escape hatch: delete the `if` block; no data or
+configuration depends on it. `prepare` keeps its existing refusal (it cannot be
+combined with a replication password at all).
+
+**(2) T-015, relaxing the D43 startup failure for `dedicated` only.** Decision proposed:
+T-015 stays gated and unstarted until T-020, T-021 and T-022 are green in CI (D56), as
+already written in TASKS.md. Two administrator-password acceptances are not isolation,
+and the relaxation also needs local `olcRootPW` and the replicated admin entry hash
+corrected together (D56), which no current test exercises. Closing #355 is possible
+after (1) is accepted; (2) remains a tracked gate, not a won't-do.
+
+Maintainer actions requested: accept or amend (1) B, and confirm (2) keeps T-015 gated.

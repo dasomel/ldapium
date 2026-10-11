@@ -191,6 +191,50 @@ refuse "dedicated admin DN = reserved DN (space variant)" "must not equal the re
 refuse "prepare admin DN = reserved DN" "must not equal the reserved replication identity DN" \
   "${rep[@]}" -e LDAP_REPLICATION_IDENTITY=prepare -e "LDAP_ADMIN_DN=cn=replicator,${base}"
 
+# --- Part 1b: admin mode warns about a stalling replication password (#355) ---
+# A distinct LDAP_REPLICATION_PASSWORD with the admin bind DN must start (never
+# refuse: a custom bind DN + password is supported) and log a WARNING without the
+# value; the same start with no password or with a custom bind DN must not warn.
+# warn_case <label> <want: warn|quiet> <docker -e args...>
+warn_case() {
+  local label="$1" want="$2" name out w=0 got=quiet
+  shift 2
+  cn=$((cn + 1))
+  name="ldapium-ridenv-warn-${cn}-${suffix}"
+  reg_containers+=("$name")
+  reg_vols+=("${name}-cfg" "${name}-data")
+  docker volume create "${name}-cfg" >/dev/null
+  docker volume create "${name}-data" >/dev/null
+  docker run -d --name "$name" \
+    -v "${name}-cfg:/etc/openldap/slapd.d" -v "${name}-data:/var/lib/openldap/data" \
+    -e LDAP_ROOT_DN="$base" -e LDAP_ADMIN_PASSWORD="$pw" \
+    -e LDAP_REPLICATION_ENABLED=true -e LDAP_REPLICATION_PEERS="$peers" -e LDAP_SERVER_ID=1 \
+    "$@" "$image" >/dev/null
+  # The warning (or its absence) is decided before slapd starts; wait until slapd is up.
+  while [ "$w" -lt "$refuse_deadline" ]; do
+    docker exec "$name" ldapwhoami -x -H ldap://localhost >/dev/null 2>&1 && break
+    sleep 1
+    w=$((w + 1))
+  done
+  out="$(docker logs "$name" 2>&1)"
+  [[ "$out" == *"WARNING: LDAP_REPLICATION_PASSWORD differs from the admin password"* ]] && got=warn
+  if [ "$w" -ge "$refuse_deadline" ]; then
+    bad "${label}: node never became ready (a warning must not refuse the start)"
+  elif [ "$got" != "$want" ]; then
+    bad "${label}: expected ${want}, got ${got}"
+  elif [[ "$out" == *"$good"* || "$out" == *"$pw"* ]]; then
+    bad "${label}: password leaked into output"
+  else
+    ok "${label}"
+  fi
+  docker rm -fv "$name" >/dev/null 2>&1 || true
+}
+warn_case "admin mode, distinct replication password warns and starts" warn -e "LDAP_REPLICATION_PASSWORD=${good}"
+warn_case "admin mode, no replication password does not warn" quiet
+warn_case "admin mode, same password as admin does not warn" quiet -e "LDAP_REPLICATION_PASSWORD=${pw}"
+warn_case "admin mode, custom bind DN + password does not warn" quiet \
+  -e "LDAP_REPLICATION_BIND_DN=cn=svc,${base}" -e "LDAP_REPLICATION_PASSWORD=${good}"
+
 # --- Part 2: admin mode is byte-identical to the base image -------------------
 norm() { grep -v -E '^(entryCSN|entryUUID|modifyTimestamp|createTimestamp|olcRootPW|userPassword)'; }
 

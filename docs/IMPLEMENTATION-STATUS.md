@@ -35,7 +35,11 @@ See the [ADR](changes/replication-identity/ADR.md),
 This is partial implementation, not complete dedicated-mode package acceptance.
 Rolling rotation, guarded rollback-admin, complete cross-node/configuration/canary
 checks, Kubernetes/restore acceptance matrix and periodic-check alerts remain
-outstanding. Shared administrator credential restriction D43 is retained. Open
+outstanding. The operator procedure (prepare, check, ensure, check, dedicated, rollback,
+total-loss recovery) is in [migration.md](migration.md) and the check/alert limits in
+[ha-profile.md](ha-profile.md). Admin mode warns, without refusing, when a distinct
+`LDAP_REPLICATION_PASSWORD` would stall replication (#355, proposed decision pending
+maintainer acceptance). Shared administrator credential restriction D43 is retained. Open
 PR data-check/restore primitives are excluded from this merged-feature snapshot.
 
 ## TLS and authentication hardening
