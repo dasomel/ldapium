@@ -1,0 +1,66 @@
+# Machine WRITE identity W_data ACL for the MAIN database
+# (docs/changes/machine-write-scope, T-020; operator guide docs/machine-write-account.md).
+#
+# The single source of this LDIF text: the live smoke applies it with the tokens
+# below substituted (and the indices shifted, see the guide), and the guide embeds
+# it verbatim.
+#
+#   @WDATA_DN@    the dedicated data-write account (outside the write subtree)
+#   @WRITE_DN@    the write subtree: the UNION of every client's write cap
+#   @SYSTEM_DN@   the container that holds M, W_data, W_lock (and the other
+#                 service accounts): a deny backstop in case @WRITE_DN@ is widened
+#   @REPL_DN@     the replication identity entry (cn=replicator,<root>, the
+#                 reserved DN of image/entrypoint.sh): the same backstop, because
+#                 it sits directly under the root and a root-wide @WRITE_DN@
+#                 would otherwise let W_data delete it
+#   @MAIN_DB_DN@  the config entry of the main database
+#
+# This is a class-level BACKSTOP, not per-client isolation: W_data is one DN shared
+# by every client, so the ACL cannot tell client A's cap from client B's. Per-client
+# caps, protected-DN and target-type checks are the application guard's job.
+#
+# Placement (guide section 4): AFTER the replication identity rule and the machine
+# read rules M, BEFORE every image allow rule. The indices below start at {0} and
+# are shifted by the guide's command to the number of leading rules that name the
+# replication identity or M. Every rule names only W_data and ends in "by * break",
+# so no other identity's access changes. There is NO userPassword/pwd* write rule:
+# the password tier W_cred is design-only and has no ACL fragment.
+#
+#   {0} anything under @SYSTEM_DN@                       none
+#   {1} the replication identity entry @REPL_DN@         none
+#   {2} secrets, pwd* state, memberOf                    none (reads AND writes)
+#   {3} entry/children inside @WRITE_DN@                 write (add, delete AND
+#                                                        modrdn/move: the ACL
+#                                                        cannot tell them apart)
+#   {4} objectClass inside @WRITE_DN@                    add (Add only, D18)
+#   {5} the closed attribute list inside @WRITE_DN@      write
+#   {6} everything else inside @WRITE_DN@                read (assertions, reads)
+#   {7} everything else                                  none (no by users read,
+#                                                        no by self write)
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
+  by dn.exact="@WDATA_DN@" none
+  by * break
+olcAccess: {1}to dn.exact="@REPL_DN@"
+  by dn.exact="@WDATA_DN@" none
+  by * break
+olcAccess: {2}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WDATA_DN@" none
+  by * break
+olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=entry,children
+  by dn.exact="@WDATA_DN@" write
+  by * break
+olcAccess: {4}to dn.subtree="@WRITE_DN@" attrs=objectClass
+  by dn.exact="@WDATA_DN@" add
+  by * break
+olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member
+  by dn.exact="@WDATA_DN@" write
+  by * break
+olcAccess: {6}to dn.subtree="@WRITE_DN@"
+  by dn.exact="@WDATA_DN@" read
+  by * break
+olcAccess: {7}to *
+  by dn.exact="@WDATA_DN@" none
+  by * break
