@@ -149,8 +149,12 @@ done
 
 # Verified LDAPS only: the identity credential and the administrator password never cross a clear or unverified link.
 require_verified_tls() {
-  case "$uri" in ldaps://*) ;; *) die "$cmd requires verified LDAPS" ;; esac
-  for u in ${peers[@]+"${peers[@]}"}; do case "$u" in ldaps://*) ;; *) die "$cmd requires verified LDAPS (peer ${u})" ;; esac; done
+  # One plain ldaps://host[:port] per value: a space/comma list or any URI with a path or
+  # options would let the client fall back to a clear URI after a failed LDAPS connect.
+  local u
+  for u in "$uri" ${peers[@]+"${peers[@]}"}; do
+    [[ "$u" =~ ^ldaps://[A-Za-z0-9._-]+(:[0-9]{1,5})?$ ]] || die "$cmd requires exactly one verified ldaps://host[:port] URI per value (got '${u}')"
+  done
   [ "${LDAPTLS_REQCERT:-demand}" = demand ] || die "$cmd requires LDAPTLS_REQCERT=demand"
   export LDAPTLS_REQCERT=demand
 }

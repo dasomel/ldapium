@@ -208,6 +208,10 @@ if has "differs from" "$last_out"; then ok "lagging node: the message says it di
 echo "== guards"
 run docker exec -e LDAPTLS_CACERT=/certs/ca.pem "$n1" bash /tmp/ri.sh rollback-admin --uri "ldap://${n1}:389" --base "$base" --admin-password-file /tmp/admin.pw
 check "clear LDAP is refused" 1 "$last_rc"
+run docker exec -e LDAPTLS_CACERT=/certs/ca.pem "$n1" bash /tmp/ri.sh rollback-admin --uri "ldaps://localhost:1 ldap://localhost:389" --base "$base" --admin-password-file /tmp/admin.pw
+check "mixed LDAPS/clear URI list is refused" 1 "$last_rc"
+run docker exec -e LDAPTLS_CACERT=/certs/ca.pem "$n1" bash /tmp/ri.sh rollback-admin --uri "ldaps://localhost:636" --peer "ldaps://${n2}:636,ldap://${n2}:389" --base "$base" --admin-password-file /tmp/admin.pw
+check "mixed LDAPS/clear peer list is refused" 1 "$last_rc"
 run docker exec -e LDAPTLS_CACERT=/certs/ca.pem "$n1" bash /tmp/ri.sh rollback-admin --uri "ldaps://${n1}:636" --base "$base" --admin-password-file /tmp/missing.pw
 check "a missing password file is refused" 1 "$last_rc"
 run docker exec -e LDAPTLS_CACERT=/certs/ca.pem -e LDAPTLS_REQCERT=never "$n1" bash /tmp/ri.sh rollback-admin --uri "ldaps://${n1}:636" --base "$base" --admin-password-file /tmp/admin.pw
