@@ -83,6 +83,9 @@ type harnessOpt struct {
 	authTimeout time.Duration
 	// revocationRead replaces the revocation snapshot reader of the real constructor.
 	revocationRead revocationRead
+	// writeOps / writeIdentity are the test-only write table and M pre-read.
+	writeOps      []machineOp
+	writeIdentity writeIdentityChecker
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -150,6 +153,9 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 		authTimeout: opt.authTimeout,
 
 		revocationRead: opt.revocationRead,
+
+		writeOps:      opt.writeOps,
+		writeIdentity: opt.writeIdentity,
 	}
 	if opt.now != nil {
 		deps.now = opt.now

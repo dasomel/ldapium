@@ -19,6 +19,13 @@ func WithMachineWriteConstraints(ctx context.Context) context.Context {
 	return context.WithValue(ctx, machineWriteConstraintKey{}, true)
 }
 
+// MachineWriteConstraintsEnabled reports whether ctx carries the marker; the
+// httpapi write pipeline tests use it to prove the marker reaches the client.
+func MachineWriteConstraintsEnabled(ctx context.Context) bool {
+	enabled, _ := ctx.Value(machineWriteConstraintKey{}).(bool)
+	return enabled
+}
+
 func writeRevisionControls(ctx context.Context, csn, requiredClass string) ([]ldap.Control, error) {
 	if enabled, _ := ctx.Value(machineWriteConstraintKey{}).(bool); !enabled {
 		return revisionControls(csn)

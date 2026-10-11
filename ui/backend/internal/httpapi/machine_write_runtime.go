@@ -10,8 +10,9 @@ import (
 
 // machineWriteRuntime holds the write-side objects built from the validated
 // configuration (T-012/T-016/T-018/T-019). It is constructed only when
-// MACHINE_WRITE_ENABLED is on and is not consulted by any request yet:
-// machineWriteOps is empty, so T-013 is the only unit that can make it matter.
+// MACHINE_WRITE_ENABLED is on. Only the write pipeline consults it, and it
+// matches no request while machineWriteOps is empty, so T-013 is the only unit
+// that can make it matter.
 type machineWriteRuntime struct {
 	policies map[string]machineWritePolicy
 	limiter  *machineWriteLimiter

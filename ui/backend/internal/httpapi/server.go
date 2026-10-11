@@ -49,8 +49,9 @@ type Server struct {
 	// machine.go). machineTest carries test-only collaborators.
 	machine     *machineAuth
 	machineTest *machineDeps
-	// machineWrite is built only when MACHINE_WRITE_ENABLED is on and is not
-	// consulted yet (machineWriteOps is empty; see machine_write_runtime.go).
+	// machineWrite is built only when MACHINE_WRITE_ENABLED is on. Only the write
+	// pipeline (machine_write_pipeline.go) reads it, and it matches nothing while
+	// machineWriteOps is empty.
 	machineWrite *machineWriteRuntime
 	// apiRoutes memoizes the route table handleAPINotFound scans; see there.
 	apiRoutesOnce sync.Once
@@ -150,6 +151,9 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 		s.echo.Use(s.machineMiddleware())
 		if cfg.Machine.WriteEnabled {
 			if s.machineWrite, err = newMachineWriteRuntime(cfg, time.Now); err != nil {
+				return nil, err
+			}
+			if s.machine.write, err = s.newMachineWritePipeline(dialer); err != nil {
 				return nil, err
 			}
 		}
