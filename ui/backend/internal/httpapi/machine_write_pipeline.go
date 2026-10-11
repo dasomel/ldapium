@@ -410,6 +410,10 @@ func (r *wreq) execute(c echo.Context) error {
 			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity check unavailable")
 		}
 	}
+	// runAs derives its own timeout from the request context: handing it ours
+	// keeps the M pre-read and the write inside ONE MACHINE_REQUEST_TIMEOUT
+	// (emergency-block and shutdown-grace bounds), not two back to back.
+	c.SetRequest(c.Request().WithContext(ctx))
 	return r.w.exec.runAs(c, r.p, id.BindDN, id.BindPassword, func(c echo.Context) error {
 		c.Set(definitiveKey, false) // from here on a 5xx may hide an applied write
 		c.Set(machineIdempotencyDoneKey, true)

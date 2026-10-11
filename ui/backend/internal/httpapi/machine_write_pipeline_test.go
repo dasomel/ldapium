@@ -462,6 +462,27 @@ func TestWritePipeline_PreReadDenialAndFailuresDoNotBurnTheKey(t *testing.T) {
 	}
 }
 
+// The identity pre-read and the write share one MACHINE_REQUEST_TIMEOUT; a slow
+// pre-read must not restart the deadline for the write (#285 PR review).
+func TestWritePipeline_DeadlineCoversPreReadAndWrite(t *testing.T) {
+	const timeout = 2 * time.Second
+	w := writeHarness(t, func(c *config.Config) { c.Machine.RequestTimeout = timeout }, catalogOps())
+	w.ident.fn = func(string, string) error { time.Sleep(300 * time.Millisecond); return nil }
+	start := time.Now()
+	if rec := w.patch(wBob, okHeaders()); rec.Code != 204 {
+		t.Fatalf("write: %d %s", rec.Code, rec.Body)
+	}
+	w.dir.mu.Lock()
+	defer w.dir.mu.Unlock()
+	if len(w.dir.ctxs) != 1 {
+		t.Fatalf("write calls = %d, want 1", len(w.dir.ctxs))
+	}
+	dl, ok := w.dir.ctxs[0].Deadline()
+	if !ok || dl.After(start.Add(timeout+100*time.Millisecond)) {
+		t.Fatalf("write deadline %v is beyond the request start + timeout (%v): the pre-read restarted it", time.Until(dl), timeout)
+	}
+}
+
 // ---- step 11: error mapping -------------------------------------------------
 
 func TestWritePipeline_DirectoryErrorsUseTheEnvelope(t *testing.T) {
