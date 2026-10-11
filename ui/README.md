@@ -285,6 +285,21 @@ named `roles` or Keycloak's `realm_access.roles`; ensure one is present in
 the **ID token**, not only an access token. Do not map a display name in
 place of `preferred_username`: it is used as the LDAP `uid` lookup key.
 
+### Drill-only image: `machinewritedrill` (machine write emergency-block drill)
+
+`docker build --build-arg GO_TAGS=machinewritedrill -t ldapium-ui:machine-drill ui` compiles
+`ui/backend/internal/httpapi/machine_write_drill.go`, which registers the five first-ship machine write
+operations (`createUser`, `patchUser`, `deleteUser`, `addGroupMember`, `removeGroupMember`) so the real write
+pipeline can be drilled end to end by `scripts/test/test-machine-write-drill.py` (change package
+`docs/changes/machine-write-scope`, T-022). **Images built with this tag are for drills only: do not publish,
+tag, deploy or put them in a chart.** The default `GO_TAGS` is empty, the default and release builds register no
+machine write operation (`TestDefaultBuildHasNoMachineWriteOperations`), and
+`scripts/test/test-machine-write-drill-guard.py` (CI) fails if the tag appears in a Dockerfile default, a release
+workflow, the Makefile, a chart or any file outside the drill files. A drill binary also logs
+`DRILL BUILD: machine write operations are registered; not for production` at start-up and appends `+DRILL-BUILD`
+to its version; `scripts/test/test-machine-write-drill-artifact.sh` (CI) inspects the built default binary for the tag
+and the marker.
+
 ## Running
 
 ```sh

@@ -287,12 +287,58 @@ fi
 
 `M`과 같다([machine-ldap-account.md](machine-ldap-account.md) 10·12·13절): 계정 항목과 비밀번호는 데이터라 복제되지만 `olcAccess`는 노드마다 따로이므로
 **노드를 추가하거나 설정 볼륨을 새로 만들면 4.2를 다시 적용**한다. 비밀번호를 한 개씩 Secret에 두므로 회전 중에는 쓰기가 실패한다. 틀린 비밀번호가 5번 연속이면
-계정이 900초 잠긴다. 임시 비밀번호 파일은 마지막에 지운다:
+계정이 900초 잠긴다(아래 9.1에서 실측하고 완화한다). 임시 비밀번호 파일은 마지막에 지운다:
 
 ```sh
 $EXEC rm -f /tmp/.pw-admin /tmp/.pw-wdata /tmp/.pw-wlock
 rm -f wdata.pw wlock.pw
 ```
+
+### 9.1 `W_*` 잠금 자기 DoS와 완화 (D24, 실측: [EVIDENCE-drill.md](changes/machine-write-scope/EVIDENCE-drill.md) F)
+
+이미지의 기본 정책(`cn=default,ou=policies,<root>`)은 `pwdLockout: TRUE`, `pwdMaxFailure: 5`, `pwdLockoutDuration: 900`이다. 실측한 거동(드릴 이미지, 실제 slapd):
+
+- 틀린 비밀번호로 `W_data`를 **5번** bind하면 계정이 잠긴다. LDAP에 닿을 수 있는 누구나 이것을 일으킬 수 있다(자기 DoS). 잠긴 동안 UI의 쓰기는 **올바른 비밀번호로도 503**이고
+  읽기(`M`)는 영향이 없다. UI의 거절된 쓰기도 요청마다 bind 1회이므로, 비밀번호 회전 뒤 쓰기 5건이 들어오면 UI 스스로 계정을 잠근다(5번째 쓰기에서 잠금 확인).
+  잠금 중 올바른 비밀번호 bind는 잠금 시각을 연장하지 않는다.
+- 관리자가 비밀번호를 다시 설정(`replace: userPassword`)하면 잠금도 풀린다(실측: 복구 직후 다음 쓰기 201). 비밀번호를 그대로 두고 풀려면
+  `delete: pwdAccountLockedTime`(관리자). `pwdFailureTime`은 `NO-USER-MODIFICATION`이라 지울 수 없다(19).
+
+완화는 **`W_*` 전용 정책** 하나다. 정책 항목을 만들고 `W_*` 항목의 `pwdPolicySubentry`로 지정한다(`M`과 일반 사용자는 기본 정책 그대로):
+
+```ldif
+dn: cn=machine-writers,ou=policies,dc=example,dc=org
+objectClass: top
+objectClass: device
+objectClass: pwdPolicy
+cn: machine-writers
+pwdAttribute: userPassword
+pwdLockout: FALSE
+
+dn: uid=machine-write-data,ou=system,dc=example,dc=org
+changetype: modify
+replace: pwdPolicySubentry
+pwdPolicySubentry: cn=machine-writers,ou=policies,dc=example,dc=org
+```
+
+- **`pwdLockout: FALSE`만 쓰고 `pwdMaxFailure`는 넣지 않는다.** `pwdMaxFailure: 5`를 남기고 플래그만 끄면(실측) 25번 실패 뒤 `pwdAccountLockedTime`이 **찍히지만**
+  쓰기는 계속 되므로, 잠금 속성을 감시하는 알림이 거짓 양성이 된다.
+- 이 정책에서 25번 틀린 비밀번호 bind 뒤에도 잠기지 않고 쓰기가 계속 된다(실측). 비밀번호 회전 차단은 그대로 동작한다: 회전 뒤 거절된 쓰기 8건, 계정 잠금 없음,
+  복구 직후 다음 쓰기가 성공한다.
+- **대가**: 이 정책에서는 운영자가 `pwdAccountLockedTime`을 직접 넣어도 **무시된다**(실측: 영구 잠금 값을 넣은 뒤에도 쓰기 201). 긴급 차단은 비밀번호 회전(또는 쓰기만 끄는 재배포)만 쓴다.
+- 대안(잠금을 유지): `pwdLockout: TRUE`, `pwdMaxFailure: 3`, `pwdLockoutDuration: 8`로 짧게 두면 잠금이 운영자 없이 풀린다(실측: 잠금 후 약 8초에 회복). 운영에서는 값을 더 크게 잡되
+  "자동 회복 시간 = 쓰기 중단 시간"임을 받아들인다.
+
+알림(둘 다 라이브로 확인한 쿼리):
+
+```sh
+# 1) 잠긴 쓰기 계정 (기본 정책을 쓰는 경우)
+ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -b "$SYSTEM_DN" '(&(objectClass=inetOrgPerson)(pwdAccountLockedTime=*))' dn
+# 2) 쓰기 계정에 대한 실패 bind (accesslog에 bind가 켜져 있어야 한다: LDAP_ACCESSLOG_OPS에 bind 포함)
+ldapsearch -x -H ldap://127.0.0.1 -D cn=admin,cn=accesslog -y /tmp/.pw-admin -b cn=accesslog "(&(reqType=bind)(reqDN=$WDATA_DN)(reqResult=49))" reqDN
+```
+
+앱 쪽 신호: 쓰기 요청이 503이고 `machine_access` 감사 줄의 `reason`이 `bind_failed`(UI 로그에 `machine LDAP bind failed`). 쓰기 신원 회전이나 잠금이 원인이면 읽기는 200이다.
 
 ## 10. 관련
 

@@ -241,3 +241,64 @@ When revocation is enabled, every verified bearer token needs a nonempty JTI and
 ### Machine write target-type prerequisite (T-018)
 
 The LDAP layer can attach an atomic `entryCSN AND objectClass` assertion to marked machine write contexts. Wrong user/group target types are refused by slapd, including when the supplied revision is current. This stage is not connected to bearer requests and does not open writes. Protected-DN identity comparison and member-type prechecks must also land before opening; those reads have a documented read/write race and do not replace atomic target assertions.
+
+## Machine write emergency block (machine-write-scope T-022, REQ-012, AC-011, D12, D24)
+
+Machine writes are not open in any default or release build (T-013 is the only unit that registers the operations; this is enforced by the CI guard and the artifact check, which inspects the built binary, not by construction). Everything below was
+measured by `scripts/test/test-machine-write-drill.py` on a **drill-only** UI image (Go build tag `machinewritedrill`, never published; see
+`ui/README.md`) with a real Keycloak and slapd, two UI replicas, the `W_data`/`W_lock` accounts and the write ACL fragments of
+[machine-write-account.md](machine-write-account.md). Numbers are from that docker setup, not from a Kubernetes rollout (not run). Raw output:
+[EVIDENCE-drill.md](changes/machine-write-scope/EVIDENCE-drill.md). Only measured values are quoted; the unmeasured items are listed at the end.
+
+### Which lever, how fast
+
+| Lever | Effect on writes | Reads | Measured |
+|---|---|---|---|
+| **1. Rotate the `W_data` LDAP password** (admin `replace: userPassword`; the Secret still holds the old value) | the **next** write on **every** replica is 503 (`reason=bind_failed`, `code=unavailable`), no directory change | 200, unchanged (`M` is a different identity) | first request after the modify returned: 503 on both replicas at +17 ms / +31 ms; four refused writes = exactly four failed `W_data` binds at slapd |
+| **2. Write-only redeploy** (`MACHINE_WRITE_ENABLED=false`, everything else unchanged) | 403 `scope_denied` (operation not permitted for machine clients) | 200 | the first request on each new replica was already 403 (two replicas replaced one after the other in 0.8 s in docker; replicas that are not yet replaced keep writing until they are) |
+| `pwdAccountLockedTime` set by an operator on `W_data` | 503, same as lever 1 | 200 | only with the default policy or a lockout policy; ignored under a `pwdLockout: FALSE` policy (see below) |
+
+Lever 1 is the faster one because every write request binds `W_data` itself (no connection is reused across requests: after a write the number of open LDAP connections is 0),
+so there is nothing to roll out. `W_lock` is not used by the five first-ship operations: rotating it left `createUser` at 201.
+
+Procedure:
+
+1. Rotate: `printf 'dn: %s\nchangetype: modify\nreplace: userPassword\nuserPassword: %s\n' "$WDATA_DN" "$NEW" | docker exec -i <ldap> ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin`
+   (use a file or stdin for the value, never argv). Confirm: a write returns 503 and the `machine_access` line shows `reason":"bind_failed"` with `outcome":"rejected"`.
+2. Keep reads running; they are unaffected. Do **not** put the new password in the Secret yet.
+3. Investigate, then either restore (step 4) or change the allow-list/scopes with a write-only redeploy (lever 2) and put the new password in the Secret with the rollout.
+4. Restore: set the password back to the value in the Secret (or roll out the Secret with the new one). The very next write succeeds on every replica (measured +30 ms), with the **same token** and even the
+   **same `Idempotency-Key`s** that got the 503: a refusal before the write releases the key, it is not recorded as an outcome.
+5. Check `(pwdAccountLockedTime=*)` for the writer (next section) before declaring the block over.
+
+### The write-identity lockout trap (D24, measured)
+
+With the image's default policy (`pwdLockout TRUE`, `pwdMaxFailure 5`, `pwdLockoutDuration 900`):
+
+- 5 wrong-password binds lock `W_data`. Each write the UI refuses after a rotation is one more failed bind, so a rotation plus **5 writes** locks the account by itself (the lock appeared at the 5th refused write).
+  While locked, the correct password also fails: writes 503, reads 200, `M` binds normally; further refused writes do not extend the lock.
+- Restoring by an admin password reset also cleared the lock (next write 201). Without a reset, `delete: pwdAccountLockedTime` unlocks; `pwdFailureTime` cannot be deleted (constraint violation 19).
+- Anyone who can reach LDAP can cause the lock with wrong binds: it is a write outage, never a read outage.
+- **Mitigation**: a dedicated policy for the `W_*` accounts with `pwdLockout: FALSE` and **no** `pwdMaxFailure` (LDIF in machine-write-account.md 9.1). Measured: 25 wrong binds neither lock nor mark the account;
+  the rotation block still works (8 refused writes, no lock) and restoring recovers the next write. With only the flag flipped and `pwdMaxFailure 5` kept, the attribute is still set after 25 failures (writes work) and alerts on it are false positives.
+  The cost: an operator-set `pwdAccountLockedTime` is then ignored (measured), so the block is the rotation or lever 2. Alternative that keeps the lock: `pwdLockoutDuration` short (3 failures / 8 s: recovered by itself 7.7 s after the lock).
+- **Alerting** (both queries verified live): `(&(objectClass=inetOrgPerson)(pwdAccountLockedTime=*))` under `ou=system`, and the accesslog failures
+  `(&(reqType=bind)(reqDN=<W_data>)(reqResult=49))`. Application side: 503 on writes with `reason=bind_failed` and reads still 200.
+
+### Limits (what the block does not do)
+
+- **Issued tokens are not revoked.** After lever 1 or 2 the same pre-event token still verifies: writes fail (503 / 403) and reads stay 200; after the restore it writes again. Its remaining lifetime is bounded by
+  `MACHINE_TOKEN_MAX_TTL` (default 10 min) + `MACHINE_CLOCK_SKEW`. Enabling the #286 revocation snapshot (`MACHINE_REVOCATION_ENABLED=true`) is **recommended** for write use to shorten that window; it is not a start-up requirement (Q9).
+- **A write already in flight can complete.** A write whose operation reached its already-bound `W_data` connection before the rotation completed after it: 201, entry applied (measured with the operation held at the
+  LDAP connection for 1.3 s while the password was rotated; it completed 0.05 s after being released). Slapd checks the bound DN, not the password, for that connection.
+- **How long an in-flight write can run is the request timeout, `MACHINE_REQUEST_TIMEOUT`** (default 10 s). A write stalled at the LDAP connection ended after exactly 10.0 s (the UI closed the connection itself), and
+  after 4.0 s with `MACHINE_REQUEST_TIMEOUT=4s`; with a rotation 2.3 s into the request it ended 7.7 s after the rotation. The result is 409 (`the result of this request could not be determined`): the outcome is unknown
+  (it may have been applied by a real, un-partitioned directory), a retry with the same key is 409 as well, so read the resource before retrying. The window after a rotation is therefore **at most the
+  configured `MACHINE_REQUEST_TIMEOUT` for a request that was already bound** (measured at 10 s and 4 s only); a request that has not yet bound uses the old password and gets 503.
+- **Idempotent replays are served without a directory write.** While `W_data` was rotated, replaying a key that had completed earlier returned its stored 201 (`Idempotent-Replayed: true`), a new key returned 503.
+  A replay does not write; it does re-authorize first (D23).
+- **Deletions are irreversible** (`deleteUser`, `removeGroupMember`); the damage window of a leaked token is narrowed by `If-Match` (one concrete tag per target), leaf-only deletes and the per-client subtree ceilings, not undone.
+- Rolling redeploy: lever 2 only takes effect on a replica once it is replaced.
+
+Not measured: a Kubernetes rolling update, multi-node LDAP, a request stalled in the `M` identity pre-read before the `W_data` bind, `W_lock` operations (none are opened in the first ship), and the natural expiry of the default
+900 s lock (the 8 s policy was used to measure self-recovery).
