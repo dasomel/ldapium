@@ -62,13 +62,14 @@ LDIF
 ri ensure --out /tmp/old.pw
 "$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem
 
-# A stored consumer config is checked without claiming it connected to a live peer.
+# A stored consumer config is checked without claiming it connected to a live peer. The provider is
+# the checked node itself: membership validation (D68) requires every named provider to be a checked target.
 credential=$(docker exec "$name" cat /tmp/old.pw)
 docker exec -i "$name" ldapmodify -x -H ldap://localhost -D cn=admin,cn=config -y /tmp/admin.pw >/dev/null <<LDIF
 dn: olcDatabase={1}mdb,cn=config
 changetype: modify
 add: olcSyncrepl
-olcSyncrepl: rid=001 provider=ldaps://localhost:1636 bindmethod=simple binddn="$identity" credentials="$credential" searchbase="$base" type=refreshAndPersist retry="60 +" tls_reqcert=demand tls_cacert=/certs/ca.pem
+olcSyncrepl: rid=001 provider=ldaps://$name:636 bindmethod=simple binddn="$identity" credentials="$credential" searchbase="$base" type=refreshAndPersist retry="60 +" tls_reqcert=demand tls_cacert=/certs/ca.pem
 LDIF
 unset credential
 "$here/check-replication-identity.sh" --container "$name" --uri "ldaps://$name:636" --base "$base" --admin-password-file /tmp/admin.pw --identity-password-file /tmp/old.pw --config-password-file /tmp/admin.pw --ca-file /certs/ca.pem --configuration-only --dedicated

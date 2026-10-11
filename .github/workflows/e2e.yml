@@ -166,6 +166,9 @@ jobs:
 
           ./scripts/test/test-replication-identity-check-live.sh ldapium:e2e
 
+      - name: Replication identity check, 3 nodes - --local slapcat, membership, canary — #375 T-014
+        run: ./scripts/test/test-replication-identity-check-cluster.sh ldapium:e2e
+
       - name: Replication identity reconcile over verified TLS — #229 D67
         run: ./scripts/test/test-replication-identity-reconcile.sh ldapium:e2e
 

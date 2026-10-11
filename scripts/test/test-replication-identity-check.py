@@ -75,6 +75,18 @@ class StableCheck(unittest.TestCase):
     with self.assertRaises(ValueError):
       check.parse_ldif(b'dn: cn=x\n\ndn: cn=x\n')
 
+  def test_membership_uses_the_providers_a_node_follows(self):
+    syncrepl = b'rid=001 provider=ldaps://N2:636 bindmethod=simple binddn="cn=replicator,dc=x" credentials=x'
+    rows = {b'olcDatabase={1}mdb,cn=config': {'olcsyncrepl': (syncrepl,)}}
+    self.assertEqual(check.missing_members(rows, ['ldaps://n1:636', 'ldaps://n2']), [])
+    self.assertEqual(check.missing_members(rows, ['ldaps://n1:636']), [('n2', 636)])
+    self.assertEqual(check.missing_members({}, ['ldaps://n1:636']), [])
+
+  def test_membership_refuses_a_plaintext_provider(self):
+    rows = {b'x': {'olcsyncrepl': (b'rid=001 provider=ldap://n2:389',)}}
+    with self.assertRaises(ValueError):
+      check.missing_members(rows, ['ldaps://n1:636'])
+
 
 if __name__ == '__main__':
   unittest.main()
