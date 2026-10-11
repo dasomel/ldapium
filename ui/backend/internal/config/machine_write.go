@@ -10,7 +10,8 @@ import (
 // loadMachineWrite parses MACHINE_WRITE_ENABLED (machine-write-scope D1, D10).
 // Default off; when off nothing else MACHINE_WRITE_* is read (T-011 will add
 // those behind this gate). Fail closed: the write switch needs the v1 machine
-// auth. T-011 validates separate identities; the operation table stays empty.
+// auth, idempotency, the W identity and the scope configuration (see the loaders
+// below); a missing prerequisite is a start-up error (T-013).
 func loadMachineWrite(getenv func(string) string, machineEnabled bool) (bool, error) {
 	on, err := boolEnv(getenv, "MACHINE_WRITE_ENABLED", false)
 	if err != nil || !on {
@@ -36,7 +37,6 @@ type MachineWriteConfig struct {
 	Lock        MachineWriteIdentity
 	// Subtrees/Groups are per-client write ceilings and writable groups,
 	// PrivilegedGroups the deny set, Limits the write budget (T-012/T-016/T-019).
-	// Inert: no operation consumes them yet.
 	Subtrees         []MachineWriteClientDNs
 	Groups           []MachineWriteClientDNs
 	PrivilegedGroups []string

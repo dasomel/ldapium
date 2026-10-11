@@ -221,6 +221,10 @@ olcAccess: {5}to *
 
 `W_lock`은 `pwdAccountLockedTime`을 **`write`** 수준으로 받는다. ppolicy가 이 속성의 변경에 `manage`를 요구하지 않음을 라이브로 확인했다(스모크: 설정·해제 모두 성공).
 
+### 4.4 그룹 멤버십 쓰기는 `MACHINE_WRITE_GROUPS`가 있어야 한다 (안전한 기본값)
+
+`addGroupMember`/`removeGroupMember`는 client별 `MACHINE_WRITE_GROUPS`(정확한 그룹 DN 목록, `MACHINE_WRITE_PRIVILEGED_GROUPS` 필수)에 있는 그룹에만 허용됩니다. 목록이 없거나 비어 있으면 그 client의 멤버 추가·제거는 **전부 403**입니다(허용 목록 비어 있음 = 거부). 사용자 쓰기(`createUser`/`patchUser`/`deleteUser`)는 `MACHINE_WRITE_SUBTREES`만으로 동작하고 이 목록과 무관합니다.
+
 ## 5. 속성이 여기서 나온 곳
 
 `W_data`의 닫힌 목록은 [부록 A(T-002 확정 목록)](changes/machine-write-scope/CHANGE.md)의 합집합이다: createUser(`uid, cn, sn`; 선택 `givenName, mail, departmentNumber, o, ou`),

@@ -16,7 +16,7 @@ var (
 // Client state is bounded by the verified allowlist, concurrency is one per
 // client and the global channel has no queue. Cost: per-replica limits;
 // escape hatch: disable writes before changing deployment replica count.
-// T-013 wires run only after the remaining write gates have passed review.
+// The write pipeline (machine_write_pipeline.go) acquires it per request.
 type machineWriteLimiter struct {
 	budget *clientBudget
 	slots  chan struct{}

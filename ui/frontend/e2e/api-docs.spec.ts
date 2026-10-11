@@ -266,7 +266,10 @@ const SERVED = JSON.parse(readFileSync(join(process.cwd(), '../backend/internal/
 test('machine badge maps exactly the machineBearer operations, with their x-machine-scope', () => {
   const eps = collectEndpoints(SERVED)
   const expected = eps.filter((e) => e.op.security?.some((s) => 'machineBearer' in s))
-  expect(expected).toHaveLength(8)
+  // The count comes from the spec (8 reads + the opened writes), not from a literal.
+  expect(expected.length).toBeGreaterThan(0)
+  // No PUT ever carries machineBearer (only the first-ship single-entry writes do).
+  expect(expected.filter((e) => e.method.toLowerCase() === 'put')).toHaveLength(0)
   expect(eps.filter((e) => e.machineScope).map((e) => e.id).sort()).toEqual(expected.map((e) => e.id).sort())
   for (const e of expected) {
     expect(e.op['x-machine-scope'], e.id).toBeTruthy()

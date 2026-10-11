@@ -55,12 +55,12 @@ func TestMachineWriteScopeValid(t *testing.T) {
 			t.Errorf("protected set lacks %s: %s", want, set)
 		}
 	}
-	// Defaults with nothing set: no client may write.
+	// Limit defaults with nothing else set (the fixture's one writer client only).
 	cfg, err = Load(writeIdentityEnv(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Machine.Write.Subtrees) != 0 || cfg.Machine.Write.Limits != (MachineWriteLimits{RPS: 1, Burst: 2, GlobalSlots: 2}) {
+	if len(cfg.Machine.Write.Subtrees) != 1 || cfg.Machine.Write.Limits != (MachineWriteLimits{RPS: 1, Burst: 2, GlobalSlots: 2}) {
 		t.Fatalf("defaults %+v", cfg.Machine.Write)
 	}
 }
@@ -182,7 +182,7 @@ func TestMachineWriteScopeIdempotencyQuota(t *testing.T) {
 	for n, ok := range map[int]bool{9: true, 10: false} {
 		var allowed, subtrees []string
 		for i := 0; i < n; i++ {
-			allowed = append(allowed, fmt.Sprintf("c%d=audit.read", i))
+			allowed = append(allowed, fmt.Sprintf("c%d=audit.read,directory.users.create", i))
 			subtrees = append(subtrees, fmt.Sprintf("c%d=ou=u%d,%s", i, i, wsBase))
 		}
 		_, err := Load(writeScopeEnv(map[string]string{
@@ -197,7 +197,9 @@ func TestMachineWriteScopeIdempotencyQuota(t *testing.T) {
 // With writes off every new variable is ignored, even valid ones: nothing is
 // read and the configuration equals the one without them.
 func TestMachineWriteScopeOffReadsNothing(t *testing.T) {
-	base := writeScopeEnv(map[string]string{"MACHINE_WRITE_ENABLED": "false"})
+	// The fixture ceiling names a write scope; the plain deployment below does not, so
+	// compare with the read-only ceiling in both.
+	base := writeScopeEnv(map[string]string{"MACHINE_WRITE_ENABLED": "false", "MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.groups.read;machine-b=audit.read"})
 	read := map[string]bool{}
 	cfg, err := Load(func(name string) string {
 		if strings.HasPrefix(name, "MACHINE_WRITE_") {
@@ -263,5 +265,66 @@ func TestMachineWriteCeilingExemptionIsByRole(t *testing.T) {
 	over["MACHINE_WRITE_SUBTREES"] = "machine-a=ou=apps," + wsBase
 	if _, err := Load(writeScopeEnv(over)); err != nil {
 		t.Fatalf("non-covering ceiling refused: %v", err)
+	}
+}
+
+// T-013: the switch refuses itself. Remove ONE prerequisite from a valid enabled
+// configuration and startup fails with that prerequisite's message; the valid
+// configuration starts, so each row proves its own prerequisite and nothing else.
+func TestMachineWriteSwitchRefusesItself(t *testing.T) {
+	if _, err := Load(writeScopeEnv(nil)); err != nil {
+		t.Fatalf("baseline must start: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		over map[string]string
+		want string
+	}{
+		{"idempotency off", map[string]string{"UI_IDEMPOTENCY_ENABLED": "false"}, "requires UI_IDEMPOTENCY_ENABLED"},
+		{"machine auth off", map[string]string{"MACHINE_AUTH_ENABLED": "-"}, "requires MACHINE_AUTH_ENABLED"},
+		{"W_data DN missing", map[string]string{"MACHINE_WRITE_DATA_BIND_DN": "-"}, "MACHINE_WRITE_DATA_BIND_DN"},
+		{"W_data password missing", map[string]string{"MACHINE_WRITE_DATA_BIND_PASSWORD": "-"}, "MACHINE_WRITE_DATA_BIND_PASSWORD"},
+		{"subtrees missing", map[string]string{"MACHINE_WRITE_SUBTREES": "-", "MACHINE_WRITE_GROUPS": "-"}, "requires MACHINE_WRITE_SUBTREES"},
+		{"no client holds a write scope", map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read;machine-b=audit.read"}, "names a write scope"},
+		{"write scope on a client without a ceiling", map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read;machine-b=audit.read,directory.users.create", "MACHINE_WRITE_SUBTREES": "machine-a=" + wsPeop, "MACHINE_WRITE_GROUPS": "machine-a=" + wsGroup}, "names a write scope"},
+		{"limit out of range (zero is not 'unset')", map[string]string{"MACHINE_WRITE_GLOBAL_SLOTS": "0"}, "MACHINE_WRITE_GLOBAL_SLOTS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			over := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create;machine-b=audit.read"}
+			for k, v := range tc.over {
+				over[k] = v
+			}
+			if _, err := Load(writeScopeEnv(over)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %v, want fragment %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A write scope in a ceiling is accepted only for an opened operation; lock,
+// group create/update/delete and password stay refused. With the switch off the
+// opened scopes still parse (they grant nothing), so the emergency "write-only
+// redeploy" that flips only MACHINE_WRITE_ENABLED=false can start.
+func TestMachineWriteScopesInCeiling(t *testing.T) {
+	open := map[string]bool{}
+	for _, s := range MachineWriteOpenScopes {
+		open[s] = true
+	}
+	if len(open) != 5 {
+		t.Fatalf("opened write scopes = %d, want 5", len(open))
+	}
+	for _, s := range MachineWriteScopes {
+		clients := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read," + s + ";machine-b=audit.read"}
+		if _, err := Load(writeScopeEnv(clients)); (err == nil) != open[s] {
+			t.Errorf("%s with the switch on: %v, opened=%v", s, err, open[s])
+		}
+		clients["MACHINE_WRITE_ENABLED"] = "false"
+		cfg, err := Load(writeScopeEnv(clients))
+		if (err == nil) != open[s] {
+			t.Errorf("%s with the switch off: %v, opened=%v", s, err, open[s])
+		}
+		if err == nil && cfg.Machine.WriteEnabled {
+			t.Errorf("%s: WriteEnabled with the switch off", s)
+		}
 	}
 }

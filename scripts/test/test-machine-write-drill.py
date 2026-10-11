@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Machine WRITE emergency-block drill (machine-write-scope T-022, REQ-012, AC-011, AC-017(c), D12, D24).
 
-Real Keycloak + real slapd + the DRILL-ONLY UI image (Go build tag `machinewritedrill`, which registers the five
-first-ship operations so the real write pipeline runs end to end; the default and release images stay closed, see
-scripts/test/test-machine-write-drill-guard.py). Everything here is measured; the OBS lines are what
+Real Keycloak + real slapd + the normal UI image (T-013 registers the five first-ship operations in production;
+they act only with MACHINE_WRITE_ENABLED=true, default off). Everything here is measured; the OBS lines are what
 docs/machine-auth-operations.md and EVIDENCE-drill.md quote.
 
   A. write path end to end for the five operations (W_data), positive and negative tokens / requests, bind counts
-  B. the default (tag-free) image with the same configuration: every write is 403 (production stays closed)
+  B. the switch refuses itself without a prerequisite (start-up error), and with MACHINE_WRITE_ENABLED off (the
+     default) the same ceilings write nothing: every write is 403, reads 200
   C. EMERGENCY BLOCK (b): rotate W_data's LDAP password -> the NEXT write on EVERY replica is 503, reads stay 200,
      an already issued token is unaffected, restore -> writes recover
   D. EMERGENCY BLOCK (a): write-only redeploy (MACHINE_WRITE_ENABLED=false) -> writes 403, reads 200
@@ -16,7 +16,7 @@ docs/machine-auth-operations.md and EVIDENCE-drill.md quote.
   F. D24 lockout: wrong-password binds lock W_data (default policy) -> writes 503, reads unchanged; the mitigation
      (dedicated W_* ppolicy without lockout / with a short duration) and the alert queries
 
-Run (local):  LDAPIUM_IMAGE=ldapium:x LDAPIUM_UI_IMAGE=<drill image> [LDAPIUM_UI_DEFAULT_IMAGE=<default image>] \
+Run (local):  LDAPIUM_IMAGE=ldapium:x LDAPIUM_UI_IMAGE=ldapium-ui:x \
               python3 scripts/test/test-machine-write-drill.py
 """
 import base64
@@ -174,7 +174,6 @@ class HoldProxy:
 
 def main():
   print(f'Run {live.name_prefix}: server {live.ldap_image}, UI {live.ui_image}, Keycloak {live.keycloak_image}', flush=True)
-  default_image = os.environ.get('LDAPIUM_UI_DEFAULT_IMAGE')
   live.make_network()
   ldap = Slapd(live)
   ldap.start()
@@ -329,6 +328,28 @@ def main():
   live.check(st in (200, 204) and d01 not in op_attr(G1, 'member'), f'[A] removeGroupMember -> {st}')
   st, _, text, _ = call(A, tok, 'DELETE', f'/api/users?dn={urlquote(d01)}', None, new_key(), etag_of(A, tok, d01))
   live.check(st in (200, 204) and not entry_exists(d01), f'[A] deleteUser (leaf) -> {st} and the entry is gone')
+  # D8e: deleteUser is leaf-only. (a) a user with a child entry, (b) a group and a container DN (class assertion),
+  # (c) a plain leaf user was deleted above. Nothing may be deleted in (a) and (b).
+  dp = 'uid=dp1,' + PEOPLE
+  ensure(create(A, tok, 'dp1')[0] == 201, 'dp1 created')
+  child = 'ou=child,' + dp
+  sub = 'ou=sub,' + PEOPLE
+  for dn, oc in ((child, 'organizationalUnit'), (sub, 'organizationalUnit')):
+    r = ldap.admin_tool('ldapadd', [], f'dn: {dn}\nobjectClass: {oc}\nou: {dn.split(",")[0][3:]}\n')
+    ensure(r.returncode == 0, 'child/container: ' + live.mask(r.stderr))
+  for label, dn in (('user with a child entry', dp), ('group DN', G1), ('container DN', sub)):
+    before_lines = len(live.audit_lines(live.name_prefix + '-a'))
+    st, _, text, _ = call(A, tok, 'DELETE', f'/api/users?dn={urlquote(dn)}', None, new_key(), etag_of(A, tok, dn))
+    live.check(st >= 400 and entry_exists(dn), f'[A] D8e deleteUser on a {label} is refused and the entry stays (got {st} {text[:140]})')
+    print(f'OBS: [A] D8e deleteUser on a {label}: status {st}, body {text[:140]}', flush=True)
+    time.sleep(0.5)
+    last = live.audit_lines(live.name_prefix + '-a')
+    live.check(len(last) > before_lines, f'[A] D8e the refused deleteUser on a {label} left an audit line: {last[-1][-260:] if last else ""}')
+  live.check(entry_exists(child), '[A] D8e the child entry of the refused delete is intact')
+  for dn in (child, sub):
+    ldap.admin_tool('ldapdelete', [dn])
+  st, _, text, _ = call(A, tok, 'DELETE', f'/api/users?dn={urlquote(dp)}', None, new_key(), etag_of(A, tok, dp))
+  live.check(st in (200, 204) and not entry_exists(dp), f'[A] D8e deleteUser on a normal leaf user -> {st}, gone')
   # the audit line of a write
   lines = live.audit_lines(live.name_prefix + '-a')
   writes = [json.loads(l[l.index('{'):]) for l in lines if '"write"' in l or 'directory.users.create' in l]
@@ -361,23 +382,21 @@ def main():
   live.check(st == 201, f'[A] rotating W_LOCK does not affect the five operations (createUser {st})')
   set_password(WLOCK_DN, wlock_pw)
 
-  # ======== B. the default image stays closed ===============================================================
-  if default_image:
-    replica('default1', image=default_image, wait=False)
-    live.wait_until(lambda: live.run(['docker', 'inspect', '-f', '{{.State.Running}}', live.name_prefix + '-default1']).stdout.strip() == 'false',
-                    'the default image to refuse the write configuration', 30)
-    refusal = live.run(['docker', 'logs', live.name_prefix + '-default1'])
-    live.check('no write operation is available yet' in refusal.stdout + refusal.stderr,
-               '[B] default (tag-free) image: a client ceiling naming a write scope is a START-UP ERROR (it exits, no listener)')
-    D = replica('default2', image=default_image, write_scopes=False)
-    before = w_binds()
-    st, _, text, _ = create(D, token(), 'closed1')
-    live.check(st == 403 and not entry_exists('uid=closed1,' + PEOPLE) and w_binds() == before,
-               f'[B] default image with MACHINE_WRITE_ENABLED=true and read-only ceilings: write is {st}, no entry, no W bind')
-    live.check(read_ok(D, token()) == 200, '[B] default image: reads are 200')
-    ensure(live.run(['docker', 'rm', '-fv', live.name_prefix + '-default2']).returncode == 0)
-  else:
-    print('SKIP: [B] LDAPIUM_UI_DEFAULT_IMAGE not set', flush=True)
+  # ======== B. the switch refuses itself; with the switch off nothing is writable =============================
+  replica('refuse1', extra_env={'MACHINE_WRITE_SUBTREES': ''}, wait=False)
+  live.wait_until(lambda: live.run(['docker', 'inspect', '-f', '{{.State.Running}}', live.name_prefix + '-refuse1']).stdout.strip() == 'false',
+                  'the UI to refuse MACHINE_WRITE_ENABLED=true without MACHINE_WRITE_SUBTREES', 30)
+  refusal = live.run(['docker', 'logs', live.name_prefix + '-refuse1'])
+  live.check('requires MACHINE_WRITE_SUBTREES' in refusal.stdout + refusal.stderr,
+             '[B] MACHINE_WRITE_ENABLED=true without MACHINE_WRITE_SUBTREES is a START-UP ERROR (it exits, no listener)')
+  ensure(live.run(['docker', 'rm', '-fv', live.name_prefix + '-refuse1']).returncode == 0)
+  D = replica('off2', write_enabled=False)
+  before = w_binds()
+  st, _, text, _ = create(D, token(), 'closed1')
+  live.check(st == 403 and not entry_exists('uid=closed1,' + PEOPLE) and w_binds() == before,
+             f'[B] MACHINE_WRITE_ENABLED off with write scopes in the ceilings: write is {st}, no entry, no W bind')
+  live.check(read_ok(D, token()) == 200, '[B] switch off: reads are 200')
+  ensure(live.run(['docker', 'rm', '-fv', live.name_prefix + '-off2']).returncode == 0)
 
   # ======== C. emergency block (b): rotate W_data's password =================================================
   tok = token()  # the "already issued" token: issued BEFORE the event, used throughout

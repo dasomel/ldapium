@@ -123,7 +123,7 @@ LDAP connection details and a session secret explicitly.
 | `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
 | `UI_LOGIN_LIMITER_MAX_ENTRIES` | no | `10000` | Hard cap on client sources the login limiter tracks (IPv6 counts per /64; must be >= 1). When full, expired sources go first, then the non-blocked source with the fewest stored failures (as of its last update; oldest on ties); a blocked source is never evicted, and only if all slots are blocked does a new source get the same `429` a blocked one does |
 | `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients: read-only `GET` operations only (#214, change package `machine-principal-auth`). Unset, no `MACHINE_*` variable is read and nothing changes. All other `MACHINE_*` variables, defaults, bounds and the startup failure rules are in [Machine bearer authentication](#machine-bearer-authentication) below. |
-| `MACHINE_WRITE_ENABLED` | no | `false` | Reserved; no write operation is registered, so every machine write stays `403 scope_denied` whatever the `MACHINE_WRITE_*` settings (#285 T-010/T-011, change package `machine-write-scope`). Setting it true needs `MACHINE_AUTH_ENABLED`, `UI_IDEMPOTENCY_ENABLED` and valid write identities, otherwise startup fails. Unset or false, no other `MACHINE_WRITE_*` variable is read. |
+| `MACHINE_WRITE_ENABLED` | no | `false` | Opens five machine write operations (`createUser` without a password, `patchUser`, `deleteUser`, `addGroupMember`, `removeGroupMember`) for clients whose ceiling and `MACHINE_WRITE_SUBTREES` allow them (#285 T-013, change package `machine-write-scope`). Off, every machine write is `403 scope_denied`. On, it refuses itself at startup unless `MACHINE_AUTH_ENABLED`, `UI_IDEMPOTENCY_ENABLED`, the `MACHINE_WRITE_DATA_BIND_*` identity, the write limits, a `MACHINE_WRITE_SUBTREES` client with a write scope and the machine audit are all in place. Unset or false, no other `MACHINE_WRITE_*` variable is read. |
 | `MACHINE_WRITE_SUBTREES` | no | _unset_ | Reserved; parsed and validated only, nothing consumes it yet (#285 T-012, `machine-write-scope`). Read only when `MACHINE_WRITE_ENABLED` is true. Per-client write subtree ceilings: `clientId=dn\|dn;clientId2=dn` (clients must be in `MACHINE_ALLOWED_CLIENTS`; at most 16 DNs each; v1 `MACHINE_ALLOWED_CLIENTS` syntax unchanged). DNs must be canonical: lowercase `uid`/`cn`/`ou`/`dc`, no escapes, spaces or multi-valued RDNs; strictly inside `LDAP_BASE_DN` (the base itself is refused) and not overlapping `MACHINE_LDAP_BIND_DN`, the write identities, the service account, rootdns, the replication/administrator identities or a privileged group. Unset: no client may write. |
 | `MACHINE_WRITE_GROUPS` | no | _unset_ | Reserved; parsed and validated only (#285 T-019). Per-client writable group allowlist, same `clientId=dn\|dn;...` syntax; each group must be strictly inside that client's `MACHINE_WRITE_SUBTREES` and not a privileged group. Needs `MACHINE_WRITE_PRIVILEGED_GROUPS`. Unset: no membership change. |
 | `MACHINE_WRITE_PRIVILEGED_GROUPS` | no | _unset_ | Reserved; parsed and validated only (#285 T-019). `;`-separated canonical group DNs (administrator groups) that no machine client may change, even when allowlisted. |
@@ -285,20 +285,13 @@ named `roles` or Keycloak's `realm_access.roles`; ensure one is present in
 the **ID token**, not only an access token. Do not map a display name in
 place of `preferred_username`: it is used as the LDAP `uid` lookup key.
 
-### Drill-only image: `machinewritedrill` (machine write emergency-block drill)
+### Retired: the `machinewritedrill` drill image (machine write)
 
-`docker build --build-arg GO_TAGS=machinewritedrill -t ldapium-ui:machine-drill ui` compiles
-`ui/backend/internal/httpapi/machine_write_drill.go`, which registers the five first-ship machine write
-operations (`createUser`, `patchUser`, `deleteUser`, `addGroupMember`, `removeGroupMember`) so the real write
-pipeline can be drilled end to end by `scripts/test/test-machine-write-drill.py` (change package
-`docs/changes/machine-write-scope`, T-022). **Images built with this tag are for drills only: do not publish,
-tag, deploy or put them in a chart.** The default `GO_TAGS` is empty, the default and release builds register no
-machine write operation (`TestDefaultBuildHasNoMachineWriteOperations`), and
-`scripts/test/test-machine-write-drill-guard.py` (CI) fails if the tag appears in a Dockerfile default, a release
-workflow, the Makefile, a chart or any file outside the drill files. A drill binary also logs
-`DRILL BUILD: machine write operations are registered; not for production` at start-up and appends `+DRILL-BUILD`
-to its version; `scripts/test/test-machine-write-drill-artifact.sh` (CI) inspects the built default binary for the tag
-and the marker.
+Until T-013 the five machine write operations existed only in a drill-only build (`--build-arg GO_TAGS=machinewritedrill`)
+so the emergency-block drill could run before writes were opened. T-013 registers them in `machineWriteOps` for every
+build; the build tag, the `GO_TAGS` build argument, the `+DRILL-BUILD` version marker, the source guard and the
+artifact check are removed. `scripts/test/test-machine-write-drill.py` now runs against the normal image. What keeps writes
+off by default is `MACHINE_WRITE_ENABLED=false` (checked by `TestMachineWriteOffValidatesNothing` and drill step B), not the image.
 
 ## Running
 

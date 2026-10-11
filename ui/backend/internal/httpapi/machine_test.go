@@ -561,13 +561,33 @@ func TestMachine_CORSNotExtended(t *testing.T) {
 	}
 }
 
-// AC-003 / T-024 / D13: with every scope, only the 8 allowlisted operations
-// reach the execution boundary; every operation on the contract deny list
-// (deniedOps: D2 permanent + unopened writes) is 403 and never binds. The
-// expectation is data-driven: each registered protected operation must be in
-// exactly one of the allowlists and the deny list.
+// AC-003 / T-024 / D13 / T-013: with every scope and writes OFF (the default),
+// only the 8 allowlisted reads reach the execution boundary; every other
+// protected operation, the five opened writes included, is 403 and never binds.
+// The expectation is data-driven: each registered protected operation must be in
+// exactly one of the allowlist (reads, plus machineWriteOps when writes are on)
+// and the deny list.
 func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 	h := newHarness(t, harnessOpt{})
+	exerciseEveryProtectedOperation(t, h, false)
+}
+
+// Writes ON and the client holding the scopes: the allowed set becomes 8 reads +
+// the 5 opened writes; the other 32 stay 403. A write is "allowed" when it gets
+// past the scope gate into the write pipeline (it is rejected there later: the
+// stub requests carry no body, key or If-Match), never as scope_denied.
+func TestMachine_EveryProtectedOperationExercisedWritesOn(t *testing.T) {
+	w := writeRuntimeConfig(true)
+	h := newHarness(t, harnessOpt{cfg: func(c *config.Config) {
+		c.IdempotencyEnabled = true
+		c.Machine.WriteEnabled = true
+		c.Machine.Write = w.Machine.Write
+	}})
+	exerciseEveryProtectedOperation(t, h, true)
+}
+
+func exerciseEveryProtectedOperation(t *testing.T, h *harness, writesOn bool) {
+	t.Helper()
 	tok := h.fullToken()
 	ops := protectedRoutes(t, h.s)
 	if len(ops) != 45 {
@@ -585,17 +605,28 @@ func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 		}
 		denied[key] = true
 	}
-	allowed, rejected := 0, 0
+	opened := map[string]bool{}
+	for _, op := range machineWriteOps {
+		opened[op.Method+" "+op.Route] = true
+	}
+	allowed, rejected, reads := 0, 0, 0
 	for _, r := range ops {
 		rec := h.do(r.Method, r.URL, bearer(tok))
-		_, isAllowed := machineOpFor(r.Method, r.Route)
+		_, isRead := machineOpFor(r.Method, r.Route)
+		isOpenWrite := writesOn && opened[r.Method+" "+r.Route]
+		isAllowed := isRead || isOpenWrite
 		isDenied := denied[r.Method+" "+routeToSpecPath(r.Route)]
-		if isAllowed == isDenied {
-			t.Errorf("%s %s must be in exactly one of allowlist/deny list (allow=%v deny=%v)", r.Method, r.Route, isAllowed, isDenied)
+		if opened[r.Method+" "+r.Route] && isDenied {
+			t.Errorf("%s %s is opened and on the deny list", r.Method, r.Route)
+		}
+		if !opened[r.Method+" "+r.Route] && !isRead && !isDenied {
+			t.Errorf("%s %s is in neither the allowlist nor the deny list", r.Method, r.Route)
 		}
 		switch {
-		case isAllowed && rec.Code != 200:
+		case isRead && rec.Code != 200:
 			t.Errorf("allowed %s %s: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+		case isOpenWrite && rec.Code == 403 && errBody(t, rec).Code == codeScopeDenied:
+			t.Errorf("opened write %s %s was refused at the scope gate with writes on: %d %s", r.Method, r.Route, rec.Code, rec.Body)
 		case !isAllowed && (rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied):
 			t.Errorf("denied %s %s: %d %s", r.Method, r.Route, rec.Code, rec.Body)
 		}
@@ -604,12 +635,19 @@ func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 		} else {
 			rejected++
 		}
+		if isRead {
+			reads++
+		}
 		if len(rec.Header().Values("Set-Cookie")) != 0 {
 			t.Errorf("%s %s: Set-Cookie", r.Method, r.Route)
 		}
 	}
-	if allowed != 8 || rejected != 37 || len(h.reached()) != 8 {
-		t.Fatalf("allowed=%d rejected=%d reached=%v, want exactly 8 and 37", allowed, rejected, h.reached())
+	wantAllowed, wantRejected := 8, 37
+	if writesOn {
+		wantAllowed, wantRejected = 13, 32
+	}
+	if allowed != wantAllowed || rejected != wantRejected || reads != 8 || len(h.reached()) != 8 {
+		t.Fatalf("writesOn=%v allowed=%d rejected=%d reads=%d reached=%v, want %d allowed, %d rejected, 8 reads", writesOn, allowed, rejected, reads, h.reached(), wantAllowed, wantRejected)
 	}
 	if h.dialer.binds.Load() != 0 || h.dialer.pings.Load() != 0 {
 		t.Error("LDAP touched")

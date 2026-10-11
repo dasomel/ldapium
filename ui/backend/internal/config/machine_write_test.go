@@ -43,10 +43,11 @@ func TestMachineWrite_OnFailsClosed(t *testing.T) {
 	}
 }
 
-// D7: every write scope is refused in a client ceiling for now, with a message
-// that says why (not the generic unknown-scope one); the vocabulary is closed
-// and disjoint from the read scopes.
-func TestMachineWrite_ScopesRefusedInCeiling(t *testing.T) {
+// D7: the write vocabulary is closed and disjoint from the read scopes. The five
+// scopes of the opened operations parse in a ceiling (and grant nothing while the
+// switch is off); every other write scope is refused with a message that says why
+// (not the generic unknown-scope one).
+func TestMachineWrite_ScopesInCeiling(t *testing.T) {
 	if len(MachineWriteScopes) != 11 {
 		t.Fatalf("write scopes = %d, want 11 (D7)", len(MachineWriteScopes))
 	}
@@ -54,12 +55,19 @@ func TestMachineWrite_ScopesRefusedInCeiling(t *testing.T) {
 	for _, s := range MachineReadScopes {
 		read[s] = true
 	}
+	open := map[string]bool{}
+	for _, s := range MachineWriteOpenScopes {
+		open[s] = true
+	}
 	for _, s := range MachineWriteScopes {
 		if read[s] {
 			t.Errorf("%s is both read and write", s)
 		}
-		_, err := Load(machineEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "a=directory.users.read," + s}))
-		if err == nil || !strings.Contains(err.Error(), "write scope") {
+		cfg, err := Load(machineEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "a=directory.users.read," + s}))
+		switch {
+		case open[s] && (err != nil || cfg.Machine.WriteEnabled):
+			t.Errorf("opened scope %s in a ceiling with the switch off: %v", s, err)
+		case !open[s] && (err == nil || !strings.Contains(err.Error(), "write scope")):
 			t.Errorf("%s in a ceiling: %v, want write-scope refusal", s, err)
 		}
 	}

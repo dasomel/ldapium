@@ -4,7 +4,7 @@
     "title": "ldapium management API",
     "version": "v1",
     "summary": "HTTP API behind the ldapium web console, usable by scripts and AI agents with a session cookie.",
-    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens. A read-only machine principal (a Keycloak service-account bearer token, `machineBearer`) exists but is off by default (MACHINE_AUTH_ENABLED) and reaches only the eight GET operations that list it; see docs/api.md and docs/changes/machine-principal-auth/CHANGE.md. CORS is off by default (no `Access-Control-*` headers); with `CORS_ALLOWED_ORIGINS` set, only the listed exact origins may read GET/HEAD responses cross-origin with credentials, and writes are never CORS-enabled.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups), a quoted 64-hex fingerprint (Keycloak role operations), or, for users, groups and entry moves, the entry's quoted entryCSN (`etag` field / `ETag` header; opt-in, enforced atomically by the directory, covering attributes written directly to the entry). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`. Every other state-changing `/api` request (POST/PUT/PATCH/DELETE) that carries an `Origin` header must be same-origin as well, else 403 `origin_mismatch`; requests without an `Origin` header are unaffected.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
+    "description": "Authentication is a signed session cookie (`ldapium_session`) obtained from POST /api/login (LDAP mode) or the browser OIDC flow (SSO mode). There are no API tokens. A machine principal (a Keycloak service-account bearer token, `machineBearer`) exists but is off by default (MACHINE_AUTH_ENABLED): it reaches the eight read-only GET operations that list it and, only with the separate MACHINE_WRITE_ENABLED switch (default off), five single-entry write operations (createUser without a password, patchUser, deleteUser, addGroupMember, removeGroupMember); see docs/api.md and docs/changes/machine-principal-auth/CHANGE.md. CORS is off by default (no `Access-Control-*` headers); with `CORS_ALLOWED_ORIGINS` set, only the listed exact origins may read GET/HEAD responses cross-origin with credentials, and writes are never CORS-enabled.\n\nEvery error (4xx/5xx, including unknown paths and wrong methods) is one JSON body, the `Error` schema: `{\"error\", \"message\", \"code\", \"requestId\", \"retryable\"}`. `error` and `message` carry the same text (`message` is a deprecated alias); branch on `code`. 5xx text is fixed and never includes internal detail; use `requestId` to find the cause in the server log. 429 and retryable 503 responses carry `Retry-After`. The exceptions are `GET /api/health/ldap` (probe body `{\"reachable\": bool}`), redirects, and responses without a body (`OPTIONS` 204, `HEAD`).\n\nConditional writes use `ETag`/`If-Match` with quoted integer revisions (profiles, methods, backups), a quoted 64-hex fingerprint (Keycloak role operations), or, for users, groups and entry moves, the entry's quoted entryCSN (`etag` field / `ETag` header; opt-in, enforced atomically by the directory, covering attributes written directly to the entry). Profile, method, backup and Keycloak write endpoints also enforce a same-origin `Origin` header and `Content-Type: application/json`. Every other state-changing `/api` request (POST/PUT/PATCH/DELETE) that carries an `Origin` header must be same-origin as well, else 403 `origin_mismatch`; requests without an `Origin` header are unaffected.\n\nSafety: `userPassword` is never returned by any endpoint. Operations marked destructive are not reversible. Directory writes run as the logged-in identity (LDAP mode) or the configured service account (SSO mode) under that identity's LDAP ACLs."
   },
   "servers": [
     {
@@ -1059,15 +1059,21 @@
       "post": {
         "operationId": "createUser",
         "summary": "Create a user",
-        "description": "Creates under LDAP_USER_CREATE_BASE. `uid` is required. If `password` is omitted none is set. With a password this is two directory operations (Add, then Password Modify). Before the password step the new entry is verified as created by this request and untouched (entryUUID/entryCSN, creator and modifier are the bound DN, modify time equals create time); otherwise the password is NOT set and nothing is deleted (`partial_failure`, `state: identity_changed`). If the password step fails the entry is removed again with a delete bound to that identity and the response is the usual error envelope whose text starts \"user not created\" (nothing remains). If it cannot be removed the response is 500 `partial_failure` with the `dn` and `state` `partial` (delete refused, entry remains), `unknown` (delete outcome not observed) or `identity_changed`. Password status is never guaranteed on a `partial_failure`; inspect the entry, then set the password with POST /api/users/password or DELETE it. A few milliseconds before the Password Modify remain racy: that operation cannot carry a condition.",
+        "description": "Creates under LDAP_USER_CREATE_BASE. `uid` is required. If `password` is omitted none is set. With a password this is two directory operations (Add, then Password Modify). Before the password step the new entry is verified as created by this request and untouched (entryUUID/entryCSN, creator and modifier are the bound DN, modify time equals create time); otherwise the password is NOT set and nothing is deleted (`partial_failure`, `state: identity_changed`). If the password step fails the entry is removed again with a delete bound to that identity and the response is the usual error envelope whose text starts \"user not created\" (nothing remains). If it cannot be removed the response is 500 `partial_failure` with the `dn` and `state` `partial` (delete refused, entry remains), `unknown` (delete outcome not observed) or `identity_changed`. Password status is never guaranteed on a `partial_failure`; inspect the entry, then set the password with POST /api/users/password or DELETE it. A few milliseconds before the Password Modify remain racy: that operation cannot carry a condition. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.users.create`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`), writes run as the dedicated write identity, never as the read identity. See docs/api.md. A `password` in the body is refused for a machine request (no password operation is open).",
         "tags": [
           "Users"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.users.create"
+            ]
           }
         ],
+        "x-machine-scope": "directory.users.create",
         "responses": {
           "201": {
             "description": "Created",
@@ -1315,15 +1321,21 @@
       "delete": {
         "operationId": "deleteUser",
         "summary": "Delete a user (destructive)",
-        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.users.delete`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. See docs/api.md.",
         "tags": [
           "Users"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.users.delete"
+            ]
           }
         ],
+        "x-machine-scope": "directory.users.delete",
         "responses": {
           "204": {
             "description": "Deleted",
@@ -1441,15 +1453,21 @@
       "patch": {
         "operationId": "patchUser",
         "summary": "Patch a user",
-        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases every optional field (`givenName`, `mail`, `department`, `organization`, `organizationalUnit`) that it omits. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases every optional field (`givenName`, `mail`, `department`, `organization`, `organizationalUnit`) that it omits. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.users.update`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. See docs/api.md.",
         "tags": [
           "Users"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.users.update"
+            ]
           }
         ],
+        "x-machine-scope": "directory.users.update",
         "responses": {
           "204": {
             "description": "Patched",
@@ -2624,15 +2642,21 @@
       "post": {
         "operationId": "addGroupMember",
         "summary": "Add a group member",
-        "description": "Adds `memberDn` to `groupDn`. Conditional on the GROUP's revision: send `If-Match` with the group's `etag`.",
+        "description": "Adds `memberDn` to `groupDn`. Conditional on the GROUP's revision: send `If-Match` with the group's `etag`. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.groups.members.add`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. See docs/api.md.",
         "tags": [
           "Groups"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.members.add"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.members.add",
         "responses": {
           "204": {
             "description": "Added",
@@ -2751,15 +2775,21 @@
       "delete": {
         "operationId": "removeGroupMember",
         "summary": "Remove a group member",
-        "description": "Removes `memberDn` from `groupDn`; both are query parameters (no body). Conditional on the GROUP's revision: send `If-Match` with the group's `etag`.",
+        "description": "Removes `memberDn` from `groupDn`; both are query parameters (no body). Conditional on the GROUP's revision: send `If-Match` with the group's `etag`. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.groups.members.remove`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. See docs/api.md.",
         "tags": [
           "Groups"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.members.remove"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.members.remove",
         "responses": {
           "204": {
             "description": "Removed",
@@ -5221,7 +5251,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Keycloak service-account access token (client_credentials), accepted only when the server runs with MACHINE_AUTH_ENABLED=true (default off) and only on the read-only GET operations that list this scheme. The scope named in `security` / `x-machine-scope` must be granted by both the token and the server's per-client ceiling. Never send a bearer token together with the session cookie (400). Every other operation answers a bearer token with 403 `scope_denied`. See docs/api.md."
+        "description": "Keycloak service-account access token (client_credentials), accepted only when the server runs with MACHINE_AUTH_ENABLED=true (default off) and only on the operations that list this scheme (the eight read-only GET operations, and the five first-ship write operations when MACHINE_WRITE_ENABLED=true, default off). The scope named in `security` / `x-machine-scope` must be granted by both the token and the server's per-client ceiling. Never send a bearer token together with the session cookie (400). Every other operation answers a bearer token with 403 `scope_denied`; so does every operation when the server runs with writes off and the operation is a write. See docs/api.md."
       }
     },
     "responses": {

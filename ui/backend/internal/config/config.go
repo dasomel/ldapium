@@ -15,10 +15,6 @@ import (
 )
 
 // Config is the fully resolved runtime configuration for the server.
-// appVersionSuffix is empty in every default build. The drill-only build tag
-// appends a marker so a mistakenly published drill image shows it in its version.
-var appVersionSuffix = ""
-
 type Config struct {
 	SessionSecretSource  string
 	BackupOperatorConfig string
@@ -231,7 +227,7 @@ func Load(getenv func(string) string) (Config, error) {
 		BackupPython:             orDefault(getenv("BACKUP_PYTHON"), "/usr/bin/python3"),
 		BackupAdminDNs:           splitEntries(getenv("BACKUP_ADMIN_DNS")),
 		AppProfilesPath:          strings.TrimSpace(getenv("APP_PROFILES_PATH")),
-		AppVersion:               orDefault(getenv("APP_VERSION"), "development") + appVersionSuffix,
+		AppVersion:               orDefault(getenv("APP_VERSION"), "development"),
 		OpenLDAPVersion:          strings.TrimSpace(getenv("OPENLDAP_VERSION")),
 		OpenLDAPPasswordHash:     strings.TrimSpace(getenv("OPENLDAP_PASSWORD_HASH")),
 		OpenLDAPUniqueAttributes: strings.TrimSpace(getenv("OPENLDAP_UNIQUE_ATTRIBUTES")),

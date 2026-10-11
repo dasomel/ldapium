@@ -32,13 +32,7 @@ COPY --from=frontend /src/backend/web/dist ./web/dist
 # copied parent (/out/ldapium -> /var/lib/ldapium) to keep its mode; the Go
 # side (internal/config/secrets.go) rejects anything but a private 0700 dir.
 RUN mkdir -p /out/ldapium/secrets && chmod 700 /out/ldapium/secrets
-# GO_TAGS is EMPTY by default and must stay empty in every published image (enforced by the CI guard and the artifact check). The only
-# non-empty value is `machinewritedrill`, which registers the machine write operations
-# for the T-022 emergency-block drill (docs/changes/machine-write-scope). A drill image
-# is built by hand or by machine-keycloak-e2e.yml and must not be pushed or released;
-# scripts/test/test-machine-write-drill-guard.py fails CI if the tag appears in a default.
-ARG GO_TAGS=""
-RUN CGO_ENABLED=0 GOOS=linux go build -tags "${GO_TAGS}" -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 # --- final image ------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS final

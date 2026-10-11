@@ -20,13 +20,15 @@ type deniedOp struct{ ID, Why string }
 const (
 	// whyD2 is a permanent denial: this package never opens these.
 	whyD2 = "D2"
-	// whyUnopened is a write that is not open yet; T-013 (and the later
-	// stages, D14) open them one by one.
+	// whyUnopened is a write that is not open yet. T-013 opened the five
+	// first-ship operations (machineWriteOpenedBy); the later stages (D14) open
+	// the rest one by one.
 	whyUnopened = "D13 unopened write"
 )
 
-// deniedOps = D2 permanent denials + writes not opened yet (D13). 36 explicit
-// entries of the v1 contract plus getMe = 37.
+// deniedOps = D2 permanent denials (24) + writes not opened yet (D13, 8) = 32.
+// The v1 contract had 37 (36 explicit entries plus getMe); T-013 moved five of
+// the writes to machineWriteOps, each with a D-id in machineWriteOpenedBy.
 var deniedOps = func() []deniedOp {
 	var out []deniedOp
 	add := func(why string, ids ...string) {
@@ -46,17 +48,27 @@ var deniedOps = func() []deniedOp {
 		"getBackupJob", "listBackupJobs", "cancelBackupJob")
 	// D2 permanent: session identity
 	add(whyD2, "getMe")
-	// D13 unopened writes: users (7) and groups (6)
-	add(whyUnopened, "createUser", "updateUser", "patchUser", "deleteUser", "setPassword", "unlockUser", "lockUser",
-		"createGroup", "updateGroup", "patchGroup", "deleteGroup", "addGroupMember", "removeGroupMember")
+	// D13 unopened writes: users (4: PUT, password, lock, unlock) and groups (4:
+	// create, PUT, patch, delete). Group membership add/remove are open.
+	add(whyUnopened, "updateUser", "setPassword", "unlockUser", "lockUser",
+		"createGroup", "updateGroup", "patchGroup", "deleteGroup")
 	return out
 }()
 
 // machineWriteOpenedBy is the D13 shrink gate. An operation leaves the deny list
 // only by being registered in machineWriteOps AND recorded here with the D-id
 // of this package that opens it; TestMachineDenyListShrinkNeedsDID enforces
-// both. Empty in T-010 (nothing is open).
-var machineWriteOpenedBy = map[string]string{}
+// both. T-013 (change package machine-write-scope, issue #285) opens exactly
+// the five first-ship operations of Resolved Q2 / appendix A; PUT, group
+// create/update/delete, lock/unlock and every password operation stay on the
+// deny list.
+var machineWriteOpenedBy = map[string]string{
+	"createUser":        "D15 createUser without a password",
+	"patchUser":         "D7 scope directory.users.update",
+	"deleteUser":        "D8 leaf-only delete (D8e)",
+	"addGroupMember":    "D14 group membership ships in the first stage",
+	"removeGroupMember": "D14 group membership ships in the first stage",
+}
 
 var deniedOperationIDs = func() []string {
 	ids := make([]string, 0, len(deniedOps))
@@ -151,8 +163,8 @@ func TestOpenAPIMachineBearerEqualsCodeAllowlist(t *testing.T) {
 		}
 	}
 	declared := append(append([]machineOp(nil), machineOps...), machineWriteOps...)
-	if len(inSpec) != 8 || len(machineOps) != 8 || len(inSpec) != len(declared) {
-		t.Fatalf("machineBearer operations in spec = %d, code allowlist = %d (+%d write), want 8 and 8 (+0)", len(inSpec), len(machineOps), len(machineWriteOps))
+	if len(inSpec) != 13 || len(machineOps) != 8 || len(machineWriteOps) != 5 || len(inSpec) != len(declared) {
+		t.Fatalf("machineBearer operations in spec = %d, code allowlist = %d (+%d write), want 13 = 8 + 5", len(inSpec), len(machineOps), len(machineWriteOps))
 	}
 	for _, code := range declared {
 		spec, ok := inSpec[code.ID]
@@ -251,8 +263,8 @@ func TestOpenAPIDeniedOperationsNeverCarryMachineBearer(t *testing.T) {
 	for _, o := range ops {
 		byID[o.ID] = o
 	}
-	if len(deniedOperationIDs)+len(machineWriteOps) != 37 {
-		t.Fatalf("denylist = %d + opened writes %d, want 37 (36 + getMe)", len(deniedOperationIDs), len(machineWriteOps))
+	if len(deniedOperationIDs) != 32 || len(machineWriteOps) != 5 {
+		t.Fatalf("denylist = %d, opened writes %d, want 32 and 5 (37 = 36 + getMe)", len(deniedOperationIDs), len(machineWriteOps))
 	}
 	for _, id := range deniedOperationIDs {
 		o, ok := byID[id]
@@ -289,16 +301,68 @@ func TestOpenAPIDeniedOperationsNeverCarryMachineBearer(t *testing.T) {
 	}
 }
 
+// T-013: a non-GET operation carries machineBearer only when it is one of the
+// five registered writes; PUT, group create/patch/delete, lock/unlock and every
+// password operation never do.
 func TestOpenAPINoNonGetCarriesMachineBearer(t *testing.T) {
+	opened := map[string]bool{}
+	for _, op := range machineWriteOps {
+		opened[op.ID] = true
+		if op.Method == "GET" || op.Method == "PUT" {
+			t.Errorf("write table entry %s is %s", op.ID, op.Method)
+		}
+	}
 	for _, o := range loadSpecOps(t) {
-		if o.Method != "GET" && (o.hasScheme("machineBearer") || o.HasScopeExt) {
-			t.Errorf("%s %s carries machineBearer", o.Method, o.Path)
+		if o.Method != "GET" && (o.hasScheme("machineBearer") || o.HasScopeExt) && !opened[o.ID] {
+			t.Errorf("%s %s (%s) carries machineBearer but is not in machineWriteOps", o.Method, o.Path, o.ID)
 		}
 	}
 	for _, op := range machineOps {
 		if op.Method != "GET" {
 			t.Errorf("allowlist entry %s is %s", op.ID, op.Method)
 		}
+	}
+}
+
+// The scopes of machineWriteOps are exactly the write scopes config accepts in a
+// client ceiling (config.MachineWriteOpenScopes), so a scope cannot be accepted
+// without an operation or the other way round.
+func TestMachineWriteOpenScopesEqualTheTable(t *testing.T) {
+	want := map[string]bool{}
+	for _, op := range machineWriteOps {
+		want[op.Scope] = true
+	}
+	got := map[string]bool{}
+	for _, s := range config.MachineWriteOpenScopes {
+		got[s] = true
+	}
+	if len(want) != 5 || len(got) != 5 {
+		t.Fatalf("scopes in table %d, accepted by config %d, want 5 and 5", len(want), len(got))
+	}
+	for s := range want {
+		if !got[s] {
+			t.Errorf("table scope %s is not accepted by config", s)
+		}
+	}
+	for s := range got {
+		if !want[s] {
+			t.Errorf("config accepts %s but no table operation uses it", s)
+		}
+	}
+	// Exactly the first-ship ids, nothing else (Resolved Q2): no PUT, group
+	// create/update/delete, lock/unlock or password operation.
+	ids := map[string]bool{}
+	for _, op := range machineWriteOps {
+		ids[op.ID] = true
+	}
+	for _, id := range []string{"createUser", "patchUser", "deleteUser", "addGroupMember", "removeGroupMember"} {
+		if !ids[id] {
+			t.Errorf("%s is not registered", id)
+		}
+		delete(ids, id)
+	}
+	for id := range ids {
+		t.Errorf("%s is registered but is not a first-ship operation", id)
 	}
 }
 
@@ -414,7 +478,7 @@ func TestMachineCodesAndSchemeAreDocumented(t *testing.T) {
 	}
 }
 
-// deniedGolden pins the 37 contract deny-list entries ("operationId reason").
+// deniedGolden pins the 32 contract deny-list entries ("operationId reason").
 // Removing, renaming or re-labelling an entry in deniedOps fails
 // TestMachineDenyListMatchesGolden until this literal is edited too, and
 // shrinking it is only valid for an operation that is then registered in
@@ -429,8 +493,8 @@ var deniedGolden = []string{
 	"getBackups D2", "putBackupPolicies D2", "putBackupConnection D2", "deleteBackupConnection D2", "runBackup D2",
 	"getBackupJob D2", "listBackupJobs D2", "cancelBackupJob D2",
 	"getMe D2",
-	"createUser D13", "updateUser D13", "patchUser D13", "deleteUser D13", "setPassword D13", "unlockUser D13", "lockUser D13",
-	"createGroup D13", "updateGroup D13", "patchGroup D13", "deleteGroup D13", "addGroupMember D13", "removeGroupMember D13",
+	"updateUser D13", "setPassword D13", "unlockUser D13", "lockUser D13",
+	"createGroup D13", "updateGroup D13", "patchGroup D13", "deleteGroup D13",
 }
 
 func TestMachineDenyListMatchesGolden(t *testing.T) {
@@ -447,8 +511,8 @@ func TestMachineDenyListMatchesGolden(t *testing.T) {
 		}
 		want[g] = true
 	}
-	if len(deniedGolden) != 37 || len(want) != 37 {
-		t.Errorf("golden has %d entries (%d distinct), want 37", len(deniedGolden), len(want))
+	if len(deniedGolden) != 32 || len(want) != 32 {
+		t.Errorf("golden has %d entries (%d distinct), want 32", len(deniedGolden), len(want))
 	}
 	for g := range want {
 		if !got[g] {

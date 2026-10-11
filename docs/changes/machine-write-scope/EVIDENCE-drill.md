@@ -1,5 +1,7 @@
 # EVIDENCE: T-022 emergency-block drill (#285)
 
+> **Superseded mechanism (T-013, 2026-10-11).** The drill-only build tag `machinewritedrill`, `GO_TAGS`, the `+DRILL-BUILD` marker, the source guard and the artifact check described below are retired: T-013 registers the five operations in `machineWriteOps` for every build and the drill runs unchanged on the normal image (53 checks, see EVIDENCE.md "T-013"). The measurements below stay valid; they were taken on the tag build and are kept as recorded.
+
 Recorded 2026-10-11 from `scripts/test/test-machine-write-drill.py` on images built from this branch (main at adcb7e2):
 server `docker build -t ldapium:l285d -f image/Dockerfile ./image`, UI drill image
 `docker build --build-arg GO_TAGS=machinewritedrill -t ldapium-ui:l285d-drill ui`, UI default image `docker build -t ldapium-ui:l285d-default ui`.

@@ -6,7 +6,12 @@ import (
 )
 
 func writeIdentityEnv(over map[string]string) func(string) string {
-	values := map[string]string{"MACHINE_WRITE_ENABLED": "true", "UI_IDEMPOTENCY_ENABLED": "true", "MACHINE_WRITE_DATA_BIND_DN": "cn=writer,ou=system,dc=example,dc=org", "MACHINE_WRITE_DATA_BIND_PASSWORD": "private-data"}
+	// T-013: the switch refuses itself without a writer, so the fixture has one
+	// client that holds a write scope and a ceiling.
+	values := map[string]string{"MACHINE_WRITE_ENABLED": "true", "UI_IDEMPOTENCY_ENABLED": "true",
+		"MACHINE_ALLOWED_CLIENTS":    "machine-a=directory.users.read,directory.groups.read,directory.users.create;machine-b=audit.read",
+		"MACHINE_WRITE_SUBTREES":     "machine-a=ou=people,dc=example,dc=org",
+		"MACHINE_WRITE_DATA_BIND_DN": "cn=writer,ou=system,dc=example,dc=org", "MACHINE_WRITE_DATA_BIND_PASSWORD": "private-data"}
 	for k, v := range over {
 		values[k] = v
 	}

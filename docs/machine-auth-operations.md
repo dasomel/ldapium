@@ -229,7 +229,7 @@ before re-enabling so the sentinel is fresh and any stray entry is found.
 
 `MACHINE_WRITE_ENABLED` stays off by default. Enabling it requires machine authentication, `UI_IDEMPOTENCY_ENABLED=true`, and both `MACHINE_WRITE_DATA_BIND_DN` and `MACHINE_WRITE_DATA_BIND_PASSWORD`. `MACHINE_WRITE_LOCK_ENABLED` defaults to false; when enabled it additionally requires `MACHINE_WRITE_LOCK_BIND_DN` and `MACHINE_WRITE_LOCK_BIND_PASSWORD`. Bind passwords follow the existing Secret injection convention and never appear in validation diagnostics. The data and lock identities must differ from one another, the read identity, administrators, service accounts, root DNs and the fixed replication identity. Non-canonical naming types (including schema aliases and numeric OIDs), non-ASCII values and ambiguous whitespace in either write or protected identity DNs are refused: the startup check must prove separation on both sides of the comparison.
 
-While the write switch is off, subordinate write variables are not read. While the lock switch is off, its DN/password variables are not read. The operation table is still empty: configured identities do not open any write endpoint or change the read execution identity. Write scopes remain refused in client ceilings. Credential/password writes have no configuration in this stage; the accepted Q1 decision requires separate approval. No Helm values or LDAP ACLs are installed by this change.
+While the write switch is off, subordinate write variables are not read. While the lock switch is off, its DN/password variables are not read. Since T-013 the operation table holds the five first-ship operations (see "Machine write emergency block" below); configured identities never change the read execution identity. Opened write scopes in a client ceiling parse and grant nothing while the switch is off; other write scopes (lock, group create/update/delete, password) are refused at start-up. Enabling the switch refuses itself: it also needs at least one `MACHINE_WRITE_SUBTREES` client whose `MACHINE_ALLOWED_CLIENTS` ceiling names an opened write scope, the write limits and the machine access audit, otherwise the server does not start. Credential/password writes have no configuration in this stage; the accepted Q1 decision requires separate approval. No Helm values or LDAP ACLs are installed by this change.
 
 ### Revocation source implementation stage (T-014)
 
@@ -240,13 +240,12 @@ When revocation is enabled, every verified bearer token needs a nonempty JTI and
 
 ### Machine write target-type prerequisite (T-018)
 
-The LDAP layer can attach an atomic `entryCSN AND objectClass` assertion to marked machine write contexts. Wrong user/group target types are refused by slapd, including when the supplied revision is current. This stage is not connected to bearer requests and does not open writes. Protected-DN identity comparison and member-type prechecks must also land before opening; those reads have a documented read/write race and do not replace atomic target assertions.
+The LDAP layer can attach an atomic `entryCSN AND objectClass` assertion to marked machine write contexts. Wrong user/group target types are refused by slapd, including when the supplied revision is current. Protected-DN identity comparison and member-type prechecks must also land before opening; those reads have a documented read/write race and do not replace atomic target assertions.
 
 ## Machine write emergency block (machine-write-scope T-022, REQ-012, AC-011, D12, D24)
 
-Machine writes are not open in any default or release build (T-013 is the only unit that registers the operations; this is enforced by the CI guard and the artifact check, which inspects the built binary, not by construction). Everything below was
-measured by `scripts/test/test-machine-write-drill.py` on a **drill-only** UI image (Go build tag `machinewritedrill`, never published; see
-`ui/README.md`) with a real Keycloak and slapd, two UI replicas, the `W_data`/`W_lock` accounts and the write ACL fragments of
+Machine writes are open for the five first-ship operations in every build since T-013, but act only with `MACHINE_WRITE_ENABLED=true` (default off; a server without the switch answers every write 403 `scope_denied`). The earlier drill-only image (Go build tag `machinewritedrill`) is retired. The measurements below were taken on that tag build (T-022); the drill now runs unchanged against the normal image. Everything below was
+measured by `scripts/test/test-machine-write-drill.py` with a real Keycloak and slapd, two UI replicas, the `W_data`/`W_lock` accounts and the write ACL fragments of
 [machine-write-account.md](machine-write-account.md). Numbers are from that docker setup, not from a Kubernetes rollout (not run). Raw output:
 [EVIDENCE-drill.md](changes/machine-write-scope/EVIDENCE-drill.md). Only measured values are quoted; the unmeasured items are listed at the end.
 

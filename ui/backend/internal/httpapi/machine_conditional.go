@@ -10,7 +10,7 @@ import (
 // machineIfMatch is the D218-14/B3 write prerequisite. D25: keep the
 // human parser unchanged; machine writes cannot opt out with a wildcard.
 // Cost: callers must reread after conflicts. Escape hatch: disable writes.
-// T-013 wires this only after all write gates have passed independent review.
+// The write pipeline (machine_write_pipeline.go) calls it for every operation with IfMatch.
 func machineIfMatch(c echo.Context) (string, error) {
 	values := c.Request().Header.Values("If-Match")
 	if len(values) == 0 || (len(values) == 1 && values[0] == "") {
