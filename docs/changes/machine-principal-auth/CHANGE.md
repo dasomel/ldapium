@@ -46,7 +46,7 @@ Keycloak이 발급한 서비스 클라이언트의 access token(Bearer)으로 **
 - 쓰기 오퍼레이션, 비밀번호 오퍼레이션, 백업, 애플리케이션 프로파일(x-admin), `entry/move` 허용.
 - 조직·subtree별 세분 권한(별도 패키지 [oidc-organization-authorization](../oidc-organization-authorization/CHANGE.md)).
   v1의 최종 범위 통제는 LDAP ACL이다(D4).
-- API 키/mTLS 구현(옵션 2·3은 평가만; D1), 토큰 introspection·즉시 폐기, 분산 rate limit. 이 v1 경계의 후속 평가·기본 꺼짐 LDAP 폐기는 [machine-token-revocation](../machine-token-revocation/CHANGE.md)(#286)에 둔다.
+- API 키/mTLS 구현(옵션 2·3은 평가만; D1), 토큰 introspection·즉시 폐기, 분산 rate limit. 이 v1 경계의 후속인 기본 꺼짐 LDAP 폐기는 구현됐고([machine-token-revocation](../machine-token-revocation/CHANGE.md), #286), API 키·mTLS는 #360, 공유 rate limit은 #361, introspection 백스톱은 #362에서 다룬다.
 - cursor paging·idempotency·오류 스키마 정비(PLAN의 P1 항목), Keycloak 클라이언트 프로비저닝 자동화.
 - 기존 `/api/login`, SSO 로그인, 쿠키 속성, 세션 모델 변경.
 

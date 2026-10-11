@@ -2,8 +2,8 @@
 
 - Change class: `D` — 인증 경계의 자격 증명 검증 규칙 변경(폐기 의미 추가), 신규 영속 상태(폐기 항목)와 LDAP 항목 의미 추가, 신뢰 경계(IdP 의존 또는 디렉터리 의존) 결정
 - Owner: dasomel (유지보수자)
-- Related issue: [#286](https://github.com/dasomel/ldapium/issues/286)(열림; 후속 구현 PR이 모든 범위를 덮기 전에는 닫지 않음). 선행: [#214](https://github.com/dasomel/ldapium/issues/214) [machine-principal-auth](../machine-principal-auth/CHANGE.md)의 비목표 "토큰 introspection·즉시 폐기, 분산 rate limit"(같은 문서 49행)
-- Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)` — 수용은 설계 방향(Q1–Q10)에 대한 유지보수자 결정이며 보안 검토 관문(T-005)은 Revision 5 검토에서 BLOCKER 없음으로 통과했다. 구현은 TASKS.md 순서를 따른다(기본 꺼짐).
+- Related issue: [#286](https://github.com/dasomel/ldapium/issues/286)(수용 조건 충족, close-out PR 병합으로 닫음; 남은 범위는 [#360](https://github.com/dasomel/ldapium/issues/360)·[#361](https://github.com/dasomel/ldapium/issues/361)·[#362](https://github.com/dasomel/ldapium/issues/362)). 선행: [#214](https://github.com/dasomel/ldapium/issues/214) [machine-principal-auth](../machine-principal-auth/CHANGE.md)의 비목표 "토큰 introspection·즉시 폐기, 분산 rate limit"(같은 문서 49행)
+- Status: `Implemented (default off), see Known follow-ups` — 설계는 Accepted(2026-10-07, 유지보수자 결정; T-005 보안 관문은 Revision 5 검토에서 BLOCKER 없음, Revision 6이 비차단 항목 반영). 구현·라이브 드릴(T-017)·독립 보안 검토(T-020, BLOCKER 없음, Codex critic 미실행)는 2026-10-11 close-out에서 완료됐다. 기능은 기본 꺼짐이며 미해결 비차단 항목은 아래 "Known follow-ups"에 있다.
 - Revision 2 (2026-10-07): T-001–T-004 실측 반영 — 미검증 문구를 [EVIDENCE.md](EVIDENCE.md) §4–§7의 측정 사실로 교체하고, 결정 **D4**(`MAX_ENTRIES` 기본값과 응답 상한의 모순, 서버 `olcSizeLimit`)를 수정하며 D3·D8·D10에 실측 사실을 적는다. 결정 방향(D1·D2·D6·D8 비채택)은 불변. 수용 표시 아님.
 - Revision 3 (2026-10-07): T-005 보안 검토의 BLOCKER 3건(B1 빈·부분 스냅샷 fail-open, B2 운영자가 쓴 `expires`로 인한 조용한 폐기 해제, B3 복제 전제 미검증과 지연 노드) 해결 — **sentinel 항목과 heartbeat 도입(REQ-013)**, 보존 기간을 `createTimestamp` 기반으로 도출(D2), cutoff 변경을 "새 항목 먼저 추가 후 최댓값"으로(D3), 상한 수식·MAX_STALE 하한·크기·질의 형태(D4), 정보 노출 축소(REQ-006), 2노드 복제 실측(EVIDENCE §8, T-004b) 반영. 비차단 8건 포함.
 - Revision 4 (2026-10-07): 재검토 BLOCKER B4'(sentinel 건수 N과 서버 측 만료 필터의 충돌 → 조용한 배포의 자기 정지) 해결 — N을 **sentinel `ts` 기준**으로 정의하고 보존 파라미터(`ret`)를 sentinel에 싣는다(REQ-013), heartbeat가 정리와 N 재계산을 맡는다, 2회 읽기 절차(D4). 비차단: `MAX_ENTRIES` 범위를 1–2500으로(1 MiB), 세대 역행 검사는 메모리뿐, 뒤처진 replica의 신선한 heartbeat 노출은 분 단위, UI 관리자 쓰기 거부, 머신 `getEntry`/`listTree` 명시 검사.
@@ -288,3 +288,14 @@ RFC 원문 확인(rfc-editor.org 텍스트에서 해당 문장 직접 확인): R
 | Q10 | cutoff는 디렉터리 `createTimestamp` + skew로 판정, 남는 창 (i)(ii)·과폐기 **수용**, jti 폐기·백스톱 병행(D7). 노드 간 시계 오차는 미실측이므로 NTP 전제를 운영 문서에 적는다 |
 
 위험: Keycloak 쪽 폐기 의미는 T-001에서 실측되었고 D8(v1 비채택) 방향은 바뀌지 않았다(introspection은 기술적으로 가능하지만 자격 증명 보관·핫 패스 의존 비용은 그대로). 저장소(Q1) 결정 전에는 단위 2 이후를 시작하지 않는다.
+
+## Known follow-ups
+
+비차단·미해결(T-020 검토 및 T-017 공백). 상세와 증거는 [TASKS.md](TASKS.md)의 같은 이름 절과 [EVIDENCE §13–§14](EVIDENCE.md).
+
+- bind 실패 뒤 갱신 백오프가 최대 15 m라 비밀번호를 고친 뒤에도 최대 15 m 동안 503이 이어질 수 있다.
+- `audit.read` scope가 accesslog로 폐기 쓰기를 읽을 수 있다.
+- #285가 머신 쓰기를 연결할 때 `machineWritePolicy.Protected`에 revocations DN을 넣어야 한다.
+- 기능을 끄는 롤백은 서브트리를 머신 `getEntry`로 읽히게 하고 관리자 쓰기를 허용한다(문서화).
+- digest 변이와 자연 노화는 라이브로 검증되지 않았다. Codex critic 라운드는 할당량 때문에 실행하지 않았다.
+- 범위 밖으로 분리: [#360](https://github.com/dasomel/ldapium/issues/360) API 키·mTLS, [#361](https://github.com/dasomel/ldapium/issues/361) 공유 rate limit, [#362](https://github.com/dasomel/ldapium/issues/362) introspection 백스톱.

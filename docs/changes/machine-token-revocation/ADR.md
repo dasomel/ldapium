@@ -1,8 +1,8 @@
 # ADR: 머신 토큰 즉시 폐기 — 오프라인 검증 + 디렉터리 폐기 목록, introspection·API 키·mTLS는 보류 (D1–D12)
 
-- Status: `Accepted (2026-10-07, design direction decided by the maintainer; T-005 security gate passed on the Revision 5 review: no BLOCKER; Revision 6 folds in the non-blocking points)` (Revision 2: T-001–T-004 실측, 3: 1차 BLOCKER 해결, 4: B4', 5: digest·연결 고정, 6: 4차 검토 비차단 반영) — [CHANGE.md](CHANGE.md)의 결정을 압축한 기록이다. 수용은 설계 방향에 대한 유지보수자 결정이고 T-005 보안 검토 관문은 Revision 5 검토에서 BLOCKER 없음으로 통과했다. 기본 꺼짐 구현은 단계별 검증·병합 중이며, 완료 여부는 [TASKS.md](TASKS.md)와 PR별 증거를 따른다.
+- Status: `Implemented (default off), see Known follow-ups` in [CHANGE.md](CHANGE.md). Design accepted 2026-10-07 (T-005 gate: no BLOCKER on Revision 5; Revision 6 folds in non-blocking points); close-out 2026-10-11 (T-017 drills, T-020 security review with no BLOCKER, Codex critic round not run).
 - Owner: dasomel (유지보수자)
-- Related issue: [#286](https://github.com/dasomel/ldapium/issues/286) (닫지 않음), 선행 [#214](https://github.com/dasomel/ldapium/issues/214)
+- Related issue: [#286](https://github.com/dasomel/ldapium/issues/286) (acceptance met; closed by the close-out PR; remaining scope in #360–#362), 선행 [#214](https://github.com/dasomel/ldapium/issues/214)
 - 위치 규약: 변경 패키지 안의 `ADR.md`([machine-principal-auth](../machine-principal-auth/ADR.md)와 같음). 근거·대안·검증 상태의 전문은 CHANGE.md, 확인 기록은 [EVIDENCE.md](EVIDENCE.md).
 - ADR threshold: `required` — 신뢰 경계·자격 증명 수용 규칙 변경, 신규 영속 상태.
 
