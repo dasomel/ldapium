@@ -274,7 +274,8 @@ class StubSourceTests(unittest.TestCase):
     with tempfile.TemporaryDirectory() as d:
       self.stub(d, name, body)
       log = Path(d) / 'args'
-      self.stub(d, name, 'echo "$@" > %s\n%s' % (log, body))
+      # printf, not echo: a first argument of -n would be eaten as an echo option by a POSIX sh (CI)
+      self.stub(d, name, 'printf "%%s " "$@" > %s\n%s' % (log, body))
       r = tool(ARGS + extra, env={'PATH': d + os.pathsep + os.environ['PATH']})
       return r, (log.read_text() if log.exists() else '')
 
