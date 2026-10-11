@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Operator command for the dedicated replication identity (docs/changes/replication-identity,
-# #229, T-013: `ensure`, `retire`, and `reconcile`). `rotate` and `rollback-admin`
-# are separate units and not implemented here.
+# #229, T-013: `ensure`, `retire`, `reconcile`, and `rotate`).
 #
 #   ensure  Create cn=replication-policy,<base> and cn=replicator,<base> once, as ordinary
 #           replicated writes with the admin DN, and hand the generated credential over in a
@@ -13,6 +12,15 @@
 #           (connection loss) the file is KEPT and the command says so; check with ldapsearch,
 #           then `retire --yes` and `ensure` again if needed. A leftover policy from an
 #           earlier run makes ensure refuse; `retire --yes` clears it.
+#   rotate  Rolling credential rotation (D55, R0-R4). State is derived, never stored: the number
+#           of userPassword values on the identity and, per node (--uri plus every --peer), the
+#           credential fingerprint of the stored consumer olcSyncrepl rows (cn=config, read with
+#           cn=admin,cn=config). R0 one value, new not present: add the new hash. R1/R2 two or
+#           more values, not every node's consumer carries the new credential yet: exit 3, roll
+#           the consumers, re-run. R3 every node carries it: replace with the new value only.
+#           R4 one value, new binds: done. Re-running resumes at the derived step. The old value
+#           is never removed while the gate is closed. --new-password-file is generated (0600)
+#           when it does not exist yet and reused on every re-run.
 #   retire  Delete both entries. Dedicated nodes lose their bind: consumers stall with rc 49
 #           until the entry is recreated, so --yes is required.
 #
@@ -23,6 +31,7 @@ usage() {
   cat <<EOF
 Usage: $0 ensure --base DN --admin-password-file FILE --out FILE [--uri URI] [--admin-dn DN] [--root-dn DN]...
        $0 reconcile --base DN --admin-password-file FILE --current-password-file FILE [--uri ldaps://HOST:636]
+       $0 rotate --base DN --admin-password-file FILE --new-password-file FILE [--peer ldaps://HOST:636]... [--uri ldaps://HOST:636] [--config-password-file FILE]
        $0 retire --base DN --admin-password-file FILE --yes [--uri URI] [--admin-dn DN]
 
   --uri        LDAP URI of any node (default ldaps://localhost:636; use ldap:// only on a trusted path)
@@ -31,6 +40,10 @@ Usage: $0 ensure --base DN --admin-password-file FILE --out FILE [--uri URI] [--
                slapcat -n 0 (run inside the container); when that is impossible the
                command refuses unless every rootDN is supplied here (operator-asserted)
   --config-dir slapd.d directory read offline with slapcat (default /etc/openldap/slapd.d)
+  --peer URI   rotate: another node (repeatable); list EVERY node of the cluster
+  --config-password-file FILE   rotate: password of cn=admin,cn=config (default: --admin-password-file)
+  --new-password-file FILE      rotate: new replication credential (created 0600 when missing)
+                                rotate exit codes: 0 done or progressed, 3 waiting for consumers, 1 refused/failed
   --out FILE   ensure only: new file (mode 0600) that receives the generated replication password
 EOF
 }
@@ -39,7 +52,7 @@ die() { echo "replication-identity: $*" >&2; exit 1; }
 
 cmd="${1:-}"
 case "$cmd" in
-  ensure|retire|reconcile) shift ;;
+  ensure|retire|reconcile|rotate) shift ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -50,9 +63,13 @@ admin_dn=""
 pwfile=""
 out=""
 current_file=""
+new_file=""
+config_pwfile=""
+peers=()
 yes=0
 extra_roots=()
 config_dir="/etc/openldap/slapd.d"   # image CONFIG_DIR
+config_dn="cn=admin,cn=config"
 while [ $# -gt 0 ]; do
   case "$1" in
     --uri) uri="${2:?--uri needs a value}"; shift 2 ;;
@@ -62,6 +79,9 @@ while [ $# -gt 0 ]; do
     --root-dn) extra_roots+=("${2:?--root-dn needs a DN}"); shift 2 ;;
     --config-dir) config_dir="${2:?--config-dir needs a directory}"; shift 2 ;;
     --current-password-file) current_file="${2:?--current-password-file needs a file}"; shift 2 ;;
+    --new-password-file) new_file="${2:?--new-password-file needs a file}"; shift 2 ;;
+    --config-password-file) config_pwfile="${2:?--config-password-file needs a file}"; shift 2 ;;
+    --peer) peers+=("${2:?--peer needs a URI}"); shift 2 ;;
     --out) out="${2:?--out needs a file}"; shift 2 ;;
     --yes) yes=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -120,25 +140,33 @@ for r in "${roots[@]}"; do
   [ "$got" != "$want" ] || die "a rootDN equals the reserved replication identity DN ${iddn}; it would bypass the identity ACL (D65)"
 done
 
+# Verified LDAPS only: the identity credential and the administrator password never cross a clear or unverified link.
+require_verified_tls() {
+  case "$uri" in ldaps://*) ;; *) die "$cmd requires verified LDAPS" ;; esac
+  for u in ${peers[@]+"${peers[@]}"}; do case "$u" in ldaps://*) ;; *) die "$cmd requires verified LDAPS (peer ${u})" ;; esac; done
+  [ "${LDAPTLS_REQCERT:-demand}" = demand ] || die "$cmd requires LDAPTLS_REQCERT=demand"
+  export LDAPTLS_REQCERT=demand
+}
+# Check exact bytes, including trailing LF/NUL, rather than shell command substitution.
+credential_hygiene() { # file label
+  local f="$1" total printable distinct unsafe
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then die "$2 must name a readable regular file"; fi
+  total=$(wc -c < "$f" | tr -d ' ')
+  printable=$(LC_ALL=C tr -cd '\041-\176' < "$f" | wc -c | tr -d ' ')
+  distinct=$(LC_ALL=C fold -w1 < "$f" | sort -u | wc -l | tr -d ' ')
+  if [ "$total" != "$printable" ] || [ "$total" -lt 32 ] || [ "$distinct" -lt 10 ]; then
+    die "$2 fails byte hygiene (not proof of randomness)"
+  fi
+  cmp -s "$f" "$pwfile" && die "$2 must differ from administrator credential"
+  unsafe=$(LC_ALL=C tr -cd '\042\134' < "$f" | wc -c | tr -d ' ')
+  [ "$unsafe" = 0 ] || die "$2 contains quote or backslash unsupported by dedicated mode"
+}
+
 if [ "$cmd" = reconcile ]; then
   # D67: the operator isolates the restored node before reconciling. This command never
   # starts peers or deletes old hashes; failure leaves the cluster isolated for inspection.
-  case "$uri" in ldaps://*) ;; *) die "reconcile requires verified LDAPS" ;; esac
-  [ "${LDAPTLS_REQCERT:-demand}" = demand ] || die "reconcile requires LDAPTLS_REQCERT=demand"
-  export LDAPTLS_REQCERT=demand
-  if [ -z "$current_file" ] || [ ! -f "$current_file" ] || [ ! -r "$current_file" ]; then
-    die "--current-password-file must name a readable regular file"
-  fi
-  # Check exact bytes, including trailing LF/NUL, rather than shell command substitution.
-  total=$(wc -c < "$current_file" | tr -d ' ')
-  printable=$(LC_ALL=C tr -cd '\041-\176' < "$current_file" | wc -c | tr -d ' ')
-  distinct=$(LC_ALL=C fold -w1 < "$current_file" | sort -u | wc -l | tr -d ' ')
-  if [ "$total" != "$printable" ] || [ "$total" -lt 32 ] || [ "$distinct" -lt 10 ]; then
-    die "current credential fails byte hygiene (not proof of randomness)"
-  fi
-  cmp -s "$current_file" "$pwfile" && die "current replication credential must differ from administrator credential"
-  unsafe=$(LC_ALL=C tr -cd '\042\134' < "$current_file" | wc -c | tr -d ' ')
-  [ "$unsafe" = 0 ] || die "current credential contains quote or backslash unsupported by dedicated mode"
+  require_verified_tls
+  credential_hygiene "$current_file" "--current-password-file"
   exists "$iddn" || die "identity missing; reconcile cannot create it"
   exists "$poldn" || die "policy missing; reconcile cannot create it"
   if ! ldapwhoami -x -H "$uri" -D "$iddn" -y "$current_file" >/dev/null 2>&1; then
@@ -155,6 +183,125 @@ EOF
     ldapwhoami -x -H "$uri" -D "$iddn" -y "$current_file" >/dev/null 2>&1 || die "current credential does not bind after reconcile (modify rc ${rc}); keep peers stopped"
   fi
   echo "reconciled current credential; verified TLS identity bind. Keep peers stopped until the identity check passes."
+elif [ "$cmd" = rotate ]; then
+  require_verified_tls
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
+  [ -n "$new_file" ] || die "--new-password-file is required (created 0600 when missing)"
+  [ -n "$config_pwfile" ] || config_pwfile="$pwfile"
+  if [ ! -r "$config_pwfile" ]; then die "--config-password-file must name a readable file"; fi
+  if [ ! -e "$new_file" ] && [ ! -L "$new_file" ]; then
+    # 43 alphanumerics from the OS CSPRNG, created exclusively (O_EXCL) with mode 0600, as ensure does.
+    newpw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 43 || true)"
+    [ "${#newpw}" -eq 43 ] || die "could not generate a password"
+    old_umask="$(umask)"
+    umask 077
+    set -C
+    { exec 3>"$new_file"; } 2>/dev/null || { set +C; umask "$old_umask"; die "cannot create ${new_file} exclusively"; }
+    set +C
+    umask "$old_umask"
+    printf '%s' "$newpw" >&3 || die "cannot write ${new_file}"
+    exec 3>&-
+    unset newpw
+    echo "generated the new replication credential in ${new_file} (mode 0600); keep it, a re-run resumes with it"
+  fi
+  credential_hygiene "$new_file" "--new-password-file"
+  exists "$iddn" || die "identity missing; rotate cannot create it (use ensure)"
+  nodes=("$uri" ${peers[@]+"${peers[@]}"})
+  newfp="$(sha256sum < "$new_file" | cut -d' ' -f1)"
+
+  value_count() {
+    local o
+    o=$(ldapsearch "${ldap_args[@]}" -LLL -o ldif-wrap=no -b "$iddn" -s base userPassword 2>/dev/null) || return 1
+    awk '/^userPassword:/{n++} END {print n+0}' <<<"$o"
+  }
+  new_binds() { ldapwhoami -x -H "$1" -D "$iddn" -y "$new_file" >/dev/null 2>&1; }
+  # new = every stored consumer row of the identity carries the new credential; old = at least one
+  # row does not; none = no consumer row binds as the identity (admin-mode node). rc 2 = unreadable.
+  consumer_state() {
+    local out line val bd cred rows=0 hit=0
+    out=$(ldapsearch -x -H "$1" -D "$config_dn" -y "$config_pwfile" -LLL -o ldif-wrap=no -b cn=config '(olcSyncrepl=*)' olcSyncrepl 2>/dev/null) || return 2
+    while IFS= read -r line; do
+      case "$line" in
+        'olcSyncrepl:: '*) val=$(printf '%s' "${line#olcSyncrepl:: }" | base64 -d 2>/dev/null) || val="" ;;
+        'olcSyncrepl: '*) val="${line#olcSyncrepl: }" ;;
+        *) continue ;;
+      esac
+      bd=$(printf '%s' "$val" | sed -n 's/.*binddn="\([^"]*\)".*/\1/p')
+      [ -n "$bd" ] && [ "$(dn_norm "$bd" || true)" = "$want" ] || continue
+      rows=$((rows + 1))
+      cred=$(printf '%s' "$val" | sed -n 's/.* credentials="\([^"]*\)".*/\1/p')
+      if [ "$(printf '%s' "$cred" | sha256sum | cut -d' ' -f1)" = "$newfp" ]; then hit=$((hit + 1)); fi
+    done <<<"$out"
+    if [ "$rows" -eq 0 ]; then echo none; elif [ "$hit" -eq "$rows" ]; then echo new; else echo old; fi
+  }
+  # The gate: on every node the new credential binds as the identity (so it replicated) AND the
+  # stored consumer configuration carries it. One fixed line per node; never a credential.
+  gate_open=1
+  gate_check() {
+    local n s b r
+    gate_open=1
+    for n in "${nodes[@]}"; do
+      r=0
+      s=$(consumer_state "$n") || r=$?
+      [ "$r" = 0 ] || die "cannot read cn=config on ${n}; check --config-password-file and TLS trust; the gate stays closed"
+      if new_binds "$n"; then b=binds; else b="does-not-bind"; gate_open=0; fi
+      [ "$s" = new ] || gate_open=0
+      echo "  ${n}: consumer credential=${s}, new credential ${b}"
+    done
+  }
+
+  count=$(value_count) || die "cannot read userPassword values of ${iddn}"
+  [ "$count" -ge 1 ] || die "${iddn} has no userPassword value; use ensure/reconcile"
+  if new_binds "$uri"; then bound=1; else bound=0; fi
+  if [ "$count" -eq 1 ] && [ "$bound" = 0 ]; then
+    echo "R0: one credential value, the new one is not present; adding it (the old value stays)"
+    hash=$(slappasswd -T "$new_file") || die "cannot hash the new credential"
+    rc=0
+    ldapmodify "${ldap_args[@]}" >/dev/null 2>&1 <<EOT || rc=$?
+dn: ${iddn}
+changetype: modify
+add: userPassword
+userPassword: ${hash}
+EOT
+    unset hash
+    # Ambiguous or lost responses are resolved by the directory, not by the write's exit status.
+    count=$(value_count) || die "cannot read userPassword values after the add (rc ${rc}); re-run to resume"
+    if [ "$count" -lt 2 ] || ! new_binds "$uri"; then die "the new value is not confirmed (modify rc ${rc}); re-run to resume"; fi
+    echo "R1: the new value is added; the old value is still valid. Next: restart each consumer with the new credential, then re-run this command."
+    echo "Rollback until R3: restore the old credential on the consumers and restart them; the old value is still in the entry."
+    exit 3
+  elif [ "$count" -ge 2 ] && [ "$bound" = 1 ]; then
+    echo "${count} credential values; checking ${#nodes[@]} node(s)"
+    gate_check
+    if [ "$gate_open" != 1 ]; then
+      echo "R2: the gate is closed, so the old value is NOT removed. Restart the consumers listed above with the new credential and re-run this command." >&2
+      echo "Rollback until R3: restore the old credential on the consumers and restart them; the old value is still in the entry." >&2
+      exit 3
+    fi
+    echo "R3: every node carries the new credential; removing the old value"
+    hash=$(slappasswd -T "$new_file") || die "cannot hash the new credential"
+    rc=0
+    ldapmodify "${ldap_args[@]}" >/dev/null 2>&1 <<EOT || rc=$?
+dn: ${iddn}
+changetype: modify
+replace: userPassword
+userPassword: ${hash}
+EOT
+    unset hash
+    count=$(value_count) || die "cannot read userPassword values after the removal (rc ${rc}); re-run to resume"
+    if [ "$count" -ne 1 ] || ! new_binds "$uri"; then die "the removal is not confirmed (modify rc ${rc}); re-run to resume"; fi
+    echo "R4: rotation complete; the entry holds only the new credential."
+    echo "Rollback after R4: reconcile --current-password-file <old credential file> re-adds the old value (consumers still on it stall with rc 49 until then)."
+  elif [ "$count" -eq 1 ] && [ "$bound" = 1 ]; then
+    echo "one credential value, the new one; checking ${#nodes[@]} node(s)"
+    gate_check
+    if [ "$gate_open" != 1 ]; then
+      die "the old value is already gone but a node does not carry the new credential: it stalls with rc 49 on its next reconnect (premature removal). Restore it with: reconcile --current-password-file <old credential file>, restart the consumers with the new credential, then re-run rotate"
+    fi
+    echo "R4: rotation complete; nothing to do."
+  else
+    die "${iddn} holds ${count} values and the new credential does not bind; --new-password-file is not this rotation's credential (or the write has not replicated here); refusing to modify"
+  fi
 elif [ "$cmd" = ensure ]; then
   [ -n "$out" ] || die "--out is required (the generated password is written there, never printed)"
   if [ -e "$out" ] || [ -L "$out" ]; then die "--out ${out} already exists (or is a symlink); refusing to overwrite a credential file"; fi

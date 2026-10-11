@@ -169,6 +169,9 @@ jobs:
       - name: Replication identity reconcile over verified TLS — #229 D67
         run: ./scripts/test/test-replication-identity-reconcile.sh ldapium:e2e
 
+      - name: Replication identity credential rotation R0-R4 — #352 AC-005
+        run: ./scripts/test/test-replication-identity-rotate.sh ldapium:e2e
+
       - name: Dedicated replication backup/restore reconciliation — #229 D63
         run: ./scripts/test/test-replication-identity-restore.sh ldapium:e2e
 
