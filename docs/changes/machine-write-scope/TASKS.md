@@ -39,9 +39,9 @@ ACL·`image/entrypoint.sh`·LDAP 쓰기 의미를 건드리는 작업은 먼저 
 
 ## Later stages (각각 별도 승인·별도 플래그·별도 증거)
 
-- [ ] `T-026` (v2b, 첫 출하 이후·별도 승인) 그룹 생성·수정·삭제(`directory.groups.create/update/delete`)와 잠금(`directory.users.lock/unlock`, `W_lock`). 그룹 멤버 추가/제거는 첫 출하(T-013)에 이미 포함된다. **`createGroup`을 열기 전**: `CreateGroup`의 seed `member: c.dn`(`ldapclient/groups.go:86`)을 머신 경로에서 `W_data` DN으로 쓰지 않도록 결정(고정 비특권 placeholder 또는 요청의 첫 멤버, D22)하고 별도 보안 검토. 각각 T-012/T-014/T-016/T-019 위에서 오퍼레이션 등록 + T-021 증거 확장.
-- [ ] `T-030` (v2c, **Q1 승인 필요**) 비밀번호 구획: `W_cred` ACL, 비밀번호 포함 `createUser`, `setPassword`(서버 생성 금지 D16, `If-Match` 불가라 멱등 키+대상 한정+한도), `T-004`⑤ 결과 반영. 별도 security-reviewer 라운드.
-- [ ] `T-031` (v2c) 비밀번호 단계 라이브 증명: 비밀 값이 응답·감사·멱등 기록·모든 컨테이너 로그에 0건, 직접 ACL 시도 거부, 긴급 차단 드릴.
+- [ ] `T-026` (v2b, 첫 출하 이후·별도 승인) 그룹 생성·수정·삭제(`directory.groups.create/update/delete`)와 잠금(`directory.users.lock/unlock`, `W_lock`). 그룹 멤버 추가/제거는 첫 출하(T-013)에 이미 포함된다. **`createGroup`을 열기 전**: `CreateGroup`의 seed `member: c.dn`(`ldapclient/groups.go:86`)을 머신 경로에서 `W_data` DN으로 쓰지 않도록 결정(고정 비특권 placeholder 또는 요청의 첫 멤버, D22)하고 별도 보안 검토. 각각 T-012/T-014/T-016/T-019 위에서 오퍼레이션 등록 + T-021 증거 확장. 설계: [machine-write-scope-v2](../machine-write-scope-v2/TASKS.md) T-010–T-015(#379).
+- [ ] `T-030` (v2c, **Q1 승인 필요**) 비밀번호 구획: `W_cred` ACL, 비밀번호 포함 `createUser`, `setPassword`(서버 생성 금지 D16, `If-Match` 불가라 멱등 키+대상 한정+한도), `T-004`⑤ 결과 반영. 별도 security-reviewer 라운드. 설계: [machine-write-scope-v2](../machine-write-scope-v2/TASKS.md) T-020–T-023, T-025–T-029(#379).
+- [ ] `T-031` (v2c) 비밀번호 단계 라이브 증명: 비밀 값이 응답·감사·멱등 기록·모든 컨테이너 로그에 0건, 직접 ACL 시도 거부, 긴급 차단 드릴. 설계: [machine-write-scope-v2](../machine-write-scope-v2/TASKS.md) T-024(#379).
 
 ## Verify
 
