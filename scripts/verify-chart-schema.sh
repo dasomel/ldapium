@@ -60,6 +60,11 @@ validate ui-machine-auth --set ui.enabled=true --set-string "ui.session.secret=$
 
 # Dedicated identity: TLS, caller-owned identity credential, and mode env.
 validate dedicated-identity --set replicaCount=3 --set replication.identity=dedicated --set replication.existingSecret=replication-identity --set tls.enabled=true --set tls.existingSecret=server-tls --set tls.caFile=/etc/openldap/tls/ca.crt
+# Replication identity check CronJob, ConfigMap and NetworkPolicy rule (#375). The alert rule is a
+# PrometheusRule CRD (no schema here): scripts/test/test-chart-replication-check.sh runs it through promtool.
+validate replication-check --set replicaCount=3 --set replication.identity=dedicated --set replication.existingSecret=replication-identity --set tls.enabled=true --set tls.existingSecret=server-tls --set tls.caFile=/etc/openldap/tls/ca.crt \
+	--set replication.check.enabled=true --set replication.check.image.repository=registry.example/ldapium-check --set-string replication.check.image.tag=1.0 --set replication.check.canary=true \
+	--set networkPolicy.enabled=true
 validate ui-machine-write --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET" \
 	--set ui.idempotency.enabled=true \
 	--set ui.trustedProxies=none --set ui.machineAuth.enabled=true \

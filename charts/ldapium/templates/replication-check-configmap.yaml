@@ -1,0 +1,17 @@
+{{- if .Values.replication.check.enabled }}
+# The check scripts, mounted into the CronJob pod. They are copies of scripts/lib/replication_*.py:
+# a chart cannot read files outside its own directory, and scripts/test/test-chart-replication-check.sh
+# fails when a copy drifts from its source.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ldapium.fullname" . }}-replication-check
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ldapium.replicationCheck.labels" . | nindent 4 }}
+data:
+  {{- range $name := list "replication_identity_check.py" "replication_identity_config.py" "replication_uri.py" }}
+  {{ $name }}: |
+{{ $.Files.Get (printf "files/replication-check/%s" $name) | indent 4 }}
+  {{- end }}
+{{- end }}

@@ -89,6 +89,43 @@ spec:
             description: "The last successful LDAPium backup is older than the configured maximum backup age."
         {{- end }}
 
+        {{- if .Values.replication.check.enabled }}
+        - alert: LDAPiumReplicationCheckFailed
+          # A failed Job stays in the history until later failures push it out, so the bare
+          # kube_job_status_failed would keep firing after the check recovered. Fire only while the
+          # newest failed run started after the newest successful completion (or none succeeded yet).
+          expr: |
+            (
+              max by (namespace) (
+                kube_job_status_start_time{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"}
+                and on (namespace, job_name)
+                (kube_job_status_failed{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"} > 0)
+              )
+              > on (namespace)
+              max by (namespace) (
+                kube_job_status_completion_time{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"}
+              )
+            )
+            or
+            (
+              max by (namespace) (
+                kube_job_status_start_time{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"}
+                and on (namespace, job_name)
+                (kube_job_status_failed{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"} > 0)
+              )
+              unless on (namespace)
+              max by (namespace) (
+                kube_job_status_completion_time{namespace="{{ .Release.Namespace }}",job_name=~"{{ include "ldapium.fullname" . }}-replication-check-.*"}
+              )
+            )
+          for: {{ .Values.metrics.prometheusRule.replicationCheckFailureFor | default "5m" }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "LDAPium replication identity check failed"
+            description: "The newest replication identity check Job failed (stable-CSN data differs, the identity configuration changed, or the check could not read a node). Read the Job logs for the fixed-format reason."
+
+        {{- end }}
         {{- if .Values.metrics.prometheusRule.tlsCertificateExpirationExpr }}
         - alert: LDAPiumTLSCertificateExpiringSoon
           expr: |

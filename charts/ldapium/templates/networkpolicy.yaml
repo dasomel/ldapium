@@ -62,6 +62,16 @@ spec:
         - port: 636
           protocol: TCP
     {{- end }}
+    {{- if .Values.replication.check.enabled }}
+    # The replication identity check CronJob reads every node as an LDAP client.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ldapium.replicationCheck.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 636
+          protocol: TCP
+    {{- end }}
     {{- if and .Values.metrics .Values.metrics.enabled }}
     - from:
         - namespaceSelector:

@@ -117,6 +117,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: backup
 {{- end -}}
 
+{{/* Replication identity check labels / selector labels. */}}
+{{- define "ldapium.replicationCheck.labels" -}}
+helm.sh/chart: {{ include "ldapium.chart" . }}
+{{ include "ldapium.replicationCheck.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{- define "ldapium.replicationCheck.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "ldapium.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: replication-check
+{{- end -}}
+
 {{/* Server ServiceAccount name. */}}
 {{- define "ldapium.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
@@ -224,6 +240,17 @@ retain a dedicated password and silently stall the administrator bind. */}}
 {{- end -}}
 {{- else if .Values.replication.existingSecret -}}
 {{- fail "replication.existingSecret is dedicated-only; remove it when rolling back identity to admin/prepare" -}}
+{{- end -}}
+{{/* D71: the check compares the dedicated identity's view with the administrator's, so it needs
+the dedicated mode (replication Secret, verified TLS), and an image that carries python3 and
+ldapsearch (the server image has no python3 and the chart does not change it). */}}
+{{- if .Values.replication.check.enabled -}}
+{{- if ne .Values.replication.identity "dedicated" -}}
+{{- fail "replication.check.enabled requires replication.identity=dedicated (the check reads the directory as the dedicated identity)" -}}
+{{- end -}}
+{{- if not .Values.replication.check.image.repository -}}
+{{- fail "replication.check.enabled requires replication.check.image.repository: an image with python3 and ldapsearch (the server image has no python3; see charts/ldapium/README.md)" -}}
+{{- end -}}
 {{- end -}}
 
 {{- if and (or $h.disallowAnonBind $h.requireAuthc) .Values.ldap.anonymousReadBase -}}

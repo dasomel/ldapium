@@ -1,0 +1,89 @@
+# Fault injection for the LDAPiumReplicationCheckFailed alert (docs/changes/replication-identity, T-017).
+# Rules are rendered from the chart by scripts/test/test-chart-replication-check.sh (release "rc",
+# namespace "directory", so Jobs are named rc-ldapium-replication-check-<timestamp>).
+rule_files:
+  - replication_check_rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a failed check run fires, and a later successful run clears it
+    input_series:
+      # run 1 (t=0) fails; run 2 (t=30m) succeeds and stays; the failed Job stays in the history.
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1+0x59"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1000+0x59"
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-replication-check-2"}'
+        values: "_x30 0+0x29"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-replication-check-2"}'
+        values: "_x30 5000+0x29"
+      - series: 'kube_job_status_completion_time{namespace="directory",job_name="rc-ldapium-replication-check-2"}'
+        values: "_x31 5060+0x28"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+            exp_annotations:
+              summary: "LDAPium replication identity check failed"
+              description: "The newest replication identity check Job failed (stable-CSN data differs, the identity configuration changed, or the check could not read a node). Read the Job logs for the fixed-format reason."
+      - eval_time: 50m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failure after an earlier success fires
+    input_series:
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "0+0x40"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1000+0x40"
+      - series: 'kube_job_status_completion_time{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1060+0x40"
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-replication-check-2"}'
+        values: "_x20 1+0x20"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-replication-check-2"}'
+        values: "_x20 5000+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: directory
+            exp_annotations:
+              summary: "LDAPium replication identity check failed"
+              description: "The newest replication identity check Job failed (stable-CSN data differs, the identity configuration changed, or the check could not read a node). Read the Job logs for the fixed-format reason."
+
+  - interval: 1m
+    name: healthy runs and other Jobs never fire
+    input_series:
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "0+0x30"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1000+0x30"
+      - series: 'kube_job_status_completion_time{namespace="directory",job_name="rc-ldapium-replication-check-1"}'
+        values: "1060+0x30"
+      # A failing backup Job and a failing Job in another namespace are not this alert's business.
+      - series: 'kube_job_status_failed{namespace="directory",job_name="rc-ldapium-backup-1"}'
+        values: "1+0x30"
+      - series: 'kube_job_status_start_time{namespace="directory",job_name="rc-ldapium-backup-1"}'
+        values: "9000+0x30"
+      - series: 'kube_job_status_failed{namespace="other",job_name="rc-ldapium-replication-check-1"}'
+        values: "1+0x30"
+      - series: 'kube_job_status_start_time{namespace="other",job_name="rc-ldapium-replication-check-1"}'
+        values: "9000+0x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LDAPiumReplicationCheckFailed
+        exp_alerts: []
