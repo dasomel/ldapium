@@ -1,0 +1,22 @@
+dn: olcDatabase={1}mdb,cn=config
+olcAccess: {0}to * by dn.exact="cn=replicator,dc=example,dc=org" ssf=128 read by dn.exact="cn=replicator,dc=example,dc=org" none by * break
+olcAccess: {1}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN by dn.exact="uid=machine,ou=system,dc=example,dc=org" none by * break
+olcAccess: {2}to dn.subtree="dc=example,dc=org" by dn.exact="uid=machine,ou=system,dc=example,dc=org" read by * break
+olcAccess: {3}to * by dn.exact="uid=machine,ou=system,dc=example,dc=org" none by * break
+olcAccess: {4}to dn.subtree="ou=system,dc=example,dc=org" by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" none by * break
+olcAccess: {5}to dn.exact="cn=replicator,dc=example,dc=org" by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" none by * break
+olcAccess: {6}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" none by * break
+olcAccess: {7}to dn.subtree="ou=managed,dc=example,dc=org" attrs=entry,children by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" write by * break
+olcAccess: {8}to dn.subtree="ou=managed,dc=example,dc=org" attrs=objectClass by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" add by * break
+olcAccess: {9}to dn.subtree="ou=managed,dc=example,dc=org" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" write by * break
+olcAccess: {10}to dn.subtree="ou=managed,dc=example,dc=org" by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" read by * break
+olcAccess: {11}to * by dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org" none by * break
+olcAccess: {12}to dn.subtree="ou=system,dc=example,dc=org" by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" none by * break
+olcAccess: {13}to dn.exact="cn=replicator,dc=example,dc=org" by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" none by * break
+olcAccess: {14}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" none by * break
+olcAccess: {15}to dn.subtree="ou=managed,dc=example,dc=org" attrs=pwdAccountLockedTime by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" write by * break
+olcAccess: {16}to dn.subtree="ou=managed,dc=example,dc=org" by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" read by * break
+olcAccess: {17}to * by dn.exact="uid=machine-write-lock,ou=system,dc=example,dc=org" none by * break
+olcAccess: {18}to attrs=userPassword,shadowLastChange by self write by anonymous auth by * none
+olcAccess: {19}to attrs=entry,uid,objectClass by anonymous read by users read
+olcAccess: {20}to * by self write by users read by anonymous none

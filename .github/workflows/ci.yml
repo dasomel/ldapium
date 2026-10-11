@@ -567,6 +567,9 @@ jobs:
       # stdlib unittest for the pure bench-generate-lifecycle-ops.py helper
       # (determinism, mix-ratio apportionment, mover/leaver disjoint ranges,
       # input validation) — no Docker needed, see the test file's docstring.
+      # Also runs test_machine_write_acl_check.py: the fixture-driven unit test of
+      # scripts/check-machine-write-acl.sh (#285, T-023); its live proof is
+      # scripts/test/test-check-machine-write-acl-live.sh (Docker, not in CI).
       - run: python3 -m unittest discover -s scripts/test -p 'test_*.py'
 
   incident-evidence:
