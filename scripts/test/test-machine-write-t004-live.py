@@ -155,6 +155,9 @@ def main():
   # ======== 4. entryCSN / objectClass assertion for W_data ====================================================
   u4 = 'uid=t4,' + PEOPLE
   w('ldapadd', [], f'dn: {u4}\nobjectClass: inetOrgPerson\nuid: t4\ncn: t4\nsn: t4\n')
+  u4_pw = live.secret('U4pw-' + secrets.token_urlsafe(12))
+  r = adm('ldapmodify', [], f'dn: {u4}\nchangetype: modify\nadd: userPassword\nuserPassword: {u4_pw}\n')
+  ensure(r.returncode == 0, 'u4 password: ' + live.mask(r.stderr))
   csn = attrs(u4, 'entryCSN')[0].split(': ', 1)[1]
   mod = f'dn: {u4}\nchangetype: modify\nreplace: mail\nmail: %s@example.org\n'
   good = w('ldapmodify', ['-e', f'!assert=(&(entryCSN={csn})(objectClass=inetOrgPerson))'], mod % 'ok')
@@ -167,6 +170,21 @@ def main():
   wrong = w('ldapmodify', ['-e', f'!assert=(&(entryCSN={csn2})(objectClass=groupOfNames))'], mod % 'wrongtype')
   obs(f'4c current entryCSN but the wrong objectClass (groupOfNames on a user): rc {wrong.returncode} {tail(wrong)}')
   live.check(wrong.returncode == 122 and attrs(u4, 'mail') == ['mail: ok@example.org'], '[4] the objectClass half of the AND filter is evaluated: a wrong target type is refused with 122')
+  # the target really has a userPassword: the admin sees it, W_data must not (search filters and assertion)
+  stored = adm('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', u4, '-s', 'base', 'userPassword']).stdout
+  prefix = next((l.split(': ', 1)[1][:3] for l in stored.splitlines() if l.lower().startswith('userpassword')), '')
+  ensure(prefix != '', 'admin must read the stored userPassword of u4')
+  found = {}
+  for label, flt in (('presence', '(userPassword=*)'), ('prefix', '(userPassword=' + prefix + '*)')):
+    a = adm('ldapsearch', ['-LLL', '-b', u4, '-s', 'base', flt, 'dn']).stdout
+    x = w('ldapsearch', ['-LLL', '-b', u4, '-s', 'base', flt, 'dn']).stdout
+    found[label] = ('dn: ' + u4 in a, 'dn: ' + u4 in x)
+  obs(f'4d0 search on u4 (has a userPassword) as (admin finds, W_data finds): presence {found["presence"]}, 3-char prefix {found["prefix"]}')
+  live.check(found['presence'] == (True, False), '[4] (userPassword=*) finds u4 as admin and finds nothing as W_data')
+  if found['prefix'][0]:
+    live.check(found['prefix'][1] is False, '[4] a value-prefix filter on userPassword finds nothing as W_data although the admin finds the entry')
+  else:
+    obs('4d1 the admin prefix filter did not match either (no substring rule on userPassword): prefix probe is not informative')
   blind = w('ldapmodify', ['-e', '!assert=(userPassword=*)'], mod % 'blind')
   obs(f'4d assertion on an attribute W_data has no access to, (userPassword=*): rc {blind.returncode} {tail(blind)}')
   live.check(blind.returncode == 122 and attrs(u4, 'mail') == ['mail: ok@example.org'], '[4] an assertion on an attribute W_data may not read evaluates false (122): it cannot be used as an oracle')
@@ -191,9 +209,18 @@ def main():
   obs(f'5b W_data Add of a groupOfNames with member={ADMIN_DN} under the user subtree: rc {r_ocadd.returncode}')
   # the RFC 3062 Password Modify extended operation as W_data (T-004 item 5)
   new_pw = live.secret('NewPw-' + secrets.token_urlsafe(12))
+  old_pw = live.secret('OldPw-' + secrets.token_urlsafe(12))
+  r = adm('ldapmodify', [], f'dn: {u5}\nchangetype: modify\nadd: userPassword\nuserPassword: {old_pw}\n')
+  ensure(r.returncode == 0, 'u5 password: ' + live.mask(r.stderr))
+  ldap.put_password('/tmp/.pw-u5old', old_pw)
+  ldap.put_password('/tmp/.pw-u5new', new_pw)
   r_pm = w('ldappasswd', ['-s', new_pw, u5])
-  r_pm_self = ldap.tool('ldapwhoami', [], u5, '/tmp/.pw-wdata')
-  obs(f'5c W_data Password Modify (ldappasswd) on a managed user: rc {r_pm.returncode} {tail(r_pm)}; the user can bind with the W_data password (must be no): {r_pm_self.returncode == 0}')
+  bind_old = ldap.tool('ldapwhoami', [], u5, '/tmp/.pw-u5old')
+  bind_new = ldap.tool('ldapwhoami', [], u5, '/tmp/.pw-u5new')
+  live.check(bind_old.returncode == 0 and bind_new.returncode == 49,
+             f'[5] after the refused Password Modify the user still binds with the OLD password (rc {bind_old.returncode}) and not with the new one (rc {bind_new.returncode}, 49 = invalid credentials)')
+  r_pm_self = bind_old
+  obs(f'5c W_data Password Modify (ldappasswd) on a managed user: rc {r_pm.returncode} {tail(r_pm)}; bind with the OLD password rc {bind_old.returncode}, with the new one rc {bind_new.returncode}')
   live.check(r_pm.returncode != 0 and 'Insufficient access (50)' in r_pm.stdout + r_pm.stderr, '[5] secret attributes `none` stop the Password Modify extended operation of W_data (50)')
   w('ldapdelete', [u5])
   w('ldapdelete', ['cn=t5b,' + PEOPLE])
@@ -259,6 +286,19 @@ def main():
   types = [l.split(': ', 1)[1] for l in rows if l.startswith('reqType:')]
   obs(f'1c the same writes through the UI (createUser/patchUser/deleteUser): reqType {sorted(types)}, reqAuthzID values {authz} (one value: W_data; the client id is NOT in slapd, only in the app audit line)')
   live.check(authz == [WDATA_DN] or authz == ['dn:' + WDATA_DN], '[1] through the UI every write is attributed to W_data in slapd, never to M, an admin or the client')
+
+  # addGroupMember / removeGroupMember through the UI
+  u8 = 'uid=t8,' + PEOPLE
+  ensure(call(api, tok, 'POST', '/api/users', {'uid': 't8', 'cn': 't8', 'sn': 'T'}, 'k-' + uuid.uuid4().hex)[0] == 201, 'create t8')
+  g_before = len(accesslog(f'(&(reqDN={G1})(reqType=modify))', ['reqAuthzID']))
+  st_a, _, ta = call(api, tok, 'POST', '/api/groups/members', {'groupDn': G1, 'memberDn': u8}, 'k-' + uuid.uuid4().hex, etag_of(api, tok, G1))
+  st_r, _, tr = call(api, tok, 'DELETE', f'/api/groups/members?groupDn={urlquote(G1)}&memberDn={urlquote(u8)}', None, 'k-' + uuid.uuid4().hex, etag_of(api, tok, G1))
+  ensure(st_a in (200, 204) and st_r in (200, 204), f'group member add/remove {st_a} {ta[:100]} / {st_r} {tr[:100]}')
+  g_rows = accesslog(f'(&(reqDN={G1})(reqType=modify))', ['reqAuthzID'])
+  g_authz = sorted({l.split(': ', 1)[1] for l in g_rows if l.startswith('reqAuthzID:')})
+  obs(f'1d addGroupMember/removeGroupMember through the UI: {st_a}/{st_r}; new group-modify accesslog rows {len(g_rows) - g_before}; reqAuthzID values over all rows {g_authz}')
+  live.check(len(g_rows) - g_before >= 2 and g_authz in ([WDATA_DN], ['dn:' + WDATA_DN]), '[1] addGroupMember and removeGroupMember through the UI each leave a modify record attributed to W_data')
+  call(api, tok, 'DELETE', f'/api/users?dn={urlquote(u8)}', None, 'k-' + uuid.uuid4().hex, etag_of(api, tok, u8))
 
   # -- idempotency replay after a restart ---------------------------------------------------------------------
   u7 = 'uid=t7,' + PEOPLE
