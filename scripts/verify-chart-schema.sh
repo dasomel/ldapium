@@ -60,3 +60,17 @@ validate ui-machine-auth --set ui.enabled=true --set-string "ui.session.secret=$
 
 # Dedicated identity: TLS, caller-owned identity credential, and mode env.
 validate dedicated-identity --set replicaCount=3 --set replication.identity=dedicated --set replication.existingSecret=replication-identity --set tls.enabled=true --set tls.existingSecret=server-tls --set tls.caFile=/etc/openldap/tls/ca.crt
+validate ui-machine-write --set ui.enabled=true --set-string "ui.session.secret=$SESSION_SECRET" \
+	--set ui.idempotency.enabled=true \
+	--set ui.trustedProxies=none --set ui.machineAuth.enabled=true \
+	--set-string ui.machineAuth.issuerURL=https://sso.example.com/realms/example \
+	--set-string ui.machineAuth.audience=ldapium-api \
+	--set-json 'ui.machineAuth.allowedClients=[{"id":"svc","scopes":["directory.users.read"]}]' \
+	--set-string 'ui.machineAuth.ldapBindDN=uid=machine\,ou=system\,dc=example\,dc=org' \
+	--set-string ui.machineAuth.existingSecret=machine-ldap \
+	--set ui.machineAuth.write.enabled=true \
+	--set-string 'ui.machineAuth.write.data.bindDN=uid=w-data\,ou=system\,dc=example\,dc=org' \
+	--set-string ui.machineAuth.write.data.existingSecret=machine-ldap-write \
+	--set-json 'ui.machineAuth.write.subtrees=[{"client":"svc","dns":["ou=people,dc=example,dc=org"]}]' \
+	--set-json 'ui.machineAuth.write.groups=[{"client":"svc","dns":["cn=team,ou=groups,dc=example,dc=org"]}]' \
+	--set-json 'ui.machineAuth.write.privilegedGroups=["cn=admins,ou=groups,dc=example,dc=org"]'

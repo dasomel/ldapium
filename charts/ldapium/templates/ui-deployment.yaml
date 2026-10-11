@@ -25,6 +25,7 @@
 {{- if not .Values.ui.keycloakAdmin.observeClients }}{{ fail "keycloakAdmin requires observeClients" }}{{ end }}
 {{- if and .Values.ui.keycloakAdmin.delegateClients (not .Values.ui.keycloakAdmin.isolatedRealm) }}{{ fail "delegated writes require an isolated realm" }}{{ end }}
 {{- end }}
+{{- if and .Values.ui.machineAuth.write.enabled (not .Values.ui.machineAuth.enabled) }}{{ fail "ui.machineAuth.write.enabled=true requires ui.machineAuth.enabled=true" }}{{ end }}
 {{- if .Values.ui.machineAuth.enabled }}
 {{- /*
   Machine bearer auth (#214): every value it cannot run without, checked in one
@@ -47,6 +48,48 @@
 {{- if not $c.id }}{{ fail "ui.machineAuth.allowedClients entries need an id" }}{{ end }}
 {{- if regexMatch "[=;,\\s]" $c.id }}{{ fail (printf "ui.machineAuth.allowedClients id %q must not contain = ; , or whitespace" $c.id) }}{{ end }}
 {{- if not $c.scopes }}{{ fail (printf "ui.machineAuth.allowedClients %q needs at least one scope" $c.id) }}{{ end }}
+{{- end }}
+{{- if $ma.write.enabled }}
+{{- /*
+  Machine write gates (machine-write-scope T-024, D3/D9). The application
+  re-validates at startup; the chart refuses an unsafe topology before a pod
+  exists. Single replica: the idempotency store is process memory (D9, Q8); this
+  chart has no UI HPA/PDB, so the replica value is the only scaling path.
+*/ -}}
+{{- $w := $ma.write -}}
+{{- if ne (int .Values.ui.replicaCount) 1 }}{{ fail "ui.machineAuth.write.enabled=true requires ui.replicaCount=1 (the idempotency store is per-process memory; a second replica would replay and double-apply keyed writes)" }}{{ end -}}
+{{- if not .Values.ui.idempotency.enabled }}{{ fail "ui.machineAuth.write.enabled=true requires ui.idempotency.enabled=true (machine writes need the Idempotency-Key store)" }}{{ end -}}
+{{- $wmiss := list -}}
+{{- if not $w.data.bindDN }}{{ $wmiss = append $wmiss "ui.machineAuth.write.data.bindDN" }}{{ end -}}
+{{- if not $w.data.existingSecret }}{{ $wmiss = append $wmiss "ui.machineAuth.write.data.existingSecret" }}{{ end -}}
+{{- if not $w.data.existingSecretKey }}{{ $wmiss = append $wmiss "ui.machineAuth.write.data.existingSecretKey" }}{{ end -}}
+{{- if not $w.subtrees }}{{ $wmiss = append $wmiss "ui.machineAuth.write.subtrees" }}{{ end -}}
+{{- if not $w.groups }}{{ $wmiss = append $wmiss "ui.machineAuth.write.groups" }}{{ end -}}
+{{- if not $w.privilegedGroups }}{{ $wmiss = append $wmiss "ui.machineAuth.write.privilegedGroups" }}{{ end -}}
+{{- if $wmiss }}{{ fail (printf "ui.machineAuth.write.enabled=true requires: %s" (join ", " $wmiss)) }}{{ end -}}
+{{- if $w.lock.enabled }}
+{{- if or (not $w.lock.bindDN) (not $w.lock.existingSecret) (not $w.lock.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock.enabled=true requires ui.machineAuth.write.lock.bindDN, existingSecret and existingSecretKey" }}{{ end }}
+{{- end }}
+{{- $adminDN := .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) -}}
+{{- $norm := dict "m" (lower (replace ", " "," (trim $ma.ldapBindDN))) "d" (lower (replace ", " "," (trim $w.data.bindDN))) "l" (lower (replace ", " "," (trim $w.lock.bindDN))) "a" (lower (replace ", " "," (trim $adminDN))) -}}
+{{- if eq $norm.d $norm.m }}{{ fail "ui.machineAuth.write.data.bindDN must differ from ui.machineAuth.ldapBindDN (the read-only identity)" }}{{ end -}}
+{{- if eq $norm.d $norm.a }}{{ fail "ui.machineAuth.write.data.bindDN must not be the LDAP administrator DN" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $norm.l $norm.d) }}{{ fail "ui.machineAuth.write.lock.bindDN must differ from ui.machineAuth.write.data.bindDN" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $norm.l $norm.m) }}{{ fail "ui.machineAuth.write.lock.bindDN must differ from ui.machineAuth.ldapBindDN (the read-only identity)" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $norm.l $norm.a) }}{{ fail "ui.machineAuth.write.lock.bindDN must not be the LDAP administrator DN" }}{{ end -}}
+{{- if and (eq $w.data.existingSecret $ma.existingSecret) (eq $w.data.existingSecretKey $ma.existingSecretKey) }}{{ fail "ui.machineAuth.write.data must not reuse the read identity's Secret key (ui.machineAuth.existingSecret/existingSecretKey)" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $w.lock.existingSecret $w.data.existingSecret) (eq $w.lock.existingSecretKey $w.data.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock must not reuse the data identity's Secret key" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $w.lock.existingSecret $ma.existingSecret) (eq $w.lock.existingSecretKey $ma.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock must not reuse the read identity's Secret key" }}{{ end -}}
+{{- $known := list -}}
+{{- range $c := $ma.allowedClients }}{{ $known = append $known $c.id }}{{ end -}}
+{{- $subIDs := list -}}
+{{- range $e := $w.subtrees }}
+{{- if not (has $e.client $known) }}{{ fail (printf "ui.machineAuth.write.subtrees client %q is not in ui.machineAuth.allowedClients" $e.client) }}{{ end }}
+{{- $subIDs = append $subIDs $e.client }}
+{{- end }}
+{{- range $e := $w.groups }}
+{{- if not (has $e.client $subIDs) }}{{ fail (printf "ui.machineAuth.write.groups client %q has no ui.machineAuth.write.subtrees entry" $e.client) }}{{ end }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.ui.sso.enabled }}
@@ -431,6 +474,50 @@ spec:
               value: {{ $ma.ipLimiterMax | quote }}
             - name: MACHINE_REQUEST_TIMEOUT
               value: {{ printf "%ds" (int $ma.requestTimeoutSeconds) | quote }}
+            {{- if $ma.write.enabled }}
+            {{- $w := $ma.write }}
+            {{- /* machine-write-scope: the switch plus its bind identities; passwords are Secret references only. No operation is opened by these. */}}
+            - name: MACHINE_WRITE_ENABLED
+              value: "true"
+            - name: MACHINE_WRITE_DATA_BIND_DN
+              value: {{ $w.data.bindDN | quote }}
+            - name: MACHINE_WRITE_DATA_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $w.data.existingSecret | quote }}
+                  key: {{ $w.data.existingSecretKey | quote }}
+            {{- if $w.lock.enabled }}
+            - name: MACHINE_WRITE_LOCK_ENABLED
+              value: "true"
+            - name: MACHINE_WRITE_LOCK_BIND_DN
+              value: {{ $w.lock.bindDN | quote }}
+            - name: MACHINE_WRITE_LOCK_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $w.lock.existingSecret | quote }}
+                  key: {{ $w.lock.existingSecretKey | quote }}
+            {{- end }}
+            {{- $subs := list }}
+            {{- range $e := $w.subtrees }}
+            {{- $subs = append $subs (printf "%s=%s" $e.client (join "|" $e.dns)) }}
+            {{- end }}
+            - name: MACHINE_WRITE_SUBTREES
+              value: {{ join ";" $subs | quote }}
+            {{- $grps := list }}
+            {{- range $e := $w.groups }}
+            {{- $grps = append $grps (printf "%s=%s" $e.client (join "|" $e.dns)) }}
+            {{- end }}
+            - name: MACHINE_WRITE_GROUPS
+              value: {{ join ";" $grps | quote }}
+            - name: MACHINE_WRITE_PRIVILEGED_GROUPS
+              value: {{ join ";" $w.privilegedGroups | quote }}
+            - name: MACHINE_WRITE_RATE_LIMIT_RPS
+              value: {{ $w.limits.rps | quote }}
+            - name: MACHINE_WRITE_RATE_LIMIT_BURST
+              value: {{ $w.limits.burst | quote }}
+            - name: MACHINE_WRITE_GLOBAL_SLOTS
+              value: {{ $w.limits.globalSlots | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.ui.sso.enabled }}
             - name: SSO_ENABLED

@@ -251,6 +251,9 @@ jobs:
       - name: Machine auth chart assertions
         run: ./scripts/test/test-chart-machine-auth.sh
 
+      - name: Machine write chart assertions
+        run: ./scripts/test/test-chart-machine-write.sh
+
       # The chart deliberately refuses to render without an admin password
       # (the image refuses to start without one), so every template call must
       # supply a throwaway value. This is a CI fixture, not a credential.

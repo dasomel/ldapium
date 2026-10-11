@@ -175,6 +175,140 @@
               "minimum": 1,
               "maximum": 300
             },
+            "write": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Machine write scope (#285). Unknown keys (for example a credential identity) are refused.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "data": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "bindDN": {
+                      "type": "string",
+                      "pattern": "^[^;|]*$"
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "existingSecretKey": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "lock": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "bindDN": {
+                      "type": "string",
+                      "pattern": "^[^;|]*$"
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "existingSecretKey": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "subtrees": {
+                  "type": "array",
+                  "description": "Per-client write subtree ceilings.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "client",
+                      "dns"
+                    ],
+                    "properties": {
+                      "client": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[^=;,|\\s]+$"
+                      },
+                      "dns": {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": true,
+                        "maxItems": 16,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "^[^;|]+$"
+                        }
+                      }
+                    }
+                  }
+                },
+                "groups": {
+                  "type": "array",
+                  "description": "Per-client writable group DNs.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "client",
+                      "dns"
+                    ],
+                    "properties": {
+                      "client": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[^=;,|\\s]+$"
+                      },
+                      "dns": {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": true,
+                        "maxItems": 16,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "^[^;|]+$"
+                        }
+                      }
+                    }
+                  }
+                },
+                "privilegedGroups": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^;|]+$"
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "rps": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "burst": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "globalSlots": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64
+                    }
+                  }
+                }
+              }
+            },
             "revocation": {
               "type": "object",
               "additionalProperties": false,

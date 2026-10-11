@@ -94,6 +94,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/test/test-chart-idempotency-render.sh
 	@./scripts/test/test-chart-ui-cors.sh
 	@./scripts/test/test-chart-machine-auth.sh
+	@./scripts/test/test-chart-machine-write.sh
 	@cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 licenses: ## Regenerate THIRD-PARTY-LICENSES.md from the dependency tree
