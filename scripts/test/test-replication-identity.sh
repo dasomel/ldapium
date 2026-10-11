@@ -178,23 +178,27 @@ bulk_users() { # node count: u01..uNN in one add
   done | docker exec -i "$1" ldapadd -x -H ldap://localhost -D "$admin" -w "$pw" >/dev/null
 }
 load_start() { # ~3 writes/s to entries the check does not compare (description), as in E11
-  : > "$work/load.run"
+  : > "$work/load.run"; : > "$work/load.ok"
   (
     local i=0
     while [ -e "$work/load.run" ]; do
       i=$((i + 1))
-      docker exec -i "$n1" ldapmodify -x -H ldap://localhost -D "$admin" -w "$pw" >/dev/null 2>&1 <<EOF || true
+      if docker exec -i "$n1" ldapmodify -x -H ldap://localhost -D "$admin" -w "$pw" >/dev/null 2>&1 <<EOF
 dn: uid=u0$((i % 3 + 1)),${base}
 changetype: modify
 replace: description
 description: load-${i}
 EOF
+      then echo ok >> "$work/load.ok"; fi
       sleep 0.2
     done
   ) &
   load_pid=$!
 }
-load_stop() { rm -f "$work/load.run"; [ -z "$load_pid" ] || wait "$load_pid" 2>/dev/null || true; load_pid=""; }
+load_stop() { # a load that never wrote anything must not read as "check passed under load"
+  rm -f "$work/load.run"; [ -z "$load_pid" ] || wait "$load_pid" 2>/dev/null || true; load_pid=""
+  [ "$(wc -l < "$work/load.ok")" -ge 5 ] || bad "load generator completed fewer than 5 writes ($(wc -l < "$work/load.ok"))"
+}
 
 docker network create "$net" >/dev/null
 for x in "${reg_vols[@]}"; do docker volume create "$x" >/dev/null; done
@@ -653,8 +657,9 @@ if want pair; then
   poll has_uid "$pc" carol || bad "admin pair: carol never reached pc"
   wipe_node "$pa"
   boot "$pa" admin -e LDAP_REPLICATION_PASSWORD="$badpw"
-  sleep 20
+  # the loss propagates asynchronously: wait (bounded) until it is observed instead of a fixed sleep
   e8="$(uid_count "$pc")"
+  for _ in $(seq 1 45); do [ "$e8" = "0" ] && break; sleep 2; e8="$(uid_count "$pc")"; done
   echo "observed: users left on the surviving peer after the wipe with a wrong credential: ${e8} of 3"
   check "[E8] contrast: admin mode loses the peer's users when sid 1 is wiped with a wrong credential" "0" "$e8"
   wipe_node "$pa"; wipe_node "$pc"

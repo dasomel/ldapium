@@ -47,7 +47,7 @@ fixture asserts the real command exits successfully. Log:
 Environment: macOS/Colima, Docker 29.8.2, image `ldapium:e2e` built from this branch (OpenLDAP 2.6.15), kind v1.37 with
 the chart for the Kubernetes script. Every check is live against real slapd and the real entrypoint, operator command
 and check script; nothing is mocked. Passwords never reach a log or output (the unified script scans the command output
-and all node logs for the administrator, wrong and both identity credentials: 0 occurrences).
+and the node logs of the final `cluster` scenario for the administrator, wrong and both identity credentials: 0 occurrences).
 
 | Command | Result | Runtime |
 |---|---|---|
