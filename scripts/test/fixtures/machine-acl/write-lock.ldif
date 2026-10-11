@@ -1,0 +1,41 @@
+# Machine WRITE identity W_lock ACL for the MAIN database
+# (docs/changes/machine-write-scope, T-020; operator guide docs/machine-write-account.md).
+#
+# Same single-source rule as write-data.ldif. Tokens:
+#
+#   @WLOCK_DN@    the dedicated lock account (outside the write subtree)
+#   @WRITE_DN@    the write subtree: the union of every client's write cap
+#   @SYSTEM_DN@   the container that holds M, W_data, W_lock: a deny backstop
+#   @MAIN_DB_DN@  the config entry of the main database
+#
+# W_lock may set and clear exactly one attribute, pwdAccountLockedTime, and reads
+# the rest of the write subtree (for assertions). It cannot create or delete
+# entries, and it has no access to userPassword, the other pwd* state or memberOf.
+# Per-client caps and the lock-target checks are the application guard's job.
+#
+# Placement: the same as write-data.ldif, after the data rules of the guide's
+# defined order. Indices start at {0}; the guide shifts them.
+#
+#   {0} anything under @SYSTEM_DN@                       none
+#   {1} secrets, other pwd* state, memberOf              none
+#   {2} pwdAccountLockedTime inside @WRITE_DN@           write
+#   {3} everything else inside @WRITE_DN@                read
+#   {4} everything else                                  none
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
+  by dn.exact="@WLOCK_DN@" none
+  by * break
+olcAccess: {1}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WLOCK_DN@" none
+  by * break
+olcAccess: {2}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
+  by dn.exact="@WLOCK_DN@" write
+  by * break
+olcAccess: {3}to dn.subtree="@WRITE_DN@"
+  by dn.exact="@WLOCK_DN@" read
+  by * break
+olcAccess: {4}to *
+  by dn.exact="@WLOCK_DN@" none
+  by * break
