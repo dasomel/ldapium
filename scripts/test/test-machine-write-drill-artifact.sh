@@ -8,9 +8,12 @@ tag=machinewritedrill
 marker='DRILL BUILD'
 work=$(mktemp -d)
 made_dist=0
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329 # invoked via the EXIT trap below (code differs by shellcheck version)
 cleanup() {
-  [ "$made_dist" = 1 ] && rm -f "$root/ui/backend/web/dist/index.html" && rmdir "$root/ui/backend/web/dist" 2>/dev/null
+  if [ "$made_dist" = 1 ]; then
+    rm -f "$root/ui/backend/web/dist/index.html"
+    rmdir "$root/ui/backend/web/dist" 2>/dev/null || true
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
