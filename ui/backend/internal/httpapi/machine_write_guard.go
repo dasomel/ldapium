@@ -22,6 +22,10 @@ func machineWriteDN(raw string) (*ldap.DN, bool) {
 		return nil, false
 	}
 	for _, rdn := range dn.RDNs {
+		// REQ-020a: a multi-valued RDN is not reproducible here; refuse it.
+		if len(rdn.Attributes) != 1 {
+			return nil, false
+		}
 		seen := map[string]bool{}
 		for _, attr := range rdn.Attributes {
 			typ := strings.ToLower(attr.Type)
@@ -69,16 +73,13 @@ type machineWritePolicy struct {
 	Groups    []string
 }
 
-func (p machineWritePolicy) permitsDN(raw string, parent bool) bool {
+// withinCeiling is the pre-connect ceiling check (B2/D20): the canonical target
+// must be a STRICT descendant of one of the client's subtrees. Only a create
+// parent (parent=true) may equal a subtree root.
+func (p machineWritePolicy) withinCeiling(raw string, parent bool) bool {
 	target, ok := machineWriteDN(raw)
 	if !ok {
 		return false
-	}
-	for _, rawProtected := range p.Protected {
-		protected, valid := machineWriteDN(rawProtected)
-		if !valid || protected.EqualFold(target) || protected.AncestorOfFold(target) {
-			return false
-		}
 	}
 	allowed := false
 	for _, rawBase := range p.Subtrees {
@@ -97,18 +98,45 @@ func (p machineWritePolicy) permitsDN(raw string, parent bool) bool {
 	return allowed
 }
 
-func (p machineWritePolicy) permitsMembership(group, member string) bool {
-	if !p.permitsDN(group, false) || !p.permitsDN(member, false) {
+// isProtected is the denylist check (D19): the DN equals or sits under a
+// protected identity. A DN or a protected entry that is not canonical counts as
+// protected (fail closed).
+func (p machineWritePolicy) isProtected(raw string) bool {
+	target, ok := machineWriteDN(raw)
+	if !ok {
+		return true
+	}
+	for _, rawProtected := range p.Protected {
+		protected, valid := machineWriteDN(rawProtected)
+		if !valid || protected.EqualFold(target) || protected.AncestorOfFold(target) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupListed reports whether the group DN is on this client's writable-group
+// allowlist (D22); an empty list allows nothing.
+func (p machineWritePolicy) groupListed(raw string) bool {
+	target, ok := machineWriteDN(raw)
+	if !ok {
 		return false
 	}
-	target, _ := machineWriteDN(group)
 	allowed := false
-	for _, raw := range p.Groups {
-		dn, valid := machineWriteDN(raw)
+	for _, rawGroup := range p.Groups {
+		dn, valid := machineWriteDN(rawGroup)
 		if !valid {
 			return false
 		}
 		allowed = allowed || dn.EqualFold(target)
 	}
 	return allowed
+}
+
+func (p machineWritePolicy) permitsDN(raw string, parent bool) bool {
+	return !p.isProtected(raw) && p.withinCeiling(raw, parent)
+}
+
+func (p machineWritePolicy) permitsMembership(group, member string) bool {
+	return p.permitsDN(group, false) && p.permitsDN(member, false) && p.groupListed(group)
 }

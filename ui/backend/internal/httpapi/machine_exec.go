@@ -66,6 +66,13 @@ func newMachineExecutor(m config.MachineConfig, d ldapclient.Dialer) *machineExe
 }
 
 func (x *machineExecutor) run(c echo.Context, p *machineauth.Principal, op machineOp, next echo.HandlerFunc) error {
+	return x.runAs(c, p, x.bindDN, x.bindPassword, next)
+}
+
+// runAs is run with the identity chosen by the caller: the read path passes M,
+// the write pipeline (machine_write_pipeline.go, step 8) passes the compartment's
+// W identity. The caller never passes anything it took from the request.
+func (x *machineExecutor) runAs(c echo.Context, p *machineauth.Principal, bindDN, bindPassword string, next echo.HandlerFunc) error {
 	st := auditStateOf(c)
 
 	select {
@@ -86,7 +93,7 @@ func (x *machineExecutor) run(c echo.Context, p *machineauth.Principal, op machi
 	// into a 200 with missing fields (D23).
 	ctx = ldapclient.WithStrictSecondaryReads(ctx)
 
-	bound, err := x.dialer.Bind(ctx, x.bindDN, x.bindPassword)
+	bound, err := x.dialer.Bind(ctx, bindDN, bindPassword)
 	if err != nil {
 		// The error text may name a host; it goes to the log (and only there).
 		log.Printf("machine LDAP bind failed [%s] client=%s: %s", logQuote(requestIDOf(c)), logQuote(p.ClientID), logDetail(err))
@@ -102,11 +109,11 @@ func (x *machineExecutor) run(c echo.Context, p *machineauth.Principal, op machi
 			panic(r)
 		}
 	}()
-	st.setBindDN(x.bindDN)
+	st.setBindDN(bindDN)
 
 	// A temporary, unregistered Session so the existing handlers run unchanged.
 	// Its ID stays empty on purpose: it must never become a cursor binding (D16).
-	c.Set(sessionContextKey, &session.Session{DN: x.bindDN, Bound: bound})
+	c.Set(sessionContextKey, &session.Session{DN: bindDN, Bound: bound})
 	c.SetRequest(c.Request().WithContext(ctx))
 	return next(c)
 }

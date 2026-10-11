@@ -39,6 +39,12 @@ type machineDeps struct {
 	// revocationRead replaces the LDAP snapshot reader, so tests drive the real
 	// constructor path (policy, base DN, refresher goroutine) without a directory.
 	revocationRead revocationRead
+	// writeOps is the TEST-ONLY write-operation table (machine-write-scope
+	// T-012..T-019). Production leaves it nil and the pipeline then opens
+	// machineWriteOps, which is empty: every machine write stays 403.
+	writeOps []machineOp
+	// writeIdentity replaces the M pre-read of the write pipeline (tests only).
+	writeIdentity writeIdentityChecker
 }
 
 type serverOption func(*Server)
@@ -81,6 +87,10 @@ type machineAuth struct {
 
 	// guardHook is nil in production; tests set it to panic inside the guard stage.
 	guardHook func()
+
+	// write is the machine write pipeline; nil unless MACHINE_WRITE_ENABLED built
+	// the runtime. With an empty operation table it never matches a request.
+	write *machineWritePipeline
 }
 
 // newMachineAuth builds the verifier and starts the JWKS source. A discovery
@@ -360,6 +370,21 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine authentication unavailable")
 		}
 	}
+	// HEAD is rewritten to GET before routing; the machine path judges the
+	// method the client sent, so HEAD is refused like any non-GET (D17).
+	method := c.Request().Method
+	if orig, _ := c.Get(origMethodKey).(string); orig != "" {
+		method = orig
+	}
+	// A registered machine write takes the write pipeline (machine-write-scope
+	// D1): its own budget, so the read budget below is neither spent nor needed.
+	// Everything else, including every write while the table is empty, continues
+	// on the v1 path unchanged.
+	if m.write != nil {
+		if wop, ok := m.write.lookup(method, c.Path()); ok {
+			return m.write.serve(c, p, wop, next)
+		}
+	}
 	// Step (5): only now, with a verified client, is its budget touched.
 	releaseClient, retry, ok := m.budget.acquire(p.ClientID)
 	if !ok {
@@ -367,12 +392,6 @@ func (m *machineAuth) serve(c echo.Context, token string, next echo.HandlerFunc)
 		return rateLimited(c, retry, "client request budget exhausted")
 	}
 	defer releaseClient()
-	// HEAD is rewritten to GET before routing; the machine path judges the
-	// method the client sent, so HEAD is refused like any non-GET (D17).
-	method := c.Request().Method
-	if orig, _ := c.Get(origMethodKey).(string); orig != "" {
-		method = orig
-	}
 	if m.guardHook != nil {
 		m.guardHook() // tests only: a bug inside the guards, with every hold taken
 	}

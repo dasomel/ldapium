@@ -102,6 +102,12 @@ func (s *Server) idempotentPasswordRoute(next echo.HandlerFunc) echo.HandlerFunc
 
 func (s *Server) idempotent(next echo.HandlerFunc, password bool) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// A machine write opened its idempotency record itself, after the
+		// authorization steps and before the bind (machine_write_pipeline.go,
+		// step 7); the route-level wrapper must not begin a second record.
+		if done, _ := c.Get(machineIdempotencyDoneKey).(bool); done {
+			return next(c)
+		}
 		req := c.Request()
 		values := req.Header.Values(headerIdempotencyKey)
 		if len(values) == 0 {
@@ -138,8 +144,11 @@ func (s *Server) idempotent(next echo.HandlerFunc, password bool) echo.HandlerFu
 		}
 
 		query := req.URL.Query().Encode() // sorted by key
-		sess := currentSession(c)
-		subject, err := machineIdempotencySubject(c, s.cfg.Machine.IssuerURL, sess.DN)
+		humanDN := ""
+		if !isMachineRequest(c) {
+			humanDN = currentSession(c).DN
+		}
+		subject, err := machineIdempotencySubject(c, s.cfg.Machine.IssuerURL, humanDN)
 		if err != nil {
 			return err
 		}

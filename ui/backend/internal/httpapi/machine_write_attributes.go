@@ -23,7 +23,7 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 		allowed = []string{"uid", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit"}
 	case "patchUser":
 		allowed = []string{"dn", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit"}
-	case "addGroupMember", "removeGroupMember":
+	case "addGroupMember":
 		allowed = []string{"groupDn", "memberDn"}
 	default:
 		return false

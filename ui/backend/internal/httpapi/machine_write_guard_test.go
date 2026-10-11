@@ -10,7 +10,7 @@ func TestMachineStrictWriteBoundary(t *testing.T) {
 	}{
 		{base, false}, {"OU=People, DC=example, DC=com", false},
 		{"uid=user," + base, true}, {"uid=User, OU=people,dc=example,dc=com", true},
-		{"uid=us\\65r," + base, true}, {"uid=user+cn=User," + base, true},
+		{"uid=us\\65r," + base, true}, {"uid=user+cn=User," + base, false},
 		{"uid=user,ou=other,dc=example,dc=com", false}, {"uid=user", false},
 		{"uid=user,ou=people,dc=other,dc=com", false},
 		{"userid=user," + base, false}, {"0.9.2342.19200300.100.1.1=user," + base, false},
