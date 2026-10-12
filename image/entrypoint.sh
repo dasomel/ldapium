@@ -1519,7 +1519,7 @@ else
   if [ -f "$dbdir_cf" ]; then
     dbdir_path=$(sed -n 's/^olcDbDirectory: //p' "$dbdir_cf" | head -n 1)
     if [ -n "$dbdir_path" ] && [ ! -d "$dbdir_path" ]; then
-      die "the configuration volume (${CONFIG_DIR}) is kept but the database directory ${dbdir_path} is missing, so the data volume was lost or replaced; refusing to start and nothing was created. Recovery: delete BOTH the data and the config volume (Kubernetes: both PVCs/claims) and start the node empty; it refills from its peers"
+      die "the configuration volume (${CONFIG_DIR}) is kept but the database directory ${dbdir_path} is missing, so the data volume was lost or replaced; refusing to start and nothing was created. Recovery: delete BOTH the data and the config volume (Kubernetes: both PVCs/claims) and start the node empty; in a replicated cluster it refills from its peers (a standalone node must be restored from backup)"
     fi
   fi
 fi
