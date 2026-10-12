@@ -14,6 +14,7 @@ writer = 'cn=writer,' + base
 user = 'uid=baseline,' + base
 group = 'cn=baseline-group,' + base
 other = 'uid=refint-consumer,' + base
+seed = 'uid=group-seed,' + base
 password = secrets.token_hex(24)
 
 
@@ -60,6 +61,12 @@ dn: {group}
 objectClass: groupOfNames
 cn: baseline-group
 member: {writer}
+
+dn: {seed}
+objectClass: inetOrgPerson
+uid: group-seed
+cn: group-seed
+sn: seed
 ''')
     ldap('ldapmodify', dn='cn=admin,cn=config',
       uri='ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi', data=f'''dn: olcDatabase={{1}}mdb,cn=config
@@ -70,9 +77,9 @@ olcAccess: {{1}}to * by dn.exact="{writer}" write by * read
 ''')
     binary = os.environ.get('LDAPIUM_WRITE_TYPE_TEST_BINARY', '/tmp/ldapium-write-type-test')
     run(['docker', 'cp', binary, name + ':/tmp/.write-type-test'])
-    result = run(['docker', 'exec', '-e', 'LDAPIUM_WRITE_TYPE_LIVE=1', name,
-      '/tmp/.write-type-test', '-test.run', '^TestMachineWriteTypeAssertionLive$', '-test.v'])
-    print(result.stdout)
+    test_run = run(['docker', 'exec', '-e', 'LDAPIUM_WRITE_TYPE_LIVE=1', name,
+      '/tmp/.write-type-test', '-test.run', '^(TestMachineWriteTypeAssertionLive|TestMachineGroupSeedLive)$', '-test.v'])
+    print(test_run.stdout)
     for dn in (user, group):
       ldap('ldapsearch', ['-LLL', '-b', dn, '-s', 'base', 'dn'])
     result = ldap('ldapsearch', ['-LLL', '-b', user, '-s', 'base', 'mail'])
@@ -80,6 +87,9 @@ olcAccess: {{1}}to * by dn.exact="{writer}" write by * read
     assert 'forbidden@example.org' not in result.stdout
     result = ldap('ldapsearch', ['-LLL', '-b', group, '-s', 'base', 'member'])
     assert 'member: ' + user in result.stdout
+    assert 'PASS machine createGroup' in test_run.stdout + test_run.stderr
+    result = ldap('ldapsearch', ['-LLL', '-b', 'cn=seeded-group,' + base, '-s', 'base', 'member'])
+    assert 'member: ' + seed in result.stdout and writer not in result.stdout
     logs = run(['docker', 'logs', name])
     assert password not in logs.stdout + logs.stderr
     print('PASS both wrong-type targets survive, correct attributes change and credential logs are clean')

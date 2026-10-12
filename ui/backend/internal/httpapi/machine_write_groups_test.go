@@ -302,3 +302,27 @@ func TestGroupPipeline_ScopeAndProductionTable(t *testing.T) {
 		}
 	}
 }
+
+// D379-5 follow-up: the W_data ACL now lets description through on user entries
+// too, so the closed user bodies are the only guard. A description on createUser
+// or patchUser is a 400 with no bind and no write (also at the body-gate level).
+func TestGroupPipeline_UserBodiesRefuseDescription(t *testing.T) {
+	for _, op := range []string{"createUser", "patchUser"} {
+		for _, body := range []string{`{"description":"x"}`, `{"description":null}`} {
+			if machineWriteBodyAllowed(op, []byte(body)) {
+				t.Errorf("%s admitted %s", op, body)
+			}
+		}
+	}
+	w := groupsHarness(t, nil)
+	for _, r := range []wreqSpec{
+		{method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"Bob","sn":"B","description":"x"}`, headers: hdr(key())},
+		{method: "PATCH", path: "/api/users", body: `{"dn":"` + wBob + `","mail":"a@example.org","description":"x"}`, headers: okHeaders()},
+		{method: "PATCH", path: "/api/users", body: `{"dn":"` + wBob + `","description":null}`, headers: okHeaders()},
+	} {
+		wantCode(t, w.send(r), 400, codeInvalidRequest)
+	}
+	if w.dir.binds() != 0 || len(w.dir.callList()) != 0 || len(w.ident.callList()) != 0 {
+		t.Fatalf("a description on a user body reached the directory: binds=%d calls=%v", w.dir.binds(), w.dir.callList())
+	}
+}
