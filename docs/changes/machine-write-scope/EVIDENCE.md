@@ -213,3 +213,118 @@ Failures during development, kept: run 1 used a `uid=` RDN for a `groupOfNames` 
 Rotation/lockout on in-flight and next requests (item 2 of T-004) is not repeated: `EVIDENCE-drill.md` measured it (next write 503 on every replica, in-flight write completes, `MACHINE_REQUEST_TIMEOUT` bound, D24 lockout and the no-lockout policy).
 
 Not verified here: a userPassword value-prefix oracle (no substring rule to probe); multi-node replication behaviour of W writes (accesslog per node); the Password Modify refusal as an ACL-only proof; a Kubernetes restart (a pod restart is the same empty memory store, but not run).
+
+## #386 objectClass value ADD: ACL/overlay candidates (2026-10-12)
+
+Question (#386, D18): can any ACL or overlay form refuse a W_data **Modify objectClass value ADD** (e.g. `extensibleObject`) while the
+**Add-time** objectClass still works? Evidence only: no decision, fragment (`write-data.ldif`) or ACL changed by this section.
+
+Setup: real slapd 2.6.15 (`docker build -t ldapium:e2e -f image/Dockerfile ./image`; `slapd -VV` -> `@(#) $OpenLDAP: slapd 2.6.15`), the
+same harness as T-004 (`machine_live.Slapd`: accesslog on, seed, the three M rules, then the package `write-data.ldif` W_data fragment shifted by 3).
+For each candidate only the objectClass slot (`{7}`, the fragment's `{4}`) was replaced through `cn=config`
+(`delete: olcAccess` by index, `add: olcAccess: {7}<rule>`; every set rc 0); the other seven W_data rules stayed as shipped. A scratch probe
+(not committed) then ran, as W_data unless noted, with `ldapadd`/`ldapmodify -x -D <W_data> -y <pwfile>` inside the container:
+
+- P1 Add user with the app's exact set `objectClass: top, person, organizationalPerson, inetOrgPerson` (`ldapclient/users.go:107`)
+- P2 Add group `top, groupOfNames` + `member` (`ldapclient/groups.go:84`)
+- P3 Modify `add: objectClass` / `objectClass: extensibleObject`; P4 the same with `shadowAccount` (auxiliary, nis, MUST uid only)
+- P5 Modify add `groupOfNames` (+`member`) on a user; P6 Add user carrying `inetOrgPerson` + `extensibleObject`
+- P7 Modify REPLACE objectClass; P8 Modify DELETE value `top`; P9 Modify `mail` (sanity); P10 **admin** Modify add `extensibleObject` on `uid=u02`
+- P11 Add user carrying `description` (no W_data write rule); P12 Add user carrying `userPassword` (W_data rule `{2}`: `none`)
+
+Rules tried in the slot (`W` = `dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org"`, `B` = `dc=example,dc=org`):
+
+| ID | Rule(s) in the objectClass slot | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 admin |
+|---|---|---|---|---|---|---|---|---|---|---|
+| C0 | shipped: `to dn.subtree=B attrs=objectClass by W add by * break` | 0 | 0 | **0** | **0** | 65 | 0 | 50 | 50 | 0 |
+| C1 | same with `by W =a` | 0 | 0 | **0** | **0** | 65 | 0 | 50 | 50 | 0 |
+| C1b | same with `by W =wa` | 0 | 0 | 0 | 0 | 65 | 0 | **0** | **0** | 0 |
+| C2 | value allowlist, one rule per value: `attrs=objectClass val=<v> by W add`, v in top, person, organizationalPerson, inetOrgPerson, groupOfNames | 0 | 0 | **0** | **0** | 65 | 0 | 50 | 50 | 0 |
+| C2b | C2 without the `val=top` rule | 0 | 0 | 50 | 50 | 65 | 0 | 50 | 50 | 0 |
+| C3 | `attrs=objectClass val.regex="^(top\|person\|organizationalPerson\|inetOrgPerson\|groupOfNames)$" by W add` | 0 | 0 | 50 | 50 | 65 | 0 | 50 | 50 | 0 |
+| C3b | C3 with an all-lower-case pattern | 0 | 0 | 50 | 50 | 65 | 0 | 50 | 50 | 0 |
+| C4 | blocklist `attrs=objectClass val=extensibleObject by W none`, then C0 | 0 | 0 | 50 | **0** | 65 | 0 | 50 | 50 | 0 |
+| C6 | **no add at all**: `attrs=objectClass by W read` | 0 | 0 | 50 | 50 | 50 | 0 | 50 | 50 | 0 |
+| C5 | C0 + constraint overlay `olcConstraintAttribute: objectClass regex "^(top\|person\|organizationalPerson\|inetOrgPerson\|groupOfNames\|organizationalUnit\|dcObject\|organization)$"` on `olcOverlay={5}constraint` | 0 | 0 | 19 | 19 | 65 | **19** | 50 | 50 | **19** |
+
+P9 was rc 0 in every row; P11 and P12 were **rc 0 in every row** (C5 included). Real output lines (excerpts, unedited):
+
+```text
+== C0 baseline: attrs=objectClass by W add (the shipped fragment rule {4})
+  P3 W Modify ADD objectClass extensibleObject: rc 0
+  P5 W Modify ADD objectClass groupOfNames (allowlisted value) on a user: rc 65 ... Object class violation (65) | additional info: invalid structural object cla
+  P12 W Add user carrying userPassword (rule {5}: none): rc 0
+  objectClass of uid=p386,ou=people,dc=example,dc=org afterwards (admin): ['objectClass: top', 'objectClass: person', 'objectClass: organizationalPerson', 'objectClass: inetOrgPerson', 'objectClass: extensibleObject', 'objectClass: shadowAccount']
+== C1b explicit privilege =wa (write+add bits, no delete)
+  P8 W Modify DELETE objectClass value: rc 0
+== C2 value allowlist: one attrs=objectClass val=<v> rule per Add-time value, nothing else
+  P3 W Modify ADD objectClass extensibleObject: rc 0
+== C2b value allowlist WITHOUT val=top
+  P1 W Add user (top,person,organizationalPerson,inetOrgPerson): rc 0
+  P3 W Modify ADD objectClass extensibleObject: rc 50 ... ldap_modify: Insufficient access (50)
+== C6 no add on objectClass at all (read only)
+  P1 W Add user (top,person,organizationalPerson,inetOrgPerson): rc 0
+  P2 W Add group (top,groupOfNames): rc 0
+  P3 W Modify ADD objectClass extensibleObject: rc 50 ... ldap_modify: Insufficient access (50)
+  P6 W Add user carrying extensibleObject: rc 0
+== C5 constraint overlay: objectClass regex allowlist (global, every identity)
+  P3 W Modify ADD objectClass extensibleObject: rc 19 ... Constraint violation (19) | additional info: modify breaks constraint on obj
+  P6 W Add user carrying extensibleObject: rc 19 ... ldap_add: Constraint violation (19) | additional info: add breaks constraint on objectC
+  P10 admin Modify ADD objectClass extensibleObject on u02: rc 19 ... modify breaks constraint on obje
+  P12 W Add user carrying userPassword (rule {5}: none): rc 0
+```
+
+(The probe's P12 label says `{5}`; the secret rule is the fragment's `{2}`, slot `{5}` after the shift. The first run had a malformed P5 LDIF,
+client rc 247 `wrong attributeType`; fixed with `-` / `add: member` and rerun, the table is the rerun.)
+
+Follow-up on P12 (same setup, C0):
+
+```text
+W_data Add with userPassword+description: rc 0 adding new entry "uid=p386p,ou=people,dc=example,dc=org"
+admin reads back: ['userPassword:: e0FSR09OMn0k...', 'description: smuggled', 'creatorsName: uid=machine-write-data,ou=system,dc=example,dc=org']
+bind as the new entry with the smuggled password: rc 0 dn:uid=p386p,ou=people,dc=example,dc=org
+W_data Modify REPLACE userPassword on it: rc 50 ... Insufficient access (50)
+```
+
+What this shows (2.6.15, this layout):
+
+1. **slapd's Add does not evaluate per-attribute ACL rules for W_data**: P1/P2 succeed even with no `add` on objectClass (C6), and P6/P11/P12 succeed
+   whatever the objectClass/description/`userPassword` rules say; only `entry`/`children` (`{3}`) gate the Add. D18's premise "Add checks each
+   attribute value, so objectClass needs `add`" (marked *unverified* in D18) does **not** hold here: the `add` level on objectClass is not needed for Add.
+   **New, broader finding:** W_data can create an entry with a bindable `userPassword` of its choosing (and any non-list attribute) by a direct Add;
+   AC-008's "`W_data` ACL `none` on `userPassword`" holds for Modify only. The `createUser` closed body (D15/D8b) is the only barrier on Add. Not in
+   #386's scope to decide; reported to the maintainer.
+2. `add` and `=a` are equivalent (C0 = C1) and grant the value add; `=wa` additionally grants REPLACE/DELETE (C1b): no privilege letter splits
+   "Add-time" from "Modify value add".
+3. `val=top` matches **every** objectClass value (C2 vs C2b): objectClass equality is subclass-aware (`objectSubClassMatch`, inferred from the
+   behaviour, not from source), so a per-value allowlist must not list `top`. C2b works for Modify and still allows the Add (point 1).
+4. Rules that refuse the Modify value add while the app's Add keeps working: **C6** (drop the `add`: simplest), C2b, C3/C3b (val.regex, case-insensitive
+   in both spellings). A blocklist (C4) only stops the listed value (P4 `shadowAccount` still lands). None of them covers Add-time objectClass (P6).
+5. The constraint overlay (C5) is the only candidate that also refuses an Add-time extra class (P6 19), but it is **global**: the admin (P10 19) and
+   every other identity is bound by the list, so every objectClass any operator or seed uses must be enumerated; it does not stop P12.
+6. A separate W identity for create (`dn.exact=W_create` with only `entry`/`children` add, W_data without `add` on `children`) was **not** tried:
+   it is a D3/D4 identity-model change (new Secret, ACL fragment, compartment) and out of #386's scope. Point 1 means it would not stop Add-time
+   attributes either.
+
+App guard end to end (the regression check, `scripts/test/test-machine-write-t004-live.py`, images `ldapium:e2e` / `ldapium-ui:e2e` built from this branch):
+
+```text
+$ LDAPIUM_IMAGE=ldapium:e2e LDAPIUM_UI_IMAGE=ldapium-ui:e2e python3 scripts/test/test-machine-write-t004-live.py
+OBS 5 W_data Add user (objectClass inetOrgPerson): rc 0; Modify REPLACE objectClass: rc 50; Modify DELETE objectClass value: rc 50; Modify ADD objectClass extensibleObject: rc 0
+PASS: [5] KNOWN LIMIT (#386): Modify ADD of an objectClass VALUE is allowed by `add` (extensibleObject); ...
+OBS 5d W_data Add of a user carrying userPassword (rule {2} gives W_data none on it): rc 0; stored: True
+PASS: [5] KNOWN LIMIT (#386): an Add is not checked per attribute, so W_data creates an entry WITH a userPassword; the createUser closed body (D15) is the only barrier
+OBS 6i patchUser through the UI carrying objectClass ['dn', 'objectClass']: 400 {"error":"request body is not a permitted machine write body",...
+OBS 6i patchUser through the UI carrying objectClass ['dn', 'mail', 'objectClass']: 400 {"error":"request body is not a permitted machine write body",...
+PASS: [6] #386: a patchUser carrying objectClass is refused by the app guard ([400, 400]), objectClass unchanged, no modify reached slapd (1 -> 1 accesslog rows)
+All T-004 measurement checks passed: 33 checks in 25s.
+```
+
+Unit/pipeline: `TestWritePipeline_Step4_ObjectClassValueAddNeverReachesTheDirectory` (`httpapi/machine_write_order_test.go`) sends seven
+objectClass shapes (array value add, beside `mail`, lower-case key, `a`-escaped key, `null`, create with an extra class, member add) and
+requires 400/403, no M pre-read, no bind, no directory call, no idempotency record; a positive control (same patch without objectClass) reaches
+`PatchUser`. Mutation (scratch, reverted): adding `objectClass` to the `patchUser` allowed list in `machine_write_attributes.go` fails three
+subtests (`binds=1 calls=[] ident=[uid=bob,...|inetOrgPerson], want none`).
+
+Negative control "guard disabled -> value lands" through the UI: **not run** (it needs a modified UI build). The guard-bypassed equivalent is
+the direct W_data `ldapmodify` above (C0 P3 rc 0, value present afterwards).

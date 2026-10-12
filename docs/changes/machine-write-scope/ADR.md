@@ -24,6 +24,18 @@ v1 머신 주체는 읽기 전용이다. 자동화가 사용자·그룹을 쓰�
 | D22 | 그룹 멤버십은 client별 허용 목록, 그룹 생성·수정·삭제는 첫 출하 제외, seed 멤버 결정 전에는 `createGroup` 불가. | `memberOf` 기반 권한 부여 | 허용 목록 확장·T-026 |
 | D26 | 보호 DN·상한 판정은 문자열 비교가 아니라 형식 fail closed + slapd 관점 `entryDN`/`entryUUID` 정체성 대조(go-ldap `dn.go:483` 한계). | 쓰기 보호의 핵심 불변식 | — |
 
+## Proposal (#386) — 결정 아님, 유지보수자 결정 대기
+
+D18의 "수정으로는 objectClass를 쓸 수 없다"는 현재 fragment(`{4}` `add`)에서 ACL만으로 성립하지 않는다(Modify 값 ADD 통과). 실측과 후보 전체: [EVIDENCE.md](EVIDENCE.md) "#386 objectClass value ADD". 상태(`Proposed`)와 D18 결정 문구는 바꾸지 않는다.
+
+| 선택지 | 내용 | 비용 | 탈출구 |
+|---|---|---|---|
+| A | 수정 경로 objectClass 방어를 앱 닫힌 본문 가드 1겹으로 명시 수용(D17과 같은 성격의 한계로 기록) | 없음(회귀 시험 이미 있음) | B로 이행 |
+| **B (권장)** | `write-data.ldif` `{4}`의 objectClass `add`를 `read`로(또는 규칙 삭제). 실측: Modify 값 ADD 50, 사용자·그룹 Add 유지(slapd Add는 속성별 ACL을 평가하지 않음) | fragment 한 줄, 가이드, `test-machine-write-acl-live.py`·T-004 KNOWN-LIMIT 단언 의도적 반전, 운영 중 ACL 재적용 | `add` 규칙 복원 |
+| C | constraint overlay objectClass 허용 목록 | 전역(관리자 포함), 모든 사용 클래스 열거 필요 | overlay 속성 제거 |
+
+어느 선택지도 **Add 시점**(추가 클래스, 목록 밖 속성, `userPassword`)은 막지 못한다: slapd Add는 `entry`/`children`만 검사한다(실측, W_data가 비밀번호가 있는 bind 가능한 항목을 직접 생성). 생성 경로는 `createUser` 닫힌 본문(D15/D8b) 1겹이며, 이 잔여 위험(AC-008 문구 포함)의 수용은 별도 결정이다.
+
 ## Consequences
 
 - 쓰기 켠 운영자는 단일 replica, 멱등 활성, `W_*` 계정·ACL, client 상한·그룹 허용 목록을 모두 설정해야 하며 하나라도 없으면 기동 실패한다.

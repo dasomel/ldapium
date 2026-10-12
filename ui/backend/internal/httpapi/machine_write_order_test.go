@@ -311,6 +311,42 @@ func TestWritePipeline_Step4_ClosedBodiesAndParameters(t *testing.T) {
 	}
 }
 
+// #386 (D18): slapd lets W_data ADD an objectClass value on Modify (measured,
+// EVIDENCE.md "#386 objectClass value ADD"), so this closed-body guard is the
+// only barrier on that path. Every shape that could carry an objectClass value
+// is refused before the M pre-read, the W bind or any directory call, and the
+// key stays unburned; the same patch without objectClass reaches PatchUser.
+func TestWritePipeline_Step4_ObjectClassValueAddNeverReachesTheDirectory(t *testing.T) {
+	bob := jsonStr(wBob)
+	for name, r := range map[string]wreqSpec{
+		"patch value add (array)":         {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":["extensibleObject"]}`},
+		"patch value add beside mail":     {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"mail":"a@example.org","objectClass":"extensibleObject"}`},
+		"patch lower-case key":            {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectclass":"extensibleObject"}`},
+		"patch escaped key":               {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":"extensibleObject"}`},
+		"patch null objectClass":          {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":null}`},
+		"create with an extra class":      {method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"B","sn":"B","objectClass":["inetOrgPerson","extensibleObject"]}`},
+		"member add carrying objectClass": {method: "POST", path: "/api/groups/members", body: `{"groupDn":` + jsonStr(wTeam) + `,"memberDn":` + bob + `,"objectClass":"extensibleObject"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := writeHarness(t, nil, catalogOps())
+			r.headers = okHeaders()
+			if rec := w.send(r); rec.Code != 400 && rec.Code != 403 {
+				t.Fatalf("%d %s, want a refusal", rec.Code, rec.Body)
+			}
+			w.untouched(t)
+			if w.s.idem.Len() != 0 {
+				t.Error("idempotency state created by a refused objectClass body")
+			}
+		})
+	}
+	// Positive control: the harness does reach the directory for the same patch
+	// without objectClass, so the refusals above are the guard, not the fixture.
+	w := writeHarness(t, nil, catalogOps())
+	if rec := w.patch(wBob, okHeaders()); rec.Code != 204 || len(w.dir.callList()) != 1 {
+		t.Fatalf("control patch: %d %s calls=%v", rec.Code, rec.Body, w.dir.callList())
+	}
+}
+
 // ---- step 5: denylist and group allowlist -----------------------------------
 
 func TestWritePipeline_Step5_ProtectedDNsEvenInsideTheCeiling(t *testing.T) {

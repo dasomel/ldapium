@@ -204,7 +204,15 @@ def main():
   live.check(r_add.returncode == 0, '[5] objectClass `add` access is enough for W_data to create a user (the Add carries objectClass)')
   live.check(r_rep.returncode == 50 and r_vdel.returncode == 50, '[5] Modify REPLACE / DELETE of objectClass is refused (50)')
   live.check(r_vadd.returncode == 0,
-             '[5] KNOWN LIMIT: Modify ADD of an objectClass VALUE is allowed by `add` (extensibleObject); only the application closed-attribute guard stops it (D18 contradicted for value-add)')
+             '[5] KNOWN LIMIT (#386): Modify ADD of an objectClass VALUE is allowed by `add` (extensibleObject); only the application closed-attribute guard stops it (D18 contradicted for value-add). '
+             'An ACL fix (EVIDENCE.md "#386") must flip this check deliberately; section 6 asserts the app guard end to end')
+  # #386: slapd's Add evaluates `entry`/`children` only, not per-attribute rules: a secret on the Add lands
+  r_pwadd = w('ldapadd', [], f'dn: uid=t5p,{PEOPLE}\nobjectClass: inetOrgPerson\nuid: t5p\ncn: t5p\nsn: t5p\nuserPassword: {live.secret("AddPw-" + secrets.token_urlsafe(12))}\n')
+  pw_landed = any(l.lower().startswith('userpassword') for l in attrs('uid=t5p,' + PEOPLE, 'userPassword'))
+  obs(f'5d W_data Add of a user carrying userPassword (rule {{2}} gives W_data none on it): rc {r_pwadd.returncode}; stored: {pw_landed}')
+  live.check(r_pwadd.returncode == 0 and pw_landed,
+             '[5] KNOWN LIMIT (#386): an Add is not checked per attribute, so W_data creates an entry WITH a userPassword; the createUser closed body (D15) is the only barrier')
+  adm('ldapdelete', ['uid=t5p,' + PEOPLE])
   r_ocadd = w('ldapadd', [], f'dn: cn=t5b,{PEOPLE}\nobjectClass: groupOfNames\ncn: t5b\nmember: {ADMIN_DN}\n')
   obs(f'5b W_data Add of a groupOfNames with member={ADMIN_DN} under the user subtree: rc {r_ocadd.returncode}')
   # the RFC 3062 Password Modify extended operation as W_data (T-004 item 5)
@@ -279,6 +287,17 @@ def main():
   ensure(st == 201, f'createUser {st} {text[:160]}')
   st, _, text = call(api, tok, 'PATCH', '/api/users', {'dn': u6, 'mail': 't6b@example.org'}, 'k-' + uuid.uuid4().hex, etag_of(api, tok, u6))
   ensure(st in (200, 204), f'patchUser {st} {text[:160]}')
+  # #386: the same objectClass value ADD that slapd lets W_data make (section 5) is stopped by the app guard
+  oc_before = attrs(u6, 'objectClass')
+  mods_before = len([l for l in accesslog(f'(&(reqDN={u6})(reqType=modify))', ['reqResult']) if l.startswith('reqResult:')])
+  refused = []
+  for shape in ({'dn': u6, 'objectClass': ['extensibleObject']}, {'dn': u6, 'mail': 't6c@example.org', 'objectClass': 'extensibleObject'}):
+    st, _, text = call(api, tok, 'PATCH', '/api/users', shape, 'k-' + uuid.uuid4().hex, etag_of(api, tok, u6))
+    refused.append(st)
+    obs(f'6i patchUser through the UI carrying objectClass {sorted(shape)}: {st} {text[:140]}')
+  mods_after = len([l for l in accesslog(f'(&(reqDN={u6})(reqType=modify))', ['reqResult']) if l.startswith('reqResult:')])
+  live.check(all(s in (400, 403) for s in refused) and attrs(u6, 'objectClass') == oc_before and mods_after == mods_before,
+             f'[6] #386: a patchUser carrying objectClass is refused by the app guard ({refused}), objectClass unchanged, no modify reached slapd ({mods_before} -> {mods_after} accesslog rows)')
   st, _, text = call(api, tok, 'DELETE', f'/api/users?dn={urlquote(u6)}', None, 'k-' + uuid.uuid4().hex, etag_of(api, tok, u6) if exists(u6) else None)
   ensure(st in (200, 204), f'deleteUser {st} {text[:160]}')
   rows = accesslog(f'(&(reqDN={u6})(!(reqType=search)))', ['reqType', 'reqAuthzID', 'reqResult'])
