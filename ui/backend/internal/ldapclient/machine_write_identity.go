@@ -155,6 +155,60 @@ func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass s
 	return nil
 }
 
+// CheckNotPrivileged refuses a target that is a direct member of any
+// MACHINE_WRITE_PRIVILEGED_GROUPS group (D379-8, REQ-007), reading memberOf as M.
+// memberOf is not transitive, so a nested membership is not seen; the W_lock ACL
+// filter is the backstop only where E-07 proved it. Anything unreadable or
+// unparseable fails closed. Cost: one more M connection per lock; escape hatch:
+// disable the lock compartment.
+func (r *WriteIdentityReader) CheckNotPrivileged(ctx context.Context, target string) error {
+	if !r.cfg.Machine.Enabled || !r.cfg.Machine.WriteEnabled {
+		return domain.ErrPermissionDenied
+	}
+	if _, ok := reproducibleWriteDN(target); !ok {
+		return domain.ErrPermissionDenied
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, stop, err := (&dialer{cfg: r.cfg}).newConn(ctx)
+	if err != nil {
+		return errWriteIdentityDirectory
+	}
+	defer conn.Close()
+	defer stop()
+	if err := conn.Bind(r.cfg.Machine.BindDN, r.cfg.Machine.BindPassword); err != nil {
+		return errWriteIdentityDirectory
+	}
+	result, err := conn.Search(ldap.NewSearchRequest(target, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", []string{"memberOf"}, nil))
+	if noSuchObject(err) && ctx.Err() == nil {
+		return domain.ErrNotFound
+	}
+	if err != nil || ctx.Err() != nil || len(result.Entries) != 1 || len(result.Referrals) != 0 {
+		return errWriteIdentityDirectory
+	}
+	return memberOfPrivileged(result.Entries[0].GetAttributeValues("memberOf"), r.cfg.Machine.Write.PrivilegedGroups)
+}
+
+// memberOfPrivileged denies when any memberOf value equals a privileged group
+// (ParseDN, case-insensitive). A value that is not in the plain spelling the
+// write policy accepts (OID types, odd whitespace, BER) cannot be proven
+// harmless, so it is a denial too.
+func memberOfPrivileged(memberOf, privileged []string) error {
+	for _, value := range memberOf {
+		dn, ok := reproducibleWriteDN(value)
+		if !ok {
+			return domain.ErrPermissionDenied
+		}
+		for _, raw := range privileged {
+			p, err := ldap.ParseDN(raw)
+			if err != nil || p.EqualFold(dn) {
+				return domain.ErrPermissionDenied
+			}
+		}
+	}
+	return nil
+}
+
 // noSuchObject reports a genuine LDAP noSuchObject (result 32), nothing else.
 func noSuchObject(err error) bool {
 	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject)

@@ -123,3 +123,44 @@ func TestMachineWriteAuditTargetDNOption(t *testing.T) {
 		t.Fatalf("option read while MACHINE_WRITE_ENABLED is off: %v", err)
 	}
 }
+
+// v2b T-013 (D379-2, REQ-006): a lock ceiling without W_lock is a start-up
+// error. directory.users.lock is not an opened scope yet (T-014), so the test
+// opens it for its own duration; directory.users.unlock is never opened.
+func TestMachineWriteLockCeilingNeedsW_lock(t *testing.T) {
+	saved := MachineWriteOpenScopes
+	MachineWriteOpenScopes = append(append([]string(nil), saved...), "directory.users.lock")
+	t.Cleanup(func() { MachineWriteOpenScopes = saved })
+	lock := map[string]string{"MACHINE_WRITE_LOCK_ENABLED": "true", "MACHINE_WRITE_LOCK_BIND_DN": "cn=locker,ou=system," + wsBase, "MACHINE_WRITE_LOCK_BIND_PASSWORD": "private-lock"}
+	withLock := func(over map[string]string) map[string]string {
+		out := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.lock;machine-b=audit.read"}
+		for k, v := range over {
+			out[k] = v
+		}
+		return out
+	}
+	if _, err := Load(writeScopeEnv(withLock(nil))); err == nil || !strings.Contains(err.Error(), "MACHINE_WRITE_LOCK_ENABLED") {
+		t.Errorf("lock ceiling without W_lock: %v", err)
+	}
+	// Either client's ceiling counts, not only the writer with a subtree.
+	if _, err := Load(writeScopeEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create;machine-b=directory.users.lock"})); err == nil {
+		t.Error("lock ceiling on a client without a write subtree was accepted")
+	}
+	if _, err := Load(writeScopeEnv(withLock(lock))); err != nil {
+		t.Errorf("lock ceiling with W_lock: %v", err)
+	}
+	// No lock scope in any ceiling: W_lock stays optional and off.
+	if _, err := Load(writeScopeEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create;machine-b=audit.read"})); err != nil {
+		t.Errorf("no lock scope: %v", err)
+	}
+	// Unlock stays an unopened vocabulary item with or without W_lock.
+	for _, env := range []map[string]string{nil, lock} {
+		over := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.unlock;machine-b=audit.read"}
+		for k, v := range env {
+			over[k] = v
+		}
+		if _, err := Load(writeScopeEnv(over)); err == nil || !strings.Contains(err.Error(), "no operation uses yet") {
+			t.Errorf("unlock in a ceiling: %v", err)
+		}
+	}
+}

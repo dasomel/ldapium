@@ -44,3 +44,49 @@ func TestWriteIdentityNotFoundMapping(t *testing.T) {
 		t.Fatalf("protected denial = %v", got)
 	}
 }
+
+// D379-8: memberOf values are compared as parsed DNs, not as strings, and a
+// value that does not parse is a denial.
+func TestMemberOfPrivileged(t *testing.T) {
+	const admins = "cn=admins,ou=people,dc=example,dc=org"
+	privileged := []string{admins, "cn=ops,ou=people,dc=example,dc=org"}
+	for name, tc := range map[string]struct {
+		memberOf []string
+		denied   bool
+	}{
+		"no memberOf":         {nil, false},
+		"other group":         {[]string{"cn=team,ou=people,dc=example,dc=org"}, false},
+		"privileged":          {[]string{admins}, true},
+		"second privileged":   {[]string{"cn=team,ou=people,dc=example,dc=org", "cn=ops,ou=people,dc=example,dc=org"}, true},
+		"upper case":          {[]string{"CN=ADMINS,OU=People,DC=example,DC=org"}, true},
+		"OID type":            {[]string{"2.5.4.3=admins,ou=people,dc=example,dc=org"}, true},
+		"other type":          {[]string{"o=elsewhere,dc=example,dc=org"}, true},
+		"escaped":             {[]string{`cn=adm\69ns,ou=people,dc=example,dc=org`}, true},
+		"child of privileged": {[]string{"cn=sub,cn=admins,ou=people,dc=example,dc=org"}, false},
+		"unparseable":         {[]string{"not a dn"}, true},
+	} {
+		err := memberOfPrivileged(tc.memberOf, privileged)
+		if tc.denied != errors.Is(err, domain.ErrPermissionDenied) || (!tc.denied && err != nil) {
+			t.Errorf("%s: %v, denied=%v", name, err, tc.denied)
+		}
+	}
+	if err := memberOfPrivileged([]string{admins}, nil); err != nil {
+		t.Errorf("no privileged groups configured: %v", err)
+	}
+	if err := memberOfPrivileged([]string{admins}, []string{"not a dn"}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("unparseable privileged group: %v", err)
+	}
+}
+
+func TestCheckNotPrivilegedRejectsBeforeDial(t *testing.T) {
+	cfg := config.Config{LDAPURL: "ldap://127.0.0.1:1", BaseDN: "dc=example,dc=org", Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, BindDN: "cn=reader,dc=example,dc=org"}}
+	for _, raw := range []string{"userid=user,dc=example,dc=org", "uid=#040475736572,dc=example,dc=org", "dc=", ""} {
+		if err := NewWriteIdentityReader(cfg, nil).CheckNotPrivileged(context.Background(), raw); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Errorf("%q dialed or passed: %v", raw, err)
+		}
+	}
+	cfg.Machine.WriteEnabled = false
+	if err := NewWriteIdentityReader(cfg, nil).CheckNotPrivileged(context.Background(), "uid=user,dc=example,dc=org"); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("writes off: %v", err)
+	}
+}

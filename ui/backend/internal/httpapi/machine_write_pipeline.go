@@ -56,6 +56,8 @@ const machineIdempotencyDoneKey = "machine_idempotency_done"
 // production); tests inject a fake because the real one dials a server.
 type writeIdentityChecker interface {
 	Check(ctx context.Context, target, requiredClass string) error
+	// CheckNotPrivileged refuses a target that is a member of a privileged group.
+	CheckNotPrivileged(ctx context.Context, target string) error
 }
 
 type machineWritePipeline struct {
@@ -435,20 +437,14 @@ func (r *wreq) execute(c echo.Context) error {
 			continue
 		}
 		if err := r.w.ident.Check(ctx, d.raw, d.class); err != nil {
-			if errors.Is(err, domain.ErrPermissionDenied) || errors.Is(err, domain.ErrInvalidInput) {
-				return r.deny(reasonScope, outcomeDeniedProtected, codeScopeDenied, "target is not permitted for machine writes")
-			}
-			if errors.Is(err, domain.ErrNotFound) {
-				// Only a genuine noSuchObject for the target reaches here; the
-				// scope/protected guards above already ran, so existence outside
-				// the client's subtree is never disclosed.
-				r.st.setReason(reasonRequestRejected)
-				r.setOutcome(outcomeTargetNotFound)
-				return apiErr(http.StatusNotFound, codeNotFound, domain.ErrNotFound.Error())
-			}
-			r.st.setReason(reasonUpstream)
-			r.setOutcome(outcomeRejected)
-			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity check unavailable")
+			return r.identityRefusal(err)
+		}
+	}
+	// D379-8 (REQ-007): a member of a privileged group is never locked by a
+	// machine. This is an M read of the target's memberOf, before the W bind.
+	if r.op.ID == "lockUser" {
+		if err := r.w.ident.CheckNotPrivileged(ctx, r.dns[0].raw); err != nil {
+			return r.identityRefusal(err)
 		}
 	}
 	// runAs derives its own timeout from the request context: handing it ours
@@ -465,6 +461,24 @@ func (r *wreq) execute(c echo.Context) error {
 		c.SetRequest(c.Request().WithContext(ctx))
 		return r.next(c)
 	})
+}
+
+// identityRefusal maps an M pre-read failure to the response of step 8.
+func (r *wreq) identityRefusal(err error) error {
+	if errors.Is(err, domain.ErrPermissionDenied) || errors.Is(err, domain.ErrInvalidInput) {
+		return r.deny(reasonScope, outcomeDeniedProtected, codeScopeDenied, "target is not permitted for machine writes")
+	}
+	if errors.Is(err, domain.ErrNotFound) {
+		// Only a genuine noSuchObject for the target reaches here; the
+		// scope/protected guards above already ran, so existence outside
+		// the client's subtree is never disclosed.
+		r.st.setReason(reasonRequestRejected)
+		r.setOutcome(outcomeTargetNotFound)
+		return apiErr(http.StatusNotFound, codeNotFound, domain.ErrNotFound.Error())
+	}
+	r.st.setReason(reasonUpstream)
+	r.setOutcome(outcomeRejected)
+	return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity check unavailable")
 }
 
 // classify names the audit outcome of a request that got past step 6, unless a

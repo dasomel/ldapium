@@ -121,6 +121,19 @@ type fakeIdent struct {
 	mu    sync.Mutex
 	calls []string
 	fn    func(target, class string) error
+	// privileged is the memberOf check (CheckNotPrivileged); privCalls records its targets.
+	privileged func(target string) error
+	privCalls  []string
+}
+
+func (f *fakeIdent) CheckNotPrivileged(_ context.Context, target string) error {
+	f.mu.Lock()
+	f.privCalls = append(f.privCalls, target)
+	f.mu.Unlock()
+	if f.privileged != nil {
+		return f.privileged(target)
+	}
+	return nil
 }
 
 func (f *fakeIdent) Check(_ context.Context, target, class string) error {
@@ -349,7 +362,7 @@ func TestWritePipeline_TableValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 8 {
+	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 9 {
 		t.Fatalf("catalog: %v %d", err, len(m))
 	}
 }
