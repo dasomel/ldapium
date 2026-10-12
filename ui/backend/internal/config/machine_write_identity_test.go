@@ -149,6 +149,16 @@ func TestMachineWriteLockCeilingNeedsW_lock(t *testing.T) {
 	if _, err := Load(writeScopeEnv(withLock(lock))); err != nil {
 		t.Errorf("lock ceiling with W_lock: %v", err)
 	}
+	// D379-17: a lock ceiling needs a non-empty privileged list; without a lock scope it stays optional.
+	noPriv := withLock(lock)
+	noPriv["MACHINE_WRITE_PRIVILEGED_GROUPS"] = ""
+	noPriv["MACHINE_WRITE_GROUPS"] = "-"
+	if _, err := Load(writeScopeEnv(noPriv)); err == nil || !strings.Contains(err.Error(), "MACHINE_WRITE_PRIVILEGED_GROUPS") {
+		t.Errorf("lock ceiling without privileged groups: %v", err)
+	}
+	if _, err := Load(writeScopeEnv(map[string]string{"MACHINE_WRITE_PRIVILEGED_GROUPS": "", "MACHINE_WRITE_GROUPS": "-", "MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create;machine-b=audit.read"})); err != nil {
+		t.Errorf("no lock scope, no privileged groups: %v", err)
+	}
 	// No lock scope in any ceiling: W_lock stays optional and off.
 	if _, err := Load(writeScopeEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create;machine-b=audit.read"})); err != nil {
 		t.Errorf("no lock scope: %v", err)

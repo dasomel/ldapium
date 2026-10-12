@@ -334,8 +334,30 @@ func TestLockPipeline_UnlockBypassesAreRefused(t *testing.T) {
 		}
 	}
 	t.Run("lock then unlock by the same client", func(t *testing.T) { roundTrip(w) })
-	t.Run("the same after a restart", func(t *testing.T) {
-		restarted := lockHarness(t, nil) // new server, new limiter and idempotency state
+	t.Run("the locked state survives a restart", func(t *testing.T) {
+		// A new server (handler, limiter, idempotency store, deps) over the SAME
+		// directory state: the locks made above are still in place, and every
+		// unlock bypass is tried again. The harness gives each server its own
+		// fake directory, so the lock state is handed over explicitly.
+		restarted := lockHarness(t, nil)
+		lockStates.Store(restarted.dir, lockStateOf(w.dir))
+		want := map[string]string{wBob: lockedForeverValue, carol: ppolicyLocked, dave: duration0}
+		for dn, v := range want {
+			if got := lockStateOf(restarted.dir).get(dn); got != v {
+				t.Fatalf("%s lost its lock across the restart: %q", dn, got)
+			}
+		}
+		for _, client := range []string{"machine-a", "machine-w2"} {
+			for dn := range want {
+				unlock(restarted, client, dn)
+			}
+		}
+		for dn, v := range want {
+			if got := lockStateOf(restarted.dir).get(dn); got != v {
+				t.Errorf("%s changed to %q", dn, got)
+			}
+		}
+		// The fresh server still locks, and still cannot unlock what it locked.
 		roundTrip(restarted)
 	})
 	t.Run("another client", func(t *testing.T) {
