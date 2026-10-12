@@ -67,6 +67,9 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 	if err != nil {
 		return fmt.Errorf("MACHINE_WRITE_SUBTREES needs a valid LDAP_BASE_DN")
 	}
+	if w.GroupSeedDN, err = loadMachineWriteGroupSeed(getenv, cfg, m, *w, base); err != nil {
+		return err
+	}
 	identities := machineWriteIdentityDNs(cfg, m, *w)
 	for _, entry := range w.Subtrees {
 		for _, raw := range entry.DNs {
@@ -94,6 +97,45 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 		return n.err
 	}
 	return w.CheckIdempotencyQuota()
+}
+
+// loadMachineWriteGroupSeed reads MACHINE_WRITE_GROUP_SEED_DN (v2 D379-3, Q2). It
+// is required as soon as any client ceiling names directory.groups.create, so a
+// machine-created group never gets the W_data DN as its first member. The DN
+// is canonical (D26), strictly inside the base and distinct from every other
+// protected identity and privileged group; it joins the protected set (and so
+// the ceiling-overlap rule) afterwards. Errors never echo the value.
+// Cost: the operator creates one password-less entry; escape hatch: none, a
+// seed that is a real principal would turn group creation into a grant.
+func loadMachineWriteGroupSeed(getenv func(string) string, cfg Config, m MachineConfig, w MachineWriteConfig, base *ldap.DN) (string, error) {
+	raw := getenv("MACHINE_WRITE_GROUP_SEED_DN")
+	if raw == "" {
+		for _, c := range m.Clients {
+			for _, s := range c.Scopes {
+				if s == "directory.groups.create" {
+					return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN is required when a client ceiling names directory.groups.create")
+				}
+			}
+		}
+		return "", nil
+	}
+	seed, err := canonicalWriteDN(raw)
+	if err != nil {
+		return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN: %w", err)
+	}
+	if !base.AncestorOfFold(seed) {
+		return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN must lie strictly inside LDAP_BASE_DN")
+	}
+	for _, other := range machineWriteProtectedDNs(cfg, m, w) {
+		p, err := ldap.ParseDN(other)
+		if err != nil || !writeIdentityDNUnambiguous(p) {
+			return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN requires unambiguous protected identity DNs")
+		}
+		if p.EqualFold(seed) {
+			return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN must be distinct from every protected identity and privileged group")
+		}
+	}
+	return raw, nil
 }
 
 // checkWriteHasWriter is the T-013 self-refusal for "enabled but nothing can
@@ -221,8 +263,8 @@ func checkMachineWriteQuota(maxPerSubject, maxRecords, clients int) error {
 
 // MachineWriteProtectedDNs is the REQ-016 protected set derived from the
 // configuration: M, every enabled W_*, the service account, rootdns, the
-// replication and administrator identities, administrator DNs and the
-// privileged groups. It applies whatever a client ceiling says.
+// replication and administrator identities, administrator DNs, the group seed
+// placeholder and the privileged groups. It applies whatever a client ceiling says.
 func (c Config) MachineWriteProtectedDNs() []string {
 	return machineWriteProtectedDNs(c, c.Machine, c.Machine.Write)
 }
@@ -243,6 +285,9 @@ func machineWriteIdentityDNs(cfg Config, m MachineConfig, w MachineWriteConfig) 
 	out = append(out, cfg.AppProfilesAdminDNs...)
 	if cfg.SSO.LDAPServiceAccountDN != "" {
 		out = append(out, cfg.SSO.LDAPServiceAccountDN)
+	}
+	if w.GroupSeedDN != "" {
+		out = append(out, w.GroupSeedDN)
 	}
 	return out
 }

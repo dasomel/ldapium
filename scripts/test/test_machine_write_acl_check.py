@@ -163,6 +163,8 @@ class CheckTests(unittest.TestCase):
       'no image rules': good[:-3],
       'by * break dropped from a W_data rule': [r.replace(' by * break', '') if i == 7 else r for i, r in enumerate(good)],
       'extra grantee clause in a W_data rule': [r + ' by users read' if i == 9 else r for i, r in enumerate(good)],
+      'description dropped from the closed list (the pre-v2b fragment)': [r.replace('description,', '') if i == 9 else r for i, r in enumerate(good)],
+      'attribute added to the closed list': [r.replace(',member', ',member,telephoneNumber') if i == 9 else r for i, r in enumerate(good)],
       'W_data may write userPassword': [r.replace('none by * break', 'write by * break') if i == 6 else r for i, r in enumerate(good)],
       'secret attribute dropped from the list': [r.replace('memberOf,', '') if i == 6 else r for i, r in enumerate(good)],
       'M may write': [r.replace('read by', 'write by') if i == 2 else r for i, r in enumerate(good)],

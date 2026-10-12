@@ -700,7 +700,7 @@ def reads_deny(node, who, tag, allowed=()):
 
 # ---- W_data -------------------------------------------------------------------------------------------
 
-OTHER_ATTRS = ('description', 'telephoneNumber', 'title', 'l', 'st', 'street', 'postalAddress', 'employeeNumber', 'employeeType',
+OTHER_ATTRS = ('telephoneNumber', 'title', 'l', 'st', 'street', 'postalAddress', 'employeeNumber', 'employeeType',
                'carLicense', 'displayName', 'initials', 'labeledURI', 'manager', 'roomNumber', 'preferredLanguage', 'seeAlso',
                'businessCategory', 'facsimileTelephoneNumber', 'mobile', 'pager', 'homePhone', 'physicalDeliveryOfficeName',
                'registeredAddress', 'secretary')
@@ -741,6 +741,14 @@ def wdata_proof(node):
   check(wd(mod(g1, ('add', 'member', [bob]))) == 0, c('adds a group member'))
   check(wd(mod(g1, ('delete', 'member', [bob]))) == 0, c('removes a group member'))
   check(wd(mod(g1, ('add', 'member', [bob]))) == 0 and wd(mod(g1, ('delete', 'member', [bob]))) == 0, c('adds and removes a member again'))
+  # v2b D379-5 (T-012): description joined the closed list for machine patchGroup. The ACL cannot tell a group from a
+  # user entry, so it is writable on both; patchUser's closed body has no description (application guard, not the ACL).
+  check(wd(mod(g1, ('replace', 'description', ['machine-set']))) == 0, c('sets a group description'))
+  got = node.search('admin', g1, '(objectClass=*)', ['description'], 'base').stdout
+  check('description: machine-set' in got, c('the group description really changed (admin reads it)'))
+  check(wd(mod(g1, ('delete', 'description', []))) == 0, c('clears a group description'))
+  check(wd(mod(bob, ('replace', 'description', ['class-level']))) == 0 and wd(mod(bob, ('delete', 'description', []))) == 0,
+        c('description is writable on a user entry too (class-level backstop; the closed patchUser body excludes it)'))
 
   print(f'--- {cfg}: W_data refused ---', flush=True)
   for attr in OTHER_ATTRS:
@@ -748,8 +756,7 @@ def wdata_proof(node):
     if value is None:
       continue
     check(wd(mod(bob, ('replace', attr, [value]))) == 50, c(f'attribute outside the closed list ({attr}) refused (50)'))
-  check(wd(mod(g1, ('replace', 'description', ['x']))) == 50 and wd(mod(g1, ('add', 'owner', [alice]))) == 50,
-        c('group attributes outside the closed list (description, owner) refused (50)'))
+  check(wd(mod(g1, ('add', 'owner', [alice]))) == 50, c('group attribute outside the closed list (owner) refused (50)'))
   check(wd(mod(bob, ('replace', 'objectClass', ['top', 'person', 'organizationalPerson', 'inetOrgPerson']))) == 50, c('objectClass REPLACE refused (50)'))
   check(wd(mod(bob, ('delete', 'objectClass', ['organizationalPerson']))) == 50, c('objectClass value DELETE refused (50)'))
   check(wd(f'dn: {alice}\nchangetype: modify\ndelete: userPassword\nuserPassword: {node.human_pw}\n-\nadd: userPassword\nuserPassword: {human_new}-w\n') == 50,

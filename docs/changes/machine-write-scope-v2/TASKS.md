@@ -1,6 +1,6 @@
 # Tasks: 머신 쓰기 범위 v2b·v2c
 
-설계: [CHANGE.md](CHANGE.md) (Status: `Proposed — maintainer acceptance pending`) · 결정 기록: [ADR.md](ADR.md) · 증거: [EVIDENCE.md](EVIDENCE.md) · 부모: [machine-write-scope TASKS](../machine-write-scope/TASKS.md)(T-026 → 이 패키지 v2b, T-030/T-031 → v2c).
+설계: [CHANGE.md](CHANGE.md) (Status: v2b `Accepted` 2026-10-12 — Q2·Q3·Q4·Q7 권고대로; v2c `Proposed`, 승인 아님 — Q1·Q5·Q6 보류; 관련 후속 이슈 #390) · 결정 기록: [ADR.md](ADR.md) · 증거: [EVIDENCE.md](EVIDENCE.md) · 부모: [machine-write-scope TASKS](../machine-write-scope/TASKS.md)(T-026 → 이 패키지 v2b, T-030/T-031 → v2c).
 수용 전에는 `Inspect and establish evidence`만 진행할 수 있다. `Implement` 단위는 해당 하위 범위(v2b 또는 v2c)가 수용된 뒤에만 착수하며, 각 단위는 별도 PR·Class D 독립 검토다. 체크 표시는 실제로 끝난 것만 한다.
 ACL·LDAP 쓰기 의미·`image/`를 건드리는 작업은 먼저 `.agents/skills/ldapium-directory-change/SKILL.md`를 로드한다. 라이브 LDAP 경로는 모킹하지 않는다(AGENTS.md "Testing philosophy"). 비밀번호 값은 증거·로그·PR 본문에 남기지 않는다(센티널은 일회용 무작위 값, 기록은 "센티널 N건"으로만).
 경로 접두: `h/` = `ui/backend/internal/httpapi/`, `l/` = `ui/backend/internal/ldapclient/`, `c/` = `ui/backend/internal/config/`, `f/` = `scripts/test/fixtures/machine-acl/`.
@@ -9,7 +9,7 @@ ACL·LDAP 쓰기 의미·`image/`를 건드리는 작업은 먼저 `.agents/skil
 
 - [x] `T-001` **(2026-10-11, main `049fcc3` 소스 읽기; CHANGE.md P1–P19, EVIDENCE.md §1)** 현재 코드의 사실 확정: 열린 표·카탈로그·거부 목록, `CreateGroup` seed, 잠금 구획 설정·ACL, Password Modify·멱등 비밀번호 모드·사람 비밀번호 한도 키, 닫힌 본문 집합, 비밀번호 정책 기본값, accesslog 기본 ops. 검수: 각 사실의 파일:줄이 EVIDENCE.md §1에 있다.
 - [ ] `T-002` (`REQ-005`, `REQ-007`, `REQ-010`, `REQ-012`, `REQ-014`) **라이브 실측 E-01–E-12, E-15–E-23**(실제 slapd, 새 컨테이너, `docker build -t ldapium:e2e -f image/Dockerfile ./image`; macOS/Colima에서는 AGENTS.md의 `docker exec -i`·파생 이미지 규칙). 각 항목의 명령·기대·판정 기준은 EVIDENCE.md §2. 검수: 실제 출력(실패 포함)을 EVIDENCE.md에 보존, 가정이 틀린 결정(D379-3/5/7/8/10/13/14/15)은 CHANGE.md Revision으로 개정하고 영향받는 하위 범위의 수용을 다시 받는다.
-- [ ] `T-005` (`REQ-001`–`REQ-017`) **수용 선행**: (v2b) 유지보수자가 CHANGE.md Q2·Q3·Q4 결정과 Status 갱신, security-reviewer 1라운드(BLOCKER 0). (v2c) 유지보수자가 Q1·Q5·Q6 결정, **전용 security-reviewer 라운드**와 Codex critic 1회(critic 계약: 재작성 금지, 버그·보안·호환·누락 시험만, 깨끗하면 `PASS`), `E-07`–`E-10`·`E-12`·`E-16`·`E-17`·`E-20`–`E-23` 결과 반영, CHANGE.md "Ship-gating open risks" R-1–R-8 각각이 닫혔거나 유지보수자가 수용으로 기록함(R-4는 닫을 수 없으므로 수용 결정 필수). 검수: CHANGE.md 머리말·Resolved questions에 결정과 검토 결과가 기록됨.
+- [ ] `T-005` (`REQ-001`–`REQ-017`) **수용 선행**: (v2b) 유지보수자가 CHANGE.md Q2·Q3·Q4 결정과 Status 갱신(**2026-10-12 완료**: Q2·Q3·Q4·Q7 권고대로), security-reviewer 1라운드(BLOCKER 0)(**미완 — 아직 하지 않음**; T-014 개방 전 필요). (v2c) 유지보수자가 Q1·Q5·Q6 결정, **전용 security-reviewer 라운드**와 Codex critic 1회(critic 계약: 재작성 금지, 버그·보안·호환·누락 시험만, 깨끗하면 `PASS`), `E-07`–`E-10`·`E-12`·`E-16`·`E-17`·`E-20`–`E-23` 결과 반영, CHANGE.md "Ship-gating open risks" R-1–R-8 각각이 닫혔거나 유지보수자가 수용으로 기록함(R-4는 닫을 수 없으므로 수용 결정 필수). 검수: CHANGE.md 머리말·Resolved questions에 결정과 검토 결과가 기록됨.
 
 ## Implement — v2b (수용 후)
 

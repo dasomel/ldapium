@@ -14,7 +14,15 @@ func TestMachineWriteClosedFieldSet(t *testing.T) {
 		{"patchUser", `{"uid":"rename"}`, false}, {"createUser", `{"password":""}`, false},
 		{"createUser", `{"cn":"one","cn":"two"}`, false}, {"createUser", `{"cn":"one","CN":"two"}`, false},
 		{"patchUser", `{"cn":null}`, false}, {"patchUser", `{"mail":{"unexpected":"object"}}`, false},
-		{"createGroup", `{"cn":"group"}`, false}, {"updateUser", `{"cn":"user"}`, false},
+		{"updateUser", `{"cn":"user"}`, false},
+		// v2b (D379-5): createGroup {cn, description}; patchGroup {dn, description} only.
+		{"createGroup", `{"cn":"group"}`, true}, {"createGroup", `{"cn":"group","description":"d"}`, true},
+		{"createGroup", `{"cn":"group","member":"uid=x"}`, false}, {"createGroup", `{"cn":"group","objectClass":"top"}`, false},
+		{"createGroup", `{"cn":"group","description":null}`, false},
+		{"patchGroup", `{"dn":"cn=team,dc=example,dc=com","description":"d"}`, true}, {"patchGroup", `{"dn":"cn=team,dc=example,dc=com","description":null}`, true},
+		{"patchGroup", `{"dn":"cn=team,dc=example,dc=com","cn":"renamed"}`, false}, {"patchGroup", `{"dn":"cn=team,dc=example,dc=com","cn":null}`, false},
+		{"patchGroup", `{"dn":null,"description":"d"}`, false}, {"patchGroup", `{"dn":"cn=team,dc=example,dc=com","member":"uid=x"}`, false},
+		{"deleteGroup", "", true}, {"deleteGroup", `{}`, false},
 	} {
 		if got := machineWriteBodyAllowed(tc.op, []byte(tc.body)); got != tc.allowed {
 			t.Errorf("%s %s got %v", tc.op, tc.body, got)

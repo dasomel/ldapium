@@ -27,6 +27,38 @@ func MachineWriteConstraintsEnabled(ctx context.Context) bool {
 	return enabled
 }
 
+type machineGroupSeedKey struct{}
+
+// WithMachineGroupSeed carries the machine createGroup seed (v2 D379-3: the
+// fixed placeholder member) to CreateGroup. Only the machine write pipeline
+// sets it, together with WithMachineWriteConstraints.
+func WithMachineGroupSeed(ctx context.Context, dn string) context.Context {
+	return context.WithValue(ctx, machineGroupSeedKey{}, dn)
+}
+
+// MachineGroupSeed returns the seed WithMachineGroupSeed stored, "" when none.
+func MachineGroupSeed(ctx context.Context) string {
+	dn, _ := ctx.Value(machineGroupSeedKey{}).(string)
+	return dn
+}
+
+// groupSeedMember is the required first "member" of a new group. A human
+// caller gets the bound DN, as ever. A machine write never does: its bound DN
+// is W_data, and seeding it would give every machine-created group a
+// W_data member (and W_data a memberOf), so under the machine constraints the
+// configured placeholder is mandatory and its absence is an error, not a
+// fallback to the bound DN.
+func groupSeedMember(ctx context.Context, boundDN string) (string, error) {
+	if enabled, _ := ctx.Value(machineWriteConstraintKey{}).(bool); !enabled {
+		return boundDN, nil
+	}
+	seed := MachineGroupSeed(ctx)
+	if seed == "" {
+		return "", fmt.Errorf("%w: machine group creation needs the configured seed member", domain.ErrInvalidInput)
+	}
+	return seed, nil
+}
+
 func writeRevisionControls(ctx context.Context, csn, requiredClass string) ([]ldap.Control, error) {
 	if enabled, _ := ctx.Value(machineWriteConstraintKey{}).(bool); !enabled {
 		return revisionControls(csn)

@@ -34,12 +34,13 @@
 ACL 조각을 적용하면 `W_data`는:
 
 - `$WRITE_DN` 아래에서 **항목을 만들고 지우며**(`entry`·`children` write), 닫힌 속성 목록
-  `uid, cn, sn, givenName, mail, departmentNumber, o, ou, member`만 쓴다(부록 A: createUser·patchUser·그룹 멤버 add/remove의 합집합).
+  `uid, cn, sn, givenName, mail, departmentNumber, o, ou, description, member`만 쓴다(부록 A: createUser·patchUser·그룹 멤버 add/remove의 합집합, 그리고 v2b `patchGroup`의 `description`).
+  `description`은 ACL이 그룹과 사용자 항목을 구별하지 못해 `$WRITE_DN` 안의 **사용자 항목에서도 쓰기 가능**하다. 머신 `patchUser`의 닫힌 본문에는 `description`이 없으므로 이를 막는 것은 앱 가드다(위 한계와 같은 종류).
 - `objectClass`는 **`add` 수준**만 받는다(D18). `replace`·`delete`는 거부된다. 그러나 ACL은 **항목 생성(Add)과 기존 항목에 값을 더하는 modify를
   구별하지 못한다**: 기존 항목에 `objectClass` 값을 **추가**하는 modify는 ACL을 통과한다(스모크가 이 한계를 고정한다).
   수정 경로가 `objectClass`를 절대 보내지 않게 하는 것은 앱 가드(T-012)다.
 - 비밀 속성(`userPassword`, `pwdHistory` 등 `M`의 목록과 같음), `memberOf`, 모든 `pwd*` 상태 속성(잠금 포함)에는 **읽기·쓰기 모두 `none`**이다.
-  `$WRITE_DN` 안의 나머지 속성(운영 속성 포함)은 읽기만 된다(`If-Match` assertion과 읽기에 필요). `description` 등 목록 밖 속성 쓰기는 거부된다.
+  `$WRITE_DN` 안의 나머지 속성(운영 속성 포함)은 읽기만 된다(`If-Match` assertion과 읽기에 필요). `telephoneNumber` 등 목록 밖 속성 쓰기는 거부된다.
 - `$SYSTEM_DN` 아래(`M`, 자기 자신, `W_lock`, 서비스 계정), `$REPL_DN`(복제 신원 항목)과 `$WRITE_DN` **밖**은 읽지도 쓰지도 못한다. 이미지의 `by users read`·`by self write`는 닿지 않는다.
 - `cn=config`, `cn=Monitor`, `cn=accesslog`, 관리자 항목에는 접근이 없다.
 
@@ -159,7 +160,7 @@ olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=entry,children
 olcAccess: {4}to dn.subtree="@WRITE_DN@" attrs=objectClass
   by dn.exact="@WDATA_DN@" add
   by * break
-olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member
+olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,description,member
   by dn.exact="@WDATA_DN@" write
   by * break
 olcAccess: {6}to dn.subtree="@WRITE_DN@"
@@ -228,10 +229,11 @@ olcAccess: {5}to *
 ## 5. 속성이 여기서 나온 곳
 
 `W_data`의 닫힌 목록은 [부록 A(T-002 확정 목록)](changes/machine-write-scope/CHANGE.md)의 합집합이다: createUser(`uid, cn, sn`; 선택 `givenName, mail, departmentNumber, o, ou`),
-patchUser(`cn, sn, givenName, mail, departmentNumber, o, ou` Replace), 그룹 멤버 add/remove(`member`), 생성 시 `objectClass`. `W_lock`: `pwdAccountLockedTime`.
+patchUser(`cn, sn, givenName, mail, departmentNumber, o, ou` Replace), 그룹 멤버 add/remove(`member`), v2b `patchGroup`(`description`), 생성 시 `objectClass`. `W_lock`: `pwdAccountLockedTime`.
 `pwd*` 상태 속성 목록(`pwdAccountLockedTime`, `pwdChangedTime`, `pwdFailureTime`, `pwdGraceUseTime`, `pwdReset`, `pwdPolicySubentry`, `pwdStartTime`, `pwdEndTime`,
 `pwdLastSuccess`)과 비밀 속성 8개는 이 이미지의 스키마·오버레이에서 도출했다(도출 명령은 machine-ldap-account.md 9절). 스키마·오버레이를 바꿨다면 다시 도출해 `{1}`의 목록에 더한다.
-부록 A가 바뀌면(예: 그룹 수정 오퍼레이션을 열 때 `description`) 이 조각과 이 문서를 같이 바꾼다.
+v2b `patchGroup`(D379-5)이 `description`을 목록에 더했다(`{5}`). 오퍼레이션 자체는 T-014 전에는 열리지 않으므로, 이 조각을 적용해도 지금의 머신 동작은 변하지 않는다.
+부록 A가 다시 바뀌면 이 조각과 이 문서를 같이 바꾼다.
 
 ## 6. 적용 후 확인 (모든 노드)
 
@@ -255,7 +257,7 @@ printf 'dn: uid=probe,%s\nchangetype: add\nobjectClass: top\nobjectClass: person
 ```
 
 거부(모두 `Insufficient access (50)`여야 한다): `userPassword` 변경(정책 때문에 옛 값 삭제 + 새 값 추가를 한 modify에 둔 형태만 ACL까지 도달한다. `replace`는
-ACL 이전에 정책이 거부해 증명이 못 된다), `objectClass` replace, `description` 등 목록 밖 속성, `$WRITE_DN` 밖 항목, `M`·`W_*`·관리자 항목, `cn=config`,
+ACL 이전에 정책이 거부해 증명이 못 된다), `objectClass` replace, `telephoneNumber`·그룹의 `owner` 등 목록 밖 속성, `$WRITE_DN` 밖 항목, `M`·`W_*`·관리자 항목, `cn=config`,
 `W_data`가 `W_lock`의 `pwdAccountLockedTime`을 쓰는 것. `memberOf` modify는 스키마가 먼저 `Constraint violation (19)`로 거부한다(ACL 증명이 아니다).
 `W_data`로 `userPassword`·`pwdAccountLockedTime`·`memberOf`를 **읽어도** 나오지 않는다(관리자는 읽는다).
 

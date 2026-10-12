@@ -31,8 +31,8 @@ type machineWriteOp struct {
 	IfMatch     bool // a strong entryCSN If-Match is required (D21)
 }
 
-// machineWriteCatalog is the first-ship set of Resolved Q2 (appendix A). Group
-// create/update/delete, lock and password operations are deliberately absent.
+// machineWriteCatalog is the first-ship set of Resolved Q2 (appendix A) plus the
+// v2b group rows. Lock and password operations are deliberately absent.
 var machineWriteCatalog = []machineWriteOp{
 	{machineOp{"createUser", http.MethodPost, "/api/users", "directory.users.create"},
 		"data", "user", "", "", shapeCreate, false, false},
@@ -44,6 +44,14 @@ var machineWriteCatalog = []machineWriteOp{
 		"data", "group", "groupOfNames", "inetOrgPerson", shapeMembership, false, true},
 	{machineOp{"removeGroupMember", http.MethodDelete, "/api/groups/members", "directory.groups.members.remove"},
 		"data", "group", "groupOfNames", "inetOrgPerson", shapeMembership, true, true},
+	// v2b groups (D379-3/5/6): catalog rows only. They become reachable when T-014
+	// adds them to machineWriteOps and config.MachineWriteOpenScopes.
+	{machineOp{"createGroup", http.MethodPost, "/api/groups", "directory.groups.create"},
+		"data", "group", "", "", shapeCreate, false, false},
+	{machineOp{"patchGroup", http.MethodPatch, "/api/groups", "directory.groups.update"},
+		"data", "group", "groupOfNames", "", shapeTarget, false, true},
+	{machineOp{"deleteGroup", http.MethodDelete, "/api/groups", "directory.groups.delete"},
+		"data", "group", "groupOfNames", "", shapeTarget, true, true},
 }
 
 // resolveMachineWriteOps joins the opened table with the catalog. Anything the
