@@ -48,7 +48,7 @@ olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=entry,children
 olcAccess: {4}to dn.subtree="@WRITE_DN@" attrs=objectClass
   by dn.exact="@WHO@" add
   by * break
-olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member
+olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,description,member
   by dn.exact="@WHO@" write
   by * break
 olcAccess: {6}to dn.subtree="@WRITE_DN@"

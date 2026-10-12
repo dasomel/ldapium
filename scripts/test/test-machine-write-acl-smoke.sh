@@ -333,6 +333,19 @@ delete: member
 member: uid=bob,${people}
 EOF
 )"
+check "W_data set group description (v2b D379-5)" "0" "$(wd <<EOF
+dn: cn=g1,${groups}
+changetype: modify
+replace: description
+description: machine-set
+EOF
+)"
+check "W_data clear group description" "0" "$(wd <<EOF
+dn: cn=g1,${groups}
+changetype: modify
+delete: description
+EOF
+)"
 check "admin sees the written mail" "1" "$(cnt '^mail: bob2@example.org' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "uid=bob,${people}" mail)"
 
 echo "=== W_data refusals ==="
@@ -363,11 +376,18 @@ replace: memberOf
 memberOf: cn=g1,${groups}
 EOF
 )"
-check "attribute outside the closed list (description) refused (50)" "50" "$(wd <<EOF
+check "attribute outside the closed list (telephoneNumber) refused (50)" "50" "$(wd <<EOF
 dn: uid=bob,${people}
 changetype: modify
-replace: description
-description: x
+replace: telephoneNumber
+telephoneNumber: 1
+EOF
+)"
+check "group attribute outside the closed list (owner) refused (50)" "50" "$(wd <<EOF
+dn: cn=g1,${groups}
+changetype: modify
+add: owner
+owner: uid=alice,${people}
 EOF
 )"
 check "pwdAccountLockedTime (W_lock's attribute) refused (50)" "50" "$(wd <<EOF

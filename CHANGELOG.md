@@ -58,6 +58,19 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   target outside the client's subtree is still the guard's 403. The audit line carries
   the new `outcome=target_not_found` (`reason=request_rejected`) rather than
   `reason=upstream_error`.
+- Groundwork for machine group writes (#379, v2b, accepted 2026-10-12), **not
+  reachable yet**: no new operation or scope is open and a ceiling naming a group
+  scope still fails at startup. New optional `MACHINE_WRITE_GROUP_SEED_DN` (read only
+  with `MACHINE_WRITE_ENABLED`; canonical DN inside the base, distinct from every
+  protected identity, added to the protected set) is the placeholder first member a
+  machine-created group will get instead of the `W_data` DN. The group pipeline rows
+  (`createGroup`, `patchGroup` description only, `deleteGroup`) exist as catalog data
+  and are exercised in tests only. **ACL (operators):** the `W_data` fragment
+  (`scripts/test/fixtures/machine-acl/write-data.ldif`, rule `{5}`) now lists
+  `description`; re-apply it where `W_data` is installed. Because the ACL cannot tell
+  groups from users, `W_data` can then write `description` on user entries too (the
+  machine `patchUser` body still excludes it). See
+  [change package](docs/changes/machine-write-scope-v2/CHANGE.md).
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a
