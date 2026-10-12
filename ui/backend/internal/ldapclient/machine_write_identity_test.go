@@ -44,3 +44,86 @@ func TestWriteIdentityNotFoundMapping(t *testing.T) {
 		t.Fatalf("protected denial = %v", got)
 	}
 }
+
+// D379-8/D379-17: memberOf values are compared as parsed DNs, attribute names
+// case-insensitively, and anything that cannot be read or parsed is a denial.
+func TestMemberOfPrivileged(t *testing.T) {
+	const admins = "cn=admins,ou=people,dc=example,dc=org"
+	privileged := []string{admins, "cn=ops,ou=people,dc=example,dc=org"}
+	entry := func(name string, values ...string) *ldap.Entry {
+		return ldap.NewEntry("uid=bob,ou=people,dc=example,dc=org", map[string][]string{name: values})
+	}
+	for name, tc := range map[string]struct {
+		entry  *ldap.Entry
+		denied bool
+	}{
+		"attribute absent":    {ldap.NewEntry("uid=bob,ou=people,dc=example,dc=org", nil), false},
+		"other group":         {entry("memberOf", "cn=team,ou=people,dc=example,dc=org"), false},
+		"privileged":          {entry("memberOf", admins), true},
+		"lower-case name":     {entry("memberof", admins), true},
+		"upper-case name":     {entry("MEMBEROF", admins), true},
+		"mixed-case name":     {entry("MemberOf", admins), true},
+		"second privileged":   {entry("memberOf", "cn=team,ou=people,dc=example,dc=org", "cn=ops,ou=people,dc=example,dc=org"), true},
+		"upper case value":    {entry("memberOf", "CN=ADMINS,OU=People,DC=example,DC=org"), true},
+		"OID type":            {entry("memberOf", "2.5.4.3=admins,ou=people,dc=example,dc=org"), true},
+		"other type":          {entry("memberOf", "o=elsewhere,dc=example,dc=org"), true},
+		"escaped":             {entry("memberOf", `cn=adm\69ns,ou=people,dc=example,dc=org`), true},
+		"child of privileged": {entry("memberOf", "cn=sub,cn=admins,ou=people,dc=example,dc=org"), false},
+		"unparseable":         {entry("memberOf", "not a dn"), true},
+	} {
+		err := memberOfPrivileged(tc.entry, privileged)
+		if tc.denied != errors.Is(err, domain.ErrPermissionDenied) || (!tc.denied && err != nil) {
+			t.Errorf("%s: %v, denied=%v", name, err, tc.denied)
+		}
+	}
+	if err := memberOfPrivileged(entry("memberOf", admins), []string{"not a dn"}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("unparseable privileged group: %v", err)
+	}
+}
+
+// D379-17: the group side positively proves readability. A hidden member list
+// (empty answer) is a denial, never "not a member".
+func TestGroupListsMember(t *testing.T) {
+	const bob = "uid=bob,ou=people,dc=example,dc=org"
+	group := func(name string, values ...string) *ldap.Entry {
+		return ldap.NewEntry("cn=admins,ou=people,dc=example,dc=org", map[string][]string{name: values})
+	}
+	for name, tc := range map[string]struct {
+		group  *ldap.Entry
+		denied bool
+	}{
+		"others only":      {group("member", "uid=alice,ou=people,dc=example,dc=org"), false},
+		"listed":           {group("member", "uid=alice,ou=people,dc=example,dc=org", bob), true},
+		"upper case DN":    {group("member", "UID=BOB,OU=People,DC=example,DC=org"), true},
+		"lower-case name":  {group("member", bob), true},
+		"mixed-case name":  {group("Member", bob), true},
+		"attribute hidden": {ldap.NewEntry("cn=admins,ou=people,dc=example,dc=org", nil), true},
+		"empty value list": {group("member"), true},
+		"unparseable":      {group("member", "not a dn"), true},
+	} {
+		err := groupListsMember(tc.group, bob)
+		if tc.denied != errors.Is(err, domain.ErrPermissionDenied) || (!tc.denied && err != nil) {
+			t.Errorf("%s: %v, denied=%v", name, err, tc.denied)
+		}
+	}
+}
+
+func TestCheckNotPrivilegedRejectsBeforeDial(t *testing.T) {
+	cfg := config.Config{LDAPURL: "ldap://127.0.0.1:1", BaseDN: "dc=example,dc=org", Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, BindDN: "cn=reader,dc=example,dc=org"}}
+	cfg.Machine.Write.PrivilegedGroups = []string{"cn=admins,dc=example,dc=org"}
+	for _, raw := range []string{"userid=user,dc=example,dc=org", "uid=#040475736572,dc=example,dc=org", "dc=", ""} {
+		if err := NewWriteIdentityReader(cfg, nil).CheckNotPrivileged(context.Background(), raw); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Errorf("%q dialed or passed: %v", raw, err)
+		}
+	}
+	// An empty privileged list denies instead of passing everyone (D379-17).
+	cfg.Machine.Write.PrivilegedGroups = nil
+	if err := NewWriteIdentityReader(cfg, nil).CheckNotPrivileged(context.Background(), "uid=user,dc=example,dc=org"); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("empty privileged list dialed or passed: %v", err)
+	}
+	cfg.Machine.Write.PrivilegedGroups = []string{"cn=admins,dc=example,dc=org"}
+	cfg.Machine.WriteEnabled = false
+	if err := NewWriteIdentityReader(cfg, nil).CheckNotPrivileged(context.Background(), "uid=user,dc=example,dc=org"); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("writes off: %v", err)
+	}
+}

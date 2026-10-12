@@ -19,7 +19,7 @@ const (
 // machineWriteOp is a machineOp plus what the write pipeline needs to know
 // about it. The catalog below is data, not a grant: an operation is reachable
 // only when it is ALSO listed in the opened table (machineWriteOps, the five
-// first-ship operations; T-013 is the only unit that fills it).
+// first-ship operations; T-014 is the only unit that adds to it).
 type machineWriteOp struct {
 	machineOp
 	Compartment string // "data" | "lock": which W identity binds (D3)
@@ -32,7 +32,7 @@ type machineWriteOp struct {
 }
 
 // machineWriteCatalog is the first-ship set of Resolved Q2 (appendix A) plus the
-// v2b group rows. Lock and password operations are deliberately absent.
+// v2b group rows and lockUser. Unlock and password operations are deliberately absent.
 var machineWriteCatalog = []machineWriteOp{
 	{machineOp{"createUser", http.MethodPost, "/api/users", "directory.users.create"},
 		"data", "user", "", "", shapeCreate, false, false},
@@ -52,6 +52,10 @@ var machineWriteCatalog = []machineWriteOp{
 		"data", "group", "groupOfNames", "", shapeTarget, false, true},
 	{machineOp{"deleteGroup", http.MethodDelete, "/api/groups", "directory.groups.delete"},
 		"data", "group", "groupOfNames", "", shapeTarget, true, true},
+	// v2b lock (D379-2/7/8): catalog row only, reachable at T-014. There is no
+	// unlockUser row on purpose: unlock stays human-only (D379-7, REQ-008).
+	{machineOp{"lockUser", http.MethodPost, "/api/users/lock", "directory.users.lock"},
+		"lock", "user", "inetOrgPerson", "", shapeTarget, false, true},
 }
 
 // resolveMachineWriteOps joins the opened table with the catalog. Anything the

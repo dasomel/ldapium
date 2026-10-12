@@ -155,6 +155,121 @@ func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass s
 	return nil
 }
 
+// CheckNotPrivileged refuses a target that is a member of any
+// MACHINE_WRITE_PRIVILEGED_GROUPS group (D379-8, REQ-007), reading as M.
+//
+// D379-17 (fail closed): an absent memberOf proves nothing, because M's ACL or a
+// missing memberof overlay yields the same empty answer as "not a member". So the
+// target's memberOf is checked AND every privileged group's own member list is
+// read; a group that is unreadable, missing, or returns no member attribute
+// (groupOfNames requires one, so none means hidden) is a denial, as is an empty
+// privileged list. Cost: 1 + N M reads per lock; escape hatch: disable the lock
+// compartment. Nested membership and a membership added after the read are not
+// seen (documented accepted risk, drilled in T-015).
+func (r *WriteIdentityReader) CheckNotPrivileged(ctx context.Context, target string) error {
+	groups := r.cfg.Machine.Write.PrivilegedGroups
+	if !r.cfg.Machine.Enabled || !r.cfg.Machine.WriteEnabled || len(groups) == 0 {
+		return domain.ErrPermissionDenied
+	}
+	if _, ok := reproducibleWriteDN(target); !ok {
+		return domain.ErrPermissionDenied
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, stop, err := (&dialer{cfg: r.cfg}).newConn(ctx)
+	if err != nil {
+		return errWriteIdentityDirectory
+	}
+	defer conn.Close()
+	defer stop()
+	if err := conn.Bind(r.cfg.Machine.BindDN, r.cfg.Machine.BindPassword); err != nil {
+		return errWriteIdentityDirectory
+	}
+	entry, err := readEntryAttr(ctx, conn, target, "memberOf")
+	if err != nil {
+		return err
+	}
+	if err := memberOfPrivileged(entry, groups); err != nil {
+		return err
+	}
+	for _, group := range groups {
+		ge, err := readEntryAttr(ctx, conn, group, "member")
+		if err != nil {
+			return protectedReadError(err) // a missing privileged group is not the target's 404
+		}
+		if err := groupListsMember(ge, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readEntryAttr reads one attribute of one entry. noSuchObject is ErrNotFound;
+// any other failure or an unexpected result shape is a directory error.
+func readEntryAttr(ctx context.Context, conn *ldap.Conn, dn, attr string) (*ldap.Entry, error) {
+	result, err := conn.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", []string{attr}, nil))
+	if noSuchObject(err) && ctx.Err() == nil {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil || ctx.Err() != nil || len(result.Entries) != 1 || len(result.Referrals) != 0 {
+		return nil, errWriteIdentityDirectory
+	}
+	return result.Entries[0], nil
+}
+
+// attrValues returns the values of an attribute by case-insensitive name
+// (RFC 4512 2.5), so a server answering memberof/MEMBEROF is still read.
+func attrValues(e *ldap.Entry, name string) []string {
+	var out []string
+	for _, a := range e.Attributes {
+		if strings.EqualFold(a.Name, name) {
+			out = append(out, a.Values...)
+		}
+	}
+	return out
+}
+
+// memberOfPrivileged denies when any memberOf value equals a privileged group
+// (ParseDN, case-insensitive). A value that is not in the plain spelling the
+// write policy accepts (OID types, odd whitespace, BER) cannot be proven
+// harmless, so it is a denial too.
+func memberOfPrivileged(entry *ldap.Entry, privileged []string) error {
+	for _, value := range attrValues(entry, "memberOf") {
+		dn, ok := reproducibleWriteDN(value)
+		if !ok {
+			return domain.ErrPermissionDenied
+		}
+		for _, raw := range privileged {
+			p, err := ldap.ParseDN(raw)
+			if err != nil || p.EqualFold(dn) {
+				return domain.ErrPermissionDenied
+			}
+		}
+	}
+	return nil
+}
+
+// groupListsMember denies when the group's member list names the target, when
+// the list is empty (hidden from M: groupOfNames always has a member), or when a
+// value does not parse.
+func groupListsMember(group *ldap.Entry, target string) error {
+	members := attrValues(group, "member")
+	if len(members) == 0 {
+		return domain.ErrPermissionDenied
+	}
+	want, err := ldap.ParseDN(target)
+	if err != nil {
+		return domain.ErrPermissionDenied
+	}
+	for _, value := range members {
+		dn, err := ldap.ParseDN(value)
+		if err != nil || dn.EqualFold(want) {
+			return domain.ErrPermissionDenied
+		}
+	}
+	return nil
+}
+
 // noSuchObject reports a genuine LDAP noSuchObject (result 32), nothing else.
 func noSuchObject(err error) bool {
 	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject)

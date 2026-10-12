@@ -72,6 +72,15 @@ func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m Machin
 		return w, err
 	}
 	if !w.LockEnabled {
+		// D379-2 (REQ-006): a lock ceiling without W_lock would be a scope that
+		// can only answer 503. Refuse it at start-up instead.
+		for _, c := range m.Clients {
+			for _, s := range c.Scopes {
+				if s == "directory.users.lock" {
+					return w, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names directory.users.lock, which requires MACHINE_WRITE_LOCK_ENABLED=true")
+				}
+			}
+		}
 		return w, nil
 	}
 	if w.Lock, err = machineWriteIdentity(getenv, "MACHINE_WRITE_LOCK", cfg, m); err != nil {

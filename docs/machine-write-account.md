@@ -25,7 +25,7 @@
 |---|---|
 | `M` | 읽기 전용 머신 계정([machine-ldap-account.md](machine-ldap-account.md)). 이 문서에서 **변하지 않는다** |
 | `W_data` (`$WDATA_DN`) | 사용자·그룹 멤버십 쓰기 계정(`createUser`/`patchUser`/`deleteUser`/`addGroupMember`/`removeGroupMember`) |
-| `W_lock` (`$WLOCK_DN`) | 잠금 계정(`pwdAccountLockedTime` 하나만, v2b 단계). 첫 출하에는 쓰이지 않지만 같은 방식으로 준비할 수 있다 |
+| `W_lock` (`$WLOCK_DN`) | 잠금 계정(`pwdAccountLockedTime` 하나만, v2b 단계). 첫 출하에는 쓰이지 않지만 같은 방식으로 준비할 수 있다. 잠금은 v2b의 `lockUser`(아직 도달 불가)만 쓰고, 해제는 사람 경로 전용이다(D379-7) |
 | `W_cred` | 비밀번호 계정. **설계만 있고 ACL 조각은 없다**(8절) |
 | `$WRITE_DN` | 쓰기 subtree: **모든 client 상한의 합집합**을 덮는 한 지점 |
 | `$SYSTEM_DN` | `M`·`W_*`·서비스 계정을 두는 컨테이너(예 `ou=system,<root>`). `$WRITE_DN`이 넓어져도 쓰기 신원이 닿지 않게 하는 거부 백스톱 |
@@ -194,7 +194,10 @@ echo "BASE=$BASE"
 
 ### 4.3 `W_lock` 적용 (선택, v2b)
 
-잠금을 쓰지 않는 배포는 건너뛴다. 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 8개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
+잠금을 쓰지 않는 배포는 건너뛴다. `MACHINE_WRITE_LOCK_ENABLED=false`에서 `MACHINE_ALLOWED_CLIENTS`가 `directory.users.lock`을 상한에 쓰면 기동이 실패한다(REQ-006).
+머신 `lockUser`는 `W_lock`으로 bind하기 전에 `M`이 대상의 `memberOf`와 각 `MACHINE_WRITE_PRIVILEGED_GROUPS` 그룹의 `member` 목록을 읽어, 하나라도 **직접** 속하면 403으로 거부한다(D379-8, D379-17). 그룹을 읽을 수 없으면(`M` ACL이 `member`를 숨김 포함) 거부이고, lock scope 상한에는 비어 있지 않은 `MACHINE_WRITE_PRIVILEGED_GROUPS`가 필요하다.
+중첩 그룹 멤버십과 읽은 뒤 추가된 멤버십(TOCTOU)은 이 검사가 보지 못한다(수용한 잔여 위험, T-015 드릴에서 기록). 이 검사는 애플리케이션 보강이고, 위 ACL 조각에는 특권 그룹 filter가 없다(라이브 증명 전에는 ACL 백스톱이라 부르지 않는다).
+머신 경로에는 잠금 해제가 없다: `directory.users.unlock`은 상한에 쓸 수 없고 `unlockUser`는 어떤 표에도 없다(D379-7, AC-005b). 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 8개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
 
 ```ldif
 dn: @MAIN_DB_DN@

@@ -87,6 +87,9 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 	if err := checkWriteGroups(*w); err != nil {
 		return err
 	}
+	if err := checkLockNeedsPrivilegedGroups(m, *w); err != nil {
+		return err
+	}
 	n := machineInts{getenv: getenv}
 	w.Limits = MachineWriteLimits{
 		RPS:         n.get("MACHINE_WRITE_RATE_LIMIT_RPS", 1, 1, 100),
@@ -196,6 +199,22 @@ func checkWriteCeilingOverlap(ceiling *ldap.DN, identities, groups []string) err
 		}
 		if p.EqualFold(ceiling) || p.AncestorOfFold(ceiling) {
 			return bad
+		}
+	}
+	return nil
+}
+
+// checkLockNeedsPrivilegedGroups (D379-17): a lock ceiling needs a named deny
+// set, otherwise the privileged-member refusal would pass everyone.
+func checkLockNeedsPrivilegedGroups(m MachineConfig, w MachineWriteConfig) error {
+	if len(w.PrivilegedGroups) > 0 {
+		return nil
+	}
+	for _, c := range m.Clients {
+		for _, s := range c.Scopes {
+			if s == "directory.users.lock" {
+				return fmt.Errorf("a client ceiling naming directory.users.lock requires MACHINE_WRITE_PRIVILEGED_GROUPS")
+			}
 		}
 	}
 	return nil

@@ -71,6 +71,16 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   groups from users, `W_data` can then write `description` on user entries too (the
   machine `patchUser` body still excludes it). See
   [change package](docs/changes/machine-write-scope-v2/CHANGE.md).
+- Groundwork for machine user locking (#379, v2b), **not reachable yet**: the
+  `lockUser` pipeline row (`W_lock`, closed body `{dn}`, strong `If-Match`,
+  `inetOrgPerson`) exists as catalog data and is exercised in tests only, and
+  `directory.users.lock` still fails at startup in a ceiling. Once opened, a lock
+  refuses a target that is a direct member of a `MACHINE_WRITE_PRIVILEGED_GROUPS`
+  group (an `M` read of `memberOf`, before the `W_lock` bind), and a lock ceiling
+  with `MACHINE_WRITE_LOCK_ENABLED` off fails startup. Unlocking stays human-only:
+  `unlockUser` and `directory.users.unlock` remain unopened (D379-7), so a machine
+  token still gets 403 `scope_denied` with no bind on `POST /api/users/unlock`. The
+  cookie lock/unlock path is unchanged.
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a
