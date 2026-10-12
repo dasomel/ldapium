@@ -3,7 +3,7 @@
 - Change class: `D` — 신규 자격 증명 쓰기 경로(`W_cred`), 비밀번호 취급, 권한 부여 의미(그룹·`memberOf`), 파괴적 디렉터리 동작(그룹 삭제·계정 잠금). AGENTS.md "Rules"에 따라 설계 변경이다. **하위 범위(v2b, v2c)마다 따로 수용한다**(#379 수용 조건 "Class D change per sub-scope, accepted before code").
 - Owner: 유지보수자(수용 대기)
 - Related issue: [#379](https://github.com/dasomel/ldapium/issues/379)(닫지 않음). 선행: [#285](https://github.com/dasomel/ldapium/issues/285) [machine-write-scope](../machine-write-scope/CHANGE.md)(v2a, 첫 출하 5개 오퍼레이션 구현됨, 기본 꺼짐). 연관: [machine-token-revocation](../machine-token-revocation/CHANGE.md)(#286, 구현됨, 기본 꺼짐).
-- Status: `Proposed — maintainer acceptance pending` (v2b·v2c 각각). **설계 문서다. 이 패키지는 코드·ACL·Helm·스크립트·`openapi.json`을 바꾸지 않는다.** 구현 단위(TASKS `Implement`)는 수용 전에는 하나도 착수하지 않는다. v2c는 부모 패키지 Resolved Q1에 따라 **별도 명시 승인**과 **전용 security-reviewer 라운드**가 수용 조건이다. Revision 1·2(2026-10-11)가 Codex 보안 검토 1·2차 지적을 반영했다(아래 "Revision"). 실측 없이는 닫을 수 없는 항목은 "Ship-gating open risks"에 있다.
+- Status: **v2b `Accepted` (2026-10-12, 유지보수자; Q2·Q3·Q4·Q7 권고대로 결정)** · **v2c `Proposed — not approved`** (Q1·Q5·Q6 보류; v2c 구현·`W_cred`·비밀번호는 착수하지 않음). v2b 구현은 TASKS T-010–T-015 순서로 진행하고 T-014 전까지 새 오퍼레이션은 도달 불가다. 관련 후속 이슈: [#390](https://github.com/dasomel/ldapium/issues/390). 아래 문장은 수용 전 작성 당시의 설계 문서 설명이다: **설계 문서다. 이 패키지는 코드·ACL·Helm·스크립트·`openapi.json`을 바꾸지 않는다.** 구현 단위(TASKS `Implement`)는 수용 전에는 하나도 착수하지 않는다. v2c는 부모 패키지 Resolved Q1에 따라 **별도 명시 승인**과 **전용 security-reviewer 라운드**가 수용 조건이다. Revision 1·2(2026-10-11)가 Codex 보안 검토 1·2차 지적을 반영했다(아래 "Revision"). 실측 없이는 닫을 수 없는 항목은 "Ship-gating open risks"에 있다.
 - 작성일: 2026-10-11
 - 형식: 부모 [machine-write-scope](../machine-write-scope/CHANGE.md)와 완료 예시 [machine-token-revocation](../machine-token-revocation/CHANGE.md)를 따른다. 코드 주장은 파일:줄(main `049fcc3` 기준, 경로 접두 `h/` = `ui/backend/internal/httpapi/`, `l/` = `ui/backend/internal/ldapclient/`, `c/` = `ui/backend/internal/config/`, `f/` = `scripts/test/fixtures/machine-acl/`)로 인용한다. 실행하지 않은 것은 "미검증"으로 표시하고 [EVIDENCE.md](EVIDENCE.md)의 라이브 계획(`E-xx`)에 연결한다.
 - 결정 ID는 이 패키지 고유의 `D379-n`이다(부모의 `D1`–`D26`과 섞이지 않게). 부모 결정은 "부모 D22"처럼 쓴다.
@@ -361,6 +361,10 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 - 코드 사실(P1–P23의 줄 번호)은 main `049fcc3`에서 읽어 확인했다. 이후 변경으로 어긋날 수 있다.
 
 ## Revision
+
+- 2026-10-12 Revision 3 (유지보수자 결정). v2b 수용, v2c는 `Proposed` 유지.
+  - Q2: 옵션 B 고정 placeholder seed DN(`MACHINE_WRITE_GROUP_SEED_DN`) 수용(D379-3). Q3: 생성 그룹의 허용 목록 자동 편입 없음(D379-4). Q4: 잠금 해제는 사람 전용 유지(D379-7). Q7: 머신 `patchGroup`의 `cn` 변경 거부(D379-5).
+  - Q1·Q5·Q6 및 v2c 전부(Q8–Q13 포함)는 보류. 전용 security-reviewer 라운드는 아직 없음(TASKS T-005 참조). 관련 후속 이슈 #390.
 
 - 2026-10-11 Revision 1 (Codex 보안 검토, 커밋 `d96858f` 대상). 5건 모두 반영, Status는 `Proposed` 유지.
   - **P1-a** 비밀번호 없는 기존 계정(SSO·외부 인증)이 "초기 비밀번호" 대상이 되던 문제 → 대기 표지 + `creatorsName=W_data` + client 태그(D379-10, REQ-010/018, AC-007b, E-16). 확인/가정 구분은 ACL 스케치 아래 "검증 상태".

@@ -1,7 +1,7 @@
 # ADR: 머신 쓰기 v2b·v2c — 그룹·잠금·비밀번호 구획 (D379-1–D379-16)
 
-- Status: `Proposed` — [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. 유지보수자 수용 대기(v2b·v2c 각각). Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
-- Owner: 유지보수자(수용 대기)
+- Status: v2b 결정(D379-3/4/5/6/7, 2026-10-12 유지보수자 수용: Q2·Q3·Q4·Q7 권고대로; 구현 단위가 병합되면 `Accepted`로 승격) · v2c 결정(D379-9–D379-16)은 `Proposed` — 승인 아님(Q1·Q5·Q6 보류). [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
+- Owner: 유지보수자(v2b 수용 2026-10-12, v2c 수용 대기)
 - Related issue: [#379](https://github.com/dasomel/ldapium/issues/379)(닫지 않음). 부모: [machine-write-scope ADR](../machine-write-scope/ADR.md)(D1/D3/D4/D5/D9, D19–D22, D26)
 - 위치 규약: 변경 패키지 안의 `ADR.md`(부모와 같음). 근거·대안·위협 모델 전문은 CHANGE.md에 있다.
 
