@@ -318,3 +318,11 @@ replication: verify the restored node's ACLs and data before starting peers and
 comparing their data. This command does not automate peer isolation, full-loss
 restore, rotation, or removal of old credentials; those acceptance paths remain
 pending in the replication identity change package.
+
+### Data volume lost, config volume kept
+
+The data volume is lost while the config volume is kept (a recreated data PVC, a wiped data disk):
+the image refuses to start in every mode, exits non-zero and creates nothing, naming the missing
+database directory (`olcDbDirectory`). Kubernetes crash-loops the pod. Delete BOTH the data and the
+config claims of that node and start it empty; it refills from its peers. Deleting only the data side
+again, or only the config side, does not recover it.

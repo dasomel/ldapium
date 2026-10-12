@@ -308,6 +308,11 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### Images
 
+- A kept config volume with a lost data volume now refuses to start in every mode
+  with a message naming the missing database directory and the recovery (delete BOTH
+  the data and the config claims; the node refills from its peers). `dedicated` no
+  longer reports it as an unreadable stored `olcSyncrepl` (#387). Behaviour is
+  otherwise unchanged: exit non-zero, nothing created.
 - `LDAP_REPLICATION_IDENTITY` (`admin` default / `prepare` / `dedicated`), unit 1
   of the staged replication-identity change (#229, `docs/changes/replication-identity`,
   T-010). Only `admin` is effective and it changes nothing (`cn=config` and

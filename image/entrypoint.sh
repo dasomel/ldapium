@@ -1509,6 +1509,19 @@ d}" "$base_structure"
   log "bootstrap complete"
 else
   log "bootstrap marker present — skipping bootstrap, using existing directory"
+  # The config volume survived but the data volume did not (#387): the stored
+  # olcDbDirectory no longer exists, so every later slapcat/slapd fails with a
+  # generic "bad configuration directory" (dedicated mode used to blame a stored
+  # olcSyncrepl). Name the real cause before any of those run. Read-only: nothing
+  # is created, and it only fires when the main database config names a directory
+  # that is absent while cn=config itself is present.
+  dbdir_cf="${CONFIG_DIR}/cn=config/olcDatabase={1}mdb.ldif"
+  if [ -f "$dbdir_cf" ]; then
+    dbdir_path=$(sed -n 's/^olcDbDirectory: //p' "$dbdir_cf" | head -n 1)
+    if [ -n "$dbdir_path" ] && [ ! -d "$dbdir_path" ]; then
+      die "the configuration volume (${CONFIG_DIR}) is kept but the database directory ${dbdir_path} is missing, so the data volume was lost or replaced; refusing to start and nothing was created. Recovery: delete BOTH the data and the config volume (Kubernetes: both PVCs/claims) and start the node empty; it refills from its peers"
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------
