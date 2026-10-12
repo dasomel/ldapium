@@ -78,7 +78,9 @@ func reproducibleWriteDN(raw string) (*ldap.DN, bool) {
 
 // Check requires an existing user/group target (or member). Creation parents
 // use the pre-connect policy instead; a nonexistent target never passes this
-// check. Any unresolved configured protected identity fails closed.
+// check. A target the directory reports as noSuchObject returns
+// domain.ErrNotFound (permanent, not retryable); every other read failure stays
+// a directory error. Any unresolved configured protected identity fails closed.
 func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass string) error {
 	if !r.cfg.Machine.Enabled || !r.cfg.Machine.WriteEnabled || len(r.protected) > 128 {
 		return domain.ErrPermissionDenied
@@ -144,13 +146,27 @@ func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass s
 	for _, raw := range protected {
 		other, err := readWriteIdentity(ctx, conn, raw)
 		if err != nil {
-			return err
+			return protectedReadError(err)
 		}
 		if other.uuid == identity.uuid {
 			return domain.ErrPermissionDenied
 		}
 	}
 	return nil
+}
+
+// noSuchObject reports a genuine LDAP noSuchObject (result 32), nothing else.
+func noSuchObject(err error) bool {
+	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject)
+}
+
+// protectedReadError: a missing protected identity is not the target's 404; it
+// fails closed as a directory error.
+func protectedReadError(err error) error {
+	if errors.Is(err, domain.ErrNotFound) {
+		return errWriteIdentityDirectory
+	}
+	return err
 }
 
 type writeIdentity struct {
@@ -163,6 +179,9 @@ func readWriteIdentity(ctx context.Context, conn *ldap.Conn, dn string) (writeId
 		return writeIdentity{}, errWriteIdentityDirectory
 	}
 	result, err := conn.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", []string{"entryDN", "entryUUID", "objectClass"}, nil))
+	if noSuchObject(err) && ctx.Err() == nil {
+		return writeIdentity{}, domain.ErrNotFound
+	}
 	if err != nil || ctx.Err() != nil || len(result.Entries) != 1 || len(result.Referrals) != 0 {
 		return writeIdentity{}, errWriteIdentityDirectory
 	}

@@ -405,6 +405,14 @@ func (r *wreq) execute(c echo.Context) error {
 			if errors.Is(err, domain.ErrPermissionDenied) || errors.Is(err, domain.ErrInvalidInput) {
 				return r.deny(reasonScope, outcomeDeniedProtected, codeScopeDenied, "target is not permitted for machine writes")
 			}
+			if errors.Is(err, domain.ErrNotFound) {
+				// Only a genuine noSuchObject for the target reaches here; the
+				// scope/protected guards above already ran, so existence outside
+				// the client's subtree is never disclosed.
+				r.st.setReason(reasonRequestRejected)
+				r.setOutcome(outcomeTargetNotFound)
+				return apiErr(http.StatusNotFound, codeNotFound, domain.ErrNotFound.Error())
+			}
 			r.st.setReason(reasonUpstream)
 			r.setOutcome(outcomeRejected)
 			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity check unavailable")

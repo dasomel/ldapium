@@ -343,10 +343,13 @@ def main():
   adm('ldapdelete', [u7])
   st_v, _, text_v = call(api, tok, 'DELETE', f'/api/users?dn={urlquote(u7)}', None, del_key, tag_del)
   obs(f'6f AFTER the restart, deleteUser key D replayed when the entry is already gone: {st_v} {text_v[:140]}')
-  live.check(st_v == 503, '[6] KNOWN BEHAVIOUR: a delete whose target no longer exists is 503 unavailable (the identity check cannot resolve it), not 404')
+  live.check(st_v == 404 and 'not_found' in text_v, '[6] #385: a delete whose target no longer exists is 404 not_found (permanent), not a retryable 503')
   st_vi, _, text_vi = call(api, tok, 'DELETE', f'/api/users?dn={urlquote(u7)}', None, 'k-' + uuid.uuid4().hex, tag_del)
   obs(f'6g deleteUser, NEW key, stale tag, entry already gone: {st_vi} {text_vi[:140]}')
+  live.check(st_vi == 404, '[6] #385: the same with a new key is 404 as well')
   lines = live.audit_lines(uiname)
+  live.check(sum('"outcome":"target_not_found"' in l for l in lines[-2:]) == 2 and not any('upstream_error' in l for l in lines[-2:]),
+             '[6] #385: both missing-target deletes are audited outcome=target_not_found, not reason=upstream_error')
   obs('6h last machine audit lines: ' + ' ## '.join(l[-330:] for l in lines[-2:]))
 
   logs = live.all_logs()

@@ -91,7 +91,7 @@ func TestMachineWriteAudit_FieldNamesGolden(t *testing.T) {
 
 func TestMachineWriteAudit_BuilderProperties(t *testing.T) {
 	outcomes := []string{"", "made-up", sentinelPassword, outcomeApplied, outcomePreconditionFailed, outcomeReplayed,
-		outcomeLDAPRefused, outcomeDeniedGuard, outcomeDeniedProtected, outcomeOutcomeUnknown, outcomeRejected}
+		outcomeLDAPRefused, outcomeDeniedGuard, outcomeDeniedProtected, outcomeTargetNotFound, outcomeOutcomeUnknown, outcomeRejected}
 	for _, st := range []int{200, 204, 403, 412, 428, 429, 500, 503} {
 		for _, oc := range outcomes {
 			for _, plain := range []bool{false, true} {

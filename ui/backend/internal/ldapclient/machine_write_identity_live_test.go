@@ -62,8 +62,11 @@ func TestMachineWriteIdentityLive(t *testing.T) {
 		t.Fatal("invalid M credentials passed")
 	}
 	cfg.Machine.BindPassword = string(password)
-	if err := NewWriteIdentityReader(cfg, []string{"cn=missing," + base}).Check(context.Background(), "uid=baseline,"+base, "inetOrgPerson"); err == nil {
-		t.Fatal("unresolved protected identity passed")
+	if err := r.Check(context.Background(), "uid=missing-target,"+base, "inetOrgPerson"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing target = %v, want domain.ErrNotFound", err)
+	}
+	if err := NewWriteIdentityReader(cfg, []string{"cn=missing," + base}).Check(context.Background(), "uid=baseline,"+base, "inetOrgPerson"); err == nil || errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unresolved protected identity = %v, want a non-NotFound directory error", err)
 	}
 	t.Log("PASS real read-only M: resolved UUID/entryDN/type, protected/alias refusal, invalid bind and unresolved protection fail closed")
 }

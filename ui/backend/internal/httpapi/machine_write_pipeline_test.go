@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"net/url"
@@ -481,6 +482,49 @@ func TestWritePipeline_DeadlineCoversPreReadAndWrite(t *testing.T) {
 	if !ok || dl.After(start.Add(timeout+100*time.Millisecond)) {
 		t.Fatalf("write deadline %v is beyond the request start + timeout (%v): the pre-read restarted it", time.Until(dl), timeout)
 	}
+}
+
+// #385: a target the identity pre-read reports as absent is a permanent 404
+// (audited target_not_found, not upstream_error); a real directory failure
+// stays a retryable 503; a missing target outside the client's subtree is
+// refused by the guard first (403), so existence is never disclosed there.
+func TestWritePipeline_MissingTargetIs404NotRetryable503(t *testing.T) {
+	t.Run("missing target", func(t *testing.T) {
+		w := writeHarness(t, nil, catalogOps())
+		lc := captureLog(t)
+		w.ident.fn = func(string, string) error { return domain.ErrNotFound }
+		h := okHeaders()
+		wantCode(t, w.del(wBob, h), 404, codeNotFound)
+		out := lc.String()
+		if !strings.Contains(out, `"outcome":"target_not_found"`) || !strings.Contains(out, `"reason":"request_rejected"`) || strings.Contains(out, "upstream_error") {
+			t.Fatalf("audit line: %s", out)
+		}
+		if w.dir.binds() != 0 || len(w.dir.callList()) != 0 {
+			t.Fatalf("binds=%d calls=%v", w.dir.binds(), w.dir.callList())
+		}
+		// Nothing was sent, so the key is not burned and not replayed as a 404.
+		w.ident.fn = nil
+		if rec := w.del(wBob, h); rec.Code != 204 || rec.Header().Get("Idempotent-Replayed") != "" {
+			t.Fatalf("retry with the same key: %d %s", rec.Code, rec.Body)
+		}
+	})
+	t.Run("directory failure stays 503", func(t *testing.T) {
+		w := writeHarness(t, nil, catalogOps())
+		lc := captureLog(t)
+		w.ident.fn = func(string, string) error { return errors.New("connection lost") }
+		wantCode(t, w.del(wBob, okHeaders()), 503, codeUnavailable)
+		if !strings.Contains(lc.String(), `"reason":"upstream_error"`) || strings.Contains(lc.String(), "target_not_found") {
+			t.Fatalf("audit line: %s", lc.String())
+		}
+	})
+	t.Run("missing target outside the subtree stays 403", func(t *testing.T) {
+		w := writeHarness(t, nil, catalogOps())
+		w.ident.fn = func(string, string) error { return domain.ErrNotFound }
+		wantCode(t, w.del("uid=ghost,ou=people,dc=example,dc=com", okHeaders()), 403, codeScopeDenied)
+		if len(w.ident.callList()) != 0 {
+			t.Fatalf("pre-read reached for an out-of-subtree target: %v", w.ident.callList())
+		}
+	})
 }
 
 // ---- step 11: error mapping -------------------------------------------------
