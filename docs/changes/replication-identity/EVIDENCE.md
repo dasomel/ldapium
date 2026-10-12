@@ -95,9 +95,11 @@ the dedicated tests' peers-down wipe (`-dedicated.sh`).
 The image refuses the configuration (`olcDbDirectory: invalid path`, `slapcat: bad configuration directory`) and exits 1 in
 every mode (checked by hand in `admin` too). Under Kubernetes the pod crash-loops (K3) without creating anything: the
 peers are byte-identical afterwards. Recovery is to delete BOTH claims; the node refills from the peers (Docker: unified
-`chaos`; Kubernetes: K3). `dedicated` words the refusal as "stored olcSyncrepl makes cn=config unreadable ... refusing to
-start", which misleads (the cause is the missing database directory). Not fixed here (scope); suggest a follow-up issue
-for the message and an operator note in `docs/migration.md`/the runbook.
+`chaos`; Kubernetes: K3). Resolved (#387): the entrypoint now checks, before any slapcat, that the main database's `olcDbDirectory` exists
+whenever the config volume is kept, and refuses in every mode with a message naming the missing database directory
+and the recovery (delete BOTH claims). `dedicated` no longer reports it as an unreadable stored olcSyncrepl (that
+refusal still fires for its real cause). Asserted by unified `chaos` E9; operator notes in `docs/migration.md` and
+`docs/ha-profile.md`.
 
 ### Accepted gaps (each AC has a committed live check or one of these)
 

@@ -578,8 +578,8 @@ if want chaos; then
   if poll strict_ok; then ok "[E12] chaos: after kill and partition the strict dedicated check passes"; else bad "[E12] chaos: strict check failed after kill and partition"; fi
   # AC-004 / T-024: the DATA volume is lost while the CONFIG volume survives. Observed behavior of the
   # image: the stored olcDbDirectory no longer exists, slapcat refuses the configuration and the container
-  # exits 1 (a crash loop under Kubernetes). `admin` behaves the same (checked by hand: "olcDbDirectory: invalid
-  # path"); `dedicated` words it as an unreadable stored olcSyncrepl (misleading, recorded in EVIDENCE.md). It
+  # exits 1 (a crash loop under Kubernetes). Every mode behaves the same: the entrypoint names the missing
+  # database directory and the recovery (#387; `dedicated` used to blame an unreadable stored olcSyncrepl). It
   # is a refusal, not damage: nothing is created, the peers are untouched. The recovery is the documented one for a wiped node:
   # wipe the config volume too (no stale config survives) and start empty; the node refills from the peers.
   fp="$(for n in "$n1" "$n2"; do asearch "$n" -b "$base" '(objectClass=*)' entryCSN | sort | cksum; done | cksum)"
@@ -595,6 +595,8 @@ if want chaos; then
   o="$(docker logs "$n3" 2>&1)"
   check "[E9] chaos: data volume wiped, config volume kept: the node refuses to start (exit non-zero, \"refusing to start\")" "yes:yes" \
     "$([ "$(docker inspect -f '{{.State.ExitCode}}' "$n3")" != 0 ] && echo yes || echo no):$(has 'refusing to start' "$o" && echo yes || echo no)"
+  check "[E9] chaos: ... the refusal names the missing database directory and the recovery (delete BOTH volumes)" "yes:yes:yes" \
+    "$(has 'database directory /var/lib/openldap/data/mdb is missing' "$o" && echo yes || echo no):$(has 'delete BOTH the data and the config volume' "$o" && echo yes || echo no):$(has 'olcSyncrepl makes cn=config unreadable' "$o" && echo no || echo yes)"
   check "[E9] chaos: ... and the peers are untouched by the failed start" "$fp" "$(for n in "$n1" "$n2"; do asearch "$n" -b "$base" '(objectClass=*)' entryCSN | sort | cksum; done | cksum)"
   wipe_node "$n3"
   boot "$n3" "file:${idfile}"
