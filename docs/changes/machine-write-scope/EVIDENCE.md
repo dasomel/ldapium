@@ -213,3 +213,98 @@ Failures during development, kept: run 1 used a `uid=` RDN for a `groupOfNames` 
 Rotation/lockout on in-flight and next requests (item 2 of T-004) is not repeated: `EVIDENCE-drill.md` measured it (next write 503 on every replica, in-flight write completes, `MACHINE_REQUEST_TIMEOUT` bound, D24 lockout and the no-lockout policy).
 
 Not verified here: a userPassword value-prefix oracle (no substring rule to probe); multi-node replication behaviour of W writes (accesslog per node); the Password Modify refusal as an ACL-only proof; a Kubernetes restart (a pod restart is the same empty memory store, but not run).
+
+## #386 objectClass value ADD: ACL/overlay candidates (2026-10-12)
+
+Question (#386, D18): can any ACL or overlay form refuse a W_data **Modify objectClass value ADD** (e.g. `extensibleObject`) while the
+**Add-time** objectClass still works? Evidence only: no decision, fragment (`write-data.ldif`), image or ACL changed by this section.
+
+Reproduce: everything below is section 5d/5e/6 of `scripts/test/test-machine-write-t004-live.py` (committed; the matrix rows are checks, so a
+different slapd behaviour fails the run). Images built from this branch after the rebase onto main `da6b7bb`:
+`docker build -t ldapium:e2e -f image/Dockerfile ./image` (slapd 2.6.15), `docker build -t ldapium-ui:e2e -f ui/Dockerfile ./ui`.
+
+```text
+$ LDAPIUM_IMAGE=ldapium:e2e LDAPIUM_UI_IMAGE=ldapium-ui:e2e python3 scripts/test/test-machine-write-t004-live.py
+...
+All T-004 measurement checks passed: 50 checks in 39s.
+```
+
+Method (5e): the harness of T-004 (accesslog on, seed, the three M rules, the package W_data fragment shifted by 3). Only the W_data
+objectClass rule (fragment `{4}`) is swapped through `cn=config` (`delete: olcAccess` by index, `add: olcAccess: {n}<rule>`); the other
+seven W_data rules stay as shipped, and the script asserts the shipped rule set is restored byte for byte afterwards. Each row runs, as
+W_data unless noted (`ldapadd`/`ldapmodify -x -D <W_data> -y <pwfile>` inside the container), in this order:
+
+P1 Add user with the app's set `top, person, organizationalPerson, inetOrgPerson` (`ldapclient/users.go:107`); P2 Add group `top, groupOfNames`
+(`groups.go:84`); P3 Modify `add: objectClass` `extensibleObject`; P4 the same with `shadowAccount` (auxiliary, MUST uid only); P5 Modify add
+`groupOfNames` + `member` on a user; P6 Add user carrying `inetOrgPerson` + `extensibleObject`; P11 Add user carrying `description` (no W_data
+write rule); P12 Add user carrying `userPassword` (W_data `{2}`: `none`); P7 Modify REPLACE objectClass; P8 Modify DELETE value `top`;
+P10 **admin** Modify add `extensibleObject` on `uid=u02`.
+
+Rules (`W` = `dn.exact="uid=machine-write-data,ou=system,dc=example,dc=org"`, `B` = `dc=example,dc=org`) and the real rc tuples (`OBS 5e` lines):
+
+| ID | objectClass slot | `olcAddContentAcl` | P1 | P2 | P3 | P4 | P5 | P6 | P11 | P12 | P7 | P8 | P10 admin |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| C0 | shipped `to dn.subtree=B attrs=objectClass by W add by * break` | absent (FALSE) | 0 | 0 | **0** | **0** | 65 | 0 | 0 | **0** | 50 | 50 | 0 |
+| C1 | `by W =a` | FALSE | 0 | 0 | **0** | **0** | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C1b | `by W =wa` | FALSE | 0 | 0 | 0 | 0 | 65 | 0 | 0 | 0 | **0** | **0** | 0 |
+| C2 | one `attrs=objectClass val=<v> by W add` per v in top, person, organizationalPerson, inetOrgPerson, groupOfNames | FALSE | 0 | 0 | **0** | **0** | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C2b | C2 without `val=top` | FALSE | 0 | 0 | 50 | 50 | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C3 | `attrs=objectClass val.regex="^(top\|person\|organizationalPerson\|inetOrgPerson\|groupOfNames)$" by W add` | FALSE | 0 | 0 | 50 | 50 | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C3b | C3, all-lower-case pattern | FALSE | 0 | 0 | 50 | 50 | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C4 | `attrs=objectClass val=extensibleObject by W none`, then C0 | FALSE | 0 | 0 | 50 | **0** | 65 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C6 | `attrs=objectClass by W read` (no add) | FALSE | 0 | 0 | 50 | 50 | 50 | 0 | 0 | 0 | 50 | 50 | 0 |
+| C0+ | shipped | **TRUE** | 0 | 0 | **0** | **0** | 65 | 0 | 50 | 50 | 50 | 50 | 0 |
+| C3+ | C3 | **TRUE** | 0 | 0 | 50 | 50 | 65 | 50 | 50 | 50 | 50 | 50 | 0 |
+| C6+ | C6 | **TRUE** | **50** | **50** | 32 | 32 | 32 | 50 | 50 | 50 | 32 | 32 | 0 |
+| C5 | C0 + constraint overlay `olcConstraintAttribute: objectClass regex "^(top\|person\|organizationalPerson\|inetOrgPerson\|groupOfNames\|organizationalUnit\|dcObject\|organization)$"` | FALSE | 0 | 0 | 19 | 19 | 65 | **19** | 0 | 0 | 50 | 50 | **19** |
+
+(P5 65 = `Object class violation ... invalid structural object class chain`; 32 in C6+ = the Modify probes hit an entry the refused P1 never created.)
+
+`olcAddContentAcl` (slapd.access(5)/slapd-config(5)): when TRUE slapd checks `add` (`=a`) on **every attribute value of an Add**; default FALSE.
+`image/entrypoint.sh`, the chart and the fixtures never set it (`grep -rni addcontentacl image/ charts/ scripts/ docs/` -> nothing before this
+section), and 5e asserts the shipped main database has no `olcAddContentAcl` value (`OBS 5e olcAddContentAcl on the main database as shipped:
+absent (default FALSE)`). Rows C0+/C3+/C6+ flip it to TRUE on the running database for the measurement and remove it again.
+
+Findings (2.6.15, this layout):
+
+1. **With `olcAddContentAcl` FALSE (what ships), slapd's Add does not evaluate per-attribute rules**; only `entry`/`children` (`{3}`) gate it: P1/P2
+   succeed with no `add` on objectClass (C6), and P6/P11/P12 succeed whatever the attribute rules say. D18's premise "Add checks each value,
+   so objectClass needs `add`" (marked unverified in D18) holds **only with `olcAddContentAcl` TRUE** (C6+: the app's own user/group Add is
+   refused 50).
+2. **Password on Add (new, broader than #386)**: with FALSE, W_data creates a user with a `userPassword` of its choosing by a direct Add and the
+   entry binds with it (`OBS 5d ... rc 0; stored: True; bind as the new entry with that password: rc 0`, a check in 5d). AC-008's "W_data ACL
+   `none` on `userPassword`" holds for Modify only; on Add the `createUser` closed body (D15/D8b) is the only barrier. With TRUE the same Add is
+   refused 50 under the shipped fragment (C0+ P12). Not decided here; reported to the maintainer.
+3. `add` = `=a` (C0 = C1) grants the value add; `=wa` also grants REPLACE/DELETE (C1b): no privilege letter separates Add-time from Modify value add.
+4. `val=top` matches every objectClass value (C2 vs C2b): objectClass equality behaves subclass-aware here (inferred from the behaviour, not from
+   source); a value allowlist must not list `top`. `val.regex` matched in both letter cases (C3 = C3b).
+5. Forms that refuse the Modify value add and keep the app's Add, by `olcAddContentAcl`:
+   - FALSE (ships): C6, C2b, C3/C3b. None stops an Add-time extra class (P6 0) or an Add-time secret (P12 0).
+   - TRUE: C3 works (P1/P2 0, P3/P4/P6/P11/P12 50); **C6 breaks user and group creation** (C6+ P1/P2 50). C2b was not run with TRUE.
+   So C3 is the only form measured to be correct under both settings; C6 is correct only while the flag stays FALSE.
+6. A blocklist (C4) stops only the listed value (P4 `shadowAccount` lands).
+7. The constraint overlay (C5) refuses the value adds **and** the Add-time extra class (P6 19), but it is global: the admin is refused too
+   (P10 19), every class any identity or seed uses must be listed, and it does not stop P11/P12.
+8. A separate W identity for create was not tried: a D3/D4 identity-model change (new Secret, fragment, compartment), out of #386's scope.
+
+App guard end to end (section 6 of the same run):
+
+```text
+OBS 6i patchUser through the UI carrying objectClass ['dn', 'objectClass']: 400 {"error":"request body is not a permitted machine write body",...
+OBS 6i patchUser through the UI carrying objectClass ['dn', 'mail', 'objectClass']: 400 {"error":"request body is not a permitted machine write body",...
+PASS: [6] #386: a patchUser carrying objectClass is refused by the app guard ([400, 400]), objectClass unchanged, no modify reached slapd (1 -> 1 accesslog rows)
+```
+
+Go regression tests (`httpapi/machine_write_order_test.go`):
+
+- `TestWritePipeline_Step4_ObjectClassNameIsOutsideTheClosedFieldSet`: six bodies the type/null rules would admit if `objectClass` were a listed
+  field (patch string, patch beside `mail`, patch with the key written as the JSON escape `objectClass` — the test asserts the escape is in
+  the body —, patch `null`, create string, member add). Each must be 400/403 with no M pre-read, bind, directory call or idempotency record; a
+  positive control (same patch without objectClass) reaches `PatchUser`. Mutation (scratch, reverted): `objectClass` added to the createUser,
+  patchUser and addGroupMember lists in `machine_write_attributes.go` -> all six subtests fail
+  (`binds=1 calls=[] ident=[uid=bob,...|inetOrgPerson], want none` on the patch rows).
+- `TestWritePipeline_Step4_ObjectClassShapesRefusedByTypeOrSpelling`: array values on patch/create and a lower-case `objectclass` key. They stay
+  refused under the same mutation (non-string value, unlisted spelling), so they pin those rules and do not detect a name-block regression.
+
+Negative control "guard disabled -> value lands" through the UI: **not run** (needs a modified UI build). The guard-bypassed equivalent is the
+direct W_data Modify in 5/5e (C0 P3 rc 0).
