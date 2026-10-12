@@ -255,6 +255,14 @@ def main():
                 extra={'MACHINE_WRITE_LOCK_ENABLED': 'false'})
   refuses_start('nopriv', 'a lock ceiling without MACHINE_WRITE_PRIVILEGED_GROUPS', 'MACHINE_WRITE_PRIVILEGED_GROUPS', privileged='-')
 
+  # Start-up validation is the first layer behind the two guards a drill cannot isolate at request time: a ceiling that contains the
+  # seed, and a privileged group on the allow-list, never start. (The request-time guards behind them are pinned in unit tests
+  # that inject such a config: TestGroupPipeline_SeedIsProtectedWithoutTheCeiling / _TargetRestrictions.)
+  refuses_start('seedin', 'a write ceiling that contains MACHINE_WRITE_GROUP_SEED_DN', 'must not overlap a protected identity',
+                extra={'MACHINE_WRITE_GROUP_SEED_DN': user_dn('seed-in')})
+  refuses_start('privlist', 'a privileged group on a client\'s MACHINE_WRITE_GROUPS', 'must not list a privileged group',
+                groups=[G1, ADMINS])
+
   A = replica('a')
   tok = token()
 
@@ -331,6 +339,7 @@ def main():
   wd0, wl0, mm0 = all_binds()
   g1_tag = etag_of(A, tok, G1)
   new1_tag = etag_of(A, tok, NEW1)
+  untouched = {dn: etag_of(A, tok, dn) for dn in (ADMINS, G2, GROUPS)}
   mm0 = binds(MACHINE_DN)  # the ETag reads above are M binds
   rid_priv1, rid_priv2 = rid_new('priv1'), rid_new('priv2')
   neg = [
@@ -359,9 +368,20 @@ def main():
     live.check(res[0] == exp, f'[C] "{name}" -> {exp} (got {res[0]} {res[2][:100]})')
   wd1, wl1, mm1 = all_binds()
   live.check((wd1, wl1) == (wd0, wl0), '[C] none of the refused group requests bound as W_data or W_lock')
-  live.check(entry_exists(ADMINS) and op_attr(ADMINS, 'description') == [] and entry_exists(G2) and entry_exists(GROUPS)
+  live.check(all(etag_of(A, tok, dn) == tag_ for dn, tag_ in untouched.items()) and op_attr(ADMINS, 'description') == []
              and op_attr(G1, 'cn') == ['g01'] and etag_of(A, tok, G1) == g1_tag and etag_of(A, tok, NEW1) == new1_tag,
-             '[C] the privileged group, g02, the root, g01 and the created group are untouched (same ETags)')
+             '[C] the privileged group, g02, the ceiling root, g01 and the created group are untouched (same ETags before and after)')
+  # (c) the target-type guard ALONE: a USER DN on the allow-list (inside the ceiling, not protected) is refused by the M
+  # pre-read class assertion only; the message differs from the protected-DN / allow-list refusals ("target is not permitted").
+  TY = replica('typ', groups=[G1, GDEL, user_dn('victim')])
+  tokty = token()
+  wd0, wl0, _ = all_binds()
+  for label, run in (('patchGroup', lambda: patch_group(TY, tokty, user_dn('victim'), {'description': 'x'}, etag_of(TY, tokty, user_dn('victim')))),
+                     ('deleteGroup', lambda: delete_group(TY, tokty, user_dn('victim'), etag_of(TY, tokty, user_dn('victim'))))):
+    res = run()
+    live.check(res[0] == 403 and 'target is not permitted for machine writes' in res[2] and entry_exists(user_dn('victim')) and op_attr(user_dn('victim'), 'description') == [],
+               f'[C] target-type guard alone: {label} on an allow-listed USER DN -> 403 "target is not permitted", user untouched ({res[0]} {res[2][:80]})')
+  live.check(all_binds()[:2] == (wd0, wl0), '[C] the type-mismatch refusals bound neither W_data nor W_lock (the pre-read refuses before any W bind)')
   pa = audit('a', rid_priv1) + audit('a', rid_priv2)
   live.check(len(pa) == 2 and all(e['outcome'] == 'denied_protected' and e['operation'] in ('patchGroup', 'deleteGroup') for e in pa),
              '[C] the privileged-group refusals are audited as denied_protected: ' + json.dumps([(e.get('operation'), e.get('outcome')) for e in pa]))
@@ -415,6 +435,9 @@ def main():
   other = token('svc-other')
   st, h, _ = lock(A, other, user_dn('lk2'), etag_of(A, other, user_dn('lk2')), key=key)
   live.check(st in (200, 204) and h.get('Idempotent-Replayed') != 'true', f'[D] another client with the same key is independent: executed, not replayed ({st})')
+  res = lock(A, tok, G2, etag_of(A, tok, G2))
+  live.check(res[0] == 403 and 'target is not permitted for machine writes' in res[2],
+             f'[D] lockUser on a group DN is refused by the target-type guard (its own message, not the protected-DN one): {res[2][:90]}')
   # refusals: no bind of any W identity
   wd0, wl0, mm0 = all_binds()
   lk5 = user_dn('lk5')
@@ -425,7 +448,7 @@ def main():
   wd0, wl0, _ = all_binds()
   rid_priv = rid_new('lkpriv')
   neg = [
-    ('lockUser on a group DN (target-type assertion)', lambda: lock(A, tok, G2, g02_tag), 403),
+    ('lockUser on a group DN inside the ceiling (target-type assertion only)', lambda: lock(A, tok, G2, g02_tag), 403),
     ('lockUser on W_data', lambda: lock(A, tok, WDATA_DN, STALE), 403),
     ('lockUser on W_lock', lambda: lock(A, tok, WLOCK_DN, STALE), 403),
     ('lockUser on M', lambda: lock(A, tok, MACHINE_DN, STALE), 403),
@@ -516,7 +539,8 @@ def main():
   live.check(r.returncode == 0 and op_attr(victim, 'pwdAccountLockedTime') == [MARKER], '[E] W_lock writes pwdAccountLockedTime (its one job)')
   ldap.admin_tool('ldapmodify', [], f'dn: {victim}\nchangetype: modify\ndelete: pwdAccountLockedTime\n')
   r = as_wlock(f'dn: {lk3}\nchangetype: modify\nreplace: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
-  obs(f'E-07 W_lock direct write on a PRIVILEGED member -> rc={r.returncode} ({"no ACL filter backstop in the fixture: the application check is the only guard" if r.returncode == 0 else "refused by the ACL"})')
+  live.check(r.returncode == 0 and op_attr(lk3, 'pwdAccountLockedTime') == [MARKER],
+             '[E] F-3 / E-07 PINNED: the shipped write-lock.ldif has no privileged-group filter, so W_lock CAN lock a privileged member directly; the application check in lockUser is the only defence (if this ever turns into a refusal, update CHANGE.md Revision 3)')
   ldap.admin_tool('ldapmodify', [], f'dn: {lk3}\nchangetype: modify\ndelete: pwdAccountLockedTime\n')
   r = as_wdata(f'dn: {victim}\nchangetype: modify\nreplace: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
   live.check(r.returncode != 0 and op_attr(victim, 'pwdAccountLockedTime') == [], '[E] AC-006 W_data cannot write pwdAccountLockedTime')
@@ -540,12 +564,15 @@ def main():
     try_bind('lk7', 'wrong-password-' + str(i))
   for i in range(5):
     try_bind('lk6', 'wrong-password-' + str(i))
+  pol_attrs = ldap.admin_tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', policy, '-s', 'base', 'pwdLockoutDuration', 'pwdMaxFailure']).stdout
+  live.check('pwdLockoutDuration: 0' in pol_attrs and 'pwdMaxFailure: 3' in pol_attrs and op_attr(user_dn('lk7'), 'pwdPolicySubentry') == [policy],
+             f'[F] the duration-0 policy exists and is assigned to lk7 (pwdPolicySubentry {op_attr(user_dn("lk7"), "pwdPolicySubentry")}); default policy would need 5 failures, this one locks after 3')
   a_val, b_val, c_val = op_attr(user_dn('lk6'), 'pwdAccountLockedTime'), op_attr(user_dn('lk7'), 'pwdAccountLockedTime'), op_attr(lk1, 'pwdAccountLockedTime')
   obs(f'lock values: (a) ppolicy timestamp lock lk6={a_val}; (b) duration-0 policy lock lk7={b_val}; (c) machine lockUser lk1={c_val}')
   live.check(len(a_val) == 1 and a_val[0] != MARKER, f'[F] (a) real ppolicy brute-force lock holds a timestamp: {a_val}')
   # CHANGE.md P22(b) assumed this lock has the SAME value as the machine marker. On the shipped build it does not: ppolicy
   # stores the lock time even with pwdLockoutDuration=0 (the lock simply never expires). Recorded, not assumed (EVIDENCE.md).
-  live.check(len(b_val) == 1 and try_bind('lk7', user_pw['lk7']) != 0,
+  live.check(len(b_val) == 1 and re.fullmatch(r'\d{14}Z', b_val[0]) and try_bind('lk7', user_pw['lk7']) != 0 and op_attr(user_dn('lk7'), 'pwdFailureTime') != [],
              f'[F] (b) a pwdLockoutDuration=0 policy lock is a permanent lock: value {b_val} (marker form: {b_val == [MARKER]}), the correct password cannot bind')
   live.check(c_val == [MARKER], f'[F] (c) the machine lockUser marker is {c_val}')
 
