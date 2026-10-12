@@ -58,6 +58,9 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   target outside the client's subtree is still the guard's 403. The audit line carries
   the new `outcome=target_not_found` (`reason=request_rejected`) rather than
   `reason=upstream_error`.
+- Chart: new optional `ui.machineAuth.write.groupSeedDN` renders `MACHINE_WRITE_GROUP_SEED_DN`
+  (empty by default; the default render is byte-identical). The chart's `allowedClients`
+  schema still lists only the read scopes, so write scopes cannot be granted through the chart yet.
 - Machine group and lock writes (#379, v2b, accepted 2026-10-12), **default off**:
   with `MACHINE_WRITE_ENABLED=true` (separate switch, default off; off, all of them
   stay 403 `scope_denied` with no bind, byte-identical to before) four more

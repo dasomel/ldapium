@@ -133,6 +133,10 @@ check "privileged groups are rendered" has "$r" 'name: MACHINE_WRITE_PRIVILEGED_
               value: "cn=admins,ou=groups,dc=example,dc=org"'
 check "write limits default to the application defaults" has "$r" 'name: MACHINE_WRITE_GLOBAL_SLOTS
               value: "2"'
+check "group seed absent by default" lacks "$r" 'MACHINE_WRITE_GROUP_SEED_DN'
+rs=$(render "${wr[@]}" --set 'ui.machineAuth.write.groupSeedDN=uid=group-seed\,ou=system\,dc=example\,dc=org')
+check "group seed renders as a plain value when set" has "$rs" 'name: MACHINE_WRITE_GROUP_SEED_DN
+              value: "uid=group-seed,ou=system,dc=example,dc=org"'
 check "lock identity absent by default" lacks "$r" 'MACHINE_WRITE_LOCK'
 check "no credential identity variable" lacks "$r" 'MACHINE_WRITE_CRED'
 check "Recreate strategy with idempotency" has "$r" 'type: Recreate'
