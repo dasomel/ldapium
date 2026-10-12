@@ -339,7 +339,7 @@ func TestWritePipeline_TableValidation(t *testing.T) {
 	good := catalogOps()[1]
 	for name, ops := range map[string][]machineOp{
 		"get":         {{ID: "patchUser", Method: "GET", Route: "/api/users", Scope: good.Scope}},
-		"unknown id":  {{ID: "createGroup", Method: "POST", Route: "/api/groups", Scope: "directory.groups.create"}},
+		"unknown id":  {{ID: "unlockUser", Method: "POST", Route: "/api/users/unlock", Scope: "directory.users.unlock"}},
 		"wrong route": {{ID: good.ID, Method: good.Method, Route: "/api/entry", Scope: good.Scope}},
 		"read scope":  {{ID: good.ID, Method: good.Method, Route: good.Route, Scope: "directory.users.read"}},
 		"wrong scope": {{ID: good.ID, Method: good.Method, Route: good.Route, Scope: "directory.users.delete"}},
@@ -349,7 +349,7 @@ func TestWritePipeline_TableValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 5 {
+	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 8 {
 		t.Fatalf("catalog: %v %d", err, len(m))
 	}
 }

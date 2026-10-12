@@ -30,3 +30,25 @@ func TestMachineWriteRevisionControls(t *testing.T) {
 		t.Fatal("human unconditional controls changed")
 	}
 }
+
+// v2b D379-3: a machine group create seeds the configured placeholder, never the
+// bound DN (W_data); the human path keeps the bound DN byte for byte.
+func TestGroupSeedMember(t *testing.T) {
+	const bound, seed = "cn=writer,ou=system,dc=example,dc=org", "cn=group-seed,ou=system,dc=example,dc=org"
+	if got, err := groupSeedMember(context.Background(), bound); err != nil || got != bound {
+		t.Fatalf("human path = %q, %v, want the bound DN", got, err)
+	}
+	// A seed in the context is ignored without the machine constraints: only the
+	// machine write pipeline sets both.
+	if got, err := groupSeedMember(WithMachineGroupSeed(context.Background(), seed), bound); err != nil || got != bound {
+		t.Fatalf("seed without constraints = %q, %v, want the bound DN", got, err)
+	}
+	ctx := WithMachineGroupSeed(WithMachineWriteConstraints(context.Background()), seed)
+	if got, err := groupSeedMember(ctx, bound); err != nil || got != seed {
+		t.Fatalf("machine path = %q, %v, want the seed", got, err)
+	}
+	// Machine constraints without a seed fail instead of falling back to W_data.
+	if got, err := groupSeedMember(WithMachineWriteConstraints(context.Background()), bound); !errors.Is(err, domain.ErrInvalidInput) || got != "" {
+		t.Fatalf("machine path without a seed = %q, %v", got, err)
+	}
+}

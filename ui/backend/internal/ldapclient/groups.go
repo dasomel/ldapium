@@ -63,7 +63,8 @@ func entryToGroup(e *ldap.Entry) domain.Group {
 // group is seeded with the creating (bound) user as its first member —
 // there is no privileged service account to use as a placeholder instead.
 // Callers can remove that membership immediately afterwards via
-// RemoveMember once a real member has been added.
+// RemoveMember once a real member has been added. A machine write seeds the
+// configured placeholder instead (groupSeedMember).
 func (c *client) CreateGroup(ctx context.Context, base string, in domain.GroupInput) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -76,6 +77,10 @@ func (c *client) CreateGroup(ctx context.Context, base string, in domain.GroupIn
 	if err != nil {
 		return "", err
 	}
+	seed, err := groupSeedMember(ctx, c.dn)
+	if err != nil {
+		return "", err
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -83,7 +88,7 @@ func (c *client) CreateGroup(ctx context.Context, base string, in domain.GroupIn
 	add := ldap.NewAddRequest(dn, nil)
 	add.Attribute("objectClass", []string{"top", "groupOfNames"})
 	add.Attribute("cn", []string{in.CN})
-	add.Attribute("member", []string{c.dn})
+	add.Attribute("member", []string{seed})
 	if in.Description != "" {
 		add.Attribute("description", []string{in.Description})
 	}

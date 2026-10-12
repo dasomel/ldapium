@@ -14,7 +14,7 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 	if len(raw) > maxIdempotencyRequestBody {
 		return false
 	}
-	if operation == "deleteUser" {
+	if operation == "deleteUser" || operation == "deleteGroup" {
 		return len(strings.TrimSpace(string(raw))) == 0
 	}
 	var allowed []string
@@ -25,6 +25,12 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 		allowed = []string{"dn", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit"}
 	case "addGroupMember":
 		allowed = []string{"groupDn", "memberDn"}
+	case "createGroup":
+		allowed = []string{"cn", "description"}
+	case "patchGroup":
+		// D379-5: description only. cn is the group's RDN and the downstream role
+		// key, so a rename is not a machine write.
+		allowed = []string{"dn", "description"}
 	default:
 		return false
 	}
@@ -45,7 +51,9 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 			return false
 		}
 		if string(value) == "null" {
-			if operation != "patchUser" || name == "dn" || name == "cn" || name == "sn" {
+			clearable := operation == "patchUser" && name != "dn" && name != "cn" && name != "sn" ||
+				operation == "patchGroup" && name == "description"
+			if !clearable {
 				return false
 			}
 			continue

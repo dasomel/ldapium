@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/labstack/echo/v4"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
@@ -246,7 +247,8 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 	allowed := map[string]bool{}
 	switch r.op.Shape {
 	case shapeCreate:
-		allowed["uid"] = true
+		allowed["uid"] = r.op.Kind != "group"
+		allowed["cn"] = r.op.Kind == "group"
 	case shapeTarget:
 		allowed["dn"] = true
 	case shapeMembership:
@@ -285,6 +287,13 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 	}
 	switch r.op.Shape {
 	case shapeCreate:
+		if r.op.Kind == "group" {
+			cn, err := need("cn")
+			if err != nil {
+				return nil, err
+			}
+			return groupCreateDNs(cn, r.w.s.cfg.GroupCreateBase)
+		}
 		uid, err := need("uid")
 		if err != nil {
 			return nil, err
@@ -313,6 +322,22 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 	}
 }
 
+// groupCreateDNs is the create shape of a group: cn under GroupCreateBase (the
+// parent, which may equal a ceiling root). The DN the guards judge must be the
+// DN the directory will create, so a cn that does not parse back as exactly one
+// plain RDN value (comma, escape, multi-valued or BER spelling) is refused.
+func groupCreateDNs(cn, base string) ([]writeDN, error) {
+	if err := validate.CN(cn); err != nil {
+		return nil, err
+	}
+	raw := "cn=" + cn + "," + base
+	dn, err := ldap.ParseDN(raw)
+	if err != nil || len(dn.RDNs) < 2 || len(dn.RDNs[0].Attributes) != 1 || dn.RDNs[0].Attributes[0].Value != cn {
+		return nil, errors.New("cn is not permitted for a machine-created group")
+	}
+	return []writeDN{{raw: raw}, {raw: base, parent: true}}, nil
+}
+
 func bodyString(fields map[string]json.RawMessage) func(string) (string, bool) {
 	return func(name string) (string, bool) {
 		var s string
@@ -330,7 +355,9 @@ func (r *wreq) step5Denylist() error {
 			return r.deny(reasonScope, outcomeDeniedProtected, codeScopeDenied, msgWriteDNRefused)
 		}
 	}
-	if r.op.Shape == shapeMembership && !r.pol.groupListed(r.dns[0].raw) {
+	// D379-4: a created group is not on the list, so patch/delete/member changes
+	// on it stay refused until the operator lists its exact DN.
+	if r.op.Kind == "group" && r.op.Shape != shapeCreate && !r.pol.groupListed(r.dns[0].raw) {
 		return r.deny(reasonScope, outcomeDeniedGuard, codeScopeDenied, "group is not writable for this machine client")
 	}
 	return nil
@@ -395,6 +422,12 @@ func (r *wreq) execute(c echo.Context) error {
 		r.setOutcome(outcomeRejected)
 		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine write identity is not configured")
 	}
+	seed := r.w.s.cfg.Machine.Write.GroupSeedDN
+	if r.op.ID == "createGroup" && seed == "" {
+		r.st.setReason(reasonUpstream)
+		r.setOutcome(outcomeRejected)
+		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine group seed is not configured")
+	}
 	ctx, cancel := context.WithTimeout(c.Request().Context(), r.w.exec.timeout)
 	defer cancel()
 	for _, d := range r.dns {
@@ -425,7 +458,11 @@ func (r *wreq) execute(c echo.Context) error {
 	return r.w.exec.runAs(c, r.p, id.BindDN, id.BindPassword, func(c echo.Context) error {
 		c.Set(definitiveKey, false) // from here on a 5xx may hide an applied write
 		c.Set(machineIdempotencyDoneKey, true)
-		c.SetRequest(c.Request().WithContext(ldapclient.WithMachineWriteConstraints(c.Request().Context())))
+		ctx := ldapclient.WithMachineWriteConstraints(c.Request().Context())
+		if r.op.ID == "createGroup" {
+			ctx = ldapclient.WithMachineGroupSeed(ctx, seed)
+		}
+		c.SetRequest(c.Request().WithContext(ctx))
 		return r.next(c)
 	})
 }
