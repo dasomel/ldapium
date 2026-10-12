@@ -196,7 +196,9 @@ echo "BASE=$BASE"
 
 잠금을 쓰지 않는 배포는 건너뛴다. `MACHINE_WRITE_LOCK_ENABLED=false`에서 `MACHINE_ALLOWED_CLIENTS`가 `directory.users.lock`을 상한에 쓰면 기동이 실패한다(REQ-006).
 머신 `lockUser`는 `W_lock`으로 bind하기 전에 `M`이 대상의 `memberOf`와 각 `MACHINE_WRITE_PRIVILEGED_GROUPS` 그룹의 `member` 목록을 읽어, 하나라도 **직접** 속하면 403으로 거부한다(D379-8, D379-17). 그룹을 읽을 수 없으면(`M` ACL이 `member`를 숨김 포함) 거부이고, lock scope 상한에는 비어 있지 않은 `MACHINE_WRITE_PRIVILEGED_GROUPS`가 필요하다.
+`memberOf` 값이 ASCII가 아니거나 파싱되지 않으면(OID 타입·이상한 공백·BER 포함) 특권 여부를 증명할 수 없으므로 그 사용자의 `lockUser`는 거부된다(fail closed, 보안이 아니라 가용성 영향: 그런 DN의 그룹에 속한 사용자는 머신으로 잠글 수 없다).
 중첩 그룹 멤버십과 읽은 뒤 추가된 멤버십(TOCTOU)은 이 검사가 보지 못한다(수용한 잔여 위험, T-015 드릴이 실측으로 확인: 중첩 그룹 멤버는 잠긴다). 이 검사는 애플리케이션 보강이고, 위 ACL 조각에는 특권 그룹 filter가 없다(라이브 증명 전에는 ACL 백스톱이라 부르지 않는다).
+정적 `openapi.json`은 `MACHINE_WRITE_ENABLED`가 꺼져 있어도 `createGroup`·`patchGroup`·`deleteGroup`·`lockUser`(앞의 다섯 개와 같이)에 `machineBearer`/`x-machine-scope`를 선언한다. 문서일 뿐 동작은 그대로이며, 스위치가 꺼져 있으면 모두 403 `scope_denied`·bind 0이다.
 머신 경로에는 잠금 해제가 없다: `directory.users.unlock`은 상한에 쓸 수 없고 `unlockUser`는 어떤 표에도 없다(D379-7, AC-005b). 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 8개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
 
 ```ldif
