@@ -312,22 +312,27 @@ func TestWritePipeline_Step4_ClosedBodiesAndParameters(t *testing.T) {
 }
 
 // #386 (D18): slapd lets W_data ADD an objectClass value on Modify (measured,
-// EVIDENCE.md "#386 objectClass value ADD"), so this closed-body guard is the
-// only barrier on that path. Every shape that could carry an objectClass value
-// is refused before the M pre-read, the W bind or any directory call, and the
-// key stays unburned; the same patch without objectClass reaches PatchUser.
-func TestWritePipeline_Step4_ObjectClassValueAddNeverReachesTheDirectory(t *testing.T) {
+// EVIDENCE.md "#386 objectClass value ADD"), so the closed field set is the
+// only barrier on that path. Every case here is a body that the type and null
+// rules would ADMIT if "objectClass" were in the operation's field set, so each
+// one fails only when the name block goes (checked by adding "objectClass" to
+// the three lists in machineWriteBodyAllowed: every subtest fails). Refused
+// before the M pre-read, the W bind or any directory call; key unburned.
+func TestWritePipeline_Step4_ObjectClassNameIsOutsideTheClosedFieldSet(t *testing.T) {
 	bob := jsonStr(wBob)
+	escaped := `"objectCl` + "\\" + `u0061ss"` // a JSON escape that decodes to objectClass
 	for name, r := range map[string]wreqSpec{
-		"patch value add (array)":         {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":["extensibleObject"]}`},
+		"patch objectClass only":          {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":"extensibleObject"}`},
 		"patch value add beside mail":     {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"mail":"a@example.org","objectClass":"extensibleObject"}`},
-		"patch lower-case key":            {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectclass":"extensibleObject"}`},
-		"patch escaped key":               {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":"extensibleObject"}`},
+		"patch escaped key":               {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,` + escaped + `:"extensibleObject"}`},
 		"patch null objectClass":          {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":null}`},
-		"create with an extra class":      {method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"B","sn":"B","objectClass":["inetOrgPerson","extensibleObject"]}`},
+		"create with objectClass":         {method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"B","sn":"B","objectClass":"extensibleObject"}`},
 		"member add carrying objectClass": {method: "POST", path: "/api/groups/members", body: `{"groupDn":` + jsonStr(wTeam) + `,"memberDn":` + bob + `,"objectClass":"extensibleObject"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if name == "patch escaped key" && !strings.Contains(r.body, `\u0061`) {
+				t.Fatalf("the body lost its JSON escape: %s", r.body)
+			}
 			w := writeHarness(t, nil, catalogOps())
 			r.headers = okHeaders()
 			if rec := w.send(r); rec.Code != 400 && rec.Code != 403 {
@@ -344,6 +349,28 @@ func TestWritePipeline_Step4_ObjectClassValueAddNeverReachesTheDirectory(t *test
 	w := writeHarness(t, nil, catalogOps())
 	if rec := w.patch(wBob, okHeaders()); rec.Code != 204 || len(w.dir.callList()) != 1 {
 		t.Fatalf("control patch: %d %s calls=%v", rec.Code, rec.Body, w.dir.callList())
+	}
+}
+
+// #386: objectClass shapes the guard refuses for reasons OTHER than the name
+// block (a non-string value, a key spelled differently from any listed field).
+// They stay refused if "objectClass" were ever listed, so they do not detect a
+// regression of the name block; they pin the type and exact-spelling rules.
+func TestWritePipeline_Step4_ObjectClassShapesRefusedByTypeOrSpelling(t *testing.T) {
+	bob := jsonStr(wBob)
+	for name, r := range map[string]wreqSpec{
+		"patch value add (array)":    {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectClass":["extensibleObject"]}`},
+		"create with an extra class": {method: "POST", path: "/api/users", body: `{"uid":"bob","cn":"B","sn":"B","objectClass":["inetOrgPerson","extensibleObject"]}`},
+		"patch lower-case key":       {method: "PATCH", path: "/api/users", body: `{"dn":` + bob + `,"objectclass":"extensibleObject"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := writeHarness(t, nil, catalogOps())
+			r.headers = okHeaders()
+			if rec := w.send(r); rec.Code != 400 && rec.Code != 403 {
+				t.Fatalf("%d %s, want a refusal", rec.Code, rec.Body)
+			}
+			w.untouched(t)
+		})
 	}
 }
 

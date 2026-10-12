@@ -10,7 +10,8 @@ are what docs/changes/machine-write-scope/EVIDENCE.md (T-004) quotes; the checks
   2. notAllowedOnNonLeaf (rc 66) and container delete as W_data
   3. `by dn.exact=W write` vs the memberOf and refint overlays (W has no access to memberOf)
   4. entryCSN / objectClass assertion (the AND filter of the If-Match precondition) evaluated for W_data
-  5. objectClass on Add versus Modify (D18), and the Password Modify extended operation
+  5. objectClass on Add versus Modify (D18), and the Password Modify extended operation; 5e the #386 ACL/overlay candidate
+     matrix (objectClass slot swapped, olcAddContentAcl TRUE, constraint overlay), restored afterwards
   6. Idempotency-Key replay after a UI restart (the memory store is empty again)
 
 The W password rotation / lockout effect on in-flight and next requests is measured by test-machine-write-drill.py
@@ -45,6 +46,11 @@ WRITE_SCOPES = ['directory.users.create', 'directory.users.update', 'directory.u
 
 def obs(text):
   print('OBS ' + text, flush=True)
+
+
+def acl_rules(ldap, main_db):
+  out = ldap.config_tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', main_db, '-s', 'base', 'olcAccess']).stdout
+  return [re.sub(r'^\{\d+\}', '', l[len('olcAccess: '):]) for l in out.splitlines() if l.startswith('olcAccess: ')]
 
 
 def main():
@@ -207,11 +213,16 @@ def main():
              '[5] KNOWN LIMIT (#386): Modify ADD of an objectClass VALUE is allowed by `add` (extensibleObject); only the application closed-attribute guard stops it (D18 contradicted for value-add). '
              'An ACL fix (EVIDENCE.md "#386") must flip this check deliberately; section 6 asserts the app guard end to end')
   # #386: slapd's Add evaluates `entry`/`children` only, not per-attribute rules: a secret on the Add lands
-  r_pwadd = w('ldapadd', [], f'dn: uid=t5p,{PEOPLE}\nobjectClass: inetOrgPerson\nuid: t5p\ncn: t5p\nsn: t5p\nuserPassword: {live.secret("AddPw-" + secrets.token_urlsafe(12))}\n')
+  add_pw = live.secret('AddPw-' + secrets.token_urlsafe(12))
+  r_pwadd = w('ldapadd', [], f'dn: uid=t5p,{PEOPLE}\nobjectClass: inetOrgPerson\nuid: t5p\ncn: t5p\nsn: t5p\nuserPassword: {add_pw}\n')
   pw_landed = any(l.lower().startswith('userpassword') for l in attrs('uid=t5p,' + PEOPLE, 'userPassword'))
-  obs(f'5d W_data Add of a user carrying userPassword (rule {{2}} gives W_data none on it): rc {r_pwadd.returncode}; stored: {pw_landed}')
-  live.check(r_pwadd.returncode == 0 and pw_landed,
-             '[5] KNOWN LIMIT (#386): an Add is not checked per attribute, so W_data creates an entry WITH a userPassword; the createUser closed body (D15) is the only barrier')
+  ldap.put_password('/tmp/.pw-t5p', add_pw)
+  bind_t5p = ldap.tool('ldapwhoami', [], 'uid=t5p,' + PEOPLE, '/tmp/.pw-t5p')
+  obs(f'5d W_data Add of a user carrying userPassword (rule {{2}} gives W_data none on it): rc {r_pwadd.returncode}; stored: {pw_landed}; '
+      f'bind as the new entry with that password: rc {bind_t5p.returncode}')
+  live.check(r_pwadd.returncode == 0 and pw_landed and bind_t5p.returncode == 0,
+             '[5] KNOWN LIMIT (#386, olcAddContentAcl FALSE): an Add is not checked per attribute, so W_data creates a BINDABLE entry with its own userPassword; '
+             'the createUser closed body (D15) is the only barrier')
   adm('ldapdelete', ['uid=t5p,' + PEOPLE])
   r_ocadd = w('ldapadd', [], f'dn: cn=t5b,{PEOPLE}\nobjectClass: groupOfNames\ncn: t5b\nmember: {ADMIN_DN}\n')
   obs(f'5b W_data Add of a groupOfNames with member={ADMIN_DN} under the user subtree: rc {r_ocadd.returncode}')
@@ -232,6 +243,99 @@ def main():
   live.check(r_pm.returncode != 0 and 'Insufficient access (50)' in r_pm.stdout + r_pm.stderr, '[5] secret attributes `none` stop the Password Modify extended operation of W_data (50)')
   w('ldapdelete', [u5])
   w('ldapdelete', ['cn=t5b,' + PEOPLE])
+
+  # ======== 5e. #386: which ACL / overlay forms refuse the Modify objectClass value ADD (candidate matrix) =======
+  # Only the W_data objectClass rule (fragment {4}) is swapped; the shipped rule and settings are restored and
+  # asserted afterwards. Probe order matters (P7/P8 run after the value adds). Expected rc per probe is what
+  # EVIDENCE.md "#386" records; a different slapd behaviour fails the matching check.
+  oc_rules = acl_rules(ldap, main_db)
+  slot = next(i for i, r in enumerate(oc_rules) if 'attrs=objectClass by dn.exact="' + WDATA_DN + '"' in r)
+  shipped = oc_rules[slot]
+  wd = f'dn.exact="{WDATA_DN}"'
+  in_slot = [1]
+
+  def set_slot(rules):
+    mod = (f'dn: {main_db}\nchangetype: modify\ndelete: olcAccess\n'
+           + ''.join(f'olcAccess: {{{slot + i}}}\n' for i in reversed(range(in_slot[0])))
+           + '-\nadd: olcAccess\n' + ''.join(f'olcAccess: {{{slot + i}}}{r}\n' for i, r in enumerate(rules)))
+    r = ldap.config_tool('ldapmodify', [], mod)
+    ensure(r.returncode == 0, 'swap objectClass slot: ' + tail(r))
+    in_slot[0] = len(rules)
+
+  def oc_rule(level, val=''):
+    return f'to dn.subtree="{BASE_DN}" attrs=objectClass{val} by {wd} {level} by * break'
+
+  def probe_row():
+    u, g, x, d, p = ('uid=p386,' + PEOPLE, 'cn=p386g,' + GROUPS, 'uid=p386x,' + PEOPLE, 'uid=p386d,' + PEOPLE, 'uid=p386p,' + PEOPLE)
+    oc_add = f'dn: {u}\nchangetype: modify\nadd: objectClass\nobjectClass: %s\n'
+    rcs = [
+      w('ldapadd', [], f'dn: {u}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: inetOrgPerson\nuid: p386\ncn: p\nsn: p\n'),
+      w('ldapadd', [], f'dn: {g}\nobjectClass: top\nobjectClass: groupOfNames\ncn: p386g\nmember: {u}\n'),
+      w('ldapmodify', [], oc_add % 'extensibleObject'),
+      w('ldapmodify', [], oc_add % 'shadowAccount'),
+      w('ldapmodify', [], oc_add % 'groupOfNames' + f'-\nadd: member\nmember: {u}\n'),
+      w('ldapadd', [], f'dn: {x}\nobjectClass: inetOrgPerson\nobjectClass: extensibleObject\nuid: p386x\ncn: x\nsn: x\n'),
+      w('ldapadd', [], f'dn: {d}\nobjectClass: inetOrgPerson\nuid: p386d\ncn: d\nsn: d\ndescription: outside the list\n'),
+      w('ldapadd', [], f'dn: {p}\nobjectClass: inetOrgPerson\nuid: p386p\ncn: p\nsn: p\nuserPassword: {live.secret("P386-" + secrets.token_urlsafe(10))}\n'),
+      w('ldapmodify', [], f'dn: {u}\nchangetype: modify\nreplace: objectClass\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: inetOrgPerson\n'),
+      w('ldapmodify', [], f'dn: {u}\nchangetype: modify\ndelete: objectClass\nobjectClass: top\n'),
+      adm('ldapmodify', [], f'dn: uid=u02,{PEOPLE}\nchangetype: modify\nadd: objectClass\nobjectClass: extensibleObject\n'),
+    ]
+    adm('ldapmodify', [], f'dn: uid=u02,{PEOPLE}\nchangetype: modify\ndelete: objectClass\nobjectClass: extensibleObject\n')
+    for dn in (g, u, x, d, p):
+      adm('ldapdelete', [dn])
+    return tuple(r.returncode for r in rcs)
+
+  heads = 'P1 add-user P2 add-group P3 mod+extensibleObject P4 mod+shadowAccount P5 mod+groupOfNames P6 add+extensibleObject ' \
+          'P11 add+description P12 add+userPassword P7 mod-replace P8 mod-delete P10 admin-mod+extensibleObject'
+  obs('5e probe columns: ' + heads)
+  base = (0, 0, 0, 0, 65, 0, 0, 0, 50, 50, 0)
+  refuse = (0, 0, 50, 50, 65, 0, 0, 0, 50, 50, 0)
+  allow = [f'val={v}' for v in ('top', 'person', 'organizationalPerson', 'inetOrgPerson', 'groupOfNames')]
+  candidates = [
+    ('C0 shipped `add`', [shipped], base),
+    ('C1 `=a`', [oc_rule('=a')], base),
+    ('C1b `=wa`', [oc_rule('=wa')], (0, 0, 0, 0, 65, 0, 0, 0, 0, 0, 0)),
+    ('C2 val= allowlist incl. top', [oc_rule('add', ' ' + v) for v in allow], base),
+    ('C2b val= allowlist without top', [oc_rule('add', ' ' + v) for v in allow[1:]], refuse),
+    ('C3 val.regex allowlist', [oc_rule('add', ' val.regex="^(top|person|organizationalPerson|inetOrgPerson|groupOfNames)$"')], refuse),
+    ('C3b val.regex lower-case', [oc_rule('add', ' val.regex="^(top|person|organizationalperson|inetorgperson|groupofnames)$"')], refuse),
+    ('C4 val=extensibleObject none, then add', [oc_rule('none', ' val=extensibleObject'), shipped], (0, 0, 50, 0, 65, 0, 0, 0, 50, 50, 0)),
+    ('C6 objectClass read only', [oc_rule('read')], (0, 0, 50, 50, 50, 0, 0, 0, 50, 50, 0)),
+  ]
+  for label, rules, want in candidates:
+    set_slot(rules)
+    got = probe_row()
+    obs(f'5e {label}: {got}')
+    live.check(got == want, f'[5e] #386 {label}: rc {got} == {want}')
+
+  # olcAddContentAcl (slapd.access(5)): TRUE makes slapd check `=a` on every attribute of an Add.
+  # Not set by image/entrypoint.sh, so the default (FALSE) is what ships.
+  cur = [l for l in ldap.config_tool('ldapsearch', ['-LLL', '-b', main_db, '-s', 'base', 'olcAddContentAcl']).stdout.splitlines() if l.startswith('olcAddContentAcl')]
+  obs(f'5e olcAddContentAcl on the main database as shipped: {cur or "absent (default FALSE)"}')
+  live.check(cur in ([], ['olcAddContentAcl: FALSE']), '[5e] the image does not turn olcAddContentAcl on (C6 / point 1 of EVIDENCE "#386" depend on it)')
+  aca = f'dn: {main_db}\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: %s\n'
+  ensure(ldap.config_tool('ldapmodify', [], aca % 'TRUE').returncode == 0, 'olcAddContentAcl TRUE')
+  for label, rules, want in [('C0 shipped `add` + olcAddContentAcl TRUE', [shipped], (0, 0, 0, 0, 65, 0, 50, 50, 50, 50, 0)),
+                             ('C3 val.regex + olcAddContentAcl TRUE', [candidates[5][1][0]], (0, 0, 50, 50, 65, 50, 50, 50, 50, 50, 0)),
+                             # the Adds fail (50), so the Modify probes hit a missing entry (32)
+                             ('C6 read + olcAddContentAcl TRUE', [oc_rule('read')], (50, 50, 32, 32, 32, 50, 50, 50, 32, 32, 0))]:
+    set_slot(rules)
+    got = probe_row()
+    obs(f'5e {label}: {got}')
+    live.check(got == want, f'[5e] #386 {label}: rc {got} == {want}')
+  ensure(ldap.config_tool('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\ndelete: olcAddContentAcl\n').returncode == 0, 'olcAddContentAcl reset')
+
+  # the constraint overlay (on by default for mail): an objectClass allowlist applies to EVERY identity
+  set_slot([shipped])
+  cdn = next(l[4:] for l in ldap.config_tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', 'cn=config', '(objectClass=olcConstraintConfig)', 'dn']).stdout.splitlines() if l.startswith('dn: '))
+  c_val = 'objectClass regex "^(top|person|organizationalPerson|inetOrgPerson|groupOfNames|organizationalUnit|dcObject|organization)$"'
+  ensure(ldap.config_tool('ldapmodify', [], f'dn: {cdn}\nchangetype: modify\nadd: olcConstraintAttribute\nolcConstraintAttribute: {c_val}\n').returncode == 0, 'constraint add')
+  got = probe_row()
+  obs(f'5e C5 constraint overlay objectClass allowlist + shipped `add`: {got}')
+  live.check(got == (0, 0, 19, 19, 65, 19, 0, 0, 50, 50, 19), f'[5e] #386 C5 constraint overlay refuses value adds AND the Add-time extra class (19) but also the admin: rc {got}')
+  ensure(ldap.config_tool('ldapmodify', [], f'dn: {cdn}\nchangetype: modify\ndelete: olcConstraintAttribute\nolcConstraintAttribute: {c_val}\n').returncode == 0, 'constraint reset')
+  live.check(acl_rules(ldap, main_db) == oc_rules, '[5e] the shipped W_data fragment is restored exactly after the candidate matrix')
 
   # ======== 6. the five operations through the UI: accesslog, then Idempotency-Key replay after a restart ======
   kcname = live.name_prefix + '-kc'

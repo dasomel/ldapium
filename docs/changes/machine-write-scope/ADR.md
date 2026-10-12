@@ -26,15 +26,18 @@ v1 머신 주체는 읽기 전용이다. 자동화가 사용자·그룹을 쓰�
 
 ## Proposal (#386) — 결정 아님, 유지보수자 결정 대기
 
-D18의 "수정으로는 objectClass를 쓸 수 없다"는 현재 fragment(`{4}` `add`)에서 ACL만으로 성립하지 않는다(Modify 값 ADD 통과). 실측과 후보 전체: [EVIDENCE.md](EVIDENCE.md) "#386 objectClass value ADD". 상태(`Proposed`)와 D18 결정 문구는 바꾸지 않는다.
+D18의 "수정으로는 objectClass를 쓸 수 없다"는 현재 fragment(`{4}` `add`)에서 ACL만으로 성립하지 않는다(Modify 값 ADD 통과). 실측과 후보 전체: [EVIDENCE.md](EVIDENCE.md) "#386 objectClass value ADD"(`test-machine-write-t004-live.py` 5d/5e로 재현). 상태(`Proposed`)와 D18 결정 문구는 바꾸지 않는다.
+
+전제: 이미지·차트는 `olcAddContentAcl`을 설정하지 않는다(기본 FALSE, 5e가 단언). FALSE에서 slapd Add는 `entry`/`children`만 검사하고, TRUE이면 Add의 모든 속성 값에 `=a`가 필요하다.
 
 | 선택지 | 내용 | 비용 | 탈출구 |
 |---|---|---|---|
-| A | 수정 경로 objectClass 방어를 앱 닫힌 본문 가드 1겹으로 명시 수용(D17과 같은 성격의 한계로 기록) | 없음(회귀 시험 이미 있음) | B로 이행 |
-| **B (권장)** | `write-data.ldif` `{4}`의 objectClass `add`를 `read`로(또는 규칙 삭제). 실측: Modify 값 ADD 50, 사용자·그룹 Add 유지(slapd Add는 속성별 ACL을 평가하지 않음) | fragment 한 줄, 가이드, `test-machine-write-acl-live.py`·T-004 KNOWN-LIMIT 단언 의도적 반전, 운영 중 ACL 재적용 | `add` 규칙 복원 |
-| C | constraint overlay objectClass 허용 목록 | 전역(관리자 포함), 모든 사용 클래스 열거 필요 | overlay 속성 제거 |
+| A | 수정 경로 objectClass 방어를 앱 닫힌 본문 가드 1겹으로 명시 수용(D17과 같은 성격의 한계로 기록) | 없음(회귀 시험 있음) | B로 이행 |
+| **B (권장)** | `write-data.ldif` `{4}`를 `val.regex` 허용 목록(앱 고정 집합 top·person·organizationalPerson·inetOrgPerson·groupOfNames) + `add`로(C3). 실측: Modify 값 ADD 50, 사용자·그룹 Add 유지 — `olcAddContentAcl` FALSE·TRUE 모두 | fragment 한 줄, 허용 목록과 `users.go`/`groups.go` 고정 집합 동기화, 가이드, `test-machine-write-acl-live.py`·T-004 KNOWN-LIMIT 단언 의도적 반전, 운영 중 ACL 재적용 | `add` 규칙 복원 |
+| B′ | objectClass를 `read`로(C6). FALSE에서는 B와 같은 효과 | B보다 단순하나 **`olcAddContentAcl` TRUE가 되면 사용자·그룹 생성이 50으로 깨진다**(실측) | `add` 규칙 복원 |
+| C | constraint overlay objectClass 허용 목록 | Add 시점 추가 클래스까지 거부(19)하지만 전역(관리자 포함), 모든 사용 클래스 열거 필요, 비밀번호·목록 밖 속성은 못 막음 | overlay 속성 제거 |
 
-어느 선택지도 **Add 시점**(추가 클래스, 목록 밖 속성, `userPassword`)은 막지 못한다: slapd Add는 `entry`/`children`만 검사한다(실측, W_data가 비밀번호가 있는 bind 가능한 항목을 직접 생성). 생성 경로는 `createUser` 닫힌 본문(D15/D8b) 1겹이며, 이 잔여 위험(AC-008 문구 포함)의 수용은 별도 결정이다.
+Add 시점(추가 클래스, 목록 밖 속성, `userPassword`): 출하 상태(FALSE)에서는 A·B·B′ 어느 것도 막지 못하고(W_data가 비밀번호를 가진 bind 가능한 항목을 직접 생성, 실측), C는 추가 클래스만 전역으로 막는다. `olcAddContentAcl` TRUE + B는 셋 모두를 50으로 거부했지만(실측) 데이터베이스 전체·모든 비 root 신원의 Add에 영향을 주며(미측정) 별도 결정이다. 그때까지 생성 경로는 `createUser` 닫힌 본문(D15/D8b) 1겹이고 AC-008 문구의 정정 여부도 유지보수자 결정이다.
 
 ## Consequences
 
