@@ -362,6 +362,12 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 ## Revision
 
+- 2026-10-12 Revision 4 (T-015 라이브 드릴 실측, EVIDENCE.md §2b; 결정 D379-3/5/6/7/17은 **바뀌지 않음**, 근거 문장만 정정).
+  - **F-1** `pwdLockoutDuration=0` ppolicy 잠금은 출하 이미지에서 관리 잠금 표지(`000001010000Z`)와 **같은 값이 아니라** 잠금 시각 타임스탬프를 남긴다(`20261012141315Z`, 영구 잠금은 맞음). 따라서 D379-7 근거 (b) "표지와 같은 형태라 구별 불가"와 P22(b)는 이 빌드에서 사실이 아니다. 해제를 사람 전용으로 두는 Q4 결정은 유지자 결정이며 근거 (a)(`lockUser`→해제 왕복이 ppolicy 시각 잠금을 표지로 덮어쓴 뒤 해제하는 우회, 드릴로 덮어씀 확인)와 (c)(메모리 한도가 재시작·replica로 초기화)로 유지된다. 값으로 구별 가능하다는 사실은 D379-7 탈출구(별도 승인 설계)에서 다시 평가할 입력이다.
+  - **F-2** 특권 그룹의 **중첩** 그룹 멤버(`lk4` ∈ `subadmins` ∈ `admins`)에 대한 `lockUser`는 204로 잠긴다. REQ-007/D379-17에서 수용한 잔여 위험을 실측으로 확인한 것이며 직접 멤버만 거부된다. 드릴이 이 거동을 고정해 변경을 알린다.
+  - **F-3** 출하 `write-lock.ldif`에는 특권 그룹 `filter=`가 없다. `W_lock` 자격 증명을 직접 쓰면 특권 멤버의 `pwdAccountLockedTime`을 쓸 수 있으므로(드릴이 rc 0을 고정), `W_lock` 쓰기에 대한 방어는 `lockUser`의 애플리케이션 검사뿐이다. ACL 백스톱(E-07)은 이 fixture에는 없다.
+  - 보조 사실: 시작 시 검증이 시드를 포함한 쓰기 상한과 허용 목록의 특권 그룹을 거부하므로(`must not overlap a protected identity`, `must not list a privileged group`) 요청 시 보호 집합 가드는 라이브 드릴로 단독 격리할 수 없고, 설정을 주입하는 단위 시험(`TestGroupPipeline_SeedIsProtectedWithoutTheCeiling`, `TestGroupPipeline_TargetRestrictions`)과 변이로 증명한다. 대상 타입 가드는 허용 목록에 사용자 DN을 올린 드릴 구성으로 단독 증명한다.
+
 - 2026-10-12 Revision 3 (유지보수자 결정). v2b 수용, v2c는 `Proposed` 유지.
   - Q2: 옵션 B 고정 placeholder seed DN(`MACHINE_WRITE_GROUP_SEED_DN`) 수용(D379-3). Q3: 생성 그룹의 허용 목록 자동 편입 없음(D379-4). Q4: 잠금 해제는 사람 전용 유지(D379-7). Q7: 머신 `patchGroup`의 `cn` 변경 거부(D379-5).
   - Q1·Q5·Q6 및 v2c 전부(Q8–Q13 포함)는 보류. 전용 security-reviewer 라운드는 아직 없음(TASKS T-005 참조). 관련 후속 이슈 #390.

@@ -168,6 +168,23 @@ What the 113 checks established (AC ids as in CHANGE.md; real values from run 3)
 | `unlockUser` (POST `/api/users/unlock`) and `updateGroup` (PUT) added to `machineWriteOps`, `directory.users.unlock` added to `MachineWriteOpenScopes` | 15 tests fail: `TestMachineWriteLockCeilingNeedsW_lock`, `TestMachineWriteScopesInCeiling`, `TestOpenAPIMachineBearerEqualsCodeAllowlist`, `TestOpenAPIDeniedOperationsNeverCarryMachineBearer`, `TestOpenAPINoNonGetCarriesMachineBearer`, `TestMachineWriteOpenScopesEqualTheTable`, `TestMachineDenyListShrinkNeedsDID`, `TestMachine_EveryProtectedOperationExercised`, `TestMachine_EveryProtectedOperationExercisedWritesOn`, `TestGroupPipeline_ScopeAndProductionTable`, `TestMachineWriteSwitchRefusesStartupWithoutAPrerequisite`, `TestLockPipeline_ProductionOpensLockNotUnlock`, `TestWritePipeline_ProductionTableHasExactlyTheNineOperations`, `TestMachineWriteSettingsOffKeepV1Byte`, `TestMachineWriteRuntimeEnabledOpensOnlyTheNine` |
 | `CheckNotPrivileged` returns `nil` immediately | unit: `TestCheckNotPrivilegedRejectsBeforeDial` fails; drill (mutated UI image): fails at the direct-privileged-member check (204 instead of 403), see run table |
 
+
+### 2c. Review follow-up (Codex security review of 25bdee8 + dc445b3)
+
+- The drill now has **121 checks** (run: `All machine write v2b live checks passed: 121 checks in 58s.`). New: start-up refusals for a seed inside a
+  write ceiling (`must not overlap a protected identity`) and a privileged group on the allow-list (`must not list a privileged group`); the target-type
+  guard ALONE (an allow-listed USER DN as `patchGroup`/`deleteGroup` target -> 403 `target is not permitted for machine writes`, its own message, no W bind) and
+  `lockUser` on a group DN with that same message; ETags of the privileged group, `g02` and the ceiling root compared before and after (the earlier claim now matches
+  the assertion); the duration-0 policy entry (`pwdLockoutDuration: 0`, `pwdMaxFailure: 3`), its assignment to `lk7` and the timestamp format of the lock are asserted;
+  F-3 is a check, not a note.
+- Why the seed and the privileged group cannot be isolated live: start-up validation rejects the layouts that would isolate them (above), which is a stronger layer in
+  front of the request-time guard. The request-time guards are therefore pinned by unit tests that inject the config, and shown failing by mutation:
+  - seed removed from `machineWriteIdentityDNs` -> `TestGroupPipeline_SeedIsProtectedWithoutTheCeiling` fails (`PATCH /api/groups ... 204`, `POST /api/users/lock ... 503`, ...).
+  - privileged groups removed from `machineWriteProtectedDNs` -> `TestGroupPipeline_TargetRestrictions` fails (`PATCH privileged group ...: 204`, `binds=6`).
+  - type check removed from `WriteIdentityReader.Check` (UI image rebuilt, drill re-run): the drill fails at check 50:
+    `AssertionError: [C] target-type guard alone: patchGroup on an allow-listed USER DN -> 403 "target is not permitted", user untouched (412 ...)`. (The LDAP
+    entryCSN/objectClass assertion is a second layer: it answered 412 and the user stayed untouched, but the app-level guard is gone.)
+
 ## 3. Not verified
 
 §2 전부(E-01–E-23)는 여전히 T-002로 남는다. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
