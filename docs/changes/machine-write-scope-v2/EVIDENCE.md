@@ -75,6 +75,102 @@
 | E-22 | 검사→쓰기 창: 요청 직전 검사 직후 느슨한 규칙을 삽입했을 때 그 요청과 다음 요청의 결과, 주기 검사가 60초 안에 닫는지 | 검사 직후 `ldapmodify`로 규칙 삽입(타이밍 훅 있는 시험 빌드) | 그 한 요청만 옛 전제, 다음 요청 503 → R-4 창 실측 |
 | E-23 | accesslog **자식 항목** 노출: (a) base에는 `search`만, 자식에는 `read`를 준 구성에서 `M`이 base 검색으로는 0건이지만 subtree 검색으로 `reqMod`/`reqOld`를 읽는지, (b) 실패한 Password Modify(카나리 프로브의 19/50)도 자식 항목을 남기는지, (c) 운영자가 추가한 감사 독자 DN으로 같은 읽기 | `writes reads bind` 구성, 각 신원으로 base·subtree 검색, 해시 패턴 grep(값 `<redacted>`) | (a)가 읽히면 검사 6이 거부해야 함; (b)(c) 결과 → R-5 |
 
+## 2b. T-015 v2b live drill (2026-10-12, branch `feat/379-v2b-drill-open`)
+
+`scripts/test/test-machine-write-v2b-live.py`, wired into `.github/workflows/machine-write-e2e.yml` (no path filter; the
+job `machine write (real Keycloak)` that `release.yml` requires keeps its name). It exercises the four v2b operations
+against real slapd (`ldapium:v2b`, built from `image/` of this tree) and the production UI image (`ldapium-ui:v2b`, built
+from `ui/` of this tree), Keycloak `quay.io/keycloak/keycloak:26.7.4` service-account tokens, a directory prepared with the
+documented `M`, `W_data`, `W_lock` fragments, and fresh containers per run. Local host: macOS, Docker Desktop 29.8.2 (not
+Colima). **The drill can only run end to end on the tree that contains BOTH the T-015 drill commit and the T-014 opening
+commit**, because T-014 is what makes the operations reachable (before it every one of them is 403 `scope_denied`). That is
+intended: T-014's gate "T-015 green" is satisfied by running the drill on the final tree, which is what was done here.
+
+Runs, failures included (command `LDAPIUM_IMAGE=ldapium:v2b LDAPIUM_UI_IMAGE=ldapium-ui:v2b python3 scripts/test/test-machine-write-v2b-live.py`):
+
+| Run | Result | Cause |
+|---|---|---|
+| 1 | FAIL after 2 checks | drill bug: expected the fragment `directory.users.unlock` in the start-up error; the real message is `MACHINE_ALLOWED_CLIENTS names a write scope that no operation uses yet (machine-write-scope T-026/T-030)` |
+| 2 | FAIL after 96 checks | **premise failure, see finding F-1**: the `pwdLockoutDuration=0` lock does not hold the machine marker value |
+| 3 | PASS, **113 checks** | `All machine write v2b live checks passed: 113 checks in 51s.` (final tree; ten containers, 348297 bytes of logs scanned) |
+| mutation | FAIL after 66 checks | UI image built with `CheckNotPrivileged` returning `nil` at once: `AssertionError: [D] "AC-005 lockUser on a DIRECT member of the privileged group" -> 403 (got 204 )` |
+
+Regression on the same images: `test-machine-write-keycloak-live.py` 84 checks passed, `test-machine-write-drill.py` 61 checks
+passed (unchanged scripts).
+
+What the 113 checks established (AC ids as in CHANGE.md; real values from run 3):
+
+- **AC-002 seed**: `createGroup` -> 201; the new group's `member` is exactly `uid=group-seed,ou=system,dc=example,dc=org`; the
+  `W_data` entry's `memberOf` is `[]` before and after; the group is bound as `W_data` only (slapd accesslog). The placeholder
+  entry's `memberOf` went from `[]` to the new group (the seed entry collects it, as designed). The human cookie `createGroup`
+  still seeds with the bind DN (`['cn=admin,dc=example,dc=org']`). The seed as `addGroupMember`/`removeGroupMember` member, as
+  `patchUser`/`deleteUser`/`lockUser` target, and as `deleteGroup` target: 403, zero `W_data`/`W_lock` binds.
+- **createGroup bodies**: `cn` with a comma, a `member` field, an `objectClass` field, empty `cn` -> 400; client without the v2b
+  scopes, and a token without the scope while the ceiling has it -> 403; duplicate `cn` -> 409; replay of the same key -> the stored
+  201 with `Idempotent-Replayed: true` and no extra bind; other body, same key -> 422; no `Idempotency-Key` -> 428.
+- **AC-003 targets**: just-created group, `g02`, ceiling root (also `OU=Groups , DC=EXAMPLE,DC=ORG`), an OID-typed spelling
+  `2.5.4.3=g01,...`, a user DN, `W_data`, the seed, and the privileged group: 403 for `patchGroup`/`deleteGroup`
+  (privileged: audit outcome `denied_protected`), zero binds, ETags of the privileged group, `g02`, root, `g01` unchanged.
+  After the operator lists the created group's DN (a second replica with the DN in `MACHINE_WRITE_GROUPS`), `patchGroup` and
+  `deleteGroup` on it succeed (204/204).
+- **AC-004**: `description` set and `null` -> 204, `cn` unchanged; `cn`, `member`, unknown field -> 400; no `If-Match` -> 428;
+  stale -> 412 `revision_conflict`, nothing written. `deleteGroup` on a listed group -> 204 and refint cleaned the member:
+  `u02.memberOf` `['cn=gdel,ou=groups,dc=example,dc=org'] -> []` (D379-6, irreversible by design).
+- **AC-005 lock**: `lockUser` -> 204, `pwdAccountLockedTime = 000001010000Z`, bound as `W_lock` not `W_data`, the locked account's
+  correct password cannot bind (`ldapwhoami` fails); replay with the same key is the stored answer without another `W_lock` bind;
+  another client with the same key is independent. Refused with zero `W_data`/`W_lock` binds: group DN (target-type assertion),
+  `W_data`, `W_lock`, `M`, administrator, ceiling root, a **direct** member of the privileged group (audit `denied_protected`;
+  the member can still bind), no `If-Match` (428), no key (428), weak `If-Match` (400), extra body field (400), no scope (403);
+  stale `If-Match` -> 412. A ppolicy timestamp lock turned into the indefinite marker by `lockUser`
+  (`['20261012141211Z'] -> ['000001010000Z']`: stricter, as AC-005 records).
+- **REQ-007 / D379-17 fail closed**: with an ACL hiding the privileged group's `member` from `M`, a NON-member target is refused
+  (403, no bind); a privileged group that does not exist -> 503 `unavailable` (fail closed, no bind, target not locked).
+- **Nested group (accepted residual risk, recorded as the actual result)**: `uid=lk4` is a member of `cn=subadmins`, which is a member of the
+  privileged `cn=admins`. `lk4.memberOf = ['cn=subadmins,...']`, `admins.member = [lk3, cn=subadmins]`. `lockUser` on `lk4` -> **204 and
+  locked**. Only direct members are refused. This is the risk accepted on 2026-10-12 (REQ-007), not a regression; the drill pins the
+  observed behaviour so a change in it is noticed.
+- **AC-006**: `W_lock` direct `ldapmodify`/`ldapadd`/`ldapdelete` of `mail`, `userPassword`, `objectClass`, an entry Add, a group
+  `member`, a group `description`, an entry Delete: all `Insufficient access`; `W_lock` writes `pwdAccountLockedTime`. `W_data` cannot write
+  `pwdAccountLockedTime` or `userPassword`, can write a group `description`; replacing a group `cn` directly gives `Naming violation (64)`
+  (E-05) and the group is not renamed. `W_lock` direct write of `pwdAccountLockedTime` on a PRIVILEGED member succeeded (rc 0): the
+  fixture has no `memberOf` filter, so the application check is the only guard (E-07 observed; not an ACL backstop).
+- **AC-005b unlock bypass**: with a token carrying every scope including `directory.users.unlock` in the Keycloak token (never in a
+  ceiling): (a) a real ppolicy brute-force lock (timestamp), (b) a `pwdLockoutDuration=0` policy lock, (c) right after the same
+  client's `lockUser`, (e) a different client on the machine-locked account, and (d) all of these again after a real `docker restart`
+  of slapd and the UI: `POST /api/users/unlock` -> **403 `scope_denied`, `W_data`/`W_lock`/`M` bind counts identical before and
+  after, `pwdAccountLockedTime` identical before and after** (example: `(13, 15, 55) -> (13, 15, 55)`). The directory state (machine
+  marker, ppolicy timestamp, duration-0 lock) was identical across the restart. `PUT /api/users` is still 403. The audit log has no
+  `unlockUser` operation line (an unregistered route has no operation id).
+- **Start-up refusals**: `directory.groups.create` in a ceiling without `MACHINE_WRITE_GROUP_SEED_DN`; `directory.users.unlock` in a ceiling;
+  lock scope with `MACHINE_WRITE_LOCK_ENABLED=false`; lock scope with empty `MACHINE_WRITE_PRIVILEGED_GROUPS`: the UI exits with the
+  message and never serves.
+- **Audit**: one `machine_access` line each for `lockUser` (compartment `lock`, `bind_dn` = `W_lock`), `createGroup`, `patchGroup`,
+  `deleteGroup` (compartment `data`, `bind_dn` = `W_data`, `write_scope`, `target_kind`), no plaintext DN.
+- **Secrets**: sentinel scan of all ten container logs (tokens and their segments, client secrets, bind and account passwords, the
+  description sentinel, every `Idempotency-Key`): 0 hits.
+
+### Findings that contradict or refine the design text (escalated, not decided)
+
+- **F-1 (contradicts CHANGE.md P22(b) / D379-7 rationale (b), AC-005b (b))**: the design says a `pwdLockoutDuration=0` ppolicy lock has "the
+  same form as the marker" `000001010000Z`. On this image (OpenLDAP with ppolicy as shipped) it does not: after three wrong binds under a
+  policy with `pwdLockoutDuration: 0` the entry holds a TIMESTAMP (`20261012141315Z`, the lock time), exactly like a normal ppolicy lock, and
+  stays locked (the correct password cannot bind). So the marker and a duration-0 lock ARE distinguishable by value here. This does not make the
+  decision to keep unlock human-only wrong (the round trip `lockUser` -> unlock over a ppolicy lock still replaces a timestamp lock by the marker, observed above,
+  and the in-memory limits do not survive a restart), but the stated reason (b) is not true on this build. CHANGE.md wording needs a maintainer decision;
+  nothing was edited there. The drill's check for (b) therefore asserts "permanent lock, bind fails" and records the value shape instead of asserting equality.
+- **F-2 (REQ-007 accepted risk, now measured)**: nested-group privileged membership is not recognised; `lockUser` on such a user returns 204 and locks it.
+- **F-3 (E-07)**: the shipped `write-lock.ldif` has no privileged-group filter; a `W_lock` credential can lock a privileged member directly.
+
+### Mutations (shown failing, then restored)
+
+| Mutation | Result |
+|---|---|
+| `unlockUser` (POST `/api/users/unlock`) and `updateGroup` (PUT) added to `machineWriteOps`, `directory.users.unlock` added to `MachineWriteOpenScopes` | 15 tests fail: `TestMachineWriteLockCeilingNeedsW_lock`, `TestMachineWriteScopesInCeiling`, `TestOpenAPIMachineBearerEqualsCodeAllowlist`, `TestOpenAPIDeniedOperationsNeverCarryMachineBearer`, `TestOpenAPINoNonGetCarriesMachineBearer`, `TestMachineWriteOpenScopesEqualTheTable`, `TestMachineDenyListShrinkNeedsDID`, `TestMachine_EveryProtectedOperationExercised`, `TestMachine_EveryProtectedOperationExercisedWritesOn`, `TestGroupPipeline_ScopeAndProductionTable`, `TestMachineWriteSwitchRefusesStartupWithoutAPrerequisite`, `TestLockPipeline_ProductionOpensLockNotUnlock`, `TestWritePipeline_ProductionTableHasExactlyTheNineOperations`, `TestMachineWriteSettingsOffKeepV1Byte`, `TestMachineWriteRuntimeEnabledOpensOnlyTheNine` |
+| `CheckNotPrivileged` returns `nil` immediately | unit: `TestCheckNotPrivilegedRejectsBeforeDial` fails; drill (mutated UI image): fails at the direct-privileged-member check (204 instead of 403), see run table |
+
 ## 3. Not verified
 
-§2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
+§2 전부(E-01–E-23)는 여전히 T-002로 남는다. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
+이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
+
+T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(차트에는 아직 없음; 차트로 `directory.groups.create`를 켜면 기동 실패로 안전하게 닫힘), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
