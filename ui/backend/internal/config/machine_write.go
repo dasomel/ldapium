@@ -46,6 +46,11 @@ type MachineWriteConfig struct {
 	// fingerprint. Default false (fingerprint only); read only when
 	// MACHINE_WRITE_ENABLED is on.
 	AuditPlainTargetDN bool
+	// GroupSeedDN is MACHINE_WRITE_GROUP_SEED_DN (v2 D379-3): the fixed, non-bindable
+	// placeholder a machine createGroup writes as the group's required first
+	// member, instead of the W_data DN. Empty unless configured; part of the
+	// protected set when set.
+	GroupSeedDN string
 }
 
 func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m MachineConfig) (MachineWriteConfig, error) {
