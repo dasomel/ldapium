@@ -188,13 +188,14 @@ const (
 	outcomeLDAPRefused        = "ldap_refused"        // the directory answered with a non-success result
 	outcomeDeniedGuard        = "denied_guard"        // subtree / group / attribute guard
 	outcomeDeniedProtected    = "denied_protected"    // protected DN or target-type assertion
+	outcomeTargetNotFound     = "target_not_found"    // the identity pre-read found no such entry (404)
 	outcomeOutcomeUnknown     = "outcome_unknown"     // sent, result not seen (idempotency_outcome_unknown)
 	outcomeRejected           = "rejected"            // any other refusal before the directory
 )
 
 var machineWriteOutcomes = map[string]bool{
 	outcomeApplied: true, outcomePreconditionFailed: true, outcomeReplayed: true, outcomeLDAPRefused: true,
-	outcomeDeniedGuard: true, outcomeDeniedProtected: true, outcomeOutcomeUnknown: true, outcomeRejected: true,
+	outcomeDeniedGuard: true, outcomeDeniedProtected: true, outcomeTargetNotFound: true, outcomeOutcomeUnknown: true, outcomeRejected: true,
 }
 
 var machineWriteScopes = func() map[string]bool {

@@ -52,6 +52,12 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   Design and evidence: [change package](docs/changes/machine-write-scope/CHANGE.md).
   The idempotency store is in memory, so a restart turns a replay into a
   re-execution (`If-Match` and entry uniqueness remain the second line).
+- A machine write whose target no longer exists now returns the cookie path's `404
+  not_found` instead of a retryable `503 unavailable` (#385). Only a genuine LDAP
+  noSuchObject for the target maps to 404; directory failures stay 503 and a missing
+  target outside the client's subtree is still the guard's 403. The audit line carries
+  the new `outcome=target_not_found` (`reason=request_rejected`) rather than
+  `reason=upstream_error`.
 - **Compatibility change (`UI_TRUSTED_PROXIES`):** with an explicit CIDR list, only
   the listed ranges are now trusted for `X-Forwarded-For`. Echo's implicit trust of
   loopback, link-local and private networks used to stay on next to the list, so a

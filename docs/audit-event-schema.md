@@ -442,7 +442,7 @@ and no write field is emitted). `operation` carries the operation id.
 | `target_kind` | `user` or `group`, else `unknown` |
 | `target_dn_fingerprint` | first 8 bytes of SHA-256 over the target DN, hex (the same fingerprint the human audit lines use). Always present when a target is named. |
 | `target_dn` | the target DN in plaintext, **only** when the operator sets `MACHINE_WRITE_AUDIT_TARGET_DN=true` (default false, Resolved Q4; read only when `MACHINE_WRITE_ENABLED=true`). With it on the log is as sensitive as the directory's DN space. |
-| `outcome` | closed set: `applied`, `precondition_failed` (If-Match 412/428), `replayed` (stored idempotent result), `ldap_refused`, `denied_guard` (subtree/group/attribute guard), `denied_protected` (protected DN or target-type assertion), `outcome_unknown`, `rejected`; an unknown value is derived from the status |
+| `outcome` | closed set: `applied`, `precondition_failed` (If-Match 412/428), `replayed` (stored idempotent result), `ldap_refused`, `denied_guard` (subtree/group/attribute guard), `denied_protected` (protected DN or target-type assertion), `target_not_found` (the identity pre-read found no such entry; 404, `reason=request_rejected`), `outcome_unknown`, `rejected`; an unknown value is derived from the status |
 | `idempotency_subject_fingerprint` | fingerprint of the idempotency principal (the client), **never** the `Idempotency-Key` value |
 | `if_match` | whether an `If-Match` header was present (the value is never logged) |
 | `ldap_result` | the directory result code when the request reached the directory, otherwise absent |
