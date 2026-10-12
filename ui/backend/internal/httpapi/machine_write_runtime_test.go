@@ -71,18 +71,54 @@ func TestMachineWriteSettingsOffKeepV1Byte(t *testing.T) {
 			denied++
 		}
 	}
-	// With writes off all 37 non-read operations are 403: the 32 on the deny list
-	// and the five registered writes, which are only reachable with the switch on.
-	if denied != 37 || len(machineWriteOps) != 5 || set.dialer.binds.Load() != 0 {
-		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 5, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
+	// AC-001: with writes off all 37 non-read operations are 403, the nine opened
+	// writes (T-014 added four) included, which are only reachable with the switch on.
+	if denied != 37 || len(machineWriteOps) != 9 || set.dialer.binds.Load() != 0 {
+		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 9, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
 	}
 }
 
-// Enabled and fully configured: the objects exist and exactly the five
+// AC-001 / T-014 default-off guarantee: with MACHINE_WRITE_ENABLED false (the
+// default) none of the nine opened operations is reachable, whatever the client
+// ceiling and token carry and however fully the write settings are populated:
+// each is 403 scope_denied, nothing reaches the execution boundary, no bind, and
+// no write pipeline exists.
+func TestMachineWriteOffNoOpenedOperationReachable(t *testing.T) {
+	h := newHarness(t, harnessOpt{cfg: func(c *config.Config) {
+		w := writeRuntimeConfig(false)
+		c.IdempotencyEnabled = true
+		c.Machine.Write = w.Machine.Write
+		c.Machine.Write.LockEnabled = true
+		c.Machine.Write.Lock = config.MachineWriteIdentity{BindDN: "cn=locker,ou=system," + rtBase, BindPassword: "private-lock"}
+		c.Machine.Write.GroupSeedDN = "cn=group-seed,ou=system," + rtBase
+	}})
+	if h.s.machineWrite != nil || h.s.machine.write != nil {
+		t.Fatal("write runtime or pipeline built while off")
+	}
+	token := h.fullToken()
+	seen := 0
+	for _, r := range protectedRoutes(t, h.s) {
+		for _, op := range machineWriteOps {
+			if r.Method != op.Method || r.Route != op.Route {
+				continue
+			}
+			seen++
+			rec := h.do(r.Method, r.URL, bearer(token))
+			if rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied {
+				t.Errorf("%s %s with writes off: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+			}
+		}
+	}
+	if seen < len(machineWriteOps) || len(h.reached()) != 0 || h.dialer.binds.Load() != 0 {
+		t.Fatalf("seen=%d of %d, reached=%v, binds=%d", seen, len(machineWriteOps), h.reached(), h.dialer.binds.Load())
+	}
+}
+
+// Enabled and fully configured: the objects exist and exactly the nine
 // registered operations get past the scope gate (the stub requests are then
 // rejected by the pipeline for lack of body, key or If-Match); every other write
 // route stays 403 before execution and no bind happens.
-func TestMachineWriteRuntimeEnabledOpensOnlyTheFive(t *testing.T) {
+func TestMachineWriteRuntimeEnabledOpensOnlyTheNine(t *testing.T) {
 	h := newHarness(t, harnessOpt{cfg: func(c *config.Config) {
 		w := writeRuntimeConfig(true)
 		c.IdempotencyEnabled = true
@@ -116,7 +152,7 @@ func TestMachineWriteRuntimeEnabledOpensOnlyTheFive(t *testing.T) {
 			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
 		}
 	}
-	if opened != 5 || closed == 0 || h.dialer.binds.Load() != 0 {
+	if opened != 9 || closed == 0 || h.dialer.binds.Load() != 0 {
 		t.Fatalf("opened=%d closed=%d binds=%d", opened, closed, h.dialer.binds.Load())
 	}
 }

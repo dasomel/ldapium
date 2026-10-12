@@ -301,8 +301,9 @@ func TestMachineWriteSwitchRefusesItself(t *testing.T) {
 	}
 }
 
-// A write scope in a ceiling is accepted only for an opened operation; lock,
-// group create/update/delete and password stay refused. With the switch off the
+// A write scope in a ceiling is accepted only for an opened operation; unlock
+// and password stay refused (lock and the group scopes opened with T-014; they
+// bring their own prerequisites, supplied below). With the switch off the
 // opened scopes still parse (they grant nothing), so the emergency "write-only
 // redeploy" that flips only MACHINE_WRITE_ENABLED=false can start.
 func TestMachineWriteScopesInCeiling(t *testing.T) {
@@ -310,11 +311,19 @@ func TestMachineWriteScopesInCeiling(t *testing.T) {
 	for _, s := range MachineWriteOpenScopes {
 		open[s] = true
 	}
-	if len(open) != 5 {
-		t.Fatalf("opened write scopes = %d, want 5", len(open))
+	if len(open) != 9 || open["directory.users.unlock"] || open["directory.users.password.write"] {
+		t.Fatalf("opened write scopes = %d (unlock %v, password %v), want 9 without unlock or password", len(open), open["directory.users.unlock"], open["directory.users.password.write"])
 	}
 	for _, s := range MachineWriteScopes {
 		clients := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read," + s + ";machine-b=audit.read"}
+		switch s {
+		case "directory.users.lock":
+			clients["MACHINE_WRITE_LOCK_ENABLED"] = "true"
+			clients["MACHINE_WRITE_LOCK_BIND_DN"] = "cn=locker,ou=system," + wsBase
+			clients["MACHINE_WRITE_LOCK_BIND_PASSWORD"] = "private-lock"
+		case "directory.groups.create":
+			clients["MACHINE_WRITE_GROUP_SEED_DN"] = wsSeed
+		}
 		if _, err := Load(writeScopeEnv(clients)); (err == nil) != open[s] {
 			t.Errorf("%s with the switch on: %v, opened=%v", s, err, open[s])
 		}

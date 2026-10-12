@@ -1876,15 +1876,21 @@
       "post": {
         "operationId": "lockUser",
         "summary": "Lock a user",
-        "description": "Administratively disables the account. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "description": "Administratively disables the account. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.users.lock`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated lock identity, never as the read identity. Runs as the separate lock identity (MACHINE_WRITE_LOCK_ENABLED); a member of a MACHINE_WRITE_PRIVILEGED_GROUPS group is never locked (D379-8). There is no machine unlock: `unlockUser` stays human-only (D379-7). See docs/api.md.",
         "tags": [
           "Users"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.users.lock"
+            ]
           }
         ],
+        "x-machine-scope": "directory.users.lock",
         "responses": {
           "204": {
             "description": "Done",
@@ -2136,15 +2142,21 @@
       "post": {
         "operationId": "createGroup",
         "summary": "Create a group",
-        "description": "Creates under LDAP_GROUP_CREATE_BASE.",
+        "description": "Creates under LDAP_GROUP_CREATE_BASE. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.groups.create`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`), writes run as the dedicated write identity, never as the read identity. The group's only initial `member` is the fixed placeholder MACHINE_WRITE_GROUP_SEED_DN, never the write identity (D379-3); the body is exactly `{cn, description?}`; the new group is not writable by any machine client until the operator lists its DN in MACHINE_WRITE_GROUPS. See docs/api.md.",
         "tags": [
           "Groups"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.create"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.create",
         "responses": {
           "201": {
             "description": "Created",
@@ -2372,15 +2384,21 @@
       "delete": {
         "operationId": "deleteGroup",
         "summary": "Delete a group (destructive)",
-        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "description": "Deletes the entry at `dn`. Not reversible. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.groups.delete`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. The target must be on the client's MACHINE_WRITE_GROUPS allow-list and is never a privileged group (D379-6). See docs/api.md.",
         "tags": [
           "Groups"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.delete"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.delete",
         "responses": {
           "204": {
             "description": "Deleted",
@@ -2498,15 +2516,21 @@
       "patch": {
         "operationId": "patchGroup",
         "summary": "Patch a group",
-        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases `description` when it is omitted. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter.",
+        "description": "Changes only the attributes present in the body (JSON Merge Patch). Prefer this over PUT for partial updates: PUT erases `description` when it is omitted. Conditional: send `If-Match` (the target entry's `etag`) to make it atomic against concurrent edits; see the parameter. Machine principal (`machineBearer`, additive): only when the server runs with MACHINE_AUTH_ENABLED and MACHINE_WRITE_ENABLED (both default off) and the client's ceiling grants `directory.groups.update`; the target must lie inside the client's MACHINE_WRITE_SUBTREES, `Idempotency-Key` is required (428 `idempotency_key_required`) and exactly one strong entryCSN `If-Match` (428 `if_match_required`), writes run as the dedicated write identity, never as the read identity. The target must be on the client's MACHINE_WRITE_GROUPS allow-list and is never a privileged group; the machine body is exactly `{dn, description}` (`cn` is refused, D379-5). See docs/api.md.",
         "tags": [
           "Groups"
         ],
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "machineBearer": [
+              "directory.groups.update"
+            ]
           }
         ],
+        "x-machine-scope": "directory.groups.update",
         "responses": {
           "204": {
             "description": "Patched",

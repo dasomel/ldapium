@@ -255,25 +255,34 @@ func TestLockPipeline_CatalogHasLockButNeverUnlock(t *testing.T) {
 	}
 }
 
-// Until T-014 the production table and the open scopes are unchanged.
-func TestLockPipeline_ProductionStaysClosed(t *testing.T) {
+// T-014 opened lockUser; unlock stays out of the production table and the open
+// scopes, and the machine unlock route is 403 with zero binds (D379-7).
+func TestLockPipeline_ProductionOpensLockNotUnlock(t *testing.T) {
+	locked := false
 	for _, op := range machineWriteOps {
-		if op.ID == "lockUser" || op.ID == "unlockUser" || op.Route == "/api/users/lock" || op.Route == "/api/users/unlock" {
-			t.Errorf("%s is in the production table before T-014", op.ID)
+		if op.ID == "unlockUser" || op.Route == "/api/users/unlock" {
+			t.Errorf("%s is in the production table", op.ID)
 		}
+		locked = locked || op.ID == "lockUser"
 	}
+	if !locked {
+		t.Error("lockUser is not in the production table after T-014")
+	}
+	lockOpen := false
 	for _, s := range config.MachineWriteOpenScopes {
-		if s == "directory.users.lock" || s == "directory.users.unlock" {
-			t.Errorf("%s is an open scope before T-014", s)
+		if s == "directory.users.unlock" {
+			t.Errorf("%s is an open scope", s)
 		}
+		lockOpen = lockOpen || s == "directory.users.lock"
+	}
+	if !lockOpen {
+		t.Error("directory.users.lock is not an open scope after T-014")
 	}
 	w := writeHarness(t, func(c *config.Config) {
 		c.Machine.Write.LockEnabled = true
 		c.Machine.Write.Lock = config.MachineWriteIdentity{BindDN: lockWriterDN, BindPassword: "private-lock"}
 	}, nil)
-	for _, p := range []string{"/api/users/lock", "/api/users/unlock"} {
-		wantCode(t, w.send(wreqSpec{method: "POST", path: p, body: `{"dn":"` + wBob + `"}`, headers: okHeaders()}), 403, codeScopeDenied)
-	}
+	wantCode(t, w.send(wreqSpec{method: "POST", path: "/api/users/unlock", body: `{"dn":"` + wBob + `"}`, headers: okHeaders()}), 403, codeScopeDenied)
 	if w.dir.binds() != 0 || len(w.dir.callList()) != 0 || len(w.ident.callList()) != 0 || w.stages() != "" {
 		t.Errorf("a closed lock reached binds=%d calls=%v ident=%v stages=%q", w.dir.binds(), w.dir.callList(), w.ident.callList(), w.stages())
 	}

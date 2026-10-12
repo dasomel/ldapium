@@ -284,21 +284,32 @@ func TestGroupPipeline_DeleteGroup(t *testing.T) {
 	}
 }
 
-// The scope gate: a token without the group scope is 403 before anything, and the
-// group operations are not part of the production table.
+// The scope gate: a token without the group scope is 403 before anything, and
+// since T-014 the three group operations are part of the production table (PUT
+// updateGroup is not, and neither is any scope it would need beyond the update one).
 func TestGroupPipeline_ScopeAndProductionTable(t *testing.T) {
 	w := groupsHarness(t, nil)
 	rec := w.sendTokenScopes(wreqSpec{method: "PATCH", path: "/api/groups", body: `{"dn":"` + wTeam + `","description":"x"}`, headers: okHeaders()}, "directory.groups.members.add")
 	wantCode(t, rec, 403, codeScopeDenied)
+	in := map[string]bool{}
 	for _, op := range machineWriteOps {
-		switch op.ID {
-		case "createGroup", "patchGroup", "deleteGroup":
-			t.Errorf("%s is in the production table before T-014", op.ID)
+		in[op.ID] = true
+	}
+	for _, id := range []string{"createGroup", "patchGroup", "deleteGroup"} {
+		if !in[id] {
+			t.Errorf("%s is not in the production table after T-014", id)
 		}
 	}
+	if in["updateGroup"] {
+		t.Error("updateGroup (PUT) is in the production table")
+	}
+	open := map[string]bool{}
 	for _, s := range config.MachineWriteOpenScopes {
-		if strings.HasPrefix(s, "directory.groups.") && !strings.HasPrefix(s, "directory.groups.members.") {
-			t.Errorf("%s is an open scope before T-014", s)
+		open[s] = true
+	}
+	for _, s := range []string{"directory.groups.create", "directory.groups.update", "directory.groups.delete"} {
+		if !open[s] {
+			t.Errorf("%s is not an open scope after T-014", s)
 		}
 	}
 }

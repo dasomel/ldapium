@@ -58,9 +58,25 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   target outside the client's subtree is still the guard's 403. The audit line carries
   the new `outcome=target_not_found` (`reason=request_rejected`) rather than
   `reason=upstream_error`.
-- Groundwork for machine group writes (#379, v2b, accepted 2026-10-12), **not
-  reachable yet**: no new operation or scope is open and a ceiling naming a group
-  scope still fails at startup. New optional `MACHINE_WRITE_GROUP_SEED_DN` (read only
+- Machine group and lock writes (#379, v2b, accepted 2026-10-12), **default off**:
+  with `MACHINE_WRITE_ENABLED=true` (separate switch, default off; off, all of them
+  stay 403 `scope_denied` with no bind, byte-identical to before) four more
+  operations open, each needing its scope in the client ceiling: `createGroup`
+  (`directory.groups.create`; the new group's only initial `member` is the fixed
+  placeholder `MACHINE_WRITE_GROUP_SEED_DN`, never the write identity, and it is not
+  writable by any machine client until the operator lists its DN in
+  `MACHINE_WRITE_GROUPS`), `patchGroup` (`directory.groups.update`, `description`
+  only; `cn` is 400), `deleteGroup` (`directory.groups.delete`, allow-listed groups
+  only, never a privileged group) and `lockUser` (`directory.users.lock`, separate
+  `W_lock` identity, refuses members of `MACHINE_WRITE_PRIVILEGED_GROUPS`; nested
+  group membership is an accepted residual risk, see the change package). **Unlock
+  stays human-only**: `unlockUser`/`directory.users.unlock` are not opened and a
+  machine `POST /api/users/unlock` is 403 with no bind (D379-7). `updateUser`,
+  `updateGroup` (PUT) and every password operation stay closed. OpenAPI gains the
+  additive `machineBearer`/`x-machine-scope` on the four operations. The T-015 live
+  drill (`scripts/test/test-machine-write-v2b-live.py`, real Keycloak and slapd) runs
+  in the machine-write E2E workflow. The groundwork notes below describe the
+  steps that led here. New optional `MACHINE_WRITE_GROUP_SEED_DN` (read only
   with `MACHINE_WRITE_ENABLED`; canonical DN inside the base, distinct from every
   protected identity, added to the protected set) is the placeholder first member a
   machine-created group will get instead of the `W_data` DN. The group pipeline rows
@@ -71,10 +87,9 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   groups from users, `W_data` can then write `description` on user entries too (the
   machine `patchUser` body still excludes it). See
   [change package](docs/changes/machine-write-scope-v2/CHANGE.md).
-- Groundwork for machine user locking (#379, v2b), **not reachable yet**: the
+- Groundwork for machine user locking (#379, v2b), opened by the entry above: the
   `lockUser` pipeline row (`W_lock`, closed body `{dn}`, strong `If-Match`,
-  `inetOrgPerson`) exists as catalog data and is exercised in tests only, and
-  `directory.users.lock` still fails at startup in a ceiling. Once opened, a lock
+  `inetOrgPerson`) was catalog data first. A lock
   refuses a target that is a direct member of a `MACHINE_WRITE_PRIVILEGED_GROUPS`
   group (an `M` read of `memberOf`, before the `W_lock` bind), and a lock ceiling
   with `MACHINE_WRITE_LOCK_ENABLED` off fails startup. Unlocking stays human-only:

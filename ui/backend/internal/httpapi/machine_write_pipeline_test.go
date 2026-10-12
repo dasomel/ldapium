@@ -298,14 +298,14 @@ func wantCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code str
 
 // ---- production stays closed ------------------------------------------------
 
-// T-013: the production table (no injected table) holds exactly the five
-// first-ship operations. They reach the pipeline (not the scope gate); every
-// other write route (PUT, group create/update/delete, lock, password) is still
-// 403 scope_denied before any bind, whatever the token carries.
-func TestWritePipeline_ProductionTableHasExactlyTheFiveOperations(t *testing.T) {
+// T-013/T-014: the production table (no injected table) holds exactly the five
+// first-ship operations plus the four v2b ones. They reach the pipeline (not the
+// scope gate); every other write route (PUT, unlock, password) is still 403
+// scope_denied before any bind, whatever the token carries.
+func TestWritePipeline_ProductionTableHasExactlyTheNineOperations(t *testing.T) {
 	w := writeHarness(t, nil, nil) // no injected table: what production runs
-	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 5 || len(machineWriteOps) != 5 {
-		t.Fatalf("production table is not the five operations: %+v", w.s.machine.write)
+	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 9 || len(machineWriteOps) != 9 {
+		t.Fatalf("production table is not the nine operations: %+v", w.s.machine.write)
 	}
 	open := map[string]bool{}
 	for _, op := range machineWriteOps {
@@ -329,6 +329,10 @@ func TestWritePipeline_ProductionTableHasExactlyTheFiveOperations(t *testing.T) 
 		{method: "DELETE", path: "/api/users?dn=" + url.QueryEscape(wBob)},
 		{method: "POST", path: "/api/groups/members", body: `{"groupDn":"` + wTeam + `","memberDn":"` + wBob + `"}`},
 		{method: "DELETE", path: "/api/groups/members?groupDn=" + url.QueryEscape(wTeam) + "&memberDn=" + url.QueryEscape(wBob)},
+		{method: "POST", path: "/api/groups", body: `{"cn":"team2"}`},
+		{method: "PATCH", path: "/api/groups", body: `{"dn":"` + wTeam + `","description":"x"}`},
+		{method: "DELETE", path: "/api/groups?dn=" + url.QueryEscape(wTeam)},
+		{method: "POST", path: "/api/users/lock", body: `{"dn":"` + wBob + `"}`},
 	} {
 		r.headers = okHeaders()
 		if rec := w.send(r); rec.Code == 403 && errBody(t, rec).Code == codeScopeDenied {

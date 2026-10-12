@@ -125,12 +125,9 @@ func TestMachineWriteAuditTargetDNOption(t *testing.T) {
 }
 
 // v2b T-013 (D379-2, REQ-006): a lock ceiling without W_lock is a start-up
-// error. directory.users.lock is not an opened scope yet (T-014), so the test
-// opens it for its own duration; directory.users.unlock is never opened.
+// error. directory.users.lock is an opened scope since T-014;
+// directory.users.unlock is never opened.
 func TestMachineWriteLockCeilingNeedsW_lock(t *testing.T) {
-	saved := MachineWriteOpenScopes
-	MachineWriteOpenScopes = append(append([]string(nil), saved...), "directory.users.lock")
-	t.Cleanup(func() { MachineWriteOpenScopes = saved })
 	lock := map[string]string{"MACHINE_WRITE_LOCK_ENABLED": "true", "MACHINE_WRITE_LOCK_BIND_DN": "cn=locker,ou=system," + wsBase, "MACHINE_WRITE_LOCK_BIND_PASSWORD": "private-lock"}
 	withLock := func(over map[string]string) map[string]string {
 		out := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.lock;machine-b=audit.read"}

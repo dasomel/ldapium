@@ -563,7 +563,7 @@ func TestMachine_CORSNotExtended(t *testing.T) {
 
 // AC-003 / T-024 / D13 / T-013: with every scope and writes OFF (the default),
 // only the 8 allowlisted reads reach the execution boundary; every other
-// protected operation, the five opened writes included, is 403 and never binds.
+// protected operation, the nine opened writes included, is 403 and never binds.
 // The expectation is data-driven: each registered protected operation must be in
 // exactly one of the allowlist (reads, plus machineWriteOps when writes are on)
 // and the deny list.
@@ -573,7 +573,9 @@ func TestMachine_EveryProtectedOperationExercised(t *testing.T) {
 }
 
 // Writes ON and the client holding the scopes: the allowed set becomes 8 reads +
-// the 5 opened writes; the other 32 stay 403. A write is "allowed" when it gets
+// the 9 opened writes; the other 28 stay 403 (T-014 flips exactly createGroup,
+// patchGroup, deleteGroup and lockUser; updateUser, updateGroup, unlockUser and
+// setPassword stay denied). A write is "allowed" when it gets
 // past the scope gate into the write pipeline (it is rejected there later: the
 // stub requests carry no body, key or If-Match), never as scope_denied.
 func TestMachine_EveryProtectedOperationExercisedWritesOn(t *testing.T) {
@@ -644,7 +646,7 @@ func exerciseEveryProtectedOperation(t *testing.T, h *harness, writesOn bool) {
 	}
 	wantAllowed, wantRejected := 8, 37
 	if writesOn {
-		wantAllowed, wantRejected = 13, 32
+		wantAllowed, wantRejected = 17, 28
 	}
 	if allowed != wantAllowed || rejected != wantRejected || reads != 8 || len(h.reached()) != 8 {
 		t.Fatalf("writesOn=%v allowed=%d rejected=%d reads=%d reached=%v, want %d allowed, %d rejected, 8 reads", writesOn, allowed, rejected, reads, h.reached(), wantAllowed, wantRejected)
