@@ -146,16 +146,27 @@ func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass s
 	for _, raw := range protected {
 		other, err := readWriteIdentity(ctx, conn, raw)
 		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				return errWriteIdentityDirectory // a missing protected identity is not the target's 404
-			}
-			return err
+			return protectedReadError(err)
 		}
 		if other.uuid == identity.uuid {
 			return domain.ErrPermissionDenied
 		}
 	}
 	return nil
+}
+
+// noSuchObject reports a genuine LDAP noSuchObject (result 32), nothing else.
+func noSuchObject(err error) bool {
+	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject)
+}
+
+// protectedReadError: a missing protected identity is not the target's 404; it
+// fails closed as a directory error.
+func protectedReadError(err error) error {
+	if errors.Is(err, domain.ErrNotFound) {
+		return errWriteIdentityDirectory
+	}
+	return err
 }
 
 type writeIdentity struct {
@@ -168,7 +179,7 @@ func readWriteIdentity(ctx context.Context, conn *ldap.Conn, dn string) (writeId
 		return writeIdentity{}, errWriteIdentityDirectory
 	}
 	result, err := conn.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", []string{"entryDN", "entryUUID", "objectClass"}, nil))
-	if ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) && ctx.Err() == nil {
+	if noSuchObject(err) && ctx.Err() == nil {
 		return writeIdentity{}, domain.ErrNotFound
 	}
 	if err != nil || ctx.Err() != nil || len(result.Entries) != 1 || len(result.Referrals) != 0 {
