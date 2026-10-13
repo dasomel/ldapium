@@ -30,6 +30,18 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `userPassword` spelling variants on every machine write operation. See
   [CHANGE.md](docs/changes/machine-write-scope/CHANGE.md) D17a/D17b/D18.
 
+- Machine write v2b hardening (#394, items 1, 3, 4). **ACL (operators, re-apply on
+  every node; roll back the old fragments first, guide section 7):** `write-lock.ldif`
+  grants `W_lock` only `add` on `pwdAccountLockedTime`, so a `W_lock` credential can
+  set a lock but never delete or replace it (unlock stays human-only at the ACL
+  level too); `write-data.ldif` moves `description` into its own rule with
+  `filter=(objectClass=groupOfNames)`, so `W_data` cannot write a user's description
+  (the fragment now has 9 rules). Machine `lockUser` adds the marker instead of
+  replacing it: re-locking is idempotent (204), an account the password policy
+  locked with a timestamp answers 409 and keeps that lock. `MACHINE_WRITE_GROUP_SEED_DN`
+  must be a direct child of the container that holds `MACHINE_WRITE_DATA_BIND_DN`,
+  or start-up fails. `scripts/check-machine-write-acl.sh` reports the old fragments
+  as a mismatch.
 - Optional LDAP machine-token revocation (#286), **default off**: validated tokens
   are checked against a background snapshot before request budgets or directory
   access. A revoked JTI or client cutoff returns `401 token_invalid`; missing,

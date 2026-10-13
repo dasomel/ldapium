@@ -5,9 +5,9 @@
 #
 #   olcAccess {0}      replication identity rule
 #   olcAccess {1}-{3}  the three machine read rules (M)
-#   olcAccess {4}-{11} the eight W_data rules   (write-data.ldif)
-#   olcAccess {12}-{17} the six W_lock rules    (write-lock.ldif)
-#   olcAccess {18}..   the image's own rules, in their original order
+#   olcAccess {4}-{12} the nine W_data rules   (write-data.ldif)
+#   olcAccess {13}-{18} the six W_lock rules    (write-lock.ldif)
+#   olcAccess {19}..   the image's own rules, in their original order
 #
 # It shows with ldapmodify as W_data / W_lock that the allowed attribute set works, that
 # representative refusals come back as insufficient access (50), that M stays read-only,
@@ -276,21 +276,21 @@ with_machine="$(acl_norm)"
 
 out="$(apply_w write-data.ldif "$wddn" "$wrdn")"
 check "guide 4.2 computed BASE=4 (replication + M) for W_data" "4" "$(printf '%s\n' "$out" | sed -n 's/^BASE=//p')"
-check "W_data rules at {4}..{11}" "4 5 6 7 8 9 10 11" "$(acl_idx "$wddn")"
+check "W_data rules at {4}..{12}" "4 5 6 7 8 9 10 11 12" "$(acl_idx "$wddn")"
 acl_w1="$(acl_norm)"
 out="$(apply_w write-data.ldif "$wddn" "$wrdn")"
 case "$out" in *"refusing: "*) ok "a second W_data apply is refused by the guide's own check" ;; *) bad "a second W_data apply was not refused: $out" ;; esac
 check "... and the olcAccess did not change (no duplicate rules)" "$acl_w1" "$(acl_norm)"
 out="$(apply_w write-lock.ldif "$wldn" "$wrdn")"
-check "guide 4.2 computed BASE=12 (also counting W_data) for W_lock" "12" "$(printf '%s\n' "$out" | sed -n 's/^BASE=//p')"
-check "W_lock rules at {12}..{17}" "12 13 14 15 16 17" "$(acl_idx "$wldn")"
-check "replication rule still at {0} (plus the REPL_DN deny rules {5} {13}), M rules still at {1} {2} {3}" "0 5 13|1 2 3" "$(acl_idx "$iddn")|$(acl_idx "$mdn")"
+check "guide 4.2 computed BASE=13 (also counting W_data) for W_lock" "13" "$(printf '%s\n' "$out" | sed -n 's/^BASE=//p')"
+check "W_lock rules at {13}..{18}" "13 14 15 16 17 18" "$(acl_idx "$wldn")"
+check "replication rule still at {0} (plus the REPL_DN deny rules {5} {14}), M rules still at {1} {2} {3}" "0 5 14|1 2 3" "$(acl_idx "$iddn")|$(acl_idx "$mdn")"
 check "the image's own rules follow, unchanged and in order" "$original" "$(acl_norm | awk -v a="$wddn" -v b="$wldn" -v m="$mdn" -v r="$iddn" 'index($0, "dn.exact=\"" a "\"") == 0 && index($0, "dn.exact=\"" b "\"") == 0 && index($0, "dn.exact=\"" m "\"") == 0 && index($0, "dn.exact=\"" r "\"") == 0')"
 acl_installed="$(acl_norm)"
 docker restart "$c" >/dev/null
 poll ready || bad "node never ready after restart"
 check "restart (prepare) keeps the whole olcAccess unchanged" "$acl_installed" "$(acl_norm)"
-check "restart keeps the identity rule at {0} (and the two deny rules)" "0 5 13" "$(acl_idx "$iddn")"
+check "restart keeps the identity rule at {0} (and the two deny rules)" "0 5 14" "$(acl_idx "$iddn")"
 
 echo "=== W_data ==="
 wd() { mod_as "$wddn" /tmp/.pw-wdata; }
@@ -344,6 +344,13 @@ check "W_data clear group description" "0" "$(wd <<EOF
 dn: cn=g1,${groups}
 changetype: modify
 delete: description
+EOF
+)"
+check "W_data cannot set a USER description (#394: the rule's filter is groupOfNames) (50)" "50" "$(wd <<EOF
+dn: uid=bob,${people}
+changetype: modify
+replace: description
+description: machine-set
 EOF
 )"
 check "admin sees the written mail" "1" "$(cnt '^mail: bob2@example.org' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "uid=bob,${people}" mail)"
@@ -496,15 +503,36 @@ EOF
 
 echo "=== W_lock ==="
 wl() { mod_as "$wldn" /tmp/.pw-wlock; }
-check "W_lock sets pwdAccountLockedTime" "0" "$(wl <<EOF
+check "W_lock sets pwdAccountLockedTime (add)" "0" "$(wl <<EOF
 dn: uid=bob,${people}
 changetype: modify
-replace: pwdAccountLockedTime
+add: pwdAccountLockedTime
 pwdAccountLockedTime: 20260101000000Z
 EOF
 )"
 check "admin sees the lock" "1" "$(cnt '^pwdAccountLockedTime:' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "uid=bob,${people}" pwdAccountLockedTime)"
-check "W_lock clears pwdAccountLockedTime" "0" "$(wl <<EOF
+# #394: add-only. slapd checks delete access for Delete AND Replace, so W_lock cannot unlock.
+check "W_lock cannot clear pwdAccountLockedTime (delete) (50)" "50" "$(wl <<EOF
+dn: uid=bob,${people}
+changetype: modify
+delete: pwdAccountLockedTime
+EOF
+)"
+check "W_lock cannot clear pwdAccountLockedTime (replace with nothing) (50)" "50" "$(wl <<EOF
+dn: uid=bob,${people}
+changetype: modify
+replace: pwdAccountLockedTime
+EOF
+)"
+check "W_lock cannot overwrite pwdAccountLockedTime (replace) (50)" "50" "$(wl <<EOF
+dn: uid=bob,${people}
+changetype: modify
+replace: pwdAccountLockedTime
+pwdAccountLockedTime: 000001010000Z
+EOF
+)"
+check "... and the lock is still there" "1" "$(cnt '^pwdAccountLockedTime: 20260101000000Z' docker exec -i "$c" ldapsearch -x -LLL -H ldap://localhost -D "$admin" -y /tmp/.pw-admin -b "uid=bob,${people}" pwdAccountLockedTime)"
+check "admin clears the lock" "0" "$(admin_mod <<EOF
 dn: uid=bob,${people}
 changetype: modify
 delete: pwdAccountLockedTime
@@ -619,8 +647,8 @@ echo "=== rollback (guide 7): W_lock then W_data; M and identity rules untouched
 out="$(rollback_w "uid=nobody,${sysdn}" 6)"
 case "$out" in *"refusing: "*) ok "rollback of a not-installed fragment refuses" ;; *) bad "rollback of a not-installed fragment did not refuse: $out" ;; esac
 rollback_w "$wldn" 6 >/dev/null
-check "W_lock rolled back: W_data rules still contiguous" "4 5 6 7 8 9 10 11" "$(acl_idx "$wddn")"
-rollback_w "$wddn" 8 >/dev/null
+check "W_lock rolled back: W_data rules still contiguous" "4 5 6 7 8 9 10 11 12" "$(acl_idx "$wddn")"
+rollback_w "$wddn" 9 >/dev/null
 check "W_data rolled back: olcAccess equals the state before the write fragments (byte for byte)" "$with_machine" "$(acl_norm)"
 check "W_data no longer writes (50)" "50" "$(wd <<EOF
 dn: uid=alice,${people}
@@ -672,7 +700,7 @@ replace: sn
 sn: x
 EOF
 )"
-rollback_w "$wddn" 8 >/dev/null
+rollback_w "$wddn" 9 >/dev/null
 check "rolled back again: original image rules + identity + M only" "$with_machine" "$(acl_norm)"
 check "identity-only state equals what prepare produced" "$with_identity" "$(acl_norm | awk -v m="$mdn" 'index($0, "dn.exact=\"" m "\"") == 0')"
 

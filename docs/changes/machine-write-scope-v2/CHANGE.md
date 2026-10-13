@@ -362,6 +362,12 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 ## Revision
 
+- 2026-10-13 Revision 5 (#394 항목 1·3·4만, 유지보수자 승인; 실측은 EVIDENCE.md §2d). 항목 2·5·6은 열린 채로 남는다.
+  - **D394-1** `write-lock.ldif` `{3}`을 `write` → **`add`**. slapd는 Delete와 Replace 모두에 삭제 권한을 검사하므로 `W_lock`은 표지를 추가만 하고 지우거나 덮어쓸 수 없다(삭제·값 삭제·빈 Replace·값 Replace 모두 50, Add 0, 같은 값 재Add 20). 머신 `lockUser`는 Replace 대신 Add를 보내고 20을 성공(멱등)으로, 19(ppolicy 타임스탬프 잠금 위의 Add, 단일 값 속성)를 409로 돌려준다. 사람 경로의 `Lock`(Replace)은 그대로다. Revision 4 F-1 (a)의 "머신 `lockUser`가 ppolicy 시각 잠금을 표지로 덮어씀"은 이제 머신 경로에서 일어나지 않는다(타임스탬프 유지, 409). `=a`도 같은 거부를 보였으나 `W_lock`의 그 속성 읽기를 잃어 `add`를 택했다.
+  - **D394-3** `write-data.ldif`의 `description`을 닫힌 목록에서 빼 `{5}to dn.subtree=@WRITE_DN@ filter=(objectClass=groupOfNames) attrs=description`로 분리했다(조각 8 → 9 규칙, `W_lock` 시작 인덱스 +1). 사용자 항목의 `description` 쓰기는 ACL만으로 50이다. 출하 상태(`olcAddContentAcl` FALSE)의 Add는 속성 ACL을 보지 않으므로 생성 시점의 `description`은 여전히 앱의 닫힌 본문만 막는다(#386과 같은 한계).
+  - **D394-4** `MACHINE_WRITE_GROUP_SEED_DN`은 `MACHINE_WRITE_DATA_BIND_DN`과 같은 컨테이너(`@SYSTEM_DN@`)의 **직계 자식**이어야 기동한다(예약 placeholder 형태). 바인드 가능 여부(`userPassword` 존재)는 설정 단계에서 알 수 없고 출하 신원 누구도 `userPassword`를 읽을 수 없으므로 검사하지 않는다 — 운영자 의무로 남는 잔여 위험.
+  - 기존 배포: 이전 조각을 적용한 노드는 `docs/machine-write-account.md` 7절로 롤백 후 다시 적용해야 한다. 점검 스크립트는 이전 조각을 불일치로 보고한다(규칙 수·`add`·`filter=`를 구조 비교).
+
 - 2026-10-12 Revision 4 (T-015 라이브 드릴 실측, EVIDENCE.md §2b; 결정 D379-3/5/6/7/17은 **바뀌지 않음**, 근거 문장만 정정).
   - **F-1** `pwdLockoutDuration=0` ppolicy 잠금은 출하 이미지에서 관리 잠금 표지(`000001010000Z`)와 **같은 값이 아니라** 잠금 시각 타임스탬프를 남긴다(`20261012141315Z`, 영구 잠금은 맞음). 따라서 D379-7 근거 (b) "표지와 같은 형태라 구별 불가"와 P22(b)는 이 빌드에서 사실이 아니다. 해제를 사람 전용으로 두는 Q4 결정은 유지자 결정이며 근거 (a)(`lockUser`→해제 왕복이 ppolicy 시각 잠금을 표지로 덮어쓴 뒤 해제하는 우회, 드릴로 덮어씀 확인)와 (c)(메모리 한도가 재시작·replica로 초기화)로 유지된다. 값으로 구별 가능하다는 사실은 D379-7 탈출구(별도 승인 설계)에서 다시 평가할 입력이다.
   - **F-2** 특권 그룹의 **중첩** 그룹 멤버(`lk4` ∈ `subadmins` ∈ `admins`)에 대한 `lockUser`는 204로 잠긴다. REQ-007/D379-17에서 수용한 잔여 위험을 실측으로 확인한 것이며 직접 멤버만 거부된다. 드릴이 이 거동을 고정해 변경을 알린다.

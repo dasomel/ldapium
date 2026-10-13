@@ -84,11 +84,19 @@ func TestMachineWriteGroupSeedRejects(t *testing.T) {
 		// The seed joins the protected set before the ceilings are checked, so a
 		// ceiling equal to, below or above it is refused (the machine must never be
 		// able to address it as a user entry).
-		"inside a ceiling":   {seed: "cn=group-seed," + wsPeop, want: "MACHINE_WRITE_SUBTREES"},
-		"equals a ceiling":   {seed: wsPeop, want: "MACHINE_WRITE_SUBTREES"},
-		"covered by ceiling": {seed: "cn=group-seed,ou=system," + wsBase, over: map[string]string{"MACHINE_WRITE_SUBTREES": "machine-a=ou=system," + wsBase}, want: "MACHINE_WRITE_SUBTREES"},
-		"covers a ceiling":   {seed: "ou=apps," + wsBase, want: "MACHINE_WRITE_SUBTREES"},
+		"equals a ceiling":   {seed: wsSeed, over: map[string]string{"MACHINE_WRITE_SUBTREES": "machine-a=" + wsSeed}, want: "MACHINE_WRITE_SUBTREES"},
+		"covered by ceiling": {seed: wsSeed, over: map[string]string{"MACHINE_WRITE_SUBTREES": "machine-a=ou=system," + wsBase}, want: "MACHINE_WRITE_SUBTREES"},
+		"covers a ceiling":   {seed: wsSeed, over: map[string]string{"MACHINE_WRITE_SUBTREES": "machine-a=ou=apps," + wsSeed}, want: "MACHINE_WRITE_SUBTREES"},
 		"empty value":        {seed: "cn=,ou=system," + wsBase, want: "canonical"},
+		// #394 item 4 (D394-4): only the reserved placeholder form, a direct child of
+		// the container that holds W_data, is accepted; a real principal elsewhere is
+		// refused before it could become the first member of every created group.
+		"a user inside a ceiling": {seed: "uid=alice," + wsPeop, want: "reserved placeholder form"},
+		"a ceiling root":          {seed: wsPeop, want: "reserved placeholder form"},
+		"directly under the base": {seed: "cn=group-seed," + wsBase, want: "reserved placeholder form"},
+		"below the container":     {seed: "cn=group-seed,ou=seeds,ou=system," + wsBase, want: "reserved placeholder form"},
+		"a sibling container":     {seed: "cn=group-seed,ou=apps," + wsBase, want: "reserved placeholder form"},
+		"the container itself":    {seed: "ou=system," + wsBase, want: "reserved placeholder form"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

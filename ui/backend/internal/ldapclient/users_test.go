@@ -340,3 +340,42 @@ func TestLockModify_ReplacesPwdAccountLockedTimeWithIndefiniteSentinel(t *testin
 		t.Errorf("Modification.Vals = %v, want [%q]", change.Modification.Vals, pwdAccountLockedTimeIndefinite)
 	}
 }
+
+// #394 (D394-1): the machine lock is an Add of the marker, never a Replace or a
+// Delete: W_lock's ACL is add-only, and slapd checks delete access for Replace.
+func TestMachineLockModify_AddsTheIndefiniteMarker(t *testing.T) {
+	dn := "uid=jdoe,ou=people,dc=example,dc=com"
+	mod := machineLockModify(dn)
+	if mod.DN != dn || len(mod.Changes) != 1 {
+		t.Fatalf("DN %q, changes %v", mod.DN, mod.Changes)
+	}
+	change := mod.Changes[0]
+	if change.Operation != ldap.AddAttribute {
+		t.Errorf("Operation = %v, want AddAttribute", change.Operation)
+	}
+	if change.Modification.Type != "pwdAccountLockedTime" {
+		t.Errorf("Modification.Type = %q", change.Modification.Type)
+	}
+	if len(change.Modification.Vals) != 1 || change.Modification.Vals[0] != pwdAccountLockedTimeIndefinite {
+		t.Errorf("Modification.Vals = %v, want [%q]", change.Modification.Vals, pwdAccountLockedTimeIndefinite)
+	}
+}
+
+func TestMapMachineLockErr(t *testing.T) {
+	if err := mapMachineLockErr(ldap.NewError(ldap.LDAPResultAttributeOrValueExists, errors.New("value #0 already exists"))); err != nil {
+		t.Errorf("re-lock (20) = %v, want nil (idempotent)", err)
+	}
+	err := mapMachineLockErr(ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("cannot have multiple values")))
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Errorf("ppolicy timestamp lock (19) = %v, want ErrConflict", err)
+	}
+	if err := mapMachineLockErr(ldap.NewError(ldap.LDAPResultInsufficientAccessRights, errors.New("x"))); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("50 = %v, want ErrPermissionDenied", err)
+	}
+	if err := mapMachineLockErr(ldap.NewError(ldap.LDAPResultAssertionFailed, errors.New("x"))); !errors.Is(err, domain.ErrRevisionConflict) {
+		t.Errorf("122 = %v, want ErrRevisionConflict", err)
+	}
+	if err := mapMachineLockErr(ldap.NewError(ldap.LDAPResultNoSuchObject, errors.New("x"))); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("32 = %v, want ErrNotFound", err)
+	}
+}

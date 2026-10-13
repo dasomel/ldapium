@@ -98,7 +98,7 @@ class CheckTests(unittest.TestCase):
   def test_real_dump_passes(self):
     r = check_dump((DUMPS / 'good-prepare.ldif').read_text())
     self.assertEqual(r.rc, 0, r.err)
-    self.assertRegex(r.out, r'RESULT status=pass checks=\d+ failed=0 rules=21')
+    self.assertRegex(r.out, r'RESULT status=pass checks=\d+ failed=0 rules=22')
 
   def test_embedded_templates_equal_the_real_dump(self):
     real = values((DUMPS / 'good-prepare.ldif').read_text())
@@ -135,12 +135,12 @@ class CheckTests(unittest.TestCase):
     cases = {
       'replication rule not first (swapped with M)': swap(0, 1),
       'replication rule moved behind the M rules': good[1:4] + good[:1] + good[4:],
-      'W_data before M': good[:1] + good[4:12] + good[1:4] + good[12:],
+      'W_data before M': good[:1] + good[4:13] + good[1:4] + good[13:],
       'two rules of W_data swapped': swap(7, 8),
       'secrets rule swapped with the SYSTEM backstop': swap(4, 6),
-      'W_lock inside W_data': good[:12] + good[18:19] + good[12:18] + good[19:],
+      'W_lock inside W_data': good[:13] + good[19:20] + good[13:19] + good[20:],
       'W block behind the image rules': good[:4] + good[-3:] + good[4:-3],
-      'W_lock behind the image rules': good[:12] + good[-3:] + good[12:-3],
+      'W_lock behind the image rules': good[:13] + good[-3:] + good[13:-3],
     }
     for label, rules in cases.items():
       with self.subTest(label):
@@ -148,7 +148,7 @@ class CheckTests(unittest.TestCase):
 
   def test_either_fragment_order_is_accepted(self):
     good = synthetic()
-    lock_first = good[:4] + good[12:18] + good[4:12] + good[18:]
+    lock_first = good[:4] + good[13:19] + good[4:13] + good[19:]
     self.assertEqual(check_dump(render(lock_first)).rc, 0)  # guide: the order of the two fragments is irrelevant
 
   def test_missing_or_altered_rules(self):
@@ -157,14 +157,18 @@ class CheckTests(unittest.TestCase):
       'secrets rule removed': good[:6] + good[7:],
       'SYSTEM backstop removed': good[:4] + good[5:],
       'replicator deny backstop removed': good[:5] + good[6:],
-      'last "to * none" rule removed': good[:11] + good[12:],
-      'W_lock fragment partly missing': good[:15] + good[16:],
+      'last "to * none" rule removed': good[:12] + good[13:],
+      'W_lock fragment partly missing': good[:16] + good[17:],
       'no M rules': good[:1] + good[4:],
       'no image rules': good[:-3],
       'by * break dropped from a W_data rule': [r.replace(' by * break', '') if i == 7 else r for i, r in enumerate(good)],
-      'extra grantee clause in a W_data rule': [r + ' by users read' if i == 9 else r for i, r in enumerate(good)],
-      'description dropped from the closed list (the pre-v2b fragment)': [r.replace('description,', '') if i == 9 else r for i, r in enumerate(good)],
-      'attribute added to the closed list': [r.replace(',member', ',member,telephoneNumber') if i == 9 else r for i, r in enumerate(good)],
+      'extra grantee clause in a W_data rule': [r + ' by users read' if i == 10 else r for i, r in enumerate(good)],
+      'group description rule removed (the pre-v2b fragment)': good[:9] + good[10:],
+      'description rule without its filter (pre-#394 reach on users)': [r.replace(' filter=(objectClass=groupOfNames)', '') if i == 9 else r for i, r in enumerate(good)],
+      'description filter widened': [r.replace('(objectClass=groupOfNames)', '(objectClass=*)') if i == 9 else r for i, r in enumerate(good)],
+      'description back in the closed list (the pre-#394 fragment)': good[:9] + [good[10].replace(',ou,member', ',ou,description,member')] + good[11:],
+      'W_lock write instead of add (pre-#394: may delete the lock)': [r.replace('" add by', '" write by') if i == 16 else r for i, r in enumerate(good)],
+      'attribute added to the closed list': [r.replace(',member', ',member,telephoneNumber') if i == 10 else r for i, r in enumerate(good)],
       'W_data may write userPassword': [r.replace('none by * break', 'write by * break') if i == 6 else r for i, r in enumerate(good)],
       'secret attribute dropped from the list': [r.replace('memberOf,', '') if i == 6 else r for i, r in enumerate(good)],
       'M may write': [r.replace('read by', 'write by') if i == 2 else r for i, r in enumerate(good)],
@@ -180,8 +184,8 @@ class CheckTests(unittest.TestCase):
 
   def test_duplicates(self):
     good = synthetic()
-    cases = {'W_data twice (as the guide BASE would place it)': good[:12] + good[4:12] + good[12:],
-             'W_lock twice': good[:18] + good[12:18] + good[18:],
+    cases = {'W_data twice (as the guide BASE would place it)': good[:13] + good[4:13] + good[13:],
+             'W_lock twice': good[:19] + good[13:19] + good[19:],
              'M twice': good[:4] + good[1:4] + good[4:],
              'replication rule twice': good[:1] + good[:1] + good[1:]}
     for label, rules in cases.items():

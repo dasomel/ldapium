@@ -882,7 +882,9 @@ ui:
       # -- MACHINE_WRITE_GROUP_SEED_DN: the fixed, non-bindable placeholder entry a
       #    machine-created group gets as its only initial `member` (v2b, D379-3).
       #    Required by the application as soon as a client ceiling names
-      #    directory.groups.create. Empty renders nothing.
+      #    directory.groups.create, and refused at start-up unless it is a direct
+      #    child of the container that holds the W_data bind DN (#394). Empty
+      #    renders nothing.
       groupSeedDN: ""
       # -- Write budget, separate from the read budget (per UI pod).
       limits:

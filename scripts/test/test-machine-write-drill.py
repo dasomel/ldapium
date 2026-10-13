@@ -200,7 +200,7 @@ def main():
     ensure(r.returncode == 0, f'{name}: {live.mask(r.stderr)}')
 
   apply_fragment('write-data.ldif', 'WDATA_DN', WDATA_DN, 3)   # after the three M rules
-  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 11)  # after the eight W_data rules
+  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 12)  # after the nine W_data rules
   ldap.put_password('/tmp/.pw-wdata', wdata_pw)
   ldap.put_password('/tmp/.pw-wlock', wlock_pw)
   ldap.put_password('/tmp/.pw-wrong', 'definitely-not-the-password')

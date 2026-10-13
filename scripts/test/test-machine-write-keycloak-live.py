@@ -85,7 +85,7 @@ def main():
     ensure(r.returncode == 0, f'{name}: {live.mask(r.stderr)}')
 
   apply_fragment('write-data.ldif', 'WDATA_DN', WDATA_DN, 3)   # after the three M rules
-  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 11)  # after the eight W_data rules
+  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 12)  # after the nine W_data rules
   ldap.put_password('/tmp/.pw-wdata', wdata_pw)
   live.check(True, 'W_data/W_lock accounts created and the write ACL fragments applied after the M rules')
 
