@@ -48,13 +48,16 @@ olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=entry,children
 olcAccess: {4}to dn.subtree="@WRITE_DN@" attrs=objectClass
   by dn.exact="@WHO@" add
   by * break
-olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,description,member
+olcAccess: {5}to dn.subtree="@WRITE_DN@" filter=(objectClass=groupOfNames) attrs=description
   by dn.exact="@WHO@" write
   by * break
-olcAccess: {6}to dn.subtree="@WRITE_DN@"
+olcAccess: {6}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member
+  by dn.exact="@WHO@" write
+  by * break
+olcAccess: {7}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WHO@" read
   by * break
-olcAccess: {7}to *
+olcAccess: {8}to *
   by dn.exact="@WHO@" none
   by * break
 '''
@@ -68,7 +71,7 @@ olcAccess: {2}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,
   by dn.exact="@WHO@" none
   by * break
 olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
-  by dn.exact="@WHO@" write
+  by dn.exact="@WHO@" add
   by * break
 olcAccess: {4}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WHO@" read
@@ -80,10 +83,11 @@ olcAccess: {5}to *
 # What each position of a fragment is for, for the failure message.
 DATA_LABELS = ['SYSTEM_DN none backstop', 'replication identity entry none backstop',
                'secret/pwd*/memberOf attributes none', 'entry+children write inside WRITE_DN',
-               'objectClass add inside WRITE_DN', 'closed attribute list write inside WRITE_DN',
+               'objectClass add inside WRITE_DN', 'group description write inside WRITE_DN (filter)',
+               'closed attribute list write inside WRITE_DN',
                'rest of WRITE_DN read', 'everything else none']
 LOCK_LABELS = ['SYSTEM_DN none backstop', 'replication identity entry none backstop',
-               'secret/pwd*/memberOf attributes none', 'pwdAccountLockedTime write inside WRITE_DN',
+               'secret/pwd*/memberOf attributes none', 'pwdAccountLockedTime add inside WRITE_DN',
                'rest of WRITE_DN read', 'everything else none']
 M_LABELS = ['M secret attributes none', 'M read under ALLOWED_DN', 'M everything else none']
 
@@ -122,6 +126,7 @@ class Rule:
     self.parse_error = None
     self.dn_sel = None      # ('exact'|'subtree'|..., normalized dn) or None = every entry
     self.attrs = None       # frozenset(lowercase) or None = every attribute
+    self.filter = None      # lowercase filter= text (compared, never evaluated: opaque)
     self.opaque = False     # selector the static evaluator cannot decide
     self.by = []            # (who, modifiers frozenset, access, control)
     self._parse()
@@ -149,6 +154,9 @@ class Rule:
         continue
       if m and self.dn_sel is None:
         self.dn_sel = (m.group(1), dn_norm(t.split('=', 1)[1]))
+      elif low.startswith('filter=') and self.filter is None:
+        self.filter = low[len('filter='):]
+        self.opaque = True
       elif low.startswith('attrs='):
         names = [a for a in low[len('attrs='):].split(',') if a]
         if not names or any(not re.match(r'^[a-z0-9-]+$', a) for a in names):
@@ -192,7 +200,7 @@ class Rule:
     return (low, None)
 
   def sig(self):
-    return (self.dn_sel, self.attrs, self.opaque, tuple(self.by))
+    return (self.dn_sel, self.attrs, self.filter, self.opaque, tuple(self.by))
 
   def names(self, dn):
     # True when a by-clause names dn as its identity.
@@ -474,8 +482,8 @@ def check(rules, a, rep):
               '%s can touch secret attributes: %s' % (name, '; '.join(bad)))
     if name == 'W_lock':
       res = effective_access(rules, dn, probe, LOCK_ATTR)
-      rep.check(res == WRITE_LEVEL, 'W_lock can write %s inside WRITE_DN' % LOCK_ATTR,
-                'W_lock does not get write on %s (result %s)' % (LOCK_ATTR, res))
+      rep.check(res == WRITE_LEVEL, 'W_lock can add %s inside WRITE_DN' % LOCK_ATTR,
+                'W_lock does not get add on %s (result %s)' % (LOCK_ATTR, res))
     outside_dn = 'ou=outside-x,' + a.root_dn
     if not dn_under(outside_dn, a.write_dn):
       res = effective_access(rules, dn, outside_dn, 'entry')

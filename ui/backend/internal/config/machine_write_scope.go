@@ -138,6 +138,21 @@ func loadMachineWriteGroupSeed(getenv func(string) string, cfg Config, m Machine
 			return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN must be distinct from every protected identity and privileged group")
 		}
 	}
+	// D394-4 (#394 item 4): the reserved placeholder form is a direct child of
+	// the container that holds W_data (the system container, @SYSTEM_DN@ of the
+	// W ACL fragments, where D379-3 puts the seed). A real
+	// principal elsewhere (a user under a people ou, a group, an application
+	// account) is refused, whatever its name. Cost: the seed's location is
+	// fixed. Escape hatch: none; move the seed entry. Residual: whether the
+	// entry is bindable (carries userPassword) cannot be checked here, and no
+	// shipped identity may read userPassword to check it later, so a
+	// password-less seed stays an operator duty (machine-write-scope-v2 CHANGE.md
+	// Revision 5).
+	wdata, err := ldap.ParseDN(w.Data.BindDN)
+	if err != nil || len(wdata.RDNs) < 2 ||
+		!(&ldap.DN{RDNs: seed.RDNs[1:]}).EqualFold(&ldap.DN{RDNs: wdata.RDNs[1:]}) {
+		return "", fmt.Errorf("MACHINE_WRITE_GROUP_SEED_DN must be a direct child of the container that holds MACHINE_WRITE_DATA_BIND_DN (the reserved placeholder form)")
+	}
 	return raw, nil
 }
 

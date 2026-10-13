@@ -185,6 +185,48 @@ What the 113 checks established (AC ids as in CHANGE.md; real values from run 3)
     `AssertionError: [C] target-type guard alone: patchGroup on an allow-listed USER DN -> 403 "target is not permitted", user untouched (412 ...)`. (The LDAP
     entryCSN/objectClass assertion is a second layer: it answered 412 and the user stayed untouched, but the app-level guard is gone.)
 
+### 2d. #394 hardening, items 1, 3, 4 (2026-10-13, branch `feat/394-v2b-hardening`)
+
+Real slapd (`image/` built as `ldapium:hard`), the UI built from the same tree (`ldapium-ui:hard`), local Colima Docker.
+
+**ACL measurement before choosing the form** (scratch script, the fixtures applied after the three M rules, `pwdAccountLockedTime` rule of `W_lock`
+substituted per run). rc per probe:
+
+| W_lock level | Add marker | re-Add same | Modify-delete attr | Modify-delete value | Replace with nothing | Replace marker | Add marker over a timestamp | W_lock reads the attr |
+|---|---|---|---|---|---|---|---|---|
+| `write` (pre-#394) | 0 | 20 | **0** (unlocked) | 16 | **0** | 0 | 19 | yes |
+| `add` (chosen) | 0 | 20 | 50 | 50 | 50 | 50 | 19 | yes |
+| `=a` | 0 | 20 | 50 | 50 | 50 | 50 | 19 | **no** |
+
+`W_data` with the split rule (`{5}` description + `filter=(objectClass=groupOfNames)`): user description replace / add / delete 50 / 50 / 50, group description
+replace / delete 0 / 0, user `mail` replace 0, group `member` add 0, user Add carrying `description` **0** (`olcAddContentAcl` FALSE: Add does not evaluate
+per-attribute rules, the #386 limit), group Add with description 0. slapd stores the rule as written
+(`to dn.subtree="dc=example,dc=org" filter=(objectClass=groupOfNames) attrs=description by dn.exact="..." write by * break`), so the guide-vs-installed
+byte comparison of `test-machine-write-acl-live.py` holds.
+
+**Runs (all on this tree):**
+
+| Run | Result |
+|---|---|
+| `scripts/test/test-machine-write-v2b-live.py` | `All machine write v2b live checks passed: 130 checks in 70s.` New: [A] a real bindable user / a seed under the base -> start-up error "reserved placeholder form"; [D] re-lock 204 as W_lock, value unchanged; [D] lockUser over a ppolicy timestamp lock -> 409 `conflict`, timestamp kept; [E] W_lock Modify-delete (attr / value), Replace (empty / other value) -> rc 50 each and the lock stays, second Add -> rc 20; [E] W_data replace / add of a USER description -> rc 50 |
+| `scripts/test/test-machine-write-t004-live.py` | `All T-004 measurement checks passed: 53 checks in 44s.` New 5f: `OBS 5f W_data user description replace/add/delete: rc 50/50/50; group description replace/delete: rc 0/0; user mail replace: rc 0; user Add carrying description: rc 0` |
+| `scripts/test/test-machine-write-acl-smoke.sh ldapium:hard` | `RESULT: all checks passed` (82 PASS; W_lock add 0, delete / empty Replace / Replace 50, lock still there; W_data user description 50) |
+| `scripts/test/test-check-machine-write-acl-live.sh ldapium:hard` | `RESULT: all checks passed`; the checker on the real installed list: `RESULT status=pass checks=55 failed=0 rules=22` |
+| `scripts/test/test-machine-write-acl-live.py` | `RESULT: 1488 checks passed, 0 failed, mutation=none, 123s` (n0, n1, p0, p1; W_data user description 50, W_lock delete / empty Replace / Replace 50, the backstop probes now use Add) |
+| Upgrade path (scratch script, guide 4.2/7 commands as written): old fragments from `02b2dff` installed (8 + 6), section 7 `K=6` W_lock, default `K=9` on the old W_data **refused** (`not 9 contiguous values`, nothing deleted), `K=8` removes it, olcAccess byte-identical to before, new fragments installed (9 + 6) | `RESULT: upgrade path passed` (12 checks; after: user description 50, group description 0, W_lock add 0 / delete 50) |
+| v2b drill, `write-lock.ldif` back to `write` (scratch, restored) | fails: `AssertionError: [E] #394 W_lock Modify-delete of the attribute of pwdAccountLockedTime is refused (rc 0, 50 expected)` |
+| v2b drill, `filter=` removed from the description rule (scratch, restored) | fails: `AssertionError: [E] #394 W_data replace of a USER description is refused (rc 0, 50 expected)` |
+
+**Unit tests and mutations (scratch, reverted):**
+
+- `ldapclient`: `TestMachineLockModify_AddsTheIndefiniteMarker`, `TestMapMachineLockErr` (20 -> nil, 19 -> `ErrConflict`, 50/122/32 unchanged).
+  Machine lock back to Replace -> the first fails; the 20 -> nil case removed -> the second fails.
+- `config`: `TestMachineWriteGroupSeedRejects` gains six placement cases (a user inside a ceiling, a ceiling root, directly under the base, below the container,
+  a sibling container, the container itself); the three ceiling-overlap cases now use a seed in the container plus a ceiling around it. The placement check
+  replaced by `false` -> 6 subtests fail. A depth-equality clause survived its mutation (redundant with the parent comparison) and was removed.
+- `scripts/test/test_machine_write_acl_check.py`: new cases (description rule without its filter, filter widened to `(objectClass=*)`, description back in the
+  closed list, `W_lock` `write` instead of `add`) fail the checker; `filter=` dropped from `Rule.sig()` -> "description filter widened" passes the checker, so the test fails.
+
 ## 3. Not verified
 
 §2 전부(E-01–E-23)는 여전히 T-002로 남는다. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.

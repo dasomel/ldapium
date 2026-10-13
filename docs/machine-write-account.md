@@ -35,7 +35,7 @@ ACL 조각을 적용하면 `W_data`는:
 
 - `$WRITE_DN` 아래에서 **항목을 만들고 지우며**(`entry`·`children` write), 닫힌 속성 목록
   `uid, cn, sn, givenName, mail, departmentNumber, o, ou, description, member`만 쓴다(부록 A: createUser·patchUser·그룹 멤버 add/remove의 합집합, 그리고 v2b `patchGroup`의 `description`).
-  `description`은 ACL이 그룹과 사용자 항목을 구별하지 못해 `$WRITE_DN` 안의 **사용자 항목에서도 쓰기 가능**하다. 머신 `patchUser`의 닫힌 본문에는 `description`이 없으므로 이를 막는 것은 앱 가드다(위 한계와 같은 종류).
+  `description`은 별도 규칙 `{5}`의 `filter=(objectClass=groupOfNames)`로 **그룹 항목에서만** 쓴다(#394). 사용자 항목의 `description` modify는 앱 가드가 없어도 50으로 거부된다(실측). 단, 출하 상태(`olcAddContentAcl` 기본 FALSE)의 Add는 속성별 ACL을 보지 않으므로 생성 시점의 `description`은 여전히 앱의 닫힌 본문만 막는다.
 - `objectClass`는 **`add` 수준**만 받는다(D18). `replace`·`delete`는 거부된다. 그러나 ACL은 **항목 생성(Add)과 기존 항목에 값을 더하는 modify를
   구별하지 못한다**: 기존 항목에 `objectClass` 값을 **추가**하는 modify는 ACL을 통과한다(스모크가 이 한계를 고정한다).
   수정 경로가 `objectClass`를 절대 보내지 않게 하는 것은 앱 가드(T-012)다.
@@ -79,7 +79,7 @@ ACL이 **보장하지 않는 것**(앱 가드 하나뿐인 것, D17/D19/D26):
 ```text
 {0}            복제 신원 규칙 (LDAP_REPLICATION_IDENTITY=prepare/dedicated일 때만; 항상 첫 값)
 {0}..{2} 또는 {1}..{3}   M 읽기 규칙 3개 (machine-ldap-account.md 5절/5.1)
-다음 8개        W_data 규칙 8개 (write-data.ldif)
+다음 9개        W_data 규칙 9개 (write-data.ldif)
 다음 6개        W_lock 규칙 6개 (write-lock.ldif, 선택)
 그 뒤           이미지의 기존 규칙, 원래 순서 그대로 (by self write / by users read / LDAP_ANONYMOUS_READ_BASE 규칙 …)
 ```
@@ -160,13 +160,16 @@ olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=entry,children
 olcAccess: {4}to dn.subtree="@WRITE_DN@" attrs=objectClass
   by dn.exact="@WDATA_DN@" add
   by * break
-olcAccess: {5}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,description,member
+olcAccess: {5}to dn.subtree="@WRITE_DN@" filter=(objectClass=groupOfNames) attrs=description
   by dn.exact="@WDATA_DN@" write
   by * break
-olcAccess: {6}to dn.subtree="@WRITE_DN@"
+olcAccess: {6}to dn.subtree="@WRITE_DN@" attrs=uid,cn,sn,givenName,mail,departmentNumber,o,ou,member
+  by dn.exact="@WDATA_DN@" write
+  by * break
+olcAccess: {7}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WDATA_DN@" read
   by * break
-olcAccess: {7}to *
+olcAccess: {8}to *
   by dn.exact="@WDATA_DN@" none
   by * break
 ```
@@ -199,7 +202,7 @@ echo "BASE=$BASE"
 `memberOf` 값이 ASCII가 아니거나 파싱되지 않으면(OID 타입·이상한 공백·BER 포함) 특권 여부를 증명할 수 없으므로 그 사용자의 `lockUser`는 거부된다(fail closed, 보안이 아니라 가용성 영향: 그런 DN의 그룹에 속한 사용자는 머신으로 잠글 수 없다).
 중첩 그룹 멤버십과 읽은 뒤 추가된 멤버십(TOCTOU)은 이 검사가 보지 못한다(수용한 잔여 위험, T-015 드릴이 실측으로 확인: 중첩 그룹 멤버는 잠긴다). 이 검사는 애플리케이션 보강이고, 위 ACL 조각에는 특권 그룹 filter가 없다(라이브 증명 전에는 ACL 백스톱이라 부르지 않는다).
 정적 `openapi.json`은 `MACHINE_WRITE_ENABLED`가 꺼져 있어도 `createGroup`·`patchGroup`·`deleteGroup`·`lockUser`(앞의 다섯 개와 같이)에 `machineBearer`/`x-machine-scope`를 선언한다. 문서일 뿐 동작은 그대로이며, 스위치가 꺼져 있으면 모두 403 `scope_denied`·bind 0이다.
-머신 경로에는 잠금 해제가 없다: `directory.users.unlock`은 상한에 쓸 수 없고 `unlockUser`는 어떤 표에도 없다(D379-7, AC-005b). 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 8개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
+머신 경로에는 잠금 해제가 없다: `directory.users.unlock`은 상한에 쓸 수 없고 `unlockUser`는 어떤 표에도 없다(D379-7, AC-005b). 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 9개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
 
 ```ldif
 dn: @MAIN_DB_DN@
@@ -215,7 +218,7 @@ olcAccess: {2}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,
   by dn.exact="@WLOCK_DN@" none
   by * break
 olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
-  by dn.exact="@WLOCK_DN@" write
+  by dn.exact="@WLOCK_DN@" add
   by * break
 olcAccess: {4}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WLOCK_DN@" read
@@ -225,7 +228,7 @@ olcAccess: {5}to *
   by * break
 ```
 
-`W_lock`은 `pwdAccountLockedTime`을 **`write`** 수준으로 받는다. ppolicy가 이 속성의 변경에 `manage`를 요구하지 않음을 라이브로 확인했다(스모크: 설정·해제 모두 성공).
+`W_lock`은 `pwdAccountLockedTime`을 **`add`** 수준으로만 받는다(#394). slapd는 Delete와 Replace 모두에 삭제 권한을 검사하므로 `W_lock` 자격 증명으로는 잠금을 **해제하거나 덮어쓸 수 없다**(값 삭제·속성 삭제·Replace 모두 50, 실측). 머신 `lockUser`는 Add로 표지를 쓰고, 이미 같은 표지가 있으면(`attributeOrValueExists`, 20) 성공으로 본다. ppolicy가 타임스탬프로 잠근 계정은 단일 값 속성이라 Add가 19로 거부되고 머신 `lockUser`는 409를 돌려준다(계정은 잠긴 채이며 표지로 바꾸려면 사람이 한다). ppolicy가 이 속성의 변경에 `manage`를 요구하지 않음을 라이브로 확인했다. 이전 조각을 적용한 노드는 7절의 "#394 이전 조각에서 올리기"대로 되돌린 뒤 4.2·4.3으로 다시 적용한다(점검 스크립트가 이전 조각을 불일치로 보고한다).
 
 ### 4.4 그룹 멤버십 쓰기는 `MACHINE_WRITE_GROUPS`가 있어야 한다 (안전한 기본값)
 
@@ -237,7 +240,7 @@ olcAccess: {5}to *
 patchUser(`cn, sn, givenName, mail, departmentNumber, o, ou` Replace), 그룹 멤버 add/remove(`member`), v2b `patchGroup`(`description`), 생성 시 `objectClass`. `W_lock`: `pwdAccountLockedTime`.
 `pwd*` 상태 속성 목록(`pwdAccountLockedTime`, `pwdChangedTime`, `pwdFailureTime`, `pwdGraceUseTime`, `pwdReset`, `pwdPolicySubentry`, `pwdStartTime`, `pwdEndTime`,
 `pwdLastSuccess`)과 비밀 속성 8개는 이 이미지의 스키마·오버레이에서 도출했다(도출 명령은 machine-ldap-account.md 9절). 스키마·오버레이를 바꿨다면 다시 도출해 `{1}`의 목록에 더한다.
-v2b `patchGroup`(D379-5)이 `description`을 목록에 더했다(`{5}`). 오퍼레이션은 T-014로 열렸다. 이 조각을 적용하지 않은 배포에서는 `patchGroup`이 `W_data`의 ACL 거부(insufficientAccessRights)로 실패하므로, `directory.groups.update`를 상한에 주기 전에 이 조각을 모든 노드에 다시 적용한다.
+v2b `patchGroup`(D379-5)이 `description`을 더했고, #394가 이를 그룹 전용 규칙 `{5}`(`filter=(objectClass=groupOfNames)`)로 분리했다(조각 8개 → 9개). 오퍼레이션은 T-014로 열렸다. 이 조각을 적용하지 않은 배포에서는 `patchGroup`이 `W_data`의 ACL 거부(insufficientAccessRights)로 실패하므로, `directory.groups.update`를 상한에 주기 전에 이 조각을 모든 노드에 다시 적용한다.
 부록 A가 다시 바뀌면 이 조각과 이 문서를 같이 바꾼다.
 
 ## 6. 적용 후 확인 (모든 노드)
@@ -248,14 +251,14 @@ v2b `patchGroup`(D379-5)이 `description`을 목록에 더했다(`{5}`). 오퍼�
 $EXEC ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess
 ```
 
-기대: `[복제 신원 규칙] · M 3개 · W_data 8개 · [W_lock 6개] · 이미지 기존 규칙(원래 순서)`. 이 순서를 눈으로 대조하는 대신 읽기 전용 점검 스크립트
+기대: `[복제 신원 규칙] · M 3개 · W_data 9개 · [W_lock 6개] · 이미지 기존 규칙(원래 순서)`. 이 순서를 눈으로 대조하는 대신 읽기 전용 점검 스크립트
 [`scripts/check-machine-write-acl.sh`](../scripts/check-machine-write-acl.sh)를 **모든 노드**에서 돌린다(`--container`/`--kube-pod`/`--input`, 사용법은 스크립트 머리말).
-순서·누락·중복·비밀 속성 `none`·보호 항목 도달 불가 중 하나라도 어긋나면 비0으로 끝나고, 읽지 못했을 때도 통과로 처리하지 않는다(T-023). `W_data` DN이 들어간 값은 **정확히 8개**이고 연속이다.
+순서·누락·중복·비밀 속성 `none`·보호 항목 도달 불가 중 하나라도 어긋나면 비0으로 끝나고, 읽지 못했을 때도 통과로 처리하지 않는다(T-023). `W_data` DN이 들어간 값은 **정확히 9개**이고 연속이다.
 `W_lock`은 정확히 6개다. 읽은 순서가 다르면 규칙을 쓰지 말고 7절로 되돌린다.
 
 ### 6.2 쓰기 계정으로 직접 확인 (허용과 거부)
 
-허용(`W_data`, `$WRITE_DN` 안): 항목 add, `mail` replace, 그룹 `member` add, 항목 delete. `W_lock`: `pwdAccountLockedTime` 설정과 해제.
+허용(`W_data`, `$WRITE_DN` 안): 항목 add, `mail` replace, 그룹 `member`·`description` 쓰기, 항목 delete. `W_lock`: `pwdAccountLockedTime` 추가(설정)만. 해제(삭제·Replace)는 50이다.
 
 ```sh
 printf 'dn: uid=probe,%s\nchangetype: add\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: inetOrgPerson\nuid: probe\ncn: probe\nsn: probe\n' "$WRITE_DN" | $EXEC ldapmodify -x -H ldap://127.0.0.1 -D "$WDATA_DN" -y /tmp/.pw-wdata
@@ -263,7 +266,7 @@ printf 'dn: uid=probe,%s\nchangetype: add\nobjectClass: top\nobjectClass: person
 
 거부(모두 `Insufficient access (50)`여야 한다): `userPassword` 변경(정책 때문에 옛 값 삭제 + 새 값 추가를 한 modify에 둔 형태만 ACL까지 도달한다. `replace`는
 ACL 이전에 정책이 거부해 증명이 못 된다), `objectClass` replace, `telephoneNumber`·그룹의 `owner` 등 목록 밖 속성, `$WRITE_DN` 밖 항목, `M`·`W_*`·관리자 항목, `cn=config`,
-`W_data`가 `W_lock`의 `pwdAccountLockedTime`을 쓰는 것. `memberOf` modify는 스키마가 먼저 `Constraint violation (19)`로 거부한다(ACL 증명이 아니다).
+`W_data`가 `W_lock`의 `pwdAccountLockedTime`을 쓰는 것, `W_data`가 사용자 항목의 `description`을 쓰는 것. `memberOf` modify는 스키마가 먼저 `Constraint violation (19)`로 거부한다(ACL 증명이 아니다).
 `W_data`로 `userPassword`·`pwdAccountLockedTime`·`memberOf`를 **읽어도** 나오지 않는다(관리자는 읽는다).
 
 `M`은 여전히 읽기 전용이다: [machine-ldap-account.md](machine-ldap-account.md) 6.2의 모든 쓰기 시도가 50이고
@@ -272,12 +275,12 @@ ACL 이전에 정책이 거부해 증명이 못 된다), `objectClass` replace, 
 
 ## 7. 롤백
 
-각 조각의 규칙이 **연속한 8개(`W_data`) / 6개(`W_lock`)이고 모두 그 계정 DN을 이름으로 가질 때만** 인덱스로 지운다. 아니면 거부하고 아무것도 바꾸지 않는다
+각 조각의 규칙이 **연속한 9개(`W_data`) / 6개(`W_lock`)이고 모두 그 계정 DN을 이름으로 가질 때만** 인덱스로 지운다. 아니면 거부하고 아무것도 바꾸지 않는다
 (밀린 인덱스로 다른 규칙을 지우는 사고 방지). 복제 신원 규칙·`M` 규칙·이미지 규칙은 건드리지 않는다. 롤백하면 쓰기 계정은 일반 사용자로 돌아가므로
 **먼저** 쓰기를 끈다(`MACHINE_WRITE_ENABLED=false`로 전 replica 교체). `W_lock`은 `K=6 WHO="$WLOCK_DN"`으로 같은 블록을 쓴다.
 
 ```sh
-K="${K:-8}"; WHO="${WHO:-$WDATA_DN}"
+K="${K:-9}"; WHO="${WHO:-$WDATA_DN}"
 FIRST=$($EXEC env MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess' | awk -v x="dn.exact=\"$WHO\"" -v k="$K" '/^olcAccess: \{[0-9]+\}/ { if (index($0,x)) { s=$0; sub(/^olcAccess: \{/,"",s); i=s+0; if (n == 0) f=i; l=i; n++ } } END { if (n == k && l - f == k - 1) print f }')
 if [ -z "$FIRST" ]; then
   echo "refusing: the rules of $WHO are not $K contiguous values" >&2
@@ -285,6 +288,8 @@ else
   { printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\n' "$MAIN_DB_DN"; i=$((FIRST + K - 1)); while [ "$i" -ge "$FIRST" ]; do printf 'olcAccess: {%s}\n' "$i"; i=$((i - 1)); done; } | $EXEC env CFG_URI="$CFG_URI" sh -c 'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
 fi
 ```
+
+**#394 이전 조각에서 올리기.** 이전 `W_data` 조각은 규칙 **8개**(`description`이 닫힌 목록 안), 이전 `W_lock` 조각은 지금과 같은 **6개**(`write`)다. 기본값 `K=9`로 이전 `W_data`를 지우면 "not 9 contiguous values"로 거부되므로 `K=8`을 준다: 먼저 `K=6 WHO="$WLOCK_DN"`, 그다음 `K=8 WHO="$WDATA_DN"`. 그 뒤 4.2(`W_data`, 9개)와 4.3(`W_lock`)을 적용하고 6.1을 확인한다. 사이 동안 쓰기 계정은 일반 사용자이므로 위와 같이 먼저 쓰기를 끈다.
 
 롤백 후 6.1을 다시 읽어 `M`·복제·이미지 규칙만 원래대로 남았는지 확인한다(스모크는 적용 전 `olcAccess`와 **바이트 단위로 같게** 돌아감을 확인한다). 계정 항목은 남는다. 완전히 없애려면 관리자로 `ldapdelete`.
 

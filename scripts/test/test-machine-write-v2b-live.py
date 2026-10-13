@@ -7,7 +7,8 @@ operator guide says (M, W_data, W_lock and the write ACL fragments). Drills the 
 contains BOTH the T-015 drill and the T-014 opening: before the opening these operations are 403 scope_denied. That is
 intended; T-014's gate "T-015 green" is satisfied by running this on the final tree.
 
-  A. start-up refusals: group create without the seed, unlock in a ceiling, lock without W_lock, lock without privileged groups
+  A. start-up refusals: group create without the seed, a seed outside the reserved placeholder form (#394), unlock in a
+     ceiling, lock without W_lock, lock without privileged groups
   B. createGroup: the created group's `member` is the placeholder seed and nothing else, the W_data entry's memberOf does
      not change, the human (cookie) path still seeds with the bind DN, the seed is untouchable (member add/remove, user
      patch/delete), closed body, cn rejection, scope / ceiling denials, duplicate
@@ -16,7 +17,8 @@ intended; T-014's gate "T-015 green" is satisfied by running this on the final t
   D. lockUser: marker value, W_lock is the binding identity, replay, group / protected / user-only targets, privileged
      member (direct) refused, the NESTED group case (accepted residual risk, recorded), fail-closed on a hidden
      or missing privileged group, 428 / 412 / 422
-  E. AC-006 compartment boundary: W_lock and W_data direct writes
+  E. AC-006 compartment boundary: W_lock and W_data direct writes; #394: W_lock is add-only (delete / replace of
+     pwdAccountLockedTime refused, 50), W_data cannot write a USER description (50)
   F. AC-005b: the five unlock bypass attempts (403, zero binds, state unchanged), again across a real UI + slapd restart
   G. audit lines of the new operations and a sentinel scan of every container log
 
@@ -90,7 +92,7 @@ def main():
     ensure(r.returncode == 0, f'{name}: {live.mask(r.stderr)}')
 
   apply_fragment('write-data.ldif', 'WDATA_DN', WDATA_DN, 3)   # after the three M rules
-  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 11)  # after the eight W_data rules
+  apply_fragment('write-lock.ldif', 'WLOCK_DN', WLOCK_DN, 12)  # after the nine W_data rules
   ldap.put_password('/tmp/.pw-wdata', wdata_pw)
   ldap.put_password('/tmp/.pw-wlock', wlock_pw)
   live.check(True, 'W_data/W_lock accounts created and the write ACL fragments applied after the M rules')
@@ -258,8 +260,12 @@ def main():
   # Start-up validation is the first layer behind the two guards a drill cannot isolate at request time: a ceiling that contains the
   # seed, and a privileged group on the allow-list, never start. (The request-time guards behind them are pinned in unit tests
   # that inject such a config: TestGroupPipeline_SeedIsProtectedWithoutTheCeiling / _TargetRestrictions.)
-  refuses_start('seedin', 'a write ceiling that contains MACHINE_WRITE_GROUP_SEED_DN', 'must not overlap a protected identity',
-                extra={'MACHINE_WRITE_GROUP_SEED_DN': user_dn('seed-in')})
+  # #394 item 4 (D394-4): only a direct child of the W_data container is accepted. A real, bindable user (victim has a
+  # userPassword) or any DN inside a write ceiling is refused at start-up, before the ceiling-overlap rule.
+  refuses_start('seedin', 'a real bindable user inside a write ceiling as MACHINE_WRITE_GROUP_SEED_DN', 'reserved placeholder form',
+                extra={'MACHINE_WRITE_GROUP_SEED_DN': user_dn('victim')})
+  refuses_start('seedbase', 'a seed directly under the base (not in the W_data container)', 'reserved placeholder form',
+                extra={'MACHINE_WRITE_GROUP_SEED_DN': 'uid=group-seed,' + BASE_DN})
   refuses_start('privlist', 'a privileged group on a client\'s MACHINE_WRITE_GROUPS', 'must not list a privileged group',
                 groups=[G1, ADMINS])
 
@@ -425,6 +431,11 @@ def main():
   live.check(st in (200, 204) and op_attr(lk1, 'pwdAccountLockedTime') == [MARKER], f'[D] AC-005 lockUser -> {st}, pwdAccountLockedTime = {op_attr(lk1, "pwdAccountLockedTime")}')
   live.check(binds(WLOCK_DN) > wl_before and binds(WDATA_DN) == wd_before, '[D] the lock bound as W_lock and not as W_data')
   live.check(try_bind('lk1', user_pw['lk1']) != 0, '[D] the locked account cannot bind with its correct password (ldapwhoami fails)')
+  # #394: the machine lock is an LDAP Add; re-locking (new key, so no replay) hits attributeOrValueExists (20) = success.
+  wl_before = binds(WLOCK_DN)
+  st, h, text = lock(A, tok, lk1, etag_of(A, tok, lk1))
+  live.check(st in (200, 204) and h.get('Idempotent-Replayed') != 'true' and binds(WLOCK_DN) > wl_before and op_attr(lk1, 'pwdAccountLockedTime') == [MARKER],
+             f'[D] #394 re-locking an already locked account executes as W_lock and succeeds idempotently ({st}, value unchanged)')
   key = new_key()
   rid1, rid2 = rid_new('l1'), rid_new('l2')
   st1, h1, _ = lock(A, tok, user_dn('lk2'), etag_of(A, tok, user_dn('lk2')), key=key, rid=rid1)
@@ -485,14 +496,15 @@ def main():
   obs(f'nested-group lockUser -> {st}, locked={nested_locked}')
   live.check(st in (200, 204) and nested_locked,
              f'[D] RESIDUAL RISK (REQ-007, accepted 2026-10-12): a user in a group NESTED inside the privileged group is NOT recognised as privileged and IS locked ({st}); only direct members are refused')
-  # lockUser over a ppolicy timestamp lock: becomes the indefinite marker (stricter, never looser; AC-005)
+  # lockUser over a ppolicy timestamp lock (#394): W_lock may only ADD, the attribute is single-valued, so slapd answers 19
+  # and the API 409; the account stays locked with ppolicy's own timestamp (never looser; turning it into the marker is human)
   for i in range(5):
     try_bind('lk8', 'wrong-password-' + str(i))
   ts = op_attr(user_dn('lk8'), 'pwdAccountLockedTime')
   live.check(len(ts) == 1 and ts[0] != MARKER, f'[D] five wrong binds made ppolicy lock lk8 with a timestamp: {ts}')
   st, _, text = lock(A, tok, user_dn('lk8'), etag_of(A, tok, user_dn('lk8')))
-  live.check(st in (200, 204) and op_attr(user_dn('lk8'), 'pwdAccountLockedTime') == [MARKER],
-             f'[D] AC-005 lockUser over a ppolicy timestamp lock turns it into the indefinite marker (stricter): {ts} -> {op_attr(user_dn("lk8"), "pwdAccountLockedTime")}')
+  live.check(st == 409 and jbody(text).get('code') == 'conflict' and op_attr(user_dn('lk8'), 'pwdAccountLockedTime') == ts,
+             f'[D] #394 lockUser over a ppolicy timestamp lock -> {st} {jbody(text).get("code")}, the timestamp lock is kept: {ts} -> {op_attr(user_dn("lk8"), "pwdAccountLockedTime")}')
 
   # fail closed on a hidden / missing privileged group (D379-17)
   hide = (f'dn: {main_db}\nchangetype: modify\nadd: olcAccess\n'
@@ -535,10 +547,20 @@ def main():
     live.check(r.returncode != 0 and 'Insufficient access' in r.stderr, f'[E] AC-006 W_lock cannot write {label} directly (insufficientAccessRights)')
   r = ldap.tool('ldapdelete', [victim], WLOCK_DN, '/tmp/.pw-wlock')
   live.check(r.returncode != 0 and entry_exists(victim), '[E] AC-006 W_lock cannot Delete an entry')
-  r = as_wlock(f'dn: {victim}\nchangetype: modify\nreplace: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
-  live.check(r.returncode == 0 and op_attr(victim, 'pwdAccountLockedTime') == [MARKER], '[E] W_lock writes pwdAccountLockedTime (its one job)')
+  r = as_wlock(f'dn: {victim}\nchangetype: modify\nadd: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
+  live.check(r.returncode == 0 and op_attr(victim, 'pwdAccountLockedTime') == [MARKER], '[E] W_lock adds pwdAccountLockedTime (its one job)')
+  # #394 item 1: add-only. slapd checks delete access for Delete AND Replace, so a leaked W_lock credential cannot unlock.
+  for label, ldif in (('Modify-delete of the attribute', f'dn: {victim}\nchangetype: modify\ndelete: pwdAccountLockedTime\n'),
+                      ('Modify-delete of the value', f'dn: {victim}\nchangetype: modify\ndelete: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n'),
+                      ('Replace with nothing', f'dn: {victim}\nchangetype: modify\nreplace: pwdAccountLockedTime\n'),
+                      ('Replace with another value', f'dn: {victim}\nchangetype: modify\nreplace: pwdAccountLockedTime\npwdAccountLockedTime: 20260101000000Z\n')):
+    r = as_wlock(ldif)
+    live.check(r.returncode == 50 and op_attr(victim, 'pwdAccountLockedTime') == [MARKER],
+               f'[E] #394 W_lock {label} of pwdAccountLockedTime is refused (rc {r.returncode}, 50 expected) and the lock stays')
+  r = as_wlock(f'dn: {victim}\nchangetype: modify\nadd: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
+  live.check(r.returncode == 20, f'[E] #394 a second W_lock Add of the marker answers attributeOrValueExists (rc {r.returncode}, 20 expected)')
   ldap.admin_tool('ldapmodify', [], f'dn: {victim}\nchangetype: modify\ndelete: pwdAccountLockedTime\n')
-  r = as_wlock(f'dn: {lk3}\nchangetype: modify\nreplace: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
+  r = as_wlock(f'dn: {lk3}\nchangetype: modify\nadd: pwdAccountLockedTime\npwdAccountLockedTime: {MARKER}\n')
   live.check(r.returncode == 0 and op_attr(lk3, 'pwdAccountLockedTime') == [MARKER],
              '[E] F-3 / E-07 PINNED: the shipped write-lock.ldif has no privileged-group filter, so W_lock CAN lock a privileged member directly; the application check in lockUser is the only defence (if this ever turns into a refusal, update CHANGE.md Revision 3)')
   ldap.admin_tool('ldapmodify', [], f'dn: {lk3}\nchangetype: modify\ndelete: pwdAccountLockedTime\n')
@@ -546,6 +568,11 @@ def main():
   live.check(r.returncode != 0 and op_attr(victim, 'pwdAccountLockedTime') == [], '[E] AC-006 W_data cannot write pwdAccountLockedTime')
   r = as_wdata(f'dn: {G1}\nchangetype: modify\nreplace: description\ndescription: by-wdata\n')
   live.check(r.returncode == 0 and op_attr(G1, 'description') == ['by-wdata'], '[E] W_data writes a group description (T-012)')
+  # #394 item 3: the description rule has filter=(objectClass=groupOfNames); a user's description is out of W_data's reach.
+  for label, ldif in (('replace', f'dn: {victim}\nchangetype: modify\nreplace: description\ndescription: by-wdata\n'),
+                      ('add', f'dn: {victim}\nchangetype: modify\nadd: description\ndescription: by-wdata\n')):
+    r = as_wdata(ldif)
+    live.check(r.returncode == 50 and op_attr(victim, 'description') == [], f'[E] #394 W_data {label} of a USER description is refused (rc {r.returncode}, 50 expected)')
   r = as_wdata(f'dn: {G1}\nchangetype: modify\nreplace: cn\ncn: g01-renamed\n')
   obs(f'E-05 W_data replace cn (RDN) on a group -> rc={r.returncode} {live.mask(r.stderr).strip()[:90]}; cn now {op_attr(G1, "cn")}')
   live.check(op_attr(G1, 'cn') == ['g01'], '[E] a direct cn replace did not rename the group')

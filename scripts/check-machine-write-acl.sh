@@ -7,7 +7,7 @@
 #   {0}                 replication identity rule (when present; --replication-identity required
 #                       makes it mandatory, as under LDAP_REPLICATION_IDENTITY=prepare/dedicated)
 #   next 3              the M read rules
-#   next 8 / 6          the W_data / W_lock rules (either order), contiguous, each rule exactly the
+#   next 9 / 6          the W_data / W_lock rules (either order), contiguous, each rule exactly the
 #                       fragment's text and ending "by * break", naming only its own identity
 #   then                the image's own rules (nothing of W may come after them)
 # and: no duplicate fragment (applied twice), no rule for W_cred, the secret/pwd*/memberOf

@@ -400,12 +400,46 @@ func lockModify(dn string) *ldap.ModifyRequest {
 	return mod
 }
 
+// machineLockModify is the machine lockUser form (#394, D394-1): Add, not
+// Replace. W_lock's ACL grants only `add` on pwdAccountLockedTime, so a
+// leaked W_lock credential cannot delete the attribute (unlock); slapd checks
+// delete access for every Replace, so Replace is refused (50) as well
+// (measured, docs/changes/machine-write-scope-v2/EVIDENCE.md 2d). Cost: a
+// machine cannot turn a ppolicy timestamp lock into the indefinite marker
+// (see mapMachineLockErr). Escape hatch: the human path keeps lockModify.
+func machineLockModify(dn string) *ldap.ModifyRequest {
+	mod := ldap.NewModifyRequest(dn, nil)
+	mod.Add("pwdAccountLockedTime", []string{pwdAccountLockedTimeIndefinite})
+	return mod
+}
+
+// mapMachineLockErr maps the result of machineLockModify. Re-locking an
+// account that already carries the marker is attributeOrValueExists (20):
+// the requested state already holds, so it is success (idempotent). An
+// account locked by ppolicy with a timestamp answers constraintViolation (19,
+// the attribute is single-valued): it stays locked, but W_lock can neither
+// replace nor delete that value, so the caller gets a conflict instead of a
+// success that would claim the indefinite marker.
+func mapMachineLockErr(err error) error {
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		switch le.ResultCode {
+		case ldap.LDAPResultAttributeOrValueExists:
+			return nil
+		case ldap.LDAPResultConstraintViolation:
+			return fmt.Errorf("%w: the account is already locked by the password policy", domain.ErrConflict)
+		}
+	}
+	return mapErr("lock user", err)
+}
+
 // Lock administratively disables dn — the symmetric counterpart to Unlock,
 // for taking an account out of service (e.g. an employee's departure)
 // rather than clearing a lockout ppolicy already applied. As with every
 // other method here, this performs no authorization check of its own;
 // whether the bound user may write dn's pwdAccountLockedTime is entirely
-// up to the directory's ACLs.
+// up to the directory's ACLs. A machine write (MachineWriteConstraintsEnabled)
+// uses machineLockModify instead of lockModify.
 func (c *client) Lock(ctx context.Context, dn, ifMatch string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -418,6 +452,14 @@ func (c *client) Lock(ctx context.Context, dn, ifMatch string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if MachineWriteConstraintsEnabled(ctx) {
+		mod := machineLockModify(dn)
+		mod.Controls = ctrls
+		if err := c.conn.Modify(mod); err != nil {
+			return mapMachineLockErr(err)
+		}
+		return nil
+	}
 	mod := lockModify(dn)
 	mod.Controls = ctrls
 	if err := c.conn.Modify(mod); err != nil {

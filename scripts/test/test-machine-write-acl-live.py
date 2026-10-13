@@ -266,7 +266,7 @@ def mutate(name, text, shift):
   if mutation == 'drop-replicator-deny':
     out, n = re.subn(r'olcAccess: \{1\}to dn\.exact="@REPL_DN@"\n  by dn\.exact="@\w+@" none\n  by \* break\n', '', text)
     require(n == 1, 'drop-replicator-deny did not apply')
-    for i in range(2, 8):
+    for i in range(2, 9):
       out = out.replace(f'olcAccess: {{{i}}}', f'olcAccess: {{{i - 1}}}')
     return out
   return text
@@ -612,7 +612,7 @@ def fragdir_for(node, tag):
   d = tempfile.mkdtemp(prefix=f'wacl-frag-{tag}-')
   tmp_dirs.append(d)
   n_image = len(node.image_rules)
-  shifts = {'write-data.ldif': n_image, 'write-lock.ldif': n_image + 8}
+  shifts = {'write-data.ldif': n_image, 'write-lock.ldif': n_image + 9}
   for name in ('write-data.ldif', 'write-lock.ldif'):
     pathlib.Path(d, name).write_text(mutate(name, fixture_text(name), shifts[name]))
   return d
@@ -741,14 +741,14 @@ def wdata_proof(node):
   check(wd(mod(g1, ('add', 'member', [bob]))) == 0, c('adds a group member'))
   check(wd(mod(g1, ('delete', 'member', [bob]))) == 0, c('removes a group member'))
   check(wd(mod(g1, ('add', 'member', [bob]))) == 0 and wd(mod(g1, ('delete', 'member', [bob]))) == 0, c('adds and removes a member again'))
-  # v2b D379-5 (T-012): description joined the closed list for machine patchGroup. The ACL cannot tell a group from a
-  # user entry, so it is writable on both; patchUser's closed body has no description (application guard, not the ACL).
+  # v2b D379-5 (T-012): description for machine patchGroup. #394: its own rule with filter=(objectClass=groupOfNames),
+  # so a user entry's description is refused by the ACL even if the closed patchUser body failed.
   check(wd(mod(g1, ('replace', 'description', ['machine-set']))) == 0, c('sets a group description'))
   got = node.search('admin', g1, '(objectClass=*)', ['description'], 'base').stdout
   check('description: machine-set' in got, c('the group description really changed (admin reads it)'))
   check(wd(mod(g1, ('delete', 'description', []))) == 0, c('clears a group description'))
-  check(wd(mod(bob, ('replace', 'description', ['class-level']))) == 0 and wd(mod(bob, ('delete', 'description', []))) == 0,
-        c('description is writable on a user entry too (class-level backstop; the closed patchUser body excludes it)'))
+  check(wd(mod(bob, ('replace', 'description', ['class-level']))) == 50 and wd(mod(bob, ('add', 'description', ['class-level']))) == 50,
+        c('cannot write description on a USER entry (50, #394 filter)'))
 
   print(f'--- {cfg}: W_data refused ---', flush=True)
   for attr in OTHER_ATTRS:
@@ -858,12 +858,19 @@ def wlock_proof(node):
   check(node.rc('admin', person(lock_target, 'lockme', 'mail: l@example.org\n')) == 0, c('control: the admin creates the lock target'))
   check(node.tool('wlock', 'ldapwhoami', []).returncode == 0, c('binds'))
   print(f'--- {cfg}: W_lock allowed ---', flush=True)
-  check(wl(mod(lock_target, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0, c('sets pwdAccountLockedTime'))
+  check(wl(mod(lock_target, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0, c('sets pwdAccountLockedTime (add)'))
   got = node.search('admin', lock_target, '(objectClass=*)', ['pwdAccountLockedTime'], 'base').stdout
   check('pwdAccountLockedTime: 20260101000000Z' in got, c('the lock is really there (admin reads it)'))
-  check(wl(mod(lock_target, ('delete', 'pwdAccountLockedTime', []))) == 0, c('clears pwdAccountLockedTime'))
-  limit(wl(mod(alice, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0 and wl(mod(alice, ('delete', 'pwdAccountLockedTime', []))) == 0,
-        c('locks and unlocks ANY user of the subtree (alice): which target may be locked is the app guard'))
+  # #394: add-only. slapd checks delete access for Delete AND Replace, so W_lock can never unlock.
+  check(wl(mod(lock_target, ('delete', 'pwdAccountLockedTime', []))) == 50, c('cannot clear pwdAccountLockedTime (delete, 50)'))
+  check(wl(mod(lock_target, ('replace', 'pwdAccountLockedTime', []))) == 50, c('cannot clear pwdAccountLockedTime (replace with nothing, 50)'))
+  check(wl(mod(lock_target, ('replace', 'pwdAccountLockedTime', ['000001010000Z']))) == 50, c('cannot overwrite pwdAccountLockedTime (replace, 50)'))
+  got = node.search('admin', lock_target, '(objectClass=*)', ['pwdAccountLockedTime'], 'base').stdout
+  check('pwdAccountLockedTime: 20260101000000Z' in got, c('the lock is still there after the refused unlocks'))
+  check(node.rc('admin', mod(lock_target, ('delete', 'pwdAccountLockedTime', []))) == 0, c('control: the admin clears the lock'))
+  limit(wl(mod(alice, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0,
+        c('locks ANY user of the subtree (alice): which target may be locked is the app guard'))
+  check(node.rc('admin', mod(alice, ('delete', 'pwdAccountLockedTime', []))) == 0, c('control: the admin unlocks alice'))
   print(f'--- {cfg}: W_lock refused ---', flush=True)
   for attr, value in (('uid', 'x'), ('cn', 'x'), ('sn', 'x'), ('givenName', 'x'), ('mail', 'x@example.org'), ('departmentNumber', '1'),
                       ('o', 'x'), ('ou', 'x'), ('description', 'x'), ('telephoneNumber', '1'), ('title', 'x')):
@@ -886,7 +893,7 @@ def wlock_proof(node):
   for attr, values in (('shadowLastChange', ['19999']), ('oathSecret', ['x']), ('pwdReset', ['TRUE']), ('pwdStartTime', ['20260101000000Z'])):
     check(wl(mod(secrets_dn, ('replace', attr, values))) == 50, c(f'REPLACE of {attr} refused (50)'))
   print(f'--- {cfg}: W_lock outside the ceiling (direct ldapmodify) ---', flush=True)
-  lock = ('replace', 'pwdAccountLockedTime', ['20260101000000Z'])
+  lock = ('add', 'pwdAccountLockedTime', ['20260101000000Z'])
   for label, dn in (('an entry outside the subtree', outsider), ('M', machine_dn), ('W_data', wd_dn), ('W_lock itself', wl_dn),
                     ('the admin entry', admin_dn), ('the root entry', base_dn), ('the machine system container', system_dn)):
     check(wl(mod(dn, lock)) == 50, c(f'cannot lock {label} (50)'))
@@ -1037,7 +1044,7 @@ def run_config(node):
   check(re.search(rf'^BASE={o + 3}$', out, re.M) is not None, f'[{cfg}] guide 4.2 computed BASE={o + 3} for W_data ({"replication + M" if o else "M"} lead): {out.strip()[-60:]}')
   layout_check(node, 'with M and W_data', managed, wl=False)
   check(idx_of(node, wd_dn) == list(range(o + 3, o + 3 + k_installed('write-data.ldif'))),
-        f'[{cfg}] W_data rules at {{{o + 3}}}..{{{o + 10}}} ({k_installed("write-data.ldif")} contiguous values naming W_data)')
+        f'[{cfg}] W_data rules at {{{o + 3}}}..{{{o + 11}}} ({k_installed("write-data.ldif")} contiguous values naming W_data)')
   acl_w1 = acl_bodies(node)
   out = guide_install(node, fragdir, 'write-data.ldif', wd_dn, managed)
   check('refusing: ' in out and acl_bodies(node) == acl_w1, f'[{cfg}] a second W_data apply is refused by the guide itself and changes nothing')
@@ -1045,8 +1052,8 @@ def run_config(node):
   check(re.search(rf'^BASE={o + 3 + k_installed("write-data.ldif")}$', out, re.M) is not None or mutation == 'reorder',
         f'[{cfg}] guide 4.2 computed the W_lock BASE counting W_data: {out.strip()[-40:]}')
   layout_check(node, 'with M, W_data and W_lock', managed)
-  check(idx_of(node, wl_dn) == list(range(o + 11, o + 11 + k_installed('write-lock.ldif'))), f'[{cfg}] W_lock rules at {{{o + 11}}}..{{{o + 16}}}')
-  check(idx_of(node, machine_dn) == list(range(o, o + 3)) and (idx_of(node, repl_dn) == ([0, o + 4, o + 12] if o else [o + 4, o + 12])),
+  check(idx_of(node, wl_dn) == list(range(o + 12, o + 12 + k_installed('write-lock.ldif'))), f'[{cfg}] W_lock rules at {{{o + 12}}}..{{{o + 17}}}')
+  check(idx_of(node, machine_dn) == list(range(o, o + 3)) and (idx_of(node, repl_dn) == ([0, o + 4, o + 13] if o else [o + 4, o + 13])),
         f'[{cfg}] M still at {{{o}}}..{{{o + 2}}}; the replication identity is named at {{0}} and by the two REPL_DN deny rules only')
   own_dn_only(node)
   if node.prepare:
@@ -1094,7 +1101,7 @@ def run_config(node):
   wl = lambda ldif: node.rc('wlock', ldif)
   w = lambda m: f'[{cfg}] root-wide {m}'
   check(wd(mod(outsider, ('replace', 'mail', ['wide@example.org']))) == 0, w('W_data now writes where it was refused (ou=other)'))
-  check(wl(mod(outsider, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0 and wl(mod(outsider, ('delete', 'pwdAccountLockedTime', []))) == 0,
+  check(wl(mod(outsider, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 0 and node.rc('admin', mod(outsider, ('delete', 'pwdAccountLockedTime', []))) == 0,
         w('W_lock now locks where it was refused (ou=other)'))
   for label, ldif in (('M entry', mod(machine_dn, ('replace', 'sn', ['x']))), ('W_lock entry', mod(wl_dn, ('replace', 'sn', ['x']))),
                       ('W_data entry (itself)', mod(wd_dn, ('replace', 'sn', ['x']))),
@@ -1103,13 +1110,13 @@ def run_config(node):
                       ('delete of M', f'dn: {machine_dn}\nchangetype: delete\n'),
                       ('password change of M', f'dn: {machine_dn}\nchangetype: modify\ndelete: userPassword\nuserPassword: {passwords["machine"]}\n-\nadd: userPassword\nuserPassword: Evil-1aA-bB\n')):
     check(wd(ldif) == 50, w(f'backstop SYSTEM_DN: W_data {label} refused (50)'))
-  check(wl(mod(machine_dn, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop SYSTEM_DN: W_lock cannot lock M (50)'))
-  check(wl(mod(wd_dn, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop SYSTEM_DN: W_lock cannot lock W_data (50)'))
+  check(wl(mod(machine_dn, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop SYSTEM_DN: W_lock cannot lock M (50)'))
+  check(wl(mod(wd_dn, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop SYSTEM_DN: W_lock cannot lock W_data (50)'))
   if node.prepare:
     check(wd(mod(repl_dn, ('replace', 'description', ['x']))) == 50 and wd(mod(repl_dn, ('add', 'cn', ['x']))) == 50,
           w('backstop REPL_DN: W_data cannot modify the replication identity entry (50)'))
     check(wd(f'dn: {repl_dn}\nchangetype: delete\n') == 50, w('backstop REPL_DN: W_data cannot delete the replication identity entry (50)'))
-    check(wl(mod(repl_dn, ('replace', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop REPL_DN: W_lock cannot lock the replication identity (50)'))
+    check(wl(mod(repl_dn, ('add', 'pwdAccountLockedTime', ['20260101000000Z']))) == 50, w('backstop REPL_DN: W_lock cannot lock the replication identity (50)'))
     check(len(dn_set(node.search('admin', repl_dn, '(objectClass=*)', ['dn'], 'base').stdout)) == 1, w('control: the replication identity entry still exists'))
   else:
     check(wd(f'dn: {repl_dn}\nchangetype: add\nobjectClass: organizationalRole\nobjectClass: simpleSecurityObject\ncn: replicator\nuserPassword: Evil-1aA-bB\n') == 50,
@@ -1138,8 +1145,8 @@ def main():
   guide = norm(read_guide.read_text())
   check(norm(M_APPLY) in guide and norm(M_SHIFT + M_APPLY) in guide, 'read guide contains the M apply commands exactly as this script runs them')
   check(guide_sh('PRESENT=') != guide_sh('FIRST='), 'install (4.2) and rollback (7) commands cut out of the write guide')
-  check(len(ldif_values(fixture_text('write-data.ldif'))) == 8 and len(ldif_values(fixture_text('write-lock.ldif'))) == 6,
-        'the fixtures hold 8 W_data and 6 W_lock rules')
+  check(len(ldif_values(fixture_text('write-data.ldif'))) == 9 and len(ldif_values(fixture_text('write-lock.ldif'))) == 6,
+        'the fixtures hold 9 W_data and 6 W_lock rules')
   for key in ('n0', 'n1', 'p0', 'p1'):
     if key in only_configs:
       run_config(Node(key))

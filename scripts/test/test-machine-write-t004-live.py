@@ -11,7 +11,8 @@ are what docs/changes/machine-write-scope/EVIDENCE.md (T-004) quotes; the checks
   3. `by dn.exact=W write` vs the memberOf and refint overlays (W has no access to memberOf)
   4. entryCSN / objectClass assertion (the AND filter of the If-Match precondition) evaluated for W_data
   5. objectClass on Add versus Modify (D18), and the Password Modify extended operation; 5e the #386 ACL/overlay candidate
-     matrix (objectClass slot swapped, olcAddContentAcl TRUE, constraint overlay), restored afterwards
+     matrix (objectClass slot swapped, olcAddContentAcl TRUE, constraint overlay), restored afterwards; 5f #394 the
+     description rule's groupOfNames filter (user description refused, group description and Add-time limit measured)
   6. Idempotency-Key replay after a UI restart (the memory store is empty again)
 
 The W password rotation / lockout effect on in-flight and next requests is measured by test-machine-write-drill.py
@@ -243,6 +244,29 @@ def main():
   live.check(r_pm.returncode != 0 and 'Insufficient access (50)' in r_pm.stdout + r_pm.stderr, '[5] secret attributes `none` stop the Password Modify extended operation of W_data (50)')
   w('ldapdelete', [u5])
   w('ldapdelete', ['cn=t5b,' + PEOPLE])
+
+  # ======== 5f. #394 item 3: description only on groups (filter=(objectClass=groupOfNames)) ====================
+  u6, u6a = 'uid=u03,' + PEOPLE, 'uid=t6a,' + PEOPLE
+  r_urep = w('ldapmodify', [], f'dn: {u6}\nchangetype: modify\nreplace: description\ndescription: by-wdata\n')
+  r_uadd = w('ldapmodify', [], f'dn: {u6}\nchangetype: modify\nadd: description\ndescription: by-wdata\n')
+  adm('ldapmodify', [], f'dn: {u6}\nchangetype: modify\nadd: description\ndescription: pre\n')
+  r_udel = w('ldapmodify', [], f'dn: {u6}\nchangetype: modify\ndelete: description\n')
+  r_grep = w('ldapmodify', [], f'dn: {G1}\nchangetype: modify\nreplace: description\ndescription: by-wdata\n')
+  r_gdel = w('ldapmodify', [], f'dn: {G1}\nchangetype: modify\ndelete: description\n')
+  r_umail = w('ldapmodify', [], f'dn: {u6}\nchangetype: modify\nreplace: mail\nmail: probe-5f@example.org\n')
+  r_uaddent = w('ldapadd', [], f'dn: {u6a}\nobjectClass: inetOrgPerson\nuid: t6a\ncn: t6a\nsn: t6a\ndescription: at-add\n')
+  obs(f'5f W_data user description replace/add/delete: rc {r_urep.returncode}/{r_uadd.returncode}/{r_udel.returncode}; '
+      f'group description replace/delete: rc {r_grep.returncode}/{r_gdel.returncode}; user mail replace: rc {r_umail.returncode}; '
+      f'user Add carrying description: rc {r_uaddent.returncode} (stored {attrs(u6a, "description")})')
+  live.check((r_urep.returncode, r_uadd.returncode, r_udel.returncode) == (50, 50, 50) and attrs(u6, 'description') == ['description: pre'],
+             '[5f] #394 W_data cannot replace / add / delete a USER description (50): the rule\'s filter is groupOfNames')
+  live.check((r_grep.returncode, r_gdel.returncode, r_umail.returncode) == (0, 0, 0),
+             '[5f] #394 W_data still writes a group description (patchGroup) and the rest of the closed list on users')
+  live.check(r_uaddent.returncode == 0,
+             '[5f] KNOWN LIMIT (#386, olcAddContentAcl FALSE): an Add is not checked per attribute, so a user created by W_data may carry a description; '
+             'the createUser closed body is the only barrier at Add time')
+  adm('ldapmodify', [], f'dn: {u6}\nchangetype: modify\ndelete: description\n')
+  adm('ldapdelete', [u6a])
 
   # ======== 5e. #386: which ACL / overlay forms refuse the Modify objectClass value ADD (candidate matrix) =======
   # Only the W_data objectClass rule (fragment {4}) is swapped; the shipped rule and settings are restored and

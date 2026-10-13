@@ -10,9 +10,12 @@
 #                 backstop as in write-data.ldif
 #   @MAIN_DB_DN@  the config entry of the main database
 #
-# W_lock may set and clear exactly one attribute, pwdAccountLockedTime, and reads
-# the rest of the write subtree (for assertions). It cannot create or delete
-# entries, and it has no access to userPassword, the other pwd* state or memberOf.
+# W_lock may ADD exactly one attribute, pwdAccountLockedTime, and reads the rest
+# of the write subtree (for assertions). `add` (not `write`, #394): slapd checks
+# delete access for Delete AND Replace, so W_lock can set the lock but can never
+# remove or overwrite it (no unlock, no undoing a ppolicy lockout). It cannot
+# create or delete entries, and it has no access to userPassword, the other pwd*
+# state or memberOf.
 # Per-client caps and the lock-target checks are the application guard's job.
 #
 # Placement: the same as write-data.ldif, after the data rules of the guide's
@@ -21,7 +24,7 @@
 #   {0} anything under @SYSTEM_DN@                       none
 #   {1} the replication identity entry @REPL_DN@         none
 #   {2} secrets, other pwd* state, memberOf              none
-#   {3} pwdAccountLockedTime inside @WRITE_DN@           write
+#   {3} pwdAccountLockedTime inside @WRITE_DN@           add (no delete)
 #   {4} everything else inside @WRITE_DN@                read
 #   {5} everything else                                  none
 dn: @MAIN_DB_DN@
@@ -37,7 +40,7 @@ olcAccess: {2}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,
   by dn.exact="@WLOCK_DN@" none
   by * break
 olcAccess: {3}to dn.subtree="@WRITE_DN@" attrs=pwdAccountLockedTime
-  by dn.exact="@WLOCK_DN@" write
+  by dn.exact="@WLOCK_DN@" add
   by * break
 olcAccess: {4}to dn.subtree="@WRITE_DN@"
   by dn.exact="@WLOCK_DN@" read

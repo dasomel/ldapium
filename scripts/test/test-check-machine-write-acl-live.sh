@@ -213,7 +213,7 @@ echo "=== 2c. the W_data fragment applied twice ==="
 # The guide's own command refuses a second apply; apply the fragment shifted behind W_lock (the BASE the guide would compute) to simulate a bypass.
 out="$(apply_w write-data.ldif "$wddn")"
 case "$out" in *"refusing: "*) ok "the guide's own command refuses a second apply" ;; *) bad "second apply not refused: $out" ;; esac
-shift_ldif $((idx_first + 14)) "${fix}/write-data.ldif" | sub_tokens "$wrdn" | cfg_apply
+shift_ldif $((idx_first + 15)) "${fix}/write-data.ldif" | sub_tokens "$wrdn" | cfg_apply
 breakage "W_data applied twice"
 restore_acl "${dump}.good"
 run_chk --container "$c"
