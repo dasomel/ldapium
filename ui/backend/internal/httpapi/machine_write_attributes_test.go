@@ -35,4 +35,30 @@ func TestMachineWriteClosedFieldSet(t *testing.T) {
 			}
 		}
 	}
+	// #390 (accepted limit next to D17): slapd checks only entry/children on a W_data
+	// Add, so this closed set is the only barrier to userPassword on every op that
+	// creates or modifies an entry. removeGroupMember is not here: it has no body
+	// DTO in this helper (the switch refuses every body), so a case would be vacuous.
+	// Each op gets a body it ADMITS (positive control) and the same body with a
+	// userPassword spelling added, which must be refused.
+	valid := map[string]string{
+		"createUser":     `"uid":"x","cn":"X","sn":"X"`,
+		"patchUser":      `"dn":"uid=x,dc=example,dc=com","mail":"a@example.org"`,
+		"addGroupMember": `"groupDn":"cn=team,dc=example,dc=com","memberDn":"uid=x,dc=example,dc=com"`,
+		"createGroup":    `"cn":"group","description":"d"`,
+		"patchGroup":     `"dn":"cn=team,dc=example,dc=com","description":"d"`,
+		"lockUser":       `"dn":"uid=x,dc=example,dc=com"`,
+	}
+	for op, fields := range valid {
+		if !machineWriteBodyAllowed(op, []byte("{"+fields+"}")) {
+			t.Fatalf("%s: control body {%s} is not admitted", op, fields)
+		}
+		for _, attr := range []string{"userPassword", "UserPassword", "USERPASSWORD", "userpassword", "userPassword;binary", "userpassword;binary", "userPassword;x-hash", "user\\u0050assword"} {
+			for _, body := range []string{`{"` + attr + `":"sentinel"}`, "{" + fields + `,"` + attr + `":"sentinel"}`} {
+				if machineWriteBodyAllowed(op, []byte(body)) {
+					t.Errorf("%s admitted %s: %s", op, attr, body)
+				}
+			}
+		}
+	}
 }

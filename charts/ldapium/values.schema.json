@@ -49,6 +49,7 @@
             },
             "allowedClients": {
               "type": "array",
+              "description": "Service clients and their scopes. Only the eight read scopes are accepted: the chart does not grant write scopes by design (#394).",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
