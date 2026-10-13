@@ -23,6 +23,8 @@ matched reality.
   E-20  pwdChangedTime written by ppolicy and readable by M
   E-21  cn=config reader ACL exposure, olcAccess byte stability (incl. a slapd restart), comparator mutations
   E-23  accesslog child entries: base search vs subtree, a refused Password Modify, an operator-added reader
+  FINAL the design after the reviews (Revision 8) on a fresh slapd: olcAddContentAcl TRUE, Add-only marker/policy,
+        narrowed filters, cross matrix, sweeps with exact sets, sweep/runbook cleanup, rollback ordering, E-17 again
   D-0..D-7  the F-4 design the maintainer chose (2026-10-13): a pending policy (pwdSafeModify FALSE, pwdCheckQuality 2)
         attached by W_data only to marker entries, removed by W_cred with the marker; the atomic one-Modify variant
 
@@ -37,7 +39,7 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'lib'))
-from machine_live import BASE_DN, FIXTURES, MACHINE_DN, Live, Slapd, ensure  # noqa: E402
+from machine_live import ADMIN_DN, BASE_DN, FIXTURES, HUMAN_DN, MACHINE_DN, Live, Slapd, ensure  # noqa: E402
 
 live = Live('ldapium-v2cx-', deadline_seconds=1500)
 SYSTEM_DN = 'ou=system,' + BASE_DN
@@ -133,6 +135,248 @@ def wcred_rules(cred_dn, entry_level='=x', pw_level='=w', creators=True, marker=
     f'to dn.subtree="{cred_dn}" attrs=entry by {wc} {entry_level} by * break',
     f'to * by {wc} none by * break',
   ]
+
+
+def lcode(r):
+  """(LDAP result code, kind) of a CLI run: 0 ok, else the (NN) in the output; kind separates ppolicy refusals."""
+  if r.returncode == 0:
+    return 0, 'ok'
+  text = r.stdout + r.stderr
+  m = re.search(r'\((\d+)\)', text)
+  c = int(m.group(1)) if m else -r.returncode
+  return c, 'safeModify' if 'old password' in text else ('policy' if c == 19 else ('acl' if c == 50 else 'other'))
+
+
+def final_phase():
+  """The design as revised after the independent reviews (Revision 8), on a FRESH slapd:
+  olcAddContentAcl TRUE (Q15), marker + pending policy settable by W_data at Add ONLY (each rule's filter names the
+  attribute it guards, so a Modify on an entry that does not carry it yet cannot pass), attach/set filter
+  creatorsName=W_data AND marker AND no password AND non-privileged AND the pending policy, cleanup limited to the
+  marker value and the exact policy DN on W_data-made entries."""
+  f = AuditSlapd(live, name=live.name_prefix + '-final')
+  f.start()
+  f.seed(users=3, groups=1)
+  f.apply_acl()
+  adm = lambda tool, args=(), data=None: f.admin_tool(tool, list(args), data)  # noqa: E731
+  cfg = lambda tool, args=(), data=None: f.config_tool(tool, list(args), data)  # noqa: E731
+  pws = {}
+  for dn, key in ((WDATA_DN, 'wdata'), (WCRED_DN, 'wcred')):
+    pws[key] = live.secret(key + '-' + secrets.token_urlsafe(18))
+    uid = dn.split(',', 1)[0][4:]
+    ensure(adm('ldapadd', [], f'dn: {dn}\nobjectClass: inetOrgPerson\nuid: {uid}\ncn: {uid}\nsn: {uid}\nuserPassword: {pws[key]}\n').returncode == 0, key)
+    f.put_password('/tmp/.pw-' + key, pws[key])
+  f.put_password('/tmp/.pw-human', f.human_password)
+  ensure(adm('ldapadd', [], f'dn: {PRIV}\nobjectClass: groupOfNames\ncn: admins\nmember: uid=u03,{PEOPLE}\n\n'
+                            f'dn: {SUBPRIV}\nobjectClass: groupOfNames\ncn: subadmins\nmember: uid=u03,{PEOPLE}\n').returncode == 0, 'groups')
+  adm('ldapmodify', [], f'dn: {PRIV}\nchangetype: modify\nadd: member\nmember: {SUBPRIV}\n')
+  dflt = [l for l in adm('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', 'cn=default,ou=policies,' + BASE_DN, '-s', 'base']).stdout.splitlines()
+          if l and not l.startswith('dn: ') and not l.lower().startswith(('cn:', 'pwdsafemodify:', 'pwdcheckquality:'))]
+  pol = 'cn=credential-pending,ou=policies,' + BASE_DN
+  ensure(adm('ldapadd', [], f'dn: {pol}\ncn: credential-pending\n' + '\n'.join(dflt) + '\npwdSafeModify: FALSE\npwdCheckQuality: 2\n').returncode == 0, 'policy')
+  main_db = next(l[4:] for l in cfg('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', 'cn=config', f'(&(objectClass=olcMdbConfig)(olcSuffix={BASE_DN}))', 'dn']).stdout.splitlines() if l.startswith('dn: '))
+  wd, wc = f'dn.exact="{WDATA_DN}"', f'dn.exact="{WCRED_DN}"'
+  target = (f'(&(objectClass=inetOrgPerson)(creatorsName={WDATA_DN})(employeeType=ldapium-credential-pending:*)(!(userPassword=*))'
+            f'(!(memberOf={PRIV}))(pwdPolicySubentry={pol}))')
+  wd_rules = fixture_rules('write-data.ldif', {'WDATA_DN': WDATA_DN, 'WRITE_DN': BASE_DN, 'SYSTEM_DN': SYSTEM_DN, 'REPL_DN': REPL_DN, 'MAIN_DB_DN': main_db})
+  wd_extra = [f'to dn.subtree="{PEOPLE}" attrs=employeeType val.regex="{MARKER_RE}" filter={target} by {wd} add by * break',
+              f'to dn.subtree="{PEOPLE}" attrs=pwdPolicySubentry val="{pol}" filter={target} by {wd} add by * break']
+  wd_rules = wd_rules[:2] + wd_extra + wd_rules[2:]      # before W_data's secrets/pwd* `none`
+  secrets_list = ('userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,'
+                  'pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess')
+  wc_rules = [f'to dn.subtree="{SYSTEM_DN}" by {wc} none by * break',
+              f'to dn.exact="{REPL_DN}" by {wc} none by * break',
+              f'to dn.subtree="{PEOPLE}" attrs=userPassword filter={target} by {wc} =w by * break',
+              f'to dn.subtree="{PEOPLE}" attrs=employeeType val.regex="{MARKER_RE}" filter=(&(creatorsName={WDATA_DN})(pwdPolicySubentry={pol})) by {wc} =z by * break',
+              f'to dn.subtree="{PEOPLE}" attrs=pwdPolicySubentry val="{pol}" filter=(creatorsName={WDATA_DN}) by {wc} =z by * break',
+              f'to attrs={secrets_list} by {wc} none by * break',
+              f'to * by {wc} none by * break']
+  body = (f'dn: {main_db}\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: TRUE\n-\nadd: olcAccess\n'
+          + ''.join(f'olcAccess: {{{3 + i}}}{r}\n' for i, r in enumerate(wd_rules + wc_rules)))
+  r = cfg('ldapmodify', [], body)
+  ensure(r.returncode == 0, 'final ACL: ' + live.mask(r.stderr))
+  cs = 3 + len(wd_rules)
+  obs(f'FINAL layout: olcAddContentAcl TRUE; M {{0}}-{{2}}; W_data {{3}}-{{{cs - 1}}} (Add-only marker {{5}}, Add-only policy {{6}}); W_cred {{{cs}}}-{{{cs + 6}}}')
+  for i, rule in enumerate(wd_extra):
+    obs(f'FINAL W_data {{{5 + i}}}: {rule}')
+  for i, rule in enumerate(wc_rules[2:5]):
+    obs(f'FINAL W_cred {{{cs + 2 + i}}}: {rule}')
+
+  WD, WC, MI, HU = ((WDATA_DN, '/tmp/.pw-wdata'), (WCRED_DN, '/tmp/.pw-wcred'), (MACHINE_DN, '/tmp/.pw-machine'), (HUMAN_DN, '/tmp/.pw-human'))
+  n = [0]
+
+  def run(who, tool, args=(), data=None):
+    return lcode(f.tool(tool, list(args), who[0], who[1], data))
+
+  def sent(prefix='F'):
+    n[0] += 1
+    v = live.secret(f'{prefix}{n[0]}-' + secrets.token_urlsafe(18))
+    f.put_password(f'/tmp/.fp-{n[0]}', v)
+    return v, f'/tmp/.fp-{n[0]}'
+
+  def add(uid, who=WD, mark=True, policy=pol, parent=PEOPLE, extra=''):
+    dn = f'uid={uid},{parent}'
+    ldif = (f'dn: {dn}\nobjectClass: inetOrgPerson\nuid: {uid}\ncn: {uid}\nsn: {uid}\n' + (f'employeeType: {MARKER}\n' if mark else '')
+            + (f'pwdPolicySubentry: {policy}\n' if policy else '') + extra)
+    return dn, run(who, 'ldapadd', [], ldif)
+
+  def mod(who, dn, change):
+    return run(who, 'ldapmodify', [], f'dn: {dn}\nchangetype: modify\n{change}\n')
+
+  def vals(dn, *names):
+    out = adm('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', dn, '-s', 'base', *names]).stdout
+    return [l for l in out.splitlines() if l and not l.startswith('dn: ')]
+
+  def setpw(dn, path=None):
+    return run(WC, 'ldappasswd', ['-T', path or sent()[1], dn])
+
+  def bind(dn, path):
+    return f.tool('ldapwhoami', [], dn, path).returncode == 0
+
+  def sweep(flt):
+    out = f.tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', BASE_DN, flt, 'dn'], *MI).stdout
+    return sorted(l[4:] for l in out.splitlines() if l.startswith('dn: '))
+
+  # ---- Q15: olcAddContentAcl TRUE, what W_data can put in an Add -------------------------------------------
+  a, ra = add('fa')
+  plain, rp = add('fplain', mark=False, policy=None, extra='mail: fplain@example.org\n')
+  _, rpw = add('fpw', mark=False, policy=None, extra=f'userPassword: {sent()[0]}\n')
+  _, rnom = add('fnomark', mark=False)
+  _, rnop = add('fnopol', policy=None)
+  _, roth = add('fother', policy='cn=default,ou=policies,' + BASE_DN)
+  _, rmpw = add('fmarkpw', extra=f'userPassword: {sent()[0]}\n')
+  _, rstaff = add('fstaff', parent=GROUPS)
+  obs(f'Q15 W_data Add: marker+policy {ra}; ordinary createUser (closed list) {rp}; carrying userPassword {rpw}; policy without marker {rnom}; '
+      f'marker without policy {rnop}; marker+DEFAULT policy {roth}; marker+policy+userPassword {rmpw}; marker+policy outside the cred subtree {rstaff}')
+  expect('Q15', ra == (0, 'ok') and rp == (0, 'ok') and vals(a, 'employeeType', 'pwdPolicySubentry') == [f'employeeType: {MARKER}', f'pwdPolicySubentry: {pol}'],
+         'with olcAddContentAcl TRUE: the pending Add (marker + policy) and an ordinary createUser still succeed')
+  expect('Q15', all(x[0] == 50 for x in (rpw, rnom, rnop, roth, rmpw, rstaff)),
+         'with olcAddContentAcl TRUE the Add is checked per attribute: userPassword, a lone policy, a lone marker, another policy, a marker outside the cred subtree -> 50')
+
+  # ---- M-1: W_data cannot mark or attach by Modify -----------------------------------------------------------
+  sso, _ = add('fsso', who=(ADMIN_DN, '/tmp/.pw-admin'), mark=False, policy=None)
+  m1 = {'mark v2a-made': mod(WD, plain, f'add: employeeType\nemployeeType: {MARKER}'),
+        'mark admin-made SSO': mod(WD, sso, f'add: employeeType\nemployeeType: {MARKER}'),
+        'policy on v2a-made': mod(WD, plain, f'add: pwdPolicySubentry\npwdPolicySubentry: {pol}'),
+        'marker+policy on v2a-made in one Modify': mod(WD, plain, f'add: employeeType\nemployeeType: {MARKER}\n-\nadd: pwdPolicySubentry\npwdPolicySubentry: {pol}'),
+        'delete the marker of a pending entry': mod(WD, a, f'delete: employeeType\nemployeeType: {MARKER}'),
+        'delete the policy of a pending entry': mod(WD, a, f'delete: pwdPolicySubentry\npwdPolicySubentry: {pol}')}
+    # a second marker value on an already pending entry: the filter is true for it, so the APP must require exactly one
+  other_tag = 'ldapium-credential-pending:' + secrets.token_hex(8)
+  second = mod(WD, a, f'add: employeeType\nemployeeType: {other_tag}')
+  obs('M-1 W_data Modify: ' + '; '.join(f'{k} {v}' for k, v in m1.items()) + f'; add a SECOND marker value to a pending entry {second} -> {vals(a, "employeeType")}')
+  expect('M-1', all(v[0] == 50 for v in m1.values()), 'W_data cannot mark, attach or un-mark by Modify (Add-only rules): every probe 50')
+  expect('M-1', second == (0, 'ok') and len(vals(a, 'employeeType')) == 2,
+         'KNOWN: a second marker value CAN be added to an entry that is already pending -> the app pre-read must require exactly one marker value')
+  mod((ADMIN_DN, '/tmp/.pw-admin'), a, f'delete: employeeType\nemployeeType: {other_tag}')
+
+  # ---- cross matrix with the final filters ----------------------------------------------------------------
+  t = {'a': a}
+  t['b'], _ = add('fb')
+  bpw = live.secret('Fb-' + secrets.token_urlsafe(14))
+  mod((ADMIN_DN, '/tmp/.pw-admin'), t['b'], f'add: userPassword\nuserPassword: {bpw}')
+  t['c'], _ = add('fc', who=(ADMIN_DN, '/tmp/.pw-admin'))                       # rootdn: same attributes, creatorsName = admin
+  t['d'] = plain
+  t['f'], _ = add('ff')
+  adm('ldapmodify', [], f'dn: {PRIV}\nchangetype: modify\nadd: member\nmember: {t["f"]}\n')
+  t['g'], _ = add('fg')
+  adm('ldapmodify', [], f'dn: {SUBPRIV}\nchangetype: modify\nadd: member\nmember: {t["g"]}\n')
+  t['h'] = f'cn=fh,{PEOPLE}'
+  adm('ldapadd', [], f'dn: {t["h"]}\nobjectClass: groupOfNames\nobjectClass: extensibleObject\ncn: fh\nemployeeType: {MARKER}\npwdPolicySubentry: {pol}\nmember: {a}\n')
+  t['i'], t['j'], t['k'] = WDATA_DN, MACHINE_DN, WCRED_DN
+  for key in 'ijk':
+    adm('ldapmodify', [], f'dn: {t[key]}\nchangetype: modify\nreplace: pwdPolicySubentry\npwdPolicySubentry: {pol}\n')
+  t['m'] = sso
+  adm('ldapmodify', [], f'dn: {sso}\nchangetype: modify\nadd: employeeType\nemployeeType: {MARKER}\n-\nadd: pwdPolicySubentry\npwdPolicySubentry: {pol}\n')
+  va, pa = sent('Fa')
+  res = {k: setpw(t[k], pa if k == 'a' else None) for k in 'abcdfghijkm'}
+  obs('FINAL cross matrix (W_cred exop): ' + ', '.join(f'{k} {v}' for k, v in res.items())
+      + ' [a pending, b has a password, c admin-made pending, d v2a-made, f direct privileged, g nested privileged, h group, i/j/k identities, m SSO marked by the ADMIN]')
+  expect('FINAL', res['a'] == (0, 'ok') and bind(a, pa), 'the pending account is set and the value binds')
+  expect('FINAL', all(res[k][0] == 50 for k in 'bcdfhijkm'),
+         'every non-target is refused (b, c, d, f, h, i, j, k, m) with the final filters')
+  f.put_password('/tmp/.fp-b', bpw)
+  expect('FINAL', bind(t['b'], '/tmp/.fp-b'), 'b keeps its original password')
+  obs(f'FINAL nested privileged member g: {res["g"]} (REQ-007 accepted risk: direct members only)')
+
+  # ---- policy under the final rules ---------------------------------------------------------------------------
+  p2, _ = add('fp2')
+  short = live.secret('aB3$' + secrets.token_hex(2)[:3])
+  f.put_password('/tmp/.fp-short', short)
+  weak = live.secret('y' + secrets.token_hex(1)[:1])
+  hashed = live.secret(live.run(['docker', 'exec', '-i', f.name, 'slappasswd', '-h', '{SSHA}', '-T', '/dev/stdin'], input=weak).stdout.strip())
+  ps = (setpw(p2, '/tmp/.fp-short'), mod(WC, p2, f'add: userPassword\nuserPassword: {hashed}'), setpw(p2))
+  obs(f'FINAL policy on a pending entry: 7-char exop {ps[0]}, pre-hashed plain Modify {ps[1]}, compliant exop {ps[2]}')
+  expect('FINAL', ps[0][0] == 19 and ps[1][0] == 19 and ps[2] == (0, 'ok'), 'pending policy: short 19, pre-hashed 19 (quality 2), compliant 0')
+
+  # ---- window, pre-read signal, sweeps ----------------------------------------------------------------------
+  oracle = (run(MI, 'ldappasswd', ['-T', pa, a]), run(MI, 'ldappasswd', ['-T', sent()[1], a]))
+  pct = f.tool('ldapsearch', ['-LLL', '-b', a, '-s', 'base', 'pwdChangedTime'], *MI).stdout.count('pwdChangedTime:')
+  f_self = run(HU, 'ldapmodify', [], f'dn: {HUMAN_DN}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {pol}\n')
+  stuck = sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN})(pwdChangedTime=*))')
+  foreign = sweep(f'(&(pwdPolicySubentry={pol})(!(creatorsName={WDATA_DN})))')
+  orphan = sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN})(!(employeeType=ldapium-credential-pending:*)))')
+  obs(f'FINAL after the sets: M new=current {oracle[0]} vs wrong {oracle[1]}; M sees pwdChangedTime on a: {pct} (pre-read 409 signal); '
+      f'F-9 self-attach on this image {f_self}; sweeps: stuck {stuck}; foreign {foreign}; orphan {orphan}')
+  expect('Q14', oracle == ((19, 'policy'), (50, 'acl')) and pct == 1, 'the accepted window: 19/50 exists before cleanup; M sees pwdChangedTime (the pre-read can answer 409)')
+  want_stuck = sorted([a, t['b'], p2, t['g']])
+  want_foreign = sorted([t['c'], t['h'], t['i'], t['j'], t['k'], t['m']] + ([HUMAN_DN] if f_self[0] == 0 else []))
+  expect('SWEEP', stuck == want_stuck, f'stuck sweep finds exactly the W_data-made pending entries that have a password ({len(want_stuck)})')
+  expect('SWEEP', foreign == want_foreign, f'foreign sweep (!(creatorsName=W_data)) finds exactly the non-W_data entries carrying the policy ({len(want_foreign)})')
+  expect('SWEEP', orphan == [], 'no W_data-made entry carries the policy without the marker (Add-only rules)')
+
+  # ---- cleanup by the sweep (W_cred) and by the runbook (admin) ---------------------------------------------
+  clean = lambda dn: mod(WC, dn, f'delete: employeeType\nemployeeType: {MARKER}\n-\ndelete: pwdPolicySubentry\npwdPolicySubentry: {pol}')  # noqa: E731
+  neg = {'whole employeeType': mod(WC, p2, 'delete: employeeType'), 'whole policy attr': mod(WC, p2, 'delete: pwdPolicySubentry'),
+         'add policy': mod(WC, plain, f'add: pwdPolicySubentry\npwdPolicySubentry: {pol}'), 'foreign c': clean(t['c']), 'foreign m (SSO)': clean(sso)}
+  # rollback ordering: with the cleanup grant gone first, W_cred cannot clean a leftover attachment
+  delete_body = f'dn: {main_db}\nchangetype: modify\ndelete: olcAccess\nolcAccess: {{{cs + 4}}}\n-\ndelete: olcAccess\nolcAccess: {{{cs + 3}}}\n'
+  ensure(cfg('ldapmodify', [], delete_body).returncode == 0, 'drop cleanup grant')
+  wrong_order = clean(p2)
+  ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\nadd: olcAccess\nolcAccess: {{{cs + 3}}}{wc_rules[3]}\nolcAccess: {{{cs + 4}}}{wc_rules[4]}\n').returncode == 0, 'restore cleanup grant')
+  swept = {dn: clean(dn) for dn in stuck}
+  runbook = {dn: lcode(f.admin_tool('ldapmodify', [], f'dn: {dn}\nchangetype: modify\ndelete: pwdPolicySubentry\npwdPolicySubentry: {pol}\n'))
+             for dn in foreign if dn not in (t['h'],)}
+  # abandoned pending entries never get a password (refused, or the automation gave up): the stuck sweep cannot see
+  # them; a TTL sweep (createTimestamp older than N, here: everything left) lets W_cred remove marker + policy
+  abandoned = sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN})(employeeType=ldapium-credential-pending:*)(!(pwdChangedTime=*)))')
+  ttl = {dn: clean(dn) for dn in abandoned}
+  after = (sweep(f'(pwdPolicySubentry={pol})'), run(MI, 'ldappasswd', ['-T', pa, a]), bind(a, pa))
+  obs('FINAL cleanup negatives: ' + '; '.join(f'{k} {v}' for k, v in neg.items()) + f'; cleanup with the grant removed first {wrong_order}')
+  obs(f'FINAL sweep cleanup (W_cred): { {k.split(",")[0]: v for k, v in swept.items()} }; runbook admin cleanup: { {k.split(",")[0]: v for k, v in runbook.items()} }; '
+      f'abandoned-pending sweep {[d.split(",")[0] for d in abandoned]} cleaned {list(ttl.values())}; '
+      f'left with the policy {after[0]}; M new=current on a afterwards {after[1]}; a still binds {after[2]}')
+  expect('CLEANUP', all(v[0] == 50 for v in neg.values()), 'W_cred cleanup cannot delete whole attributes, add the policy, or touch non-W_data entries')
+  expect('CLEANUP', wrong_order[0] == 50, 'rollback ordering: once the cleanup grant is removed W_cred cannot clean a leftover (remove attachments first)')
+  expect('SWEEP', abandoned == [t['f']],
+         'the abandoned-pending sweep finds exactly the pending entry that never got a password (the refused privileged member f)')
+  expect('CLEANUP', all(v == (0, 'ok') for v in list(swept.values()) + list(ttl.values()) + list(runbook.values())) and after[0] == [t['h']],
+         'the stuck and abandoned sweeps (W_cred) and the admin runbook (foreign) leave only the group h (its own check)')
+  expect('CLEANUP', after[1] == (50, 'safeModify') and after[2], 'after cleanup the default policy applies (no oracle) and the password is kept')
+
+  # ---- E-17 with the final policy (lockout on: bind the winner first, then three losers) -------------------
+  rounds = []
+  for k in range(5):
+    dn, _ = add(f'frace{k}')
+    paths = [sent('FR') for _ in range(10)]
+    script = ''
+    for i, (_, p) in enumerate(paths):
+      if k == 4 and i % 2:
+        cmd = (f'printf "dn: {dn}\\nchangetype: modify\\nreplace: userPassword\\nuserPassword: %s\\n" "$(cat {p})" | '
+               f'ldapmodify -x -H ldap://127.0.0.1 -D "{WCRED_DN}" -y /tmp/.pw-wcred')
+      else:
+        cmd = f'ldappasswd -x -H ldap://127.0.0.1 -D "{WCRED_DN}" -y /tmp/.pw-wcred -T {p} "{dn}"'
+      script += f'( {cmd} > /tmp/.fo{i} 2>&1; echo $? > /tmp/.fr{i} ) &\n'
+    script += 'wait\n' + ''.join(f'echo "@@ $(cat /tmp/.fr{i}) $(tr "\\n" " " < /tmp/.fo{i})"\n' for i in range(10))
+    rcs = []
+    for line in live.run(['docker', 'exec', '-i', f.name, 'sh'], input=script).stdout.splitlines():
+      if line.startswith('@@ '):
+        m = re.search(r'\((\d+)\)', line)
+        rcs.append(0 if line.split()[1] == '0' else (int(m.group(1)) if m else -1))
+    win = [i for i, x in enumerate(rcs) if x == 0]
+    ok = len(win) == 1 and bind(dn, paths[win[0]][1]) and not any(bind(dn, paths[i][1]) for i in [j for j in range(10) if j not in win][:3])
+    rounds.append((rcs, ok))
+    obs(f'FINAL E-17 round {k} ({"mixed" if k == 4 else "exop"}): rc {rcs}; winner binds and 3 losers do not: {ok}')
+  expect('E-17', all(ok and sorted(set(r)) == [0, 50] for r, ok in rounds), 'final policy: every round exactly one success (single slapd), losers 50')
 
 
 def main():
@@ -874,6 +1118,8 @@ def main():
       f'left {attrs(d6, "employeeType", "pwdPolicySubentry")}; accesslog hashed values {len(pw_hashes(vals6))} {[shape(v) for v in pw_hashes(vals6)]}')
   expect('D-7', at_short[0] == 19 and len(at_short_left) == 2 and at == (0, 'ok') and binds(d6, p6) == 0 and attrs(d6, 'employeeType', 'pwdPolicySubentry') == [],
          'one plain Modify can set and clean up atomically (policy enforced; nothing left to clean)')
+
+  final_phase()
 
   # ======== E-12d: accesslog logging `extended` ==================================================================
   for ops in ('writes reads bind extended', 'all'):

@@ -405,6 +405,59 @@ own account). It does not create a `W_cred` target.
 exop (§2e E-12d; still reproduced in run 9 as an expected known defect). The v2c design does not depend on it, but an operator who adds
 `extended` makes every `setPassword` (human or machine) a slapd crash.
 
+### 2g. Revision 8: the design after the independent reviews (2026-10-13, same branch)
+
+Inputs: security-reviewer (BLOCKER 0, MAJOR 2), Codex (P1 3, P2 2), and the maintainer's decisions: Q15 `olcAddContentAcl TRUE` becomes a v2c
+prerequisite, Q14 accepts the 19/50 window with stronger sweeps, and F-9 (#399) is a prerequisite fixed in a separate PR. The same script gained a
+`FINAL` phase on a **fresh** slapd with the revised rules. Every row below is an assertion, not an `OBS`.
+
+```
+LDAPIUM_IMAGE=ldapium:v2cgate python3 scripts/test/test-machine-write-cred-experiments.py
+...
+82 of 82 expectations held, 0 failed, 59s.          (run 12, exit 0)
+```
+
+Run 10 hung on a probe that read a password from `/dev/stdin` (killed, probe removed). Run 11 had 80 of 81: one FAIL, and the expectation was
+wrong, not the design. The pending direct privileged member, whose set was refused, never gets a password, so the stuck sweep correctly does not see
+it. That gap is the new TTL ("abandoned pending") sweep.
+
+**Final rules** (main DB, `olcAddContentAcl: TRUE`; `T` = `(&(objectClass=inetOrgPerson)(creatorsName=<W_data>)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))(!(memberOf=cn=admins,...))(pwdPolicySubentry=<pending policy>))`):
+
+```
+W_data {5}  to dn.subtree="ou=people,..." attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=T by <W_data> add by * break
+W_data {6}  to dn.subtree="ou=people,..." attrs=pwdPolicySubentry val="<pending policy>" filter=T by <W_data> add by * break
+            (both before W_data's secrets/pwd* `none`; at Add the new entry satisfies T, creatorsName is set before the ACL check;
+             on Modify an entry without the attribute cannot satisfy T)
+W_cred      attrs=userPassword filter=T =w
+            attrs=employeeType val.regex=<marker> filter=(&(creatorsName=<W_data>)(pwdPolicySubentry=<pending policy>)) =z
+            attrs=pwdPolicySubentry val="<pending policy>" filter=(creatorsName=<W_data>) =z
+            (no `entry` rule; secrets none; to * none)
+```
+
+| Check | Result |
+|---|---|
+| Q15 `W_data` Add: marker + policy / ordinary createUser (closed list) | 0 / 0 |
+| Q15 `W_data` Add: carrying `userPassword` / policy without marker / marker without policy / marker + **default** policy / marker + policy + `userPassword` / marker + policy outside the cred subtree | 50 each |
+| M-1 `W_data` Modify: mark a v2a-made entry / mark an admin-made SSO entry / attach the policy to a v2a entry / both in one Modify / delete the marker / delete the policy | 50 each: the Modify path is closed |
+| M-1 `W_data` Modify: a **second** marker value on an already-pending entry | **0** (two markers stored). The app pre-read must require exactly one marker value |
+| Cross matrix, `W_cred` exop: a pending / b has a password / c admin-made pending / d v2a-made / f direct privileged / h group / i,j,k identities / m SSO entry marked by the admin | a 0 and binds; b, c, f, h, i, j, k, m 50 (acl); d 50 (safeModify: default policy); b keeps its password |
+| nested privileged member g | 0 (REQ-007 accepted risk, unchanged) |
+| pending policy: 7-char exop / pre-hashed `{SSHA}` plain Modify / compliant exop | 19 / 19 / 0 |
+| Q14 window before cleanup: `M` new = current / wrong | 19 / 50; `M` reads `pwdChangedTime` on the set entry (the pre-read 409 signal) |
+| F-9 on this image: ordinary user self-attach | 0. Still present (fixed by #399, a prerequisite); found by the foreign sweep |
+| stuck sweep `(&(pwdPolicySubentry=P)(creatorsName=W_data)(pwdChangedTime=*))` | exactly {a, b (admin-set password), g, p2}: 4 |
+| foreign sweep `(&(pwdPolicySubentry=P)(!(creatorsName=W_data)))` | exactly {c, h, m, human (F-9), M, W_cred, W_data (policy put on them by the test as targets)}: 7 |
+| orphan `(&(pwdPolicySubentry=P)(creatorsName=W_data)(!(employeeType=...*)))` | none |
+| abandoned (TTL) sweep `(&(pwdPolicySubentry=P)(creatorsName=W_data)(employeeType=...*)(!(pwdChangedTime=*)))` | exactly {f}; `W_cred` cleanup 0 |
+| `W_cred` cleanup negatives: whole `employeeType` / whole `pwdPolicySubentry` / add the policy / foreign c / foreign m | 50 each |
+| rollback ordering: `W_cred` cleanup rules removed first, then cleanup of a leftover | 50: leftovers must be removed **before** the grant |
+| sweep cleanup (`W_cred`, one Modify: marker value + policy value) on the 4 stuck entries; admin runbook on 6 foreign entries | all 0; only the group h is left (the test leaves it out of the runbook) |
+| after cleanup: `M` new = current on a; a binds | `(50, safeModify)`: no oracle; binds |
+| E-17 with the final policy: 4 exop rounds + 1 exop/Modify mixed round, N=10 | each round exactly one 0, nine 50; the winner binds, three losers do not. Single slapd only: multi-provider is last-write-wins (not measured) |
+
+Not measured here: the application parts of Revision 8 (exactly-one-marker pre-read, 409 on `pwdChangedTime`, cleanup in a detached context,
+sweep scheduling and TTL value, runbook execution under an LDAP outage), multi-provider replication, and a re-review of Revision 8.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
