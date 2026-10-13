@@ -511,6 +511,10 @@ spec:
               value: {{ join ";" $grps | quote }}
             - name: MACHINE_WRITE_PRIVILEGED_GROUPS
               value: {{ join ";" $w.privilegedGroups | quote }}
+            {{- if $w.groupSeedDN }}
+            - name: MACHINE_WRITE_GROUP_SEED_DN
+              value: {{ $w.groupSeedDN | quote }}
+            {{- end }}
             - name: MACHINE_WRITE_RATE_LIMIT_RPS
               value: {{ $w.limits.rps | quote }}
             - name: MACHINE_WRITE_RATE_LIMIT_BURST

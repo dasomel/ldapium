@@ -44,15 +44,15 @@ var machineWriteCatalog = []machineWriteOp{
 		"data", "group", "groupOfNames", "inetOrgPerson", shapeMembership, false, true},
 	{machineOp{"removeGroupMember", http.MethodDelete, "/api/groups/members", "directory.groups.members.remove"},
 		"data", "group", "groupOfNames", "inetOrgPerson", shapeMembership, true, true},
-	// v2b groups (D379-3/5/6): catalog rows only. They become reachable when T-014
-	// adds them to machineWriteOps and config.MachineWriteOpenScopes.
+	// v2b groups (D379-3/5/6): opened by T-014 (machineWriteOps,
+	// config.MachineWriteOpenScopes).
 	{machineOp{"createGroup", http.MethodPost, "/api/groups", "directory.groups.create"},
 		"data", "group", "", "", shapeCreate, false, false},
 	{machineOp{"patchGroup", http.MethodPatch, "/api/groups", "directory.groups.update"},
 		"data", "group", "groupOfNames", "", shapeTarget, false, true},
 	{machineOp{"deleteGroup", http.MethodDelete, "/api/groups", "directory.groups.delete"},
 		"data", "group", "groupOfNames", "", shapeTarget, true, true},
-	// v2b lock (D379-2/7/8): catalog row only, reachable at T-014. There is no
+	// v2b lock (D379-2/7/8): opened by T-014. There is no
 	// unlockUser row on purpose: unlock stays human-only (D379-7, REQ-008).
 	{machineOp{"lockUser", http.MethodPost, "/api/users/lock", "directory.users.lock"},
 		"lock", "user", "inetOrgPerson", "", shapeTarget, false, true},

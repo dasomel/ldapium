@@ -100,14 +100,18 @@ var MachineWriteScopes = []string{
 	"directory.users.password.write",
 }
 
-// MachineWriteOpenScopes are the write scopes of the operations T-013 opens
-// (Resolved Q2, appendix A). A test in httpapi keeps this list equal to the
-// scopes of machineWriteOps; a ceiling naming any other write scope (lock,
-// group create/update/delete, password) is refused at startup.
+// MachineWriteOpenScopes are the write scopes of the operations T-013 (Resolved
+// Q2, appendix A) and the v2b unit T-014 (machine-write-scope-v2) open. A test
+// in httpapi keeps this list equal to the scopes of machineWriteOps; a ceiling
+// naming any other write scope (unlock, password) is refused at startup.
 var MachineWriteOpenScopes = []string{
 	"directory.users.create",
 	"directory.users.update",
 	"directory.users.delete",
+	"directory.users.lock",
+	"directory.groups.create",
+	"directory.groups.update",
+	"directory.groups.delete",
 	"directory.groups.members.add",
 	"directory.groups.members.remove",
 }

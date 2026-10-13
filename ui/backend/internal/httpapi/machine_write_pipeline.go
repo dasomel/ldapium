@@ -72,7 +72,7 @@ type machineWritePipeline struct {
 
 // newMachineWritePipeline returns nil when the write runtime is off, so with
 // MACHINE_WRITE_ENABLED unset no table is consulted at all. The opened table is
-// machineWriteOps (five operations, T-013) unless a test injects its own through machineDeps.
+// machineWriteOps (nine operations, T-013/T-014) unless a test injects its own through machineDeps.
 func (s *Server) newMachineWritePipeline(dialer ldapclient.Dialer) (*machineWritePipeline, error) {
 	rt := s.machineWrite
 	if rt == nil {

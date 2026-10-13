@@ -41,7 +41,7 @@ type machineDeps struct {
 	revocationRead revocationRead
 	// writeOps is the TEST-ONLY write-operation table (machine-write-scope
 	// T-012..T-019). Production leaves it nil and the pipeline then opens
-	// machineWriteOps, the five first-ship operations (T-013).
+	// machineWriteOps, the nine opened operations (five first-ship, T-013, and four v2b, T-014).
 	writeOps []machineOp
 	// writeIdentity replaces the M pre-read of the write pipeline (tests only).
 	writeIdentity writeIdentityChecker

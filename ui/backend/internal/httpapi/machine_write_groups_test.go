@@ -253,6 +253,37 @@ func TestGroupPipeline_TargetRestrictions(t *testing.T) {
 	}
 }
 
+// REQ-003 / D379-3: the seed placeholder is protected by the protected set ALONE.
+// Start-up validation refuses a ceiling that contains the seed, so the live drill
+// cannot build this layout; here the seed is injected INSIDE the client's ceiling,
+// on the group allow-list, and as a user, and only the protected-set guard is left
+// to refuse it: no ceiling check, allow-list check or pre-read can mask a removal.
+func TestGroupPipeline_SeedIsProtectedWithoutTheCeiling(t *testing.T) {
+	seed := "cn=group-seed," + rtPeop // strictly inside the machine-a ceiling
+	w := groupsHarness(t, func(c *config.Config) {
+		c.Machine.Write.GroupSeedDN = seed
+		c.Machine.Write.Groups = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: []string{rtGroup, seed}}}
+	})
+	for _, r := range []wreqSpec{
+		{method: "PATCH", path: "/api/groups", body: `{"dn":` + jsonStr(seed) + `,"description":"x"}`},
+		{method: "DELETE", path: "/api/groups?dn=" + url.QueryEscape(seed)},
+		{method: "PATCH", path: "/api/users", body: `{"dn":` + jsonStr(seed) + `,"mail":"a@example.org"}`},
+		{method: "DELETE", path: "/api/users?dn=" + url.QueryEscape(seed)},
+		{method: "POST", path: "/api/users/lock", body: `{"dn":` + jsonStr(seed) + `}`},
+		{method: "POST", path: "/api/groups/members", body: `{"groupDn":"` + wTeam + `","memberDn":` + jsonStr(seed) + `}`},
+		{method: "DELETE", path: "/api/groups/members?groupDn=" + url.QueryEscape(wTeam) + "&memberDn=" + url.QueryEscape(seed)},
+	} {
+		r.headers = okHeaders()
+		rec := w.send(r)
+		if rec.Code != 403 || !strings.Contains(rec.Body.String(), msgWriteDNRefused) {
+			t.Errorf("%s %s with the seed inside the ceiling: %d %s", r.method, r.path, rec.Code, rec.Body)
+		}
+	}
+	if w.dir.binds() != 0 || len(w.ident.callList()) != 0 || len(w.dir.callList()) != 0 {
+		t.Fatalf("the seed reached the directory: binds=%d ident=%v calls=%v", w.dir.binds(), w.ident.callList(), w.dir.callList())
+	}
+}
+
 func TestGroupPipeline_DeleteGroup(t *testing.T) {
 	w := groupsHarness(t, nil)
 	del := func(q string, h map[string][]string) int {
@@ -284,21 +315,32 @@ func TestGroupPipeline_DeleteGroup(t *testing.T) {
 	}
 }
 
-// The scope gate: a token without the group scope is 403 before anything, and the
-// group operations are not part of the production table.
+// The scope gate: a token without the group scope is 403 before anything, and
+// since T-014 the three group operations are part of the production table (PUT
+// updateGroup is not, and neither is any scope it would need beyond the update one).
 func TestGroupPipeline_ScopeAndProductionTable(t *testing.T) {
 	w := groupsHarness(t, nil)
 	rec := w.sendTokenScopes(wreqSpec{method: "PATCH", path: "/api/groups", body: `{"dn":"` + wTeam + `","description":"x"}`, headers: okHeaders()}, "directory.groups.members.add")
 	wantCode(t, rec, 403, codeScopeDenied)
+	in := map[string]bool{}
 	for _, op := range machineWriteOps {
-		switch op.ID {
-		case "createGroup", "patchGroup", "deleteGroup":
-			t.Errorf("%s is in the production table before T-014", op.ID)
+		in[op.ID] = true
+	}
+	for _, id := range []string{"createGroup", "patchGroup", "deleteGroup"} {
+		if !in[id] {
+			t.Errorf("%s is not in the production table after T-014", id)
 		}
 	}
+	if in["updateGroup"] {
+		t.Error("updateGroup (PUT) is in the production table")
+	}
+	open := map[string]bool{}
 	for _, s := range config.MachineWriteOpenScopes {
-		if strings.HasPrefix(s, "directory.groups.") && !strings.HasPrefix(s, "directory.groups.members.") {
-			t.Errorf("%s is an open scope before T-014", s)
+		open[s] = true
+	}
+	for _, s := range []string{"directory.groups.create", "directory.groups.update", "directory.groups.delete"} {
+		if !open[s] {
+			t.Errorf("%s is not an open scope after T-014", s)
 		}
 	}
 }

@@ -8,6 +8,9 @@ name: Machine write E2E (real Keycloak)
 #     request with the write fields, write budget and single write slot, secret scan of all container logs.
 #   - test-machine-write-drill.py: the emergency block (password rotation, write-only redeploy, in-flight window,
 #     W_* lockout) on the same production image.
+#   - test-machine-write-v2b-live.py (machine-write-scope-v2 T-015): the four v2b operations (createGroup with the
+#     placeholder seed, patchGroup, deleteGroup, lockUser) and the refusal of unlock, against real Keycloak tokens
+#     and slapd, including a real UI + slapd restart. It needs the tree that contains the T-014 opening.
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
 
 on:
@@ -67,6 +70,9 @@ jobs:
 
       - name: Machine write emergency-block drill (production image, two replicas, in-flight window, W_* lockout)
         run: python3 scripts/test/test-machine-write-drill.py
+
+      - name: Machine write v2b drill (group seed / allow-list / privileged refusal, lock, unlock bypass attempts, restart)
+        run: python3 scripts/test/test-machine-write-v2b-live.py
 
       # The scripts remove their own containers, volumes and networks even on failure. The runner is
       # fresh per job, so anything left under these prefixes belongs to this run: list it and fail.

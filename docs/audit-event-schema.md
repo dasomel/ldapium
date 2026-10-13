@@ -430,15 +430,16 @@ by `TestMachineAudit_ServerLevelRejectionsAreNotAudited`.
 A machine **write** request adds the fields below to the same single line (the
 one-line rule, early returns included, is unchanged: the wrapper still emits it).
 They appear only when a write operation recorded them; every v1 line and every
-refusal before a write operation was reached keeps the v1 shape. The five
-first-ship operations are registered in `machineWriteOps` (T-013) and act only
+refusal before a write operation was reached keeps the v1 shape. The nine
+operations (the five first-ship ones, T-013, and the v2b `createGroup`, `patchGroup`,
+`deleteGroup`, `lockUser`, T-014) are registered in `machineWriteOps` and act only
 with `MACHINE_WRITE_ENABLED=true` (default off; off, every machine write is 403
 and no write field is emitted). `operation` carries the operation id.
 
 | Field | Meaning |
 | --- | --- |
 | `write_scope` | the write scope the operation required (closed set: the `directory.*` write scopes), else `unknown` |
-| `compartment` | `data` or `lock` (the `W_*` identity class), else `unknown` |
+| `compartment` | `data` or `lock` (the `W_*` identity class; `lock` is `lockUser`, which binds `W_lock`), else `unknown` |
 | `target_kind` | `user` or `group`, else `unknown` |
 | `target_dn_fingerprint` | first 8 bytes of SHA-256 over the target DN, hex (the same fingerprint the human audit lines use). Always present when a target is named. |
 | `target_dn` | the target DN in plaintext, **only** when the operator sets `MACHINE_WRITE_AUDIT_TARGET_DN=true` (default false, Resolved Q4; read only when `MACHINE_WRITE_ENABLED=true`). With it on the log is as sensitive as the directory's DN space. |

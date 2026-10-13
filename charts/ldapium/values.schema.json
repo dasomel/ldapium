@@ -286,6 +286,9 @@
                     "pattern": "^[^;|]+$"
                   }
                 },
+                "groupSeedDN": {
+                  "type": "string"
+                },
                 "limits": {
                   "type": "object",
                   "additionalProperties": false,

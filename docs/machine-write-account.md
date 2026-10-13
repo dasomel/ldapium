@@ -25,7 +25,7 @@
 |---|---|
 | `M` | 읽기 전용 머신 계정([machine-ldap-account.md](machine-ldap-account.md)). 이 문서에서 **변하지 않는다** |
 | `W_data` (`$WDATA_DN`) | 사용자·그룹 멤버십 쓰기 계정(`createUser`/`patchUser`/`deleteUser`/`addGroupMember`/`removeGroupMember`) |
-| `W_lock` (`$WLOCK_DN`) | 잠금 계정(`pwdAccountLockedTime` 하나만, v2b 단계). 첫 출하에는 쓰이지 않지만 같은 방식으로 준비할 수 있다. 잠금은 v2b의 `lockUser`(아직 도달 불가)만 쓰고, 해제는 사람 경로 전용이다(D379-7) |
+| `W_lock` (`$WLOCK_DN`) | 잠금 계정(`pwdAccountLockedTime` 하나만, v2b 단계). 첫 출하에는 쓰이지 않지만 같은 방식으로 준비할 수 있다. 잠금은 v2b의 `lockUser`(T-014로 열림, `directory.users.lock`을 상한에 준 client만)만 쓰고, 해제는 사람 경로 전용이다(D379-7) |
 | `W_cred` | 비밀번호 계정. **설계만 있고 ACL 조각은 없다**(8절) |
 | `$WRITE_DN` | 쓰기 subtree: **모든 client 상한의 합집합**을 덮는 한 지점 |
 | `$SYSTEM_DN` | `M`·`W_*`·서비스 계정을 두는 컨테이너(예 `ou=system,<root>`). `$WRITE_DN`이 넓어져도 쓰기 신원이 닿지 않게 하는 거부 백스톱 |
@@ -196,7 +196,9 @@ echo "BASE=$BASE"
 
 잠금을 쓰지 않는 배포는 건너뛴다. `MACHINE_WRITE_LOCK_ENABLED=false`에서 `MACHINE_ALLOWED_CLIENTS`가 `directory.users.lock`을 상한에 쓰면 기동이 실패한다(REQ-006).
 머신 `lockUser`는 `W_lock`으로 bind하기 전에 `M`이 대상의 `memberOf`와 각 `MACHINE_WRITE_PRIVILEGED_GROUPS` 그룹의 `member` 목록을 읽어, 하나라도 **직접** 속하면 403으로 거부한다(D379-8, D379-17). 그룹을 읽을 수 없으면(`M` ACL이 `member`를 숨김 포함) 거부이고, lock scope 상한에는 비어 있지 않은 `MACHINE_WRITE_PRIVILEGED_GROUPS`가 필요하다.
-중첩 그룹 멤버십과 읽은 뒤 추가된 멤버십(TOCTOU)은 이 검사가 보지 못한다(수용한 잔여 위험, T-015 드릴에서 기록). 이 검사는 애플리케이션 보강이고, 위 ACL 조각에는 특권 그룹 filter가 없다(라이브 증명 전에는 ACL 백스톱이라 부르지 않는다).
+`memberOf` 값이 ASCII가 아니거나 파싱되지 않으면(OID 타입·이상한 공백·BER 포함) 특권 여부를 증명할 수 없으므로 그 사용자의 `lockUser`는 거부된다(fail closed, 보안이 아니라 가용성 영향: 그런 DN의 그룹에 속한 사용자는 머신으로 잠글 수 없다).
+중첩 그룹 멤버십과 읽은 뒤 추가된 멤버십(TOCTOU)은 이 검사가 보지 못한다(수용한 잔여 위험, T-015 드릴이 실측으로 확인: 중첩 그룹 멤버는 잠긴다). 이 검사는 애플리케이션 보강이고, 위 ACL 조각에는 특권 그룹 filter가 없다(라이브 증명 전에는 ACL 백스톱이라 부르지 않는다).
+정적 `openapi.json`은 `MACHINE_WRITE_ENABLED`가 꺼져 있어도 `createGroup`·`patchGroup`·`deleteGroup`·`lockUser`(앞의 다섯 개와 같이)에 `machineBearer`/`x-machine-scope`를 선언한다. 문서일 뿐 동작은 그대로이며, 스위치가 꺼져 있으면 모두 403 `scope_denied`·bind 0이다.
 머신 경로에는 잠금 해제가 없다: `directory.users.unlock`은 상한에 쓸 수 없고 `unlockUser`는 어떤 표에도 없다(D379-7, AC-005b). 4.2의 블록을 `FRAG=write-lock.ldif WHO="$WLOCK_DN"`으로 실행한다(`W_data`의 8개가 `BASE`에 더해져 `W_lock`이 그 뒤에 놓인다).
 
 ```ldif
@@ -235,7 +237,7 @@ olcAccess: {5}to *
 patchUser(`cn, sn, givenName, mail, departmentNumber, o, ou` Replace), 그룹 멤버 add/remove(`member`), v2b `patchGroup`(`description`), 생성 시 `objectClass`. `W_lock`: `pwdAccountLockedTime`.
 `pwd*` 상태 속성 목록(`pwdAccountLockedTime`, `pwdChangedTime`, `pwdFailureTime`, `pwdGraceUseTime`, `pwdReset`, `pwdPolicySubentry`, `pwdStartTime`, `pwdEndTime`,
 `pwdLastSuccess`)과 비밀 속성 8개는 이 이미지의 스키마·오버레이에서 도출했다(도출 명령은 machine-ldap-account.md 9절). 스키마·오버레이를 바꿨다면 다시 도출해 `{1}`의 목록에 더한다.
-v2b `patchGroup`(D379-5)이 `description`을 목록에 더했다(`{5}`). 오퍼레이션 자체는 T-014 전에는 열리지 않으므로, 이 조각을 적용해도 지금의 머신 동작은 변하지 않는다.
+v2b `patchGroup`(D379-5)이 `description`을 목록에 더했다(`{5}`). 오퍼레이션은 T-014로 열렸다. 이 조각을 적용하지 않은 배포에서는 `patchGroup`이 `W_data`의 ACL 거부(insufficientAccessRights)로 실패하므로, `directory.groups.update`를 상한에 주기 전에 이 조각을 모든 노드에 다시 적용한다.
 부록 A가 다시 바뀌면 이 조각과 이 문서를 같이 바꾼다.
 
 ## 6. 적용 후 확인 (모든 노드)

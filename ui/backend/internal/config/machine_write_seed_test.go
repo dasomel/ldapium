@@ -5,18 +5,10 @@ import (
 	"testing"
 )
 
-// v2b T-010 (D379-3): MACHINE_WRITE_GROUP_SEED_DN. directory.groups.create is
-// not an opened scope yet (T-014 opens it), so these tests open it for their own
-// duration to exercise the rule that depends on it.
+// v2b T-010 (D379-3): MACHINE_WRITE_GROUP_SEED_DN. directory.groups.create is an
+// opened scope since T-014, so the rule that depends on it applies directly.
 
 const wsSeed = "cn=group-seed,ou=system," + wsBase
-
-func openGroupCreate(t *testing.T) {
-	t.Helper()
-	saved := MachineWriteOpenScopes
-	MachineWriteOpenScopes = append(append([]string(nil), saved...), "directory.groups.create")
-	t.Cleanup(func() { MachineWriteOpenScopes = saved })
-}
 
 func seedEnv(over map[string]string) func(string) string {
 	values := map[string]string{
@@ -30,7 +22,6 @@ func seedEnv(over map[string]string) func(string) string {
 }
 
 func TestMachineWriteGroupSeedValid(t *testing.T) {
-	openGroupCreate(t)
 	cfg, err := Load(seedEnv(map[string]string{"MACHINE_WRITE_GROUP_SEED_DN": wsSeed}))
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +45,6 @@ func TestMachineWriteGroupSeedValid(t *testing.T) {
 }
 
 func TestMachineWriteGroupSeedRequiredByCreateScope(t *testing.T) {
-	openGroupCreate(t)
 	// Either client's ceiling counts, not only the writer with a subtree.
 	for _, clients := range []string{
 		"machine-a=directory.users.read,directory.users.create,directory.groups.create;machine-b=audit.read",
@@ -68,7 +58,6 @@ func TestMachineWriteGroupSeedRequiredByCreateScope(t *testing.T) {
 }
 
 func TestMachineWriteGroupSeedRejects(t *testing.T) {
-	openGroupCreate(t)
 	lock := map[string]string{"MACHINE_WRITE_LOCK_ENABLED": "true", "MACHINE_WRITE_LOCK_BIND_DN": "cn=locker,ou=system," + wsBase, "MACHINE_WRITE_LOCK_BIND_PASSWORD": "private-lock"}
 	cases := map[string]struct {
 		seed string
