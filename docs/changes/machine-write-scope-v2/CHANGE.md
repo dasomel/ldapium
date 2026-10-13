@@ -3,7 +3,7 @@
 - Change class: `D` — 신규 자격 증명 쓰기 경로(`W_cred`), 비밀번호 취급, 권한 부여 의미(그룹·`memberOf`), 파괴적 디렉터리 동작(그룹 삭제·계정 잠금). AGENTS.md "Rules"에 따라 설계 변경이다. **하위 범위(v2b, v2c)마다 따로 수용한다**(#379 수용 조건 "Class D change per sub-scope, accepted before code").
 - Owner: 유지보수자(수용 대기)
 - Related issue: [#379](https://github.com/dasomel/ldapium/issues/379)(닫지 않음). 선행: [#285](https://github.com/dasomel/ldapium/issues/285) [machine-write-scope](../machine-write-scope/CHANGE.md)(v2a, 첫 출하 5개 오퍼레이션 구현됨, 기본 꺼짐). 연관: [machine-token-revocation](../machine-token-revocation/CHANGE.md)(#286, 구현됨, 기본 꺼짐).
-- Status: **v2b `Accepted` (2026-10-12, 유지보수자; Q2·Q3·Q4·Q7 권고대로 결정)** · **v2c `Proposed — not approved`** (Q1·Q5·Q6 보류; v2c 구현·`W_cred`·비밀번호는 착수하지 않음). v2b 구현은 TASKS T-010–T-015 순서로 진행하고 T-014 전까지 새 오퍼레이션은 도달 불가다. 관련 후속 이슈: [#390](https://github.com/dasomel/ldapium/issues/390). 아래 문장은 수용 전 작성 당시의 설계 문서 설명이다: **설계 문서다. 이 패키지는 코드·ACL·Helm·스크립트·`openapi.json`을 바꾸지 않는다.** 구현 단위(TASKS `Implement`)는 수용 전에는 하나도 착수하지 않는다. v2c는 부모 패키지 Resolved Q1에 따라 **별도 명시 승인**과 **전용 security-reviewer 라운드**가 수용 조건이다. Revision 1·2(2026-10-11)가 Codex 보안 검토 1·2차 지적을 반영했다(아래 "Revision"). 실측 없이는 닫을 수 없는 항목은 "Ship-gating open risks"에 있다.
+- Status: **v2b `Accepted` (2026-10-12, 유지보수자; Q2·Q3·Q4·Q7 권고대로 결정)** · **v2c `Accepted for implementation start (2026-10-13), pending security-reviewer + Codex gate`** (유지보수자 2026-10-13: Q1 승인, Q5·Q6 권고대로; Q11·Q12·Q13은 명시 답변이 없어 권고안을 **잠정(provisional, recommendation, not explicitly confirmed)** 으로 따른다). 설계 게이트 실측은 [EVIDENCE.md §2e](EVIDENCE.md)이며 **F-4(출하 기본 정책의 `pwdSafeModify: TRUE`가 `W_cred`의 모든 초기 설정을 거부)가 D379-9·D379-13과 `W_cred` 스케치의 개정을 요구한다** — T-020 착수 전에 그 개정 결정이 필요하다(Revision 6). 전용 security-reviewer 라운드와 Codex critic은 아직이다(이 Status는 그 결과를 주장하지 않는다). v2c 구현 단위는 하나도 착수하지 않았다. v2b 구현은 TASKS T-010–T-015 순서로 진행하고 T-014 전까지 새 오퍼레이션은 도달 불가다. 관련 후속 이슈: [#390](https://github.com/dasomel/ldapium/issues/390). 아래 문장은 수용 전 작성 당시의 설계 문서 설명이다: **설계 문서다. 이 패키지는 코드·ACL·Helm·스크립트·`openapi.json`을 바꾸지 않는다.** 구현 단위(TASKS `Implement`)는 수용 전에는 하나도 착수하지 않는다. v2c는 부모 패키지 Resolved Q1에 따라 **별도 명시 승인**과 **전용 security-reviewer 라운드**가 수용 조건이다. Revision 1·2(2026-10-11)가 Codex 보안 검토 1·2차 지적을 반영했다(아래 "Revision"). 실측 없이는 닫을 수 없는 항목은 "Ship-gating open risks"에 있다.
 - 작성일: 2026-10-11
 - 형식: 부모 [machine-write-scope](../machine-write-scope/CHANGE.md)와 완료 예시 [machine-token-revocation](../machine-token-revocation/CHANGE.md)를 따른다. 코드 주장은 파일:줄(main `049fcc3` 기준, 경로 접두 `h/` = `ui/backend/internal/httpapi/`, `l/` = `ui/backend/internal/ldapclient/`, `c/` = `ui/backend/internal/config/`, `f/` = `scripts/test/fixtures/machine-acl/`)로 인용한다. 실행하지 않은 것은 "미검증"으로 표시하고 [EVIDENCE.md](EVIDENCE.md)의 라이브 계획(`E-xx`)에 연결한다.
 - 결정 ID는 이 패키지 고유의 `D379-n`이다(부모의 `D1`–`D26`과 섞이지 않게). 부모 결정은 "부모 D22"처럼 쓴다.
@@ -326,19 +326,19 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 각 항목에 권고안을 둔다. **[유지보수자]** 표시는 부모 Resolved Q1처럼 유지보수자의 명시 결정이 필요한 항목이고, 나머지는 권고대로 진행하되 이의가 있으면 수용 시 바꾼다.
 
-1. **[유지보수자] v2c 착수 승인**(부모 Resolved Q1). 권고: 이 설계를 수용하되 구현은 v2b 병합과 부모 T-025(CI 릴리스 게이트) 이후에 시작하고, 수용 전 전용 security-reviewer 라운드와 Codex critic 1회를 거친다.
+1. **[유지보수자] v2c 착수 승인**(부모 Resolved Q1). **Resolved 2026-10-13: 승인**(전용 security-reviewer 라운드 + Codex critic이 수용 선행, 미실시). 권고: 이 설계를 수용하되 구현은 v2b 병합과 부모 T-025(CI 릴리스 게이트) 이후에 시작하고, 수용 전 전용 security-reviewer 라운드와 Codex critic 1회를 거친다.
 2. **[유지보수자] seed 멤버**(부모 D22). 권고: 옵션 B 고정 placeholder DN(`MACHINE_WRITE_GROUP_SEED_DN`, bind 불가 항목, 보호 집합 자동 포함).
 3. **[유지보수자] 생성 그룹의 허용 목록 편입**. 권고: 첫 v2b 출하는 자동 편입 없음(정확 DN 허용 목록 유지). 그룹 서브트리 허용(`MACHINE_WRITE_GROUP_SUBTREES`)은 다운스트림 역할 매핑이 그 서브트리를 참조하지 않는다는 운영 보증과 함께 별도 결정.
 4. **[유지보수자] 잠금 해제를 잠금과 함께 열지**. 권고(Revision 2에서 다시 변경): **열지 않는다 — 해제는 사람 전용**. 값으로 관리 잠금과 ppolicy 잠금을 구별할 수 없고(P22) 잠금→해제 왕복이 우회가 되기 때문이다. 해제 자동화가 필요하면 D379-7 탈출구(지속 표지)를 별도 승인으로.
-5. **[유지보수자] 초기 비밀번호만 vs 재설정 포함**. 권고(Revision 1에서 변경): 첫 v2c 출하는 **이 기능이 대기 표지와 함께 만든 계정의 초기 비밀번호만**(ACL: `creatorsName=W_data` ∧ 표지 ∧ `!(userPassword=*)`, 앱: client 태그 대조). 비밀번호가 없는 기존 계정(SSO 등)은 대상이 아니다. 재설정은 별도 승인. `E-08`·`E-16`·`E-17` 중 하나라도 성립하지 않으면 이 질문을 다시 연다.
-6. **[유지보수자] 비밀번호 포함 `createUser`**. 권고: 열지 않는다(부모 D15 유지). 합성 `createUser`→`setPassword`.
+5. **[유지보수자] 초기 비밀번호만 vs 재설정 포함**. **Resolved 2026-10-13: 권고대로**(첫 출하 = 이 기능이 대기 표지와 함께 만든 계정의 초기 비밀번호만, 재설정 제외). `E-08`·`E-16`·`E-17`은 성립했으므로(EVIDENCE §2e) 다시 열지 않는다. 권고(Revision 1에서 변경): 첫 v2c 출하는 **이 기능이 대기 표지와 함께 만든 계정의 초기 비밀번호만**(ACL: `creatorsName=W_data` ∧ 표지 ∧ `!(userPassword=*)`, 앱: client 태그 대조). 비밀번호가 없는 기존 계정(SSO 등)은 대상이 아니다. 재설정은 별도 승인. `E-08`·`E-16`·`E-17` 중 하나라도 성립하지 않으면 이 질문을 다시 연다.
+6. **[유지보수자] 비밀번호 포함 `createUser`**. **Resolved 2026-10-13: 권고대로**(열지 않음, `createUser` → `setPassword` 합성). 권고: 열지 않는다(부모 D15 유지). 합성 `createUser`→`setPassword`.
 7. `patchGroup`의 `cn` 변경. 권고: 머신 경로에서 거부(`description`만).
 8. 비밀번호 정책 비활성 배포(`LDAP_PASSWORD_POLICY_ENABLED=false`, `image/entrypoint.sh:1307`)에서 v2c를 허용할지. 권고(Revision 1에서 변경): **허용하지 않는다 — 실행 시 기동 거부**. 기동 프로브 4(D379-15)가 정책 미적용을 직접 관측하므로 UI가 `cn=config`를 읽지 않아도 거부할 수 있다. 운영 점검 스크립트는 보조다.
 9. 비밀번호 대상 범위를 쓰기 상한보다 좁힐지(`MACHINE_WRITE_CRED_SUBTREES ⊆ MACHINE_WRITE_SUBTREES`). 권고: 예, 비면 비밀번호 쓰기 불가.
 10. 특권 멤버 거부를 잠금·비밀번호 외(`patchUser`·`deleteUser`)에도 적용할지. 권고: 이 패키지 범위 밖이지만 같은 검사이므로 v2b 구현 시 v2a 오퍼레이션에도 적용하는 후속 이슈를 연다(관리자 `mail` 변경 = SSO 탈취, 부모 D19 시나리오).
-11. **[유지보수자] 대기 표지 속성**. 권고: `employeeType`(inetOrgPerson 표준 속성, 현재 앱·머신 목록 미사용) 값 `ldapium-credential-pending:<16 hex>`. 그 속성을 이미 쓰는 배포를 위해 속성 이름을 설정 가능하게 할지는 구현 시 결정(기본값은 고정). 전용 스키마 속성 추가는 이미지 스키마 변경이라 별도 패키지.
-12. **[유지보수자] `M` accesslog 읽기(감사 옵트인)와 v2c의 공존**. 권고: 첫 v2c 출하는 **상호 배제**(검사 6: `M`이 accesslog 자식 항목을 하나라도 읽으면 거부). 값 수준 거부 규칙(`val.regex="^userPassword:"`)이 `E-12`에서 성립하면 공존을 별도 결정으로 열고 검사 7(실제 쓰기의 자식 항목 사후 확인)로 바꾼다. auditlog(`LDAP_AUDIT_ENABLED`)와 v2c는 차트에서 동시 활성 불가, 차트 밖 배포는 문서로만 막힌다는 잔여 위험(R-6)을 수용할지 함께 결정.
-13. **[유지보수자] 설정 읽기 전용 신원(D379-16)**. 권고: 둔다 — 범위 전체 ACL·기본 정책 증명은 `olcAccess`·`olcPPolicyDefault` 원문 없이는 불가능하다. 대안(운영 점검 스크립트 결과만 신뢰)은 노출 창이 "다음 점검까지"로 커지므로 그 경우 R-2를 수용으로 기록해야 한다.
+11. **[유지보수자] 대기 표지 속성**. **잠정(provisional, recommendation, not explicitly confirmed, 2026-10-13)**: 권고대로 진행. 권고: `employeeType`(inetOrgPerson 표준 속성, 현재 앱·머신 목록 미사용) 값 `ldapium-credential-pending:<16 hex>`. 그 속성을 이미 쓰는 배포를 위해 속성 이름을 설정 가능하게 할지는 구현 시 결정(기본값은 고정). 전용 스키마 속성 추가는 이미지 스키마 변경이라 별도 패키지.
+12. **[유지보수자] `M` accesslog 읽기(감사 옵트인)와 v2c의 공존**. **잠정(provisional, recommendation, not explicitly confirmed, 2026-10-13)**: 상호 배제로 진행. `E-12c`에서 값 수준 거부(`reqMod`·`reqOld` 각각 한 규칙)가 `M`에 대해 성립했으나 공존 결정은 여전히 별도다. 권고: 첫 v2c 출하는 **상호 배제**(검사 6: `M`이 accesslog 자식 항목을 하나라도 읽으면 거부). 값 수준 거부 규칙(`val.regex="^userPassword:"`)이 `E-12`에서 성립하면 공존을 별도 결정으로 열고 검사 7(실제 쓰기의 자식 항목 사후 확인)로 바꾼다. auditlog(`LDAP_AUDIT_ENABLED`)와 v2c는 차트에서 동시 활성 불가, 차트 밖 배포는 문서로만 막힌다는 잔여 위험(R-6)을 수용할지 함께 결정.
+13. **[유지보수자] 설정 읽기 전용 신원(D379-16)**. **잠정(provisional, recommendation, not explicitly confirmed, 2026-10-13)**: 둔다. `E-21`이 성립 조건 두 가지를 더했다(규칙에 `entry` 포함, 메인 DB에 그 신원의 `none` 규칙). 권고: 둔다 — 범위 전체 ACL·기본 정책 증명은 `olcAccess`·`olcPPolicyDefault` 원문 없이는 불가능하다. 대안(운영 점검 스크립트 결과만 신뢰)은 노출 창이 "다음 점검까지"로 커지므로 그 경우 R-2를 수용으로 기록해야 한다.
 
 ## Ship-gating open risks
 
@@ -355,12 +355,23 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 | R-7 | `W_cred`(대상≠요청자) 설정에 품질·이력 규칙이 적용되는지(검사 5는 길이만 증명) | E-10 | v2c 출하 중단(D379-13) |
 | R-8 | ppolicy가 `W_cred` 설정 시 `pwdChangedTime`을 남기고 `M`이 읽을 수 있는지(검사 4의 근거) | E-20 | 검사 4에서 그 조건 제거, R-1에 의존 |
 
+**2026-10-13 실측 후 상태**(EVIDENCE.md §2e, 근거·수치는 그곳): R-1 **닫힘**(filter 의미: E-07 직접 멤버·E-08·E-16 성립; 단 ACL보다 먼저 거부하는 정책이 없을 때 — F-4; 중첩 특권 멤버는 REQ-007 수용 위험). R-2 **닫힘**(E-21 안정성·노출 범위; 설계 추가 2건: 읽기 규칙에 `entry`, 메인 DB에 그 신원의 `none`). R-3 **LDAP 수준에서 닫힘**(E-17 직접 경로 11라운드×10, 매번 1건만 성공; 앱 경로 절반은 오퍼레이션 구현 후). R-4 닫을 수 없음(E-22 미실행). R-5 **열림**(운영자 감사 독자·plain Modify 경로·거부된 쓰기의 시도 해시, F-8) → 상호 배제 유지. R-6 유지보수자 결정 대기(auditlog 해시 확인). R-7 **설계 변경 필요**(F-4 safeModify, F-6 사전 해시 우회; 이력은 초기 설정으로 증명 불가). R-8 **닫힘**(E-20).
+
 ## Not verified
 
+- (2026-10-13 갱신) EVIDENCE.md §2b·§2d·§2e가 E-05·E-06·E-07–E-12·E-15·E-16·E-17(LDAP 직접)·E-19·E-20·E-21·E-23을 실측했다. 남은 것은 EVIDENCE.md §3. 아래는 작성 당시의 원문이다.
 - `E-01`–`E-23` 전부(EVIDENCE.md): 이 패키지는 라이브로 아무 것도 실행하지 않았다. 특히 ACL `filter=`의 `userPassword` 부재·`creatorsName`·표지 부분 문자열·`memberOf` 부정 평가(E-07/E-08/E-16), 동시 Password Modify의 단일 성공(E-17), Password Modify의 ACL 요구 수준(E-09), 관리자형 설정에 대한 ppolicy 적용(E-10), accesslog·auditlog의 해시 기록과 값 수준 거부(E-12), 잠금 덮어쓰기·duration 0 잠금의 형태(E-19), `olcAccess` 원문 대조의 안정성(E-21), 검사→쓰기 창(E-22), accesslog 자식 항목 노출(E-23), `pwdChangedTime` 기록(E-20), `cn` 교체의 slapd 결과(E-05), `olcMemberOfDangling` 기본값의 seed 영향(E-04).
 - 코드 사실(P1–P23의 줄 번호)은 main `049fcc3`에서 읽어 확인했다. 이후 변경으로 어긋날 수 있다.
 
 ## Revision
+
+- 2026-10-13 Revision 6 (v2c 설계 게이트 실측, EVIDENCE.md §2e; 유지보수자 2026-10-13 v2c 착수 승인 — Q1 승인, Q5·Q6 권고대로, Q11–Q13 잠정). 결정 문구는 아직 바꾸지 않았다 — 아래는 **개정 결정이 필요한 실측**이다.
+  - **F-4 (설계 변경 필요)**: 출하 기본 정책 `pwdSafeModify: TRUE`가 rootdn·비밀번호 관리자 아닌 요청자의 Password Modify를 대상에 비밀번호가 없어도 거부한다("Must supply old password", 50). 스케치의 `W_cred`(`=w`)로는 기본 정책 계정에 초기 비밀번호를 설정할 수 없다. 대안 실측: (A) `W_cred`를 비밀번호 관리자로(`=wm`) — 설정은 되지만 ppolicy가 길이·품질을 건너뛴다(7자·2자 저장) → D379-13 위반, 기각. (B) 대기 계정별 정책(기본 사본, `pwdSafeModify FALSE`, `pwdCheckQuality 2`)을 `W_data`가 Add 시 `pwdPolicySubentry`로 부착(Add 0, Modify 50) — 모든 ACL·정책 기대가 성립하지만 F-5가 생기고 정리 단계가 정책 부착도 지워야 한다. (C) 기본 정책의 safeModify 끄기 — F-5를 모든 계정에 열므로 기각. 결정 전에는 T-020/T-021을 시작하지 않는다.
+  - **F-5**: `pwdSafeModify FALSE` 계정에 비밀번호가 있으면 인증된 누구나(`W_cred`·`M`·일반 사용자 실측) "새 값 = 현재 값"을 19(같음)/50(다름)으로 구별할 수 있고 `pwdFailureTime`이 남지 않아 lockout이 걸리지 않는다. 출하 기본(safeModify TRUE)은 맞는/틀린 옛 비밀번호 모두 53이라 이 오라클이 없다.
+  - **F-6**: `pwdCheckQuality 1`(출하 값)에서는 `W_cred`가 직접 plain Modify로 사전 해시 값을 넣어 길이 규칙을 우회한다(2자 비밀번호 bind 성공). `pwdCheckQuality 2`면 19로 거부.
+  - **F-7 (범위 밖 결함, 사람 경로 포함)**: `LDAP_ACCESSLOG_OPS`에 `extended`(또는 `all`)가 있으면 Password Modify 한 번에 slapd가 중단된다(`accesslog.c:1623` assertion, exit 133). 별도 이슈 필요.
+  - **F-8 (P17·P21 정정)**: `writes reads bind`에서 exop는 성공·거부 모두 accesslog에 남지 않는다. plain Modify는 해시를 남기고, ACL로 **거부된** plain Modify도 시도 값의 해시를 남긴다. auditlog는 exop 해시를 남긴다(P20 확인).
+  - 그 밖의 실측: Password Modify는 `entry` 접근이 전혀 필요 없다(스케치 `{4}` 불필요), `userPassword` 최소 수준은 `=w`(`=a`·`=z` 단독은 50); ppolicy 내부 갱신(`pwdChangedTime`)은 `W_cred`의 `none`과 무관; `M`은 `pwdChangedTime`·`creatorsName`·`employeeType`을 읽는다(R-8 닫힘); `W_data`는 relax로도 `creatorsName`을 위조하지 못한다(50).
 
 - 2026-10-13 Revision 5 (#394 항목 1·3·4만, 유지보수자 승인; 실측은 EVIDENCE.md §2d). 항목 2·5·6은 열린 채로 남는다.
   - **D394-1** `write-lock.ldif` `{3}`을 `write` → **`add`**. slapd는 Delete와 Replace 모두에 삭제 권한을 검사하므로 `W_lock`은 표지를 추가만 하고 지우거나 덮어쓸 수 없다(삭제·값 삭제·빈 Replace·값 Replace 모두 50, Add 0, 같은 값 재Add 20). 머신 `lockUser`는 Replace 대신 Add를 보내고 20을 성공(멱등)으로, 19(ppolicy 타임스탬프 잠금 위의 Add, 단일 값 속성)를 409로 돌려준다. 사람 경로의 `Lock`(Replace)은 그대로다. Revision 4 F-1 (a)의 "머신 `lockUser`가 ppolicy 시각 잠금을 표지로 덮어씀"은 이제 머신 경로에서 일어나지 않는다(타임스탬프 유지, 409). `=a`도 같은 거부를 보였으나 `W_lock`의 그 속성 읽기를 잃어 `add`를 택했다.

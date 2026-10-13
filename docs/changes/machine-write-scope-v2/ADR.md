@@ -1,7 +1,7 @@
 # ADR: 머신 쓰기 v2b·v2c — 그룹·잠금·비밀번호 구획 (D379-1–D379-16)
 
-- Status: v2b 결정(D379-3/4/5/6/7, 2026-10-12 유지보수자 수용: Q2·Q3·Q4·Q7 권고대로; 구현 단위가 병합되면 `Accepted`로 승격) · v2c 결정(D379-9–D379-16)은 `Proposed` — 승인 아님(Q1·Q5·Q6 보류). [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
-- Owner: 유지보수자(v2b 수용 2026-10-12, v2c 수용 대기)
+- Status: v2b 결정(D379-3/4/5/6/7, 2026-10-12 유지보수자 수용: Q2·Q3·Q4·Q7 권고대로; 구현 단위가 병합되면 `Accepted`로 승격) · v2c 결정(D379-9–D379-16)은 **`Accepted for implementation start (2026-10-13), pending security-reviewer + Codex gate`**(유지보수자: Q1 승인, Q5·Q6 권고대로; Q11–Q13 잠정 — 권고, 명시 확인 아님). 단 D379-9·D379-13은 EVIDENCE §2e F-4 때문에 개정 결정 전까지 구현할 수 없다(아래 Revision 6). [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
+- Owner: 유지보수자(v2b 수용 2026-10-12, v2c 착수 승인 2026-10-13 — security-reviewer·Codex 게이트 대기)
 - Related issue: [#379](https://github.com/dasomel/ldapium/issues/379)(닫지 않음). 부모: [machine-write-scope ADR](../machine-write-scope/ADR.md)(D1/D3/D4/D5/D9, D19–D22, D26)
 - 위치 규약: 변경 패키지 안의 `ADR.md`(부모와 같음). 근거·대안·위협 모델 전문은 CHANGE.md에 있다.
 
@@ -39,4 +39,5 @@ D379-6(그룹 삭제 조건)은 되돌리기 쉬운 운영 결정이라 CHANGE.m
 - v2c를 켠 배포는 subtree마다 카나리 항목 3개와 설정 읽기 전용 신원을 유지해야 하며, 전제 검사가 실패하면 UI가 기동하지 않는다(D379-15/16). auditlog·`M` accesslog 읽기와는 함께 켤 수 없다(D379-14).
 - 머신은 어떤 잠금도 풀 수 없다(D379-7). 잠금 해제 자동화는 사람 경로 또는 별도 승인.
 - 그룹 권한이 그룹 멤버십으로 주어지는 사용자를 보호하려면 운영자가 `MACHINE_WRITE_PRIVILEGED_GROUPS`를 정확히 설정해야 한다.
+- Revision 6 (2026-10-13, v2c 설계 게이트 실측 EVIDENCE.md §2e; 결정 문구 불변, 개정 필요 표시): 출하 기본 정책의 `pwdSafeModify: TRUE`가 `W_cred`(`=w`)의 초기 설정을 전부 거부한다(F-4). 비밀번호 관리자(`manage`) 우회는 길이·품질 검사를 건너뛰어 D379-13을 깨고(기각), 대기 계정별 정책(safeModify FALSE, `pwdCheckQuality 2`)은 경계를 지키지만 비밀번호가 생긴 뒤 lockout 없는 일치 오라클(F-5)을 연다. ACL filter 경계(E-07 직접·E-08·E-16)와 동시 단일 성공(E-17)은 성립했으므로 D379-10은 유지된다. D379-9·D379-13 개정과 D379-16의 보강(`entry`, 메인 DB `none`)은 유지보수자 결정 대상이다.
 - Revision 4 (2026-10-12, T-015 실측; 결정 불변): D379-7의 근거 (b)는 출하 이미지에서 사실이 아니다(`pwdLockoutDuration=0` 잠금은 표지가 아니라 타임스탬프를 남김). 해제 사람 전용은 근거 (a)(c)와 유지자 결정으로 유지. 중첩 특권 그룹 멤버 잠금 허용(수용한 잔여 위험)과 `write-lock.ldif`에 특권 filter가 없다는 사실은 실측으로 확인됨. 상세는 CHANGE.md Revision 4, EVIDENCE.md §2b.

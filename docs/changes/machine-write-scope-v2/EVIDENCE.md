@@ -227,9 +227,127 @@ byte comparison of `test-machine-write-acl-live.py` holds.
 - `scripts/test/test_machine_write_acl_check.py`: new cases (description rule without its filter, filter widened to `(objectClass=*)`, description back in the
   closed list, `W_lock` `write` instead of `add`) fail the checker; `filter=` dropped from `Rule.sig()` -> "description filter widened" passes the checker, so the test fails.
 
+### 2e. v2c design gate: W_cred ship-gating experiments (2026-10-13, branch `feat/379-v2c-gate`)
+
+Design gate only: no v2c code, no operation opened, no shipped fixture changed. Real slapd built from this tree
+(`docker build -t ldapium:e2e -f image/Dockerfile ./image`, OpenLDAP `slapd 2.6.15`, image `sha256:76e8ffc187ac`), local Docker
+Desktop (context `desktop-linux`). One fresh container per run with `LDAP_ACCESSLOG_OPS="writes reads bind"`,
+`LDAP_AUDIT_ENABLED=true`, `LDAP_PASSWORD_POLICY_ENABLED=true` (shipped default policy: `pwdMinLength 8`, `pwdCheckQuality 1`,
+`pwdInHistory 5`, `pwdSafeModify TRUE`, ppm `minQuality 1`), the shipped `M` / `W_data` / `W_lock` fragments, and a **scratch** `W_cred`
+fragment (below). Two more short-lived containers for E-12d. Script: `scripts/test/test-machine-write-cred-experiments.py` (every probe is an
+`OBS` line; every design expectation an `EXPECT PASS/FAIL` line; a FAIL does not stop the run, the script exits 1 listing them).
+
+```
+LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-experiments.py
+...
+45 of 51 expectations held, 6 failed, 47s.          (exit 1; run 6, the recorded run)
+```
+
+Runs 1–5 were script development on the same image; run 2 is itself a result: with the shipped default policy **every** `W_cred`
+Password Modify answered `Insufficient access (50)` / `Must supply old password to be changed as well as new one`, so the ACL probes in that
+run proved nothing (all 50s came from ppolicy, not the ACL). Run 6 therefore measures the ACL on targets whose `pwdPolicySubentry` is a copy of
+the default with `pwdSafeModify FALSE` (mode `pending`) and, separately, the "password administrator" alternative (mode `pwadmin`). Each refusal
+is classified by its text: `safeModify`, `policy` (19), `acl` (50 without the safeModify text).
+
+**ACL fragment tested** (main DB `{19}`–`{25}`, after `M` `{0}`–`{2}`, `W_data` `{3}`–`{12}` and `W_lock` `{13}`–`{18}`; tokens substituted;
+`W_cred` cap = `ou=people`, `W_data` cap = the base):
+
+```
+{19} to dn.subtree="ou=system,dc=example,dc=org" by dn.exact="<W_cred>" none by * break
+{20} to dn.exact="cn=replicator,dc=example,dc=org" by dn.exact="<W_cred>" none by * break
+{21} to dn.subtree="ou=people,dc=example,dc=org" attrs=userPassword filter=(&(objectClass=inetOrgPerson)(creatorsName=<W_data>)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))(!(memberOf=cn=admins,ou=groups,dc=example,dc=org))) by dn.exact="<W_cred>" =w by * break
+{22} to dn.subtree="ou=people,dc=example,dc=org" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" by dn.exact="<W_cred>" =z by * break
+{23} to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess by dn.exact="<W_cred>" none by * break
+{24} to dn.subtree="ou=people,dc=example,dc=org" attrs=entry by dn.exact="<W_cred>" =x by * break
+{25} to * by dn.exact="<W_cred>" none by * break
+W_data (inserted as its {6}): to dn.subtree="dc=example,dc=org" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" by dn.exact="<W_data>" add by * break
+```
+
+**Results (run 6, measured values):**
+
+| ID | What was done | Result | Verdict |
+|---|---|---|---|
+| E-09/E-10 | `W_cred` `=w`, **shipped default policy**, correct pending account | `(50, safeModify)` "Must supply old password..." | **FAIL — design must change (F-4)** |
+| E-08 | `W_cred` reads `userPassword`/`employeeType`/`creatorsName` | none returned | pass |
+| E-08 | [pending] a: W_data-made, marker, no password | 0, the value binds | pass |
+| E-08 | [pending] b: same but already has a password | `(50, acl)`, original password still binds | pass — `(!(userPassword=*))` holds for a non-reader |
+| E-16 | [pending] c: marker by hand, admin-made; d: W_data-made, no marker; l: admin-made, marker added by W_data; e: pending outside the `W_cred` cap | all `(50, acl)` | pass |
+| E-07 | [pending] f: pending DIRECT member of `cn=admins` | `(50, acl)` | pass — `(!(memberOf=...))` holds |
+| E-07 | [pending] g: pending NESTED member (via `cn=subadmins`, no nestgroup overlay) | **0** (set) | as REQ-007 accepted (direct members only) |
+| E-16 | [pending] h: group carrying the marker; i/j/k: `W_data`, `M`, `W_cred` | all `(50, acl)` | pass |
+| E-16 | `creatorsName`: W_data Add → `uid=machine-write-data,...`; rootdn Add with explicit `creatorsName` → 19 `no user modification allowed`; rootdn **with relax** → 0 (stored); `W_data` with relax → 50 | — | pass (`W_data` cannot forge it; only the rootdn with relax can) |
+| E-16 | `W_data` Modify on its own entry: add marker 0; add other `employeeType` 50; delete marker 50; add malformed marker 50; add marker to an **admin-made** entry 0 | — | pass (the admin-made case is stopped by `creatorsName`, row l) |
+| E-16 | `W_cred` on `employeeType` after a set: delete the marker value 0 (other value kept); delete another value 50; delete the whole attribute 50; add a marker 50; replace 50 | — | pass — `val.regex` limits `=z` to the marker value |
+| E-09 | [pending] `entry` level sweep (`userPassword =w`): none / `=x` / `=d` / `=c` / `=s` / `=r` | 0 for every level, **including none** | Password Modify needs **no** `entry` access: rule `{24}` is unnecessary |
+| E-09 | [pending] `userPassword` level sweep: `=a` 50, `=z` 50, `=az` 0, `=w` 0, `write` 0, `=wm` 0 | — | minimum is `=w` (add **and** delete: the exop is a Replace) |
+| E-09 | ppolicy state after the set (admin view) | `pwdChangedTime` written although `W_cred` has `none` on it | pass — ppolicy's internal mods bypass the requester ACL |
+| E-09 | [pwadmin] `userPassword` rule `=wm`, shipped default policy: a 0; b, c, d, e, f, h, l refused `(50, safeModify)`; i/j/k `(50, acl)` | — | works, but see E-10 [pwadmin] |
+| E-10 | [pending] 7-char exop `(19, policy)`, nothing stored; compliant set 0; 2-char cleartext plain Modify `(19, policy)` | — | pass — length applies to a requester ≠ target |
+| E-10 | [pending] plain Modify with a **pre-hashed** `{SSHA}` value of a 2-char password | **0, and it binds** | **FAIL (F-6)** at `pwdCheckQuality 1` |
+| E-10 | [pending-q2] same policy with `pwdCheckQuality 2`: compliant exop 0, 7-char 19, pre-hashed plain Modify `(19, policy)` and no bind | — | pass — quality 2 closes F-6 |
+| E-10 | [pwadmin] 7-char exop **0 (stored)**; 2-char cleartext plain Modify **0**; pre-hashed 0 (binds) | — | **FAIL** — a ppolicy password administrator bypasses length/quality (D379-13 violated) |
+| E-10 | history: after the admin cleared `userPassword` (1 `pwdHistory` entry), re-setting that previous value | 0 in every mode | `pwdInHistory` is not consulted when the entry has no current password — not provable through an initial set (R-7) |
+| E-11 | [pending] second set on a: same value `(19, policy)`, other value `(50, acl)`, first value still binds; after cleanup + admin clearing `userPassword`, set again `(50, acl)` | — | pass (refused, first value kept); the 19/50 split is F-5 |
+| E-17 | 11 rounds × N=10 parallel on one pending account: 6 exop-only + 2 exop/Modify mixed [pending], 2 exop + 1 mixed [pwadmin] | every round exactly **one** 0, nine 50; only the winning value binds (e.g. round 0 `[50,50,0,50,...]`, binds `[2]`) | pass (LDAP level) |
+| E-20 | `M` reads on a after the set | `creatorsName`, `employeeType`, `pwdChangedTime`, `pwdPolicySubentry` — no `userPassword`; never-set entry has no `pwdChangedTime` | pass (R-8) |
+| E-12a | accesslog after the successful **exop** on a | **no** record of the exop (rows: add/bind/modify of other ops only, 0 hashed values); refused exops (50 ACL, 19 policy, safeModify) leave no record either | exop path leaves no hash in accesslog (F-8) |
+| E-12a | accesslog after a successful **plain Modify** of `userPassword` (t10b) | `userPassword:+ {SSHA}<redacted>` in `reqMod` | P21 holds for the plain Modify path |
+| E-23b | `W_cred` plain Modify of b **refused** by the ACL (50) | 1 row with `userPassword:= {ARGON2}<redacted>` — the hash of the **attempted** value | refused writes leak the attempted hash (F-8) |
+| E-12b | auditlog stdout (`docker logs`) for a | 1 `userPassword::` line, `{ARGON2}` (base64 `e0FSR09OMn0`, folded over two lines) | P20 confirmed: D379-14 (a) is required |
+| E-13 (slice) | every plaintext sentinel vs. accesslog values and the slapd container log (auditlog included) | 0 hits | pass |
+| E-12/E-23 | shipped accesslog ACL (`{0}to * by dn.exact="cn=admin,cn=accesslog" read by * none`): `M` reads nothing; with the opt-in `to * by M read`: `M` reads 1 `{SSHA}` hash + 20 other `reqMod` values | — | P21 confirmed for the opt-in |
+| E-12c | `to attrs=reqMod val.regex="^userPassword:" by * none` and the same for `reqOld` (two rules: `val` needs a single attribute; one rule naming both is rejected with 80) in front of the opt-in | `M`: 0 hashed values, 20 other `reqMod` values kept; the accesslog rootdn still sees it | value-level deny works (Q12 option) |
+| E-23a | base `search` + children `read` for `M` | base search returns nothing; subtree search returns the hash | check 6 must search children (confirmed) |
+| E-23c | operator-added reader `uid=auditor` with `to * by auditor read` | auditor gets the hash, `M` (no opt-in) 0 | R-5 stays open |
+| E-12d | `LDAP_ACCESSLOG_OPS="writes reads bind extended"` and `"all"`, one admin Password Modify exop | **slapd aborts**: `slapd: accesslog.c:1623: accesslog_response: Assertion '0' failed.`, container exit 133 | **FAIL (F-7)**, pre-existing, also the human path |
+| E-21 | `cn=config` shipped ACL `{0}to *  by * none`; reader rules `attrs=olcAccess` / `attrs=olcPPolicyDefault` only → reader sees nothing; `attrs=entry,olcAccess` / `attrs=entry,olcPPolicyDefault` → exactly `olcDatabase={1}mdb,cn=config: [olcAccess]` and `olcOverlay={2}ppolicy,...: [olcPPolicyDefault]`; subtree search from `cn=config` 32 | — | pass with `entry` in the rule; the reader must filter on the granted attribute (`(olcAccess=*)`): `(objectClass=*)` is undefined for it (AGENTS.md) |
+| E-21 | byte comparison of the 26 machine rules (fixture text, tokens substituted, folding undone, `{n}` stripped) with what slapd returns to the reader; again after `docker restart` | identical; identical | pass (R-2 stability) |
+| E-21 | comparator mutations: (1) `to dn.subtree="ou=staff,..." attrs=userPassword by W_cred write` in front of the bundle, (2) `creatorsName` dropped from the filter, (3) a rule at `{0}` | comparator rejects all three, matches again after restore; real effect of (1): `W_cred` resets an **existing** staff password (0); of (2): `W_cred` sets the hand-marked admin-made c (0) | pass |
+| E-21 | the reader identity in the **main** DB (no rule names it) | reads 58 entries under `ou=people` (image `by users read`) | D379-16 needs a main-DB deny for the reader (like `M` `{2}`) |
+
+**Findings (escalated, not decided):**
+
+- **F-4 (design-changing; D379-9, D379-13, the `W_cred` sketch).** The shipped default policy has `pwdSafeModify: TRUE`, and ppolicy applies
+  it to every requester that is not the rootdn or a password administrator, **even when the target has no password**. The sketch's `W_cred`
+  (`=w`) can therefore never set an initial password on a default-policy account. The ACL boundary itself holds (E-08/E-16/E-07/E-17 pass under
+  a policy without safeModify), so **Q5 is not reopened**, but D379-9/D379-13 need a revision before T-020/T-021. Measured alternatives:
+  (A) `W_cred` as password administrator (`=wm` on the filtered rule): works with the default policy, but ppolicy then skips length and quality
+  (7-char and 2-char values stored) — violates D379-13, **rejected by measurement**. (B) a per-account pending policy (a copy of the default with
+  `pwdSafeModify FALSE` and `pwdCheckQuality 2`) put on the entry by `W_data` at Add (`W_data` Add carrying `pwdPolicySubentry` → 0, stored;
+  `W_data` Modify adding it → 50; Add is not checked per attribute, #386): every E-08/E-16/E-07/E-10/E-17 expectation holds, but it
+  introduces F-5 and needs a cleanup that also removes `pwdPolicySubentry`. (C) `pwdSafeModify FALSE` in the default policy: F-5 on every
+  account — not measured further, rejected by F-5.
+- **F-5 (new risk under B/C).** On an account whose policy has `pwdSafeModify FALSE` and that **has** a password, any authenticated identity
+  (measured: `W_cred`, `M`, an ordinary user) can test a guess: a Password Modify whose new value equals the current password answers 19
+  (ppolicy's same-as-current/history check runs before the backend ACL), a wrong guess 50; `pwdFailureTime` is not written (0 → 0), so lockout
+  never triggers. The shipped default (safeModify TRUE) answers 53 for a correct and a wrong old password (no oracle). Under B the pending policy
+  must leave the entry in the same step as the marker; a failed cleanup leaves the oracle open.
+- **F-6 (R-7).** `W_cred` used directly (not through the app's exop) can set a policy-violating password through a plain Modify with a
+  pre-hashed value when `pwdCheckQuality` is 1 (the shipped value). `pwdCheckQuality 2` refuses it (19). The ACL cannot tell a Password Modify
+  exop from a plain Modify, so the guard has to be the policy.
+- **F-7 (defect outside this spec; also the human `setPassword` path).** With `extended` (or `all`) in `LDAP_ACCESSLOG_OPS`, one Password Modify
+  exop aborts slapd (`accesslog.c:1623: accesslog_response: Assertion '0' failed.`, exit 133). The shipped default (`reads bind`) and the
+  documented `writes reads bind` do not include `extended`. Not fixed here; needs its own issue (guard the value in `image/entrypoint.sh` or
+  document it).
+- **F-8 (refines P17/P21).** Under `writes reads bind` the exop (success or refusal) leaves **no** accesslog record, so the application path
+  does not put the hash into accesslog; a plain Modify of `userPassword` does, including an ACL-refused one (the hash of the attempted value).
+  `W_cred` used directly can therefore leak hashes of attempted values to every accesslog reader. auditlog carries the exop hash.
+
+**Ship-gating risks after this run:** R-1 **closed** for the filter semantics (E-07 direct, E-08, E-16), conditional on a policy that does not
+refuse before the ACL (F-4); nested privileged membership stays the accepted REQ-007 risk. R-2 **closed** for stability and exposure (E-21),
+with two required design additions (`entry` in the reader rules, a main-DB deny for the reader). R-3 **closed at the LDAP level** (E-17, direct;
+the app-path half needs the operation). R-4 not closable (E-22 not run, needs the implementation). R-5 **still open** (operator readers, the
+plain-Modify path, F-8); mutual exclusion stays. R-6 still a maintainer decision (auditlog hash confirmed). R-7 **design must change** (F-4,
+F-6; history is not provable through an initial set; ppm `minQuality 1` cannot be told apart from no quality check). R-8 **closed** (E-20).
+
+**Not run in this gate:** E-01–E-06 (v2b, partly covered by §2b), E-13 in full (only the slapd-log/accesslog slice), E-14, E-15, E-18 (needs the
+UI checks), E-19 (§2b), E-22 (needs the implementation's timing hook), the app-path halves of E-17/AC-010c (two `Idempotency-Key`s through
+the UI: no operation exists). Colima was not used (Docker Desktop was the active context). The security-reviewer round and the Codex critic
+of the v2c gate are run by the orchestrator after this change and are not claimed here.
+
 ## 3. Not verified
 
-§2 전부(E-01–E-23)는 여전히 T-002로 남는다. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
+§2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
