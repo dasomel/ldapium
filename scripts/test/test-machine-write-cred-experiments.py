@@ -6,9 +6,11 @@ logged, auditlog overlay ON so its stdout can be inspected), the shipped M / W_d
 W_cred fragment that is the CHANGE.md "W_cred ACL sketch" with its tokens substituted. Nothing here is a fixture the
 product ships; the W_cred rules exist only inside this script.
 
-Every probe is RECORDED (an `OBS` line) and compared with what the design needs (an `EXPECT` line, PASS or FAIL). A FAIL
-does not stop the run: every experiment still runs, and the script exits 1 at the end listing the failed expectations,
-so a design-changing finding is never hidden behind the first assertion.
+Every probe is RECORDED (an `OBS` line) and compared with the measured reality the design relies on (an `EXPECT` line).
+Known refusals and known defects (the F-4 baseline, the rejected `manage` alternative, F-6 at quality 1, F-7, F-9) are
+expectations of what slapd DOES, so a change in that behaviour fails the run. A FAIL does not stop the run: every
+experiment still runs, and the script exits 1 at the end listing the failed expectations; exit 0 means every expectation
+matched reality.
 
   E-07  memberOf negation in the W_cred filter (direct / nested member)
   E-08  (!(userPassword=*)) evaluated for an identity that cannot read userPassword
@@ -21,6 +23,8 @@ so a design-changing finding is never hidden behind the first assertion.
   E-20  pwdChangedTime written by ppolicy and readable by M
   E-21  cn=config reader ACL exposure, olcAccess byte stability (incl. a slapd restart), comparator mutations
   E-23  accesslog child entries: base search vs subtree, a refused Password Modify, an operator-added reader
+  D-0..D-7  the F-4 design the maintainer chose (2026-10-13): a pending policy (pwdSafeModify FALSE, pwdCheckQuality 2)
+        attached by W_data only to marker entries, removed by W_cred with the marker; the atomic one-Modify variant
 
 Run (local):  LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-experiments.py
 Secrets: every password is a fresh random sentinel; output carries only counts, rc values and hash SCHEME names.
@@ -104,7 +108,7 @@ def fixture_rules(name, tokens):
   return [re.sub(r'^\{\d+\}', '', l[len('olcAccess: '):]) for l in text.splitlines() if l.startswith('olcAccess: ')]
 
 
-def wcred_rules(cred_dn, entry_level='=x', pw_level='=w', creators=True, marker=True, priv=True):
+def wcred_rules(cred_dn, entry_level='=x', pw_level='=w', creators=True, marker=True, priv=True, policy=None):
   """The CHANGE.md W_cred sketch, substituted. Knobs exist for E-09 and the comparator mutations only."""
   wc = f'dn.exact="{WCRED_DN}"'
   flt = '(objectClass=inetOrgPerson)'
@@ -115,6 +119,8 @@ def wcred_rules(cred_dn, entry_level='=x', pw_level='=w', creators=True, marker=
   flt += '(!(userPassword=*))'
   if priv:
     flt += f'(!(memberOf={PRIV}))'
+  if policy:
+    flt += f'(pwdPolicySubentry={policy})'
   secrets_list = ('userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,'
                   'memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,'
                   'pwdStartTime,pwdEndTime,pwdLastSuccess')
@@ -312,7 +318,8 @@ def main():
   d0 = pending('p-default')
   r_d0 = setpw(d0)
   obs(f'E-09/E-10 DEFAULT policy (pwdSafeModify TRUE), W_cred =w, correct pending account: {code(r_d0)} {tail(r_d0)}')
-  expect('E-09', code(r_d0) == (0, 'ok'), 'with the SHIPPED default policy W_cred can set an initial password (D379-9 admin-style set)')
+  expect('E-09', code(r_d0) == (50, 'safeModify'),
+         'F-4 baseline (expected refusal): the SHIPPED default policy (pwdSafeModify TRUE) refuses a W_cred initial set before the ACL')
 
   # ======== E-08 / E-16 / E-07: who the W_cred userPassword rule reaches (per mode) ========================
   def swap(slot, rule):
@@ -508,14 +515,15 @@ def main():
   expect('E-10', P['short'][0] == 19 and not P['short_stored'], '[pending policy] ppolicy refuses a too-short value on a W_cred (requester != target) exop: 19, nothing stored')
   expect('E-10', P['first'] == (0, 'ok'), '[pending policy] a policy-compliant initial set succeeds')
   expect('E-10', P['clear2'][0] == 19, '[pending policy] a too-short cleartext value through a plain Modify is refused (19)')
-  expect('E-10', P['prehashed'][0] != 0 and not P['prehashed_binds'], '[pending policy] a PRE-HASHED value through a plain Modify does not bypass the length rule')
+  expect('E-10', P['prehashed'] == (0, 'ok') and P['prehashed_binds'],
+         'F-6 (recorded): at pwdCheckQuality 1 a PRE-HASHED 2-char value through a plain Modify is stored and binds -> the pending policy needs quality 2')
   obs(f'E-10 [pending] pwdInHistory enforced on a W_cred re-set of a previous value: {P["reuse"][0] == 19}')
   Q = e10('pending-q2')
   expect('E-10', Q['first'] == (0, 'ok') and Q['short'][0] == 19, '[pending-q2] pwdCheckQuality 2 still accepts a compliant exop and refuses a short one')
   expect('E-10', Q['prehashed'][0] != 0 and not Q['prehashed_binds'], '[pending-q2] pwdCheckQuality 2 refuses a PRE-HASHED value through a plain Modify')
   A = e10('pwadmin')
-  expect('E-10', A['short'][0] == 19 and not A['short_stored'], '[pwadmin] ppolicy refuses a too-short value from a password administrator: 19, nothing stored')
-  expect('E-10', A['prehashed'][0] != 0 and not A['prehashed_binds'], '[pwadmin] a PRE-HASHED value through a plain Modify does not bypass the length rule')
+  expect('E-10', A['short'] == (0, 'ok') and A['short_stored'] and A['clear2'] == (0, 'ok'),
+         'rejected alternative (recorded): a ppolicy password administrator (`manage`) bypasses the length rule (7-char exop and 2-char Modify stored)')
   obs(f'E-10 [pwadmin] pwdInHistory enforced on a re-set of a previous value: {A["reuse"][0] == 19}')
   t10 = 'uid=t10-pending,' + PEOPLE
 
@@ -747,6 +755,126 @@ def main():
   restored = compare(reader_rules())
   expect('E-21', (c1, c2, c3, restored) == (False, False, False, True), 'the comparator rejects each mutation and matches again once restored')
 
+  # ======== F-4 decided design (maintainer 2026-10-13): per-pending-account policy ===========================
+  # A dedicated policy (copy of the default, pwdSafeModify FALSE, pwdCheckQuality 2) is attached ONLY to marker
+  # accounts, by W_data, and removed by W_cred together with the marker in one cleanup Modify. Scratch ACL:
+  #   W_data (before its {2} none): pwdPolicySubentry, exactly that DN, only on a marker entry   -> add
+  #   W_cred (before its secrets none): pwdPolicySubentry, exactly that DN                       -> =z
+  #   W_cred userPassword filter gains (pwdPolicySubentry=<that DN>)
+  POL = policy('credential-pending', 'FALSE', 'TRUE')   # dflt carries pwdCheckQuality 2 at this point
+  pol_attrs = attrs(POL, 'pwdSafeModify', 'pwdCheckQuality', 'pwdMinLength', 'pwdLockout', 'pwdAttribute', who=MID)
+  obs(f'D-0 the pending policy as M reads it (what a start-up check can compare): {pol_attrs}')
+  expect('D-0', {'pwdSafeModify: FALSE', 'pwdCheckQuality: 2', 'pwdMinLength: 8', 'pwdAttribute: userPassword'} <= set(pol_attrs),
+         'M reads pwdSafeModify / pwdCheckQuality / pwdMinLength / pwdAttribute of the pending policy entry')
+  wd_pol = (f'to dn.subtree="{PEOPLE}" attrs=pwdPolicySubentry val="{POL}" filter=(employeeType=ldapium-credential-pending:*) '
+            f'by dn.exact="{WDATA_DN}" add by * break')
+  install(main_db, 5, [wd_pol])          # W_data {2} (secrets none) is at {5}
+  cs = cred_start + 1
+  install(main_db, cs + 4, [f'to dn.subtree="{PEOPLE}" attrs=pwdPolicySubentry val="{POL}" by dn.exact="{WCRED_DN}" =z by * break'])
+  swap(cs + 2, wcred_rules(PEOPLE, policy=POL)[2])
+  got_rules = [re.sub(r'^\{\d+\}', '', l[len('olcAccess: '):]) for l in cfg('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', main_db, '-s', 'base', 'olcAccess']).stdout.splitlines() if l.startswith('olcAccess: ')]
+  obs(f'D-0 rules as slapd stores them: W_data {{5}} {got_rules[5]!r}; W_cred {{{cs + 2}}} {got_rules[cs + 2]!r}; W_cred {{{cs + 4}}} {got_rules[cs + 4]!r}')
+
+  def wadd(uid, mark=True, pol=POL, extra=''):
+    dn = f'uid={uid},{PEOPLE}'
+    body = (f'dn: {dn}\nobjectClass: inetOrgPerson\nuid: {uid}\ncn: {uid}\nsn: {uid}\n' + (f'employeeType: {MARKER}\n' if mark else '')
+            + (f'pwdPolicySubentry: {pol}\n' if pol else '') + extra)
+    return dn, code(wdata('ldapadd', [], body))
+
+  def polof(dn):
+    return [l.split(': ', 1)[1] for l in attrs(dn, 'pwdPolicySubentry')]
+
+  # --- attach at Add (olcAddContentAcl as shipped = FALSE: an Add is not checked per attribute, #386)
+  d1, r1 = wadd('d1')
+  d2, r2 = wadd('d2', mark=False)
+  d3, r3 = wadd('d3', pol=POL_NOLOCK)
+  obs(f'D-1 W_data Add (olcAddContentAcl FALSE): marker+pending policy {r1} {polof(d1)}; NO marker+pending policy {r2} {polof(d2)}; marker+OTHER policy {r3} {polof(d3)}')
+  expect('D-1', r1 == (0, 'ok') and polof(d1) == [POL], 'W_data attaches the pending policy in the createUser Add that carries the marker')
+  expect('D-1', r2 == (0, 'ok') and r3 == (0, 'ok'),
+         'KNOWN LIMIT (#386, olcAddContentAcl FALSE): at Add the ACL does not constrain pwdPolicySubentry (any DN, with or without the marker); only the app closed body does')
+  # --- attach by Modify (the ACL rule applies)
+  d4, _ = wadd('d4', pol=None)
+  d5, _ = wadd('d5', mark=False, pol=None)
+  m_ok = code(wdata('ldapmodify', [], f'dn: {d4}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  adm('ldapmodify', [], f'dn: {d4}\nchangetype: modify\ndelete: pwdPolicySubentry\n')
+  m_other = code(wdata('ldapmodify', [], f'dn: {d4}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL_NOLOCK}\n'))
+  m_nomark = code(wdata('ldapmodify', [], f'dn: {d5}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  m_u01 = code(wdata('ldapmodify', [], f'dn: uid=u01,{PEOPLE}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  m_repl = code(wdata('ldapmodify', [], f'dn: {d1}\nchangetype: modify\ndelete: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  obs(f'D-2 W_data Modify: add the pending policy to a marker entry {m_ok}; add another policy DN to a marker entry {m_other}; '
+      f'add the pending policy to a NON-marker W_data entry {m_nomark} / to ordinary u01 {m_u01}; delete it {m_repl}')
+  expect('D-2', m_ok[0] == 0 and (m_other[0], m_nomark[0], m_u01[0], m_repl[0]) == (50, 50, 50, 50),
+         'W_data Modify: only the exact pending DN, only on a marker entry, add only')
+  h_self = code(ldap.tool('ldapmodify', [], *HUMAN, f'dn: uid=human,{PEOPLE}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  h_other = code(ldap.tool('ldapmodify', [], *HUMAN, f'dn: uid=u02,{PEOPLE}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  m_m = code(ldap.tool('ldapmodify', [], *MID, f'dn: uid=u02,{PEOPLE}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  w_c = code(wcred('ldapmodify', [], f'dn: {d5}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  obs(f'D-2 attach by others: ordinary user on itself {h_self}, on u02 {h_other}; M {m_m}; W_cred {w_c}')
+  expect('D-2', all(x[0] == 50 for x in (h_other, m_m, w_c)), 'an ordinary user (on another account), M and W_cred cannot attach the pending policy')
+  self_set = attrs(f'uid=human,{PEOPLE}', 'pwdPolicySubentry')
+  self_w = code(wcred('ldappasswd', ['-T', sentinel()[1], f'uid=human,{PEOPLE}']))
+  self_orphan = 'uid=human' in ldap.tool('ldapsearch', ['-LLL', '-b', PEOPLE, f'(&(pwdPolicySubentry={POL})(!(employeeType=ldapium-credential-pending:*)))', 'dn'], *MID).stdout
+  obs(f'D-2 F-9: the image rule `to * by self write` lets a user put ANY pwdPolicySubentry on itself: {h_self} -> {self_set}; W_cred on it {self_w}; M orphan sweep sees it {self_orphan}')
+  expect('D-2', h_self == (0, 'ok') and self_w[0] == 50 and self_orphan,
+         'F-9 known pre-existing (recorded, separate issue): a user can self-attach the pending policy; it is no W_cred target and the orphan sweep finds it')
+  # --- the same Adds with olcAddContentAcl TRUE (hardening candidate, a database-wide switch)
+  ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: TRUE\n').returncode == 0, 'aca on')
+  t1, q1 = wadd('t1')
+  t2, q2 = wadd('t2', mark=False)
+  t3, q3 = wadd('t3', pol=POL_NOLOCK)
+  t4, q4 = wadd('t4', pol=None, mark=False, extra='mail: t4@example.org\n')
+  t5, q5 = wadd('t5', pol=None, mark=False, extra=f'userPassword: {sentinel()[0]}\n')
+  ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\ndelete: olcAddContentAcl\n').returncode == 0, 'aca off')
+  obs(f'D-3 olcAddContentAcl TRUE: W_data Add marker+pending policy {q1}; NO marker+pending {q2}; marker+OTHER policy {q3}; '
+      f'plain user (closed list) {q4}; plain user carrying userPassword {q5}')
+  expect('D-3', q1[0] == 0 and q2[0] == 50 and q3[0] == 50 and q4[0] == 0,
+         'with olcAddContentAcl TRUE the Add-time attach is ACL-limited to the exact DN on a marker entry, ordinary createUser still works')
+  # --- set under the attached policy
+  short_r = code(setpw(d1, '/tmp/.np-short'))
+  pre_r = code(wcred('ldapmodify', [], f'dn: {d1}\nchangetype: modify\nadd: userPassword\nuserPassword: {hashed}\n'))
+  nolock_r = code(setpw(d3))
+  before_oracle = code(ldap.tool('ldappasswd', ['-T', sentinel()[1], d1], *MID))
+  vd, pd = sentinel('D')
+  ok_r = code(setpw(d1, pd))
+  obs(f'D-4 W_cred on d1 (pending policy): 7-char exop {short_r}; pre-hashed 2-char Modify {pre_r}; compliant exop {ok_r} (binds {binds(d1, pd) == 0}); '
+      f'on d3 (marker + OTHER policy) {nolock_r}; M Password Modify on d1 BEFORE the set {before_oracle}')
+  expect('D-4', short_r[0] == 19 and pre_r[0] == 19 and ok_r == (0, 'ok') and binds(d1, pd) == 0,
+         'under the attached policy: short exop 19, pre-hashed Modify 19 (quality 2), compliant exop 0 and binds')
+  expect('D-4', nolock_r == (50, 'acl'), 'the (pwdPolicySubentry=<pending>) filter clause refuses a marker entry carrying another policy')
+  # --- window between set and cleanup: the F-5 oracle, and how M finds a stuck account
+  win = (code(ldap.tool('ldappasswd', ['-T', pd, d1], *MID)), code(ldap.tool('ldappasswd', ['-T', sentinel()[1], d1], *MID)))
+  stuck = ldap.tool('ldapsearch', ['-LLL', '-b', PEOPLE, f'(&(pwdPolicySubentry={POL})(pwdChangedTime=*))', 'dn'], *MID).stdout.count('dn: ')
+  orphan = ldap.tool('ldapsearch', ['-LLL', '-b', PEOPLE, f'(&(pwdPolicySubentry={POL})(!(employeeType=ldapium-credential-pending:*)))', 'dn'], *MID).stdout.count('dn: ')
+  obs(f'D-5 after the set, before cleanup: M new=current {win[0]} vs wrong {win[1]} (oracle); M sweep "pending policy AND pwdChangedTime" finds {stuck}; '
+      f'"pending policy WITHOUT marker" finds {orphan} (d2, t-entries)')
+  expect('D-5', win == ((19, 'policy'), (50, 'acl')) and stuck == 1, 'between set and cleanup the oracle exists, and an M sweep finds the account (stuck-cleanup detector)')
+  expect('D-5', orphan >= 1, 'an M sweep finds a pending policy on an entry without the marker (#386 Add-time attach is detectable)')
+  # --- cleanup: one Modify removes the marker value and the policy value
+  cl_other = code(wcred('ldapmodify', [], f'dn: {d3}\nchangetype: modify\ndelete: pwdPolicySubentry\npwdPolicySubentry: {POL_NOLOCK}\n'))
+  cl_attr = code(wcred('ldapmodify', [], f'dn: {d1}\nchangetype: modify\ndelete: pwdPolicySubentry\n'))
+  cl = code(wcred('ldapmodify', [], f'dn: {d1}\nchangetype: modify\ndelete: employeeType\nemployeeType: {MARKER}\n-\ndelete: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  after = attrs(d1, 'employeeType', 'pwdPolicySubentry')
+  post = (code(ldap.tool('ldappasswd', ['-T', pd, d1], *MID)), code(setpw(d1)), binds(d1, pd) == 0)
+  stuck2 = ldap.tool('ldapsearch', ['-LLL', '-b', PEOPLE, f'(&(pwdPolicySubentry={POL})(pwdChangedTime=*))', 'dn'], *MID).stdout.count('dn: ')
+  obs(f'D-6 W_cred cleanup: delete ANOTHER policy value {cl_other}; delete the whole attribute {cl_attr}; marker+policy values in one Modify {cl} -> left {after}; '
+      f'afterwards M new=current {post[0]}, W_cred exop {post[1]}, password still binds {post[2]}; stuck sweep {stuck2}')
+  expect('D-6', cl == (0, 'ok') and after == [] and cl_other[0] == 50 and cl_attr[0] == 50,
+         'cleanup removes exactly the marker value and the pending policy value in one Modify; nothing else')
+  expect('D-6', post[0] == (50, 'safeModify') and post[1] == (50, 'safeModify') and post[2] and stuck2 == 0,
+         'after cleanup the default policy applies again (safeModify, no 19/50 oracle) and the password is kept')
+  # --- atomic alternative: one plain Modify sets the password AND cleans up (no window)
+  d6, _ = wadd('d6')
+  v6, p6 = sentinel('A')
+  at_short = code(wcred('ldapmodify', [], f'dn: {d6}\nchangetype: modify\nreplace: userPassword\nuserPassword: {short_v}\n-\ndelete: employeeType\nemployeeType: {MARKER}\n-\ndelete: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  at_short_left = attrs(d6, 'employeeType', 'pwdPolicySubentry')
+  at = code(wcred('ldapmodify', [], f'dn: {d6}\nchangetype: modify\nreplace: userPassword\nuserPassword: {v6}\n-\ndelete: employeeType\nemployeeType: {MARKER}\n-\ndelete: pwdPolicySubentry\npwdPolicySubentry: {POL}\n'))
+  time.sleep(0.6)
+  _, vals6 = alog(f'(reqDN={d6})')
+  obs(f'D-7 atomic plain Modify (set + cleanup in one op): 7-char {at_short} (entry unchanged: {len(at_short_left) == 2}); compliant {at}, binds {binds(d6, p6) == 0}, '
+      f'left {attrs(d6, "employeeType", "pwdPolicySubentry")}; accesslog hashed values {len(pw_hashes(vals6))} {[shape(v) for v in pw_hashes(vals6)]}')
+  expect('D-7', at_short[0] == 19 and len(at_short_left) == 2 and at == (0, 'ok') and binds(d6, p6) == 0 and attrs(d6, 'employeeType', 'pwdPolicySubentry') == [],
+         'one plain Modify can set and clean up atomically (policy enforced; nothing left to clean)')
+
   # ======== E-12d: accesslog logging `extended` ==================================================================
   for ops in ('writes reads bind extended', 'all'):
     x = AuditSlapd(live, name=live.name_prefix + '-ext' + str(len(ops)), ops=ops)
@@ -761,8 +889,8 @@ def main():
     xlog = live.run(['docker', 'logs', x.name])
     assertion = [l for l in (xlog.stdout + xlog.stderr).splitlines() if 'Assertion' in l]
     obs(f'E-12d LDAP_ACCESSLOG_OPS="{ops}": admin Password Modify exop rc {rx.returncode}; container {state}; {assertion}')
-    expect('E-12', rx.returncode == 0 and state.startswith('running'),
-           f'LDAP_ACCESSLOG_OPS="{ops}" survives a Password Modify exop (slapd keeps running)')
+    expect('E-12', rx.returncode != 0 and state.startswith('exited') and assertion,
+           f'F-7 known defect (recorded, separate issue): LDAP_ACCESSLOG_OPS="{ops}" aborts slapd on a Password Modify exop; flips when fixed')
 
   # ---- summary ------------------------------------------------------------------------------------------
   failed = [r for r in results if not r[1]]

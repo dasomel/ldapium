@@ -243,6 +243,10 @@ LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-experimen
 45 of 51 expectations held, 6 failed, 47s.          (exit 1; run 6, the recorded run)
 ```
 
+(In run 6 the six FAILs were design expectations that slapd did not meet: F-4, F-6 at quality 1, the `manage` length bypass, and F-7 twice.
+§2f re-states them as expected refusals or known defects. Run 9 of the same script passes all 64 expectations, and its values for the §2e
+probes are the same as in this table.)
+
 Runs 1–5 were script development on the same image; run 2 is itself a result: with the shipped default policy **every** `W_cred`
 Password Modify answered `Insufficient access (50)` / `Must supply old password to be changed as well as new one`, so the ACL probes in that
 run proved nothing (all 50s came from ppolicy, not the ACL). Run 6 therefore measures the ACL on targets whose `pwdPolicySubentry` is a copy of
@@ -344,6 +348,62 @@ F-6; history is not provable through an initial set; ppm `minQuality 1` cannot b
 UI checks), E-19 (§2b), E-22 (needs the implementation's timing hook), the app-path halves of E-17/AC-010c (two `Idempotency-Key`s through
 the UI: no operation exists). Colima was not used (Docker Desktop was the active context). The security-reviewer round and the Codex critic
 of the v2c gate are run by the orchestrator after this change and are not claimed here.
+
+### 2f. F-4 decided design: pending policy attach and cleanup (2026-10-13, same branch)
+
+Maintainer decision (2026-10-13): a dedicated per-pending-account policy (`pwdSafeModify FALSE`, `pwdCheckQuality 2`), attached only to marker
+accounts and removed together with the marker in the cleanup step. Rejected: the `manage` ACL and changing the default policy. Same script,
+extended with the `D-0`–`D-7` probes. The expectations now pin **measured reality**: the F-4 baseline, the rejected `manage` alternative, F-6 at
+quality 1, F-7 and F-9 are expected refusals or known defects (a change in slapd behaviour fails the run), so exit 0 means every expectation held.
+The image was rebuilt under a private tag because the shared `ldapium:e2e` tag disappeared between runs (another lane).
+
+```
+docker build -q -t ldapium:v2cgate -f image/Dockerfile ./image      # sha256:bd53af25be9d
+LDAPIUM_IMAGE=ldapium:v2cgate python3 scripts/test/test-machine-write-cred-experiments.py
+...
+64 of 64 expectations held, 0 failed, 48s.                         (exit 0; run 9)
+```
+
+Run 7 broke on the missing image. Run 8 had one real FAIL, which became F-9 below (a harness argument-order bug in the same probe was fixed
+before it).
+
+**Scratch ACL added on top of §2e** (stored by slapd exactly as written, read back as M/admin):
+
+```
+W_data (before its {2} none, as {5}):
+  to dn.subtree="ou=people,dc=example,dc=org" attrs=pwdPolicySubentry val="cn=credential-pending,ou=policies,dc=example,dc=org"
+     filter=(employeeType=ldapium-credential-pending:*) by dn.exact="<W_data>" add by * break
+W_cred userPassword rule: the §2e filter + (pwdPolicySubentry=cn=credential-pending,ou=policies,dc=example,dc=org)
+W_cred (before its secrets none):
+  to dn.subtree="ou=people,dc=example,dc=org" attrs=pwdPolicySubentry val="cn=credential-pending,ou=policies,dc=example,dc=org"
+     by dn.exact="<W_cred>" =z by * break
+policy cn=credential-pending: copy of cn=default with pwdSafeModify FALSE, pwdCheckQuality 2 (pwdMinLength 8, pwdLockout TRUE, ppm kept)
+```
+
+| ID | Probe | Result |
+|---|---|---|
+| D-0 | `M` reads the pending policy entry | `pwdAttribute: userPassword`, `pwdMinLength: 8`, `pwdCheckQuality: 2`, `pwdSafeModify: FALSE`, `pwdLockout: TRUE`; a start-up check can compare all of them |
+| D-1 | `W_data` **Add** (shipped `olcAddContentAcl` FALSE): marker + pending policy / **no marker** + pending policy / marker + **another** policy | 0 / **0** / **0**, all stored. At Add the ACL does not constrain `pwdPolicySubentry` (#386); only the app's closed body does |
+| D-2 | `W_data` **Modify**: add the pending DN to a marker entry / another DN to a marker entry / the pending DN to a non-marker `W_data` entry / to ordinary `u01` / delete it | 0 / 50 / 50 / 50 / 50: Modify attach is ACL-limited to the exact DN, marker entries only, add only |
+| D-2 | others attaching the pending policy: ordinary user on **another** account, `M`, `W_cred` | 50 / 50 / 50 |
+| D-2 (F-9) | ordinary user on **itself** | **0, stored**: the image rule `{2}to * by self write` covers `pwdPolicySubentry`, so any user can pick **any** password policy for its own entry (pre-existing). `W_cred` on that user: 50 (no marker, not `W_data`-made, has a password); the `M` orphan sweep finds it |
+| D-3 | `olcAddContentAcl TRUE` (database-wide switch, restored after): `W_data` Add marker + pending / no marker + pending / marker + other policy / plain user (closed list) / plain user carrying `userPassword` | 0 / **50** / **50** / 0 / **50**: with TRUE the Add-time attach is ACL-limited too, and the #386 `userPassword`-at-Add limit closes |
+| D-4 | `W_cred` on a marker entry carrying the pending policy: 7-char exop / pre-hashed `{SSHA}` 2-char plain Modify / compliant exop | 19 / **19** (quality 2) / 0, the value binds |
+| D-4 | `W_cred` on a marker entry carrying **another** policy (`cn=nolock`) | 50 (the new filter clause) |
+| D-4 | `M` Password Modify on the pending entry **before** the set | 50: no password yet, no oracle |
+| D-5 | after the set, before cleanup: `M` new = current / wrong guess | **19 / 50**: the F-5 oracle exists in this window |
+| D-5 | `M` sweeps: `(&(pwdPolicySubentry=<pending>)(pwdChangedTime=*))` / `(&(pwdPolicySubentry=<pending>)(!(employeeType=ldapium-credential-pending:*)))` | 1 (the set-but-not-cleaned entry) / 2 (the D-1 no-marker Add and the F-9 self-attach) |
+| D-6 | `W_cred` cleanup: delete **another** policy value / the whole attribute / marker value + pending policy value in **one** Modify | 50 / 50 / 0; nothing left (`employeeType` and `pwdPolicySubentry` gone) |
+| D-6 | after cleanup: `M` new = current; `W_cred` exop; bind with the set password; stuck sweep | `(50, safeModify)`; `(50, safeModify)`; binds; 0 hits. The default policy applies again and the oracle is gone |
+| D-7 | **atomic** alternative: one `W_cred` plain Modify = replace `userPassword` (cleartext) + delete marker value + delete pending policy value | 7-char: 19, entry unchanged; compliant: 0, binds, nothing left. accesslog (`writes`) holds the hash of that Modify (`userPassword:= {ARGON2}<redacted>`, F-8) |
+
+**F-9 (pre-existing, outside this spec; a separate issue, not opened here).** Any authenticated user can set its own `pwdPolicySubentry`
+(image rule `to * by self write`), so it can choose a weaker password policy for itself (and, with the pending policy, open the F-5 oracle on its
+own account). It does not create a `W_cred` target.
+
+**F-7 note (a separate issue, not opened here):** `LDAP_ACCESSLOG_OPS` containing `extended` (or `all`) aborts slapd on any Password Modify
+exop (§2e E-12d; still reproduced in run 9 as an expected known defect). The v2c design does not depend on it, but an operator who adds
+`extended` makes every `setPassword` (human or machine) a slapd crash.
 
 ## 3. Not verified
 
