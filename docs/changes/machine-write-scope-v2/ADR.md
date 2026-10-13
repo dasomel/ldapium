@@ -40,6 +40,7 @@ D379-6(그룹 삭제 조건)은 되돌리기 쉬운 운영 결정이라 CHANGE.m
 - v2c를 켠 배포는 subtree마다 카나리 항목 3개와 설정 읽기 전용 신원을 유지해야 하며, 전제 검사가 실패하면 UI가 기동하지 않는다(D379-15/16). auditlog·`M` accesslog 읽기와는 함께 켤 수 없다(D379-14).
 - 머신은 어떤 잠금도 풀 수 없다(D379-7). 잠금 해제 자동화는 사람 경로 또는 별도 승인.
 - 그룹 권한이 그룹 멤버십으로 주어지는 사용자를 보호하려면 운영자가 `MACHINE_WRITE_PRIVILEGED_GROUPS`를 정확히 설정해야 한다.
+- Revision 10 (2026-10-14, 유지보수자 Q16 수용): v2c를 켜면 머신 `deleteUser`·modrdn은 `W_data`가 만들지 않은 사용자에게 50(v2a 계약 축소, 의도된 결과). 잔여 위험(스스로 만든 계정, 중첩 특권 그룹) 수용.
 - Revision 9 (2026-10-13, Revision 8 재검토 반영, EVIDENCE.md §2h): M-3(유출된 `W_data` + `password.write` client로 삭제→대기 재생성→설정→특권 재가입) 완화 — 비-`W_data` 사용자 `entry` `=rsc`, 특권 그룹 `member` `=rsc`(둘 다 실측 50). 결과: v2c를 켜면 머신 `deleteUser`·modrdn이 `W_data`가 만든 사용자로 좁아진다; 잔여 위험(스스로 만든 계정, 중첩 특권 그룹)은 Q16. 롤백은 부착 차단 → 0건 확인 → 정리 권한 제거. R-3·AC-010c는 provider 하나 안에서만.
 - Revision 8 (2026-10-13, 독립 검토 security-reviewer BLOCKER 0·MAJOR 2, Codex P1 3·P2 2 반영; 유지보수자 Q14 수용+스윕 강화, Q15 `olcAddContentAcl TRUE` 채택, F-9 #399 선행 조건; EVIDENCE.md §2g): 표지 규칙이 Modify에도 적용되던 문제(M-1)를 Add 전용 filter로 닫음, R-3은 단일 slapd에서만(다중 provider는 last-write-wins), 롤백 시 남은 부착을 정리 권한보다 먼저 지움, 정리 실패 창의 상한은 LDAP·`W_cred`가 살아 있을 때만 "스윕 한 주기".
 - Revision 7 (2026-10-13, 유지보수자 F-4 결정, EVIDENCE.md §2f): D379-18 채택(`manage` ACL·기본 정책 변경 기각). 결과: 정리 전 짧은 창과 정리 실패 시 다음 스윕의 정리 시도까지 F-5 오라클이 남는다(고정 시간 상한 없음, Revision 9 정정; Q14 수용). Add 안의 부착은 `olcAddContentAcl FALSE`라 ACL이 막지 못한다(Q15, #386). F-7(accesslog `extended` → slapd 중단)·F-9(사용자가 자기 `pwdPolicySubentry`를 설정 가능)는 범위 밖 별도 이슈.
