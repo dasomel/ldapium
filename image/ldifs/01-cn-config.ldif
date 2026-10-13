@@ -100,7 +100,7 @@ olcAccess: {0}to attrs=userPassword,shadowLastChange
 # relationship between the DN and its naming attribute, and letting it
 # rewrite objectClass lets a user grant themselves attributes the schema
 # would otherwise deny. Self-service writes belong to the catch-all `to *`
-# rule further below (numbered {2} by default, {4} when
+# rule further below (numbered {3} by default, {5} when
 # LDAP_ANONYMOUS_READ_BASE is set), where `by self write` comes first and
 # applies.
 #__ANON_READ_ACCESS__

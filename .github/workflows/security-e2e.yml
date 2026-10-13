@@ -184,6 +184,136 @@ jobs:
               ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base sn | grep -q "sn: SelfService"
             '
 
+      - name: Verify a user cannot choose their own password policy
+        run: |
+          set -euo pipefail
+          # #399 (F-9): the catch-all `by self write` used to cover
+          # pwdPolicySubentry, so any user could point its own entry at a
+          # weaker pwdPolicy (no lockout, no quality, no history). Self now
+          # gets read only on it. Result 50 against an existing policy DN
+          # proves the ACL refuses it, not a bad DN or bind; the admin control
+          # proves the attribute itself is still writable by the rootdn.
+          # shellcheck disable=SC2016 # The quoted script is evaluated by the client container.
+          kubectl -n directory run ldap-client --rm -i --restart=Never --image=ldapium:security -- \
+            sh -ec '
+              url="ldap://directory-ldapium:389"
+              admin="cn=admin,dc=example,dc=org"
+              bob="uid=bob,ou=people,dc=example,dc=org"
+              policy="cn=default,ou=policies,dc=example,dc=org"
+
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/self-policy.out 2>&1 <<EOF
+          dn: $bob
+          changetype: modify
+          add: pwdPolicySubentry
+          pwdPolicySubentry: $policy
+          EOF
+              then
+                echo "::error::a bound user set pwdPolicySubentry on its own entry"
+                exit 1
+              fi
+              echo "::group::rejected self pwdPolicySubentry change"
+              cat /tmp/self-policy.out
+              echo "::endgroup::"
+              if ! grep -q "Insufficient access (50)" /tmp/self-policy.out; then
+                echo "::error::self pwdPolicySubentry change was not rejected by the ACL (result 50)"
+                exit 1
+              fi
+
+              echo "control: the admin can still assign a policy, and the user can read it"
+              ldapmodify -x -H "$url" -D "$admin" -w security-e2e-password <<EOF
+          dn: $bob
+          changetype: modify
+          add: pwdPolicySubentry
+          pwdPolicySubentry: $policy
+          EOF
+              ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base pwdPolicySubentry |
+                grep -q "^pwdPolicySubentry: $policy$"
+
+              if ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/self-policy-del.out 2>&1 <<EOF
+          dn: $bob
+          changetype: modify
+          delete: pwdPolicySubentry
+          EOF
+              then
+                echo "::error::a bound user removed the policy the admin assigned to it"
+                exit 1
+              fi
+              grep -q "Insufficient access (50)" /tmp/self-policy-del.out
+
+              ldapmodify -x -H "$url" -D "$admin" -w security-e2e-password <<EOF
+          dn: $bob
+          changetype: modify
+          delete: pwdPolicySubentry
+          EOF
+              echo "PASS: a user can read but not choose its own password policy"
+            '
+
+      - name: Verify a user cannot choose their own password policy (default ACL branch)
+        run: |
+          set -euo pipefail
+          # The release above sets ldap.anonymousReadBase, which renders the
+          # scoped ACL branch. The default branch (LDAP_ANONYMOUS_READ_BASE
+          # empty) carries its own copy of the #399 rule, so prove it on a
+          # plain container of the same image.
+          c=ldapium-selfpolicy-default
+          b=dc=example,dc=org
+          admin="cn=admin,$b"
+          pw=security-e2e-password
+          bob="uid=bob,ou=people,$b"
+          policy="cn=default,ou=policies,$b"
+          url=ldap://127.0.0.1:389
+          trap 'docker rm -f "$c" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$c" -e LDAP_ROOT_DN="$b" -e LDAP_ADMIN_PASSWORD="$pw" ldapium:security >/dev/null
+          for _ in $(seq 60); do
+            docker exec "$c" ldapwhoami -x -H "$url" -D "$admin" -w "$pw" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec "$c" ldapwhoami -x -H "$url" -D "$admin" -w "$pw"
+          acl=$(docker exec "$c" ldapsearch -LLL -o ldif-wrap=no -x -H "$url" -D cn=admin,cn=config -w "$pw" \
+            -b 'olcDatabase={1}mdb,cn=config' -s base olcAccess)
+          echo "$acl"
+          if echo "$acl" | grep -q 'dn.subtree'; then
+            echo "::error::expected the default (unscoped) ACL branch"
+            exit 1
+          fi
+          docker exec -i "$c" ldapadd -x -H "$url" -D "$admin" -w "$pw" <<EOF
+          dn: ou=people,$b
+          objectClass: organizationalUnit
+          ou: people
+
+          dn: $bob
+          objectClass: inetOrgPerson
+          uid: bob
+          cn: Bob
+          sn: Tester
+          userPassword: BobPassword1!
+          EOF
+          self_mod() { # ldif op line -> output of a modify bound as bob
+            printf 'dn: %s\nchangetype: modify\n%s\n' "$bob" "$1" |
+              docker exec -i "$c" ldapmodify -x -H "$url" -D "$bob" -w 'BobPassword1!' 2>&1 && return 1
+            return 0
+          }
+          if ! out=$(self_mod "add: pwdPolicySubentry
+          pwdPolicySubentry: $policy"); then
+            echo "::error::a bound user set pwdPolicySubentry on its own entry (default ACL branch)"
+            exit 1
+          fi
+          echo "$out"
+          case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self add not refused with 50"; exit 1 ;; esac
+
+          printf 'dn: %s\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: %s\n' "$bob" "$policy" |
+            docker exec -i "$c" ldapmodify -x -H "$url" -D "$admin" -w "$pw"
+          read_back=$(docker exec "$c" ldapsearch -LLL -x -H "$url" -D "$bob" -w 'BobPassword1!' -b "$bob" -s base pwdPolicySubentry)
+          case "$read_back" in *"pwdPolicySubentry: $policy"*) ;; *) echo "::error::bob cannot read its own policy"; exit 1 ;; esac
+
+          if ! out=$(self_mod "delete: pwdPolicySubentry"); then
+            echo "::error::a bound user removed the policy the admin assigned to it (default ACL branch)"
+            exit 1
+          fi
+          echo "$out"
+          case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self delete not refused with 50"; exit 1 ;; esac
+          echo "PASS: default ACL branch - a user can read but not choose its own password policy"
+
       - name: Verify an authenticated user cannot change group membership
         run: |
           set -euo pipefail

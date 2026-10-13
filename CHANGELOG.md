@@ -377,6 +377,18 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### Images
 
+- **Security:** a user can no longer choose its own password policy (#399, F-9). The
+  catch-all `to * by self write` covered `pwdPolicySubentry`, so any bound user could
+  point its own entry at any `pwdPolicy` subentry (e.g. one without lockout, quality
+  check or history). A new rule before the catch-all gives the entry itself only
+  `read` on `pwdPolicySubentry` and passes every other identity through unchanged
+  (`by * break`); the admin still assigns policies. The catch-all moves from `{2}` to
+  `{3}` (`{4}` to `{5}` with `LDAP_ANONYMOUS_READ_BASE`). **Upgrade:** the ACL is
+  written at bootstrap only, so existing volumes keep the old behaviour until the rule
+  is added by hand (one `ldapmodify`, see image/README.md "Access control"). Other
+  ppolicy attributes a user can still write on itself, measured and left as they are:
+  `pwdReset`, `pwdStartTime`, `pwdEndTime` (replace and delete) and
+  `pwdAccountLockedTime` (add, i.e. locking itself out).
 - A kept config volume with a lost data volume now refuses to start in every mode
   with a message naming the missing database directory and the recovery (delete BOTH
   the data and the config claims; the node refills from its peers). `dedicated` no
