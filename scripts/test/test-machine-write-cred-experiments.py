@@ -236,6 +236,68 @@ def final_phase():
     out = f.tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', BASE_DN, flt, 'dn'], *MI).stdout
     return sorted(l[4:] for l in out.splitlines() if l.startswith('dn: '))
 
+  # ---- M-3: leaked W_data (+ a password.write client): delete + re-Add as pending, then privilege -----------
+  def victim(uid):
+    dn = f'uid={uid},{PEOPLE}'
+    ensure(adm('ldapadd', [], f'dn: {dn}\nobjectClass: inetOrgPerson\nuid: {uid}\ncn: {uid}\nsn: {uid}\nmail: {uid}@example.org\n').returncode == 0, uid)
+    adm('ldapmodify', [], f'dn: {PRIV}\nchangetype: modify\nadd: member\nmember: {dn}\n')
+    return dn
+
+  def attack(uid, priv_candidate=None):
+    dn = victim(uid)
+    out = {'delete admin-made victim': run(WD, 'ldapdelete', [dn])}
+    out['victim still in admins'] = any(dn in l for l in vals(PRIV, 'member'))
+    out['re-Add as pending'] = add(uid)[1]
+    vp = sent('M3')
+    out['W_cred set'] = setpw(dn, vp[1])
+    out['takeover bind'] = bind(dn, vp[1])
+    out['W_data adds it to admins'] = mod(WD, PRIV, f'add: member\nmember: {priv_candidate or dn}')
+    return dn, out
+
+  v1dn, before = attack('fvic1')
+  obs('M-3 WITHOUT mitigation: ' + '; '.join(f'{k} {v}' for k, v in before.items()))
+  expect('M-3', before['delete admin-made victim'] == (0, 'ok') and before['re-Add as pending'] == (0, 'ok') and before['takeover bind']
+         and before['W_data adds it to admins'] == (0, 'ok'),
+         'M-3 reproduced without mitigation: W_data deletes an admin-made privileged account, re-Adds it as pending, W_cred sets it, W_data re-privileges it')
+  m3 = [f'to dn.subtree="{BASE_DN}" attrs=entry filter=(&(objectClass=inetOrgPerson)(!(creatorsName={WDATA_DN}))) by {wd} =rsc by * break',
+        f'to dn.exact="{PRIV}" attrs=member by {wd} =rsc by * break']
+  ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\nadd: olcAccess\n' + ''.join(f'olcAccess: {{{5 + i}}}{r}\n' for i, r in enumerate(m3))).returncode == 0, 'm3 rules')
+  cs += len(m3)
+  for i, rule in enumerate(m3):
+    obs(f'M-3 mitigation W_data {{{5 + i}}}: {rule}')
+  wmade, _ = add('fwmade', mark=False, policy=None)
+  wmade2, _ = add('fwmade2', mark=False, policy=None)
+  vdn, after_m = attack('fvic2', priv_candidate=wmade2)
+  outside = victim('fvic3')
+  side = {'delete a W_data-made user (deleteUser of own creations)': run(WD, 'ldapdelete', [wmade]),
+          'patchUser mail on an admin-made user': mod(WD, outside, 'replace: mail\nmail: fvic3b@example.org'),
+          'modrdn an admin-made user': run(WD, 'ldapmodrdn', [outside, 'uid=fvic3x']),
+          'add a member to subadmins (nested privilege)': mod(WD, SUBPRIV, f'add: member\nmember: uid=u02,{PEOPLE}'),
+          'add a member to ordinary g01': mod(WD, f'cn=g01,{GROUPS}', f'add: member\nmember: uid=u02,{PEOPLE}'),
+          'pending Add reusing an existing uid under another RDN': run(WD, 'ldapadd', [], f'dn: cn=fvic3alt,{PEOPLE}\nobjectClass: inetOrgPerson\nuid: fvic3\ncn: fvic3alt\nsn: x\nemployeeType: {MARKER}\npwdPolicySubentry: {pol}\n')}
+  obs('M-3 WITH mitigation: ' + '; '.join(f'{k} {v}' for k, v in after_m.items()) + ' || side effects: ' + '; '.join(f'{k} {v}' for k, v in side.items()))
+  expect('M-3', after_m['delete admin-made victim'][0] == 50 and after_m['victim still in admins'] and after_m['re-Add as pending'][0] != 0
+         and after_m['W_cred set'][0] == 50 and not after_m['takeover bind'],
+         'mitigation (a): W_data cannot delete a non-W_data user, so the re-Add (68 exists / unique uid) and the set fail')
+  expect('M-3', after_m['W_data adds it to admins'][0] == 50, 'mitigation (b): W_data cannot write `member` of the privileged group')
+  expect('M-3', side['delete a W_data-made user (deleteUser of own creations)'] == (0, 'ok') and side['patchUser mail on an admin-made user'] == (0, 'ok')
+         and side['modrdn an admin-made user'][0] == 50 and side['add a member to ordinary g01'] == (0, 'ok'),
+         'side effects pinned: deleteUser of W_data-made users and patchUser still work; modrdn and DELETE of non-W_data users now refused (v2a deleteUser narrowed)')
+  expect('M-3', side['add a member to subadmins (nested privilege)'] == (0, 'ok'), 'RESIDUAL (recorded): a nested group of a privileged group is not covered by (b)')
+  # boundary of (a): an account W_data ITSELF created earlier (v2a createUser, e.g. an SSO user provisioned by automation)
+  v2a_dn, _ = add('fv2a', mark=False, policy=None, extra='mail: fv2a@example.org\n')
+  r_del = run(WD, 'ldapdelete', [v2a_dn])
+  r_re = add('fv2a')[1]
+  rp = sent('V2A')
+  r_set = setpw(v2a_dn, rp[1])
+  obs(f'M-3 boundary: v2a-made (W_data-created) account: delete {r_del}, re-Add as pending {r_re}, W_cred set {r_set}, binds {bind(v2a_dn, rp[1])}')
+  expect('M-3', r_del == (0, 'ok') and r_re == (0, 'ok') and r_set == (0, 'ok'),
+         'RESIDUAL (recorded): rule (a) does not cover accounts W_data itself created; a leaked W_data + a password.write client can delete, re-create and set them')
+  clean_v2a = mod(WC, v2a_dn, f'delete: employeeType\nemployeeType: {MARKER}\n-\ndelete: pwdPolicySubentry\npwdPolicySubentry: {pol}')
+  ensure(clean_v2a == (0, 'ok'), 'clean v2a residual probe')
+  expect('M-3', side['pending Add reusing an existing uid under another RDN'][0] == 19,
+         'the unique overlay (uid, mail) refuses a pending twin of an existing account under another RDN (19)')
+
   # ---- Q15: olcAddContentAcl TRUE, what W_data can put in an Add -------------------------------------------
   a, ra = add('fa')
   plain, rp = add('fplain', mark=False, policy=None, extra='mail: fplain@example.org\n')
@@ -251,6 +313,11 @@ def final_phase():
          'with olcAddContentAcl TRUE: the pending Add (marker + policy) and an ordinary createUser still succeed')
   expect('Q15', all(x[0] == 50 for x in (rpw, rnom, rnop, roth, rmpw, rstaff)),
          'with olcAddContentAcl TRUE the Add is checked per attribute: userPassword, a lone policy, a lone marker, another policy, a marker outside the cred subtree -> 50')
+
+  g_ok = run(WD, 'ldapadd', [], f'dn: cn=fgrp,{GROUPS}\nobjectClass: groupOfNames\ncn: fgrp\ndescription: made by W_data\nmember: uid=u01,{PEOPLE}\n')
+  u_desc = add('fudesc', mark=False, policy=None, extra='description: on a user\n')[1]
+  obs(f'Q15 createGroup-shaped Add (groupOfNames + description) {g_ok}; user Add carrying description {u_desc}')
+  expect('Q15', g_ok == (0, 'ok') and u_desc[0] == 50, 'olcAddContentAcl TRUE: createGroup with description still 0, a user Add carrying description 50 (#386 description limit closed)')
 
   # ---- M-1: W_data cannot mark or attach by Modify -----------------------------------------------------------
   sso, _ = add('fsso', who=(ADMIN_DN, '/tmp/.pw-admin'), mark=False, policy=None)
@@ -317,10 +384,24 @@ def final_phase():
   orphan = sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN})(!(employeeType=ldapium-credential-pending:*)))')
   obs(f'FINAL after the sets: M new=current {oracle[0]} vs wrong {oracle[1]}; M sees pwdChangedTime on a: {pct} (pre-read 409 signal); '
       f'F-9 self-attach on this image {f_self}; sweeps: stuck {stuck}; foreign {foreign}; orphan {orphan}')
+  rules_now = cfg('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', main_db, '-s', 'base', 'olcAccess']).stdout
+  f9_fixed = bool(re.search(r'olcAccess: \{\d+\}to attrs=[^ ]*pwdPolicySubentry[^\n]*by self (none|read|=)', rules_now, re.I))
+  if f9_fixed:
+    expect('F-9', f_self[0] == 50, 'F-9 fixed in this image (#399): a user cannot self-attach the pending policy (50)')
+  else:
+    obs(f'F-9 image WITHOUT the #399 fix: self-attach {f_self} (recorded, not asserted; the assertion becomes 50 once the fix is in the image)')
   expect('Q14', oracle == ((19, 'policy'), (50, 'acl')) and pct == 1, 'the accepted window: 19/50 exists before cleanup; M sees pwdChangedTime (the pre-read can answer 409)')
-  want_stuck = sorted([a, t['b'], p2, t['g']])
+  want_stuck = sorted([a, t['b'], p2, t['g'], v1dn])   # v1dn: the M-3 victim taken over before the mitigation
   want_foreign = sorted([t['c'], t['h'], t['i'], t['j'], t['k'], t['m']] + ([HUMAN_DN] if f_self[0] == 0 else []))
-  expect('SWEEP', stuck == want_stuck, f'stuck sweep finds exactly the W_data-made pending entries that have a password ({len(want_stuck)})')
+  # TTL condition: the abandoned sweep only acts on entries older than the TTL (createTimestamp ordering, as M)
+  now = live.run(['docker', 'exec', f.name, 'date', '-u', '+%Y%m%d%H%M%SZ']).stdout.strip()
+  old_cut = live.run(['docker', 'exec', f.name, 'date', '-u', '-d', '@' + str(int(time.time()) - 3600), '+%Y%m%d%H%M%SZ']).stdout.strip()
+  aband = f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN})(employeeType=ldapium-credential-pending:*)(!(pwdChangedTime=*))'
+  ttl_young = sweep(aband + f'(createTimestamp<={old_cut}))')
+  ttl_now = sweep(aband + f'(createTimestamp<={now}))')
+  obs(f'TTL sweep: createTimestamp <= now-1h -> {len(ttl_young)}; <= now -> {[d.split(",")[0] for d in ttl_now]}')
+  expect('SWEEP', ttl_young == [] and t['f'] in ttl_now, 'the TTL condition works for M: entries younger than the cut-off are not swept, older ones are')
+  expect('SWEEP', stuck == want_stuck, f'stuck sweep finds exactly the W_data-made pending entries that have a password ({len(want_stuck)}, incl. the pre-mitigation M-3 victim)')
   expect('SWEEP', foreign == want_foreign, f'foreign sweep (!(creatorsName=W_data)) finds exactly the non-W_data entries carrying the policy ({len(want_foreign)})')
   expect('SWEEP', orphan == [], 'no W_data-made entry carries the policy without the marker (Add-only rules)')
 
@@ -377,6 +458,25 @@ def final_phase():
     rounds.append((rcs, ok))
     obs(f'FINAL E-17 round {k} ({"mixed" if k == 4 else "exop"}): rc {rcs}; winner binds and 3 losers do not: {ok}')
   expect('E-17', all(ok and sorted(set(r)) == [0, 50] for r, ok in rounds), 'final policy: every round exactly one success (single slapd), losers 50')
+
+  # ---- Codex P1: rollback ordering (attach grant first, drain, verify zero, then the cleanup grant) ---------
+  def clean_all():
+    for dn in sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN}))'):
+      clean(dn)
+    return sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN}))')
+  zero1 = clean_all()
+  late_dn, late = add('flate1')                     # attach rules still live: a late Add re-attaches
+  wrong = sweep(f'(&(pwdPolicySubentry={pol})(creatorsName={WDATA_DN}))')
+  zero2 = clean_all()
+  attach_idx = 5 + len(m3)                           # W_data's two Add-only rules (after the M-3 rules)
+  ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\ndelete: olcAccess\nolcAccess: {{{attach_idx + 1}}}\n-\ndelete: olcAccess\nolcAccess: {{{attach_idx}}}\n').returncode == 0, 'drop attach rules')
+  cs -= 2
+  late2 = add('flate2')[1]
+  zero3 = clean_all()
+  obs(f'ROLLBACK zero after cleanup {zero1}; late Add with the attach grant still live {late} -> attachments {[d.split(",")[0] for d in wrong]}; '
+      f'cleaned again {zero2}; attach grant removed first, late Add {late2}; attachments {zero3}')
+  expect('ROLLBACK', zero1 == [] and late == (0, 'ok') and wrong == [late_dn], 'wrong order: with the attach grant live a late Add re-attaches after "zero" was verified')
+  expect('ROLLBACK', late2[0] == 50 and zero3 == [], 'right order: attach grant removed (and in-flight drained) first, then zero holds; only then remove the cleanup grant')
 
 
 def main():

@@ -458,6 +458,44 @@ W_cred      attrs=userPassword filter=T =w
 Not measured here: the application parts of Revision 8 (exactly-one-marker pre-read, 409 on `pwdChangedTime`, cleanup in a detached context,
 sweep scheduling and TTL value, runbook execution under an LDAP outage), multi-provider replication, and a re-review of Revision 8.
 
+### 2h. Revision 9: re-review of Revision 8 (2026-10-13, same branch)
+
+Re-review results: security-reviewer found 0 blockers, 1 major (M-3) and 4 minors; Codex found 1 P1 and 2 P2. Run 15 of the same script,
+on a fresh slapd, with the `FINAL` phase extended:
+
+```
+LDAPIUM_IMAGE=ldapium:v2cgate python3 scripts/test/test-machine-write-cred-experiments.py
+...
+93 of 93 expectations held, 0 failed, 59s.          (run 15, exit 0)
+```
+
+Runs 13 and 14 each had one FAIL caused by a wrong expected set in the script (the stuck sweep correctly also found the M-3 victim taken over
+before the mitigation), not by slapd. Both were fixed in the expectation.
+
+**M-3 mitigation rules** (W_data, inserted before its secrets/`entry` write rules):
+
+```
+to dn.subtree="<W_data cap>" attrs=entry filter=(&(objectClass=inetOrgPerson)(!(creatorsName=<W_data>))) by <W_data> =rsc by * break   (a)
+to dn.exact="<each privileged group>" attrs=member by <W_data> =rsc by * break                                                           (b)
+```
+
+| Check | Result |
+|---|---|
+| M-3 **without** mitigation: `W_data` deletes an admin-made member of `cn=admins` → re-Adds it as pending → `W_cred` sets it → `W_data` adds it to `cn=admins` | 0 / refint dropped the membership / 0 / 0, **binds** (takeover reproduced) / 0 |
+| M-3 **with** (a)+(b): delete of the admin-made victim / re-Add / `W_cred` set / `W_data` adds a W_data-made account to `cn=admins` | 50 (victim kept, still in `cn=admins`) / 68 (exists) / `(50, safeModify)`, no bind / 50 |
+| side effects of (a)+(b): delete a W_data-made user / patchUser `mail` on an admin-made user / modrdn an admin-made user / add a member to ordinary `g01` | 0 / 0 / **50** / 0. v2a `deleteUser` and modrdn of **non-W_data users** are refused once (a) is installed: a contract change (Q16) |
+| residual (b): add a member to `cn=subadmins` (a nested group of `cn=admins`) | 0: nested privilege is not covered (as REQ-007) |
+| residual (a): a **W_data-made** (v2a) account: delete / re-Add as pending / `W_cred` set | 0 / 0 / 0, binds: (a) cannot protect accounts W_data itself created |
+| pending twin of an existing account under another RDN (same `uid`) | 19: the unique overlay (`uid`, `mail`, image default) refuses it |
+| Q15 createGroup-shaped Add (groupOfNames + description) / user Add carrying description | 0 / 50 |
+| TTL condition for `M`: abandoned sweep with `createTimestamp<=now-1h` / `<=now` | 0 entries / exactly the abandoned entry |
+| F-9 on this image (no #399 fix): self-attach | 0, recorded. The script asserts 50 automatically once a rule naming `pwdPolicySubentry` with a `by self` limit is in the image |
+| Codex P1 rollback, wrong order: all attachments cleaned, then a late Add with the attach rules still live | 0, the attachment is back |
+| right order: attach rules removed first, then a late Add; then cleanup | 50; zero attachments, and then the cleanup grant may go |
+
+Not measured: application parts (exactly-one-marker, 409, detached cleanup with `context.WithoutCancel` + timeout, sweep scheduling, backlog
+and throughput), multi-provider (pinning, direct `W_cred` writes to another provider), and a re-review of Revision 9.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
