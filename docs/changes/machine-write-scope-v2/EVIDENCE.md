@@ -213,6 +213,7 @@ byte comparison of `test-machine-write-acl-live.py` holds.
 | `scripts/test/test-machine-write-acl-smoke.sh ldapium:hard` | `RESULT: all checks passed` (82 PASS; W_lock add 0, delete / empty Replace / Replace 50, lock still there; W_data user description 50) |
 | `scripts/test/test-check-machine-write-acl-live.sh ldapium:hard` | `RESULT: all checks passed`; the checker on the real installed list: `RESULT status=pass checks=55 failed=0 rules=22` |
 | `scripts/test/test-machine-write-acl-live.py` | `RESULT: 1488 checks passed, 0 failed, mutation=none, 123s` (n0, n1, p0, p1; W_data user description 50, W_lock delete / empty Replace / Replace 50, the backstop probes now use Add) |
+| Upgrade path (scratch script, guide 4.2/7 commands as written): old fragments from `02b2dff` installed (8 + 6), section 7 `K=6` W_lock, default `K=9` on the old W_data **refused** (`not 9 contiguous values`, nothing deleted), `K=8` removes it, olcAccess byte-identical to before, new fragments installed (9 + 6) | `RESULT: upgrade path passed` (12 checks; after: user description 50, group description 0, W_lock add 0 / delete 50) |
 | v2b drill, `write-lock.ldif` back to `write` (scratch, restored) | fails: `AssertionError: [E] #394 W_lock Modify-delete of the attribute of pwdAccountLockedTime is refused (rc 0, 50 expected)` |
 | v2b drill, `filter=` removed from the description rule (scratch, restored) | fails: `AssertionError: [E] #394 W_data replace of a USER description is refused (rc 0, 50 expected)` |
 

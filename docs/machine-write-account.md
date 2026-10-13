@@ -228,7 +228,7 @@ olcAccess: {5}to *
   by * break
 ```
 
-`W_lock`은 `pwdAccountLockedTime`을 **`add`** 수준으로만 받는다(#394). slapd는 Delete와 Replace 모두에 삭제 권한을 검사하므로 `W_lock` 자격 증명으로는 잠금을 **해제하거나 덮어쓸 수 없다**(값 삭제·속성 삭제·Replace 모두 50, 실측). 머신 `lockUser`는 Add로 표지를 쓰고, 이미 같은 표지가 있으면(`attributeOrValueExists`, 20) 성공으로 본다. ppolicy가 타임스탬프로 잠근 계정은 단일 값 속성이라 Add가 19로 거부되고 머신 `lockUser`는 409를 돌려준다(계정은 잠긴 채이며 표지로 바꾸려면 사람이 한다). ppolicy가 이 속성의 변경에 `manage`를 요구하지 않음을 라이브로 확인했다. 이전 `write` 조각을 적용한 노드는 7절로 되돌린 뒤 이 조각을 다시 적용한다(점검 스크립트가 `write`를 불일치로 보고한다).
+`W_lock`은 `pwdAccountLockedTime`을 **`add`** 수준으로만 받는다(#394). slapd는 Delete와 Replace 모두에 삭제 권한을 검사하므로 `W_lock` 자격 증명으로는 잠금을 **해제하거나 덮어쓸 수 없다**(값 삭제·속성 삭제·Replace 모두 50, 실측). 머신 `lockUser`는 Add로 표지를 쓰고, 이미 같은 표지가 있으면(`attributeOrValueExists`, 20) 성공으로 본다. ppolicy가 타임스탬프로 잠근 계정은 단일 값 속성이라 Add가 19로 거부되고 머신 `lockUser`는 409를 돌려준다(계정은 잠긴 채이며 표지로 바꾸려면 사람이 한다). ppolicy가 이 속성의 변경에 `manage`를 요구하지 않음을 라이브로 확인했다. 이전 조각을 적용한 노드는 7절의 "#394 이전 조각에서 올리기"대로 되돌린 뒤 4.2·4.3으로 다시 적용한다(점검 스크립트가 이전 조각을 불일치로 보고한다).
 
 ### 4.4 그룹 멤버십 쓰기는 `MACHINE_WRITE_GROUPS`가 있어야 한다 (안전한 기본값)
 
@@ -288,6 +288,8 @@ else
   { printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\n' "$MAIN_DB_DN"; i=$((FIRST + K - 1)); while [ "$i" -ge "$FIRST" ]; do printf 'olcAccess: {%s}\n' "$i"; i=$((i - 1)); done; } | $EXEC env CFG_URI="$CFG_URI" sh -c 'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
 fi
 ```
+
+**#394 이전 조각에서 올리기.** 이전 `W_data` 조각은 규칙 **8개**(`description`이 닫힌 목록 안), 이전 `W_lock` 조각은 지금과 같은 **6개**(`write`)다. 기본값 `K=9`로 이전 `W_data`를 지우면 "not 9 contiguous values"로 거부되므로 `K=8`을 준다: 먼저 `K=6 WHO="$WLOCK_DN"`, 그다음 `K=8 WHO="$WDATA_DN"`. 그 뒤 4.2(`W_data`, 9개)와 4.3(`W_lock`)을 적용하고 6.1을 확인한다. 사이 동안 쓰기 계정은 일반 사용자이므로 위와 같이 먼저 쓰기를 끈다.
 
 롤백 후 6.1을 다시 읽어 `M`·복제·이미지 규칙만 원래대로 남았는지 확인한다(스모크는 적용 전 `olcAccess`와 **바이트 단위로 같게** 돌아감을 확인한다). 계정 항목은 남는다. 완전히 없애려면 관리자로 `ldapdelete`.
 
