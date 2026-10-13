@@ -10,10 +10,17 @@
 #   test-replication-identity-dedicated.sh). Every refusal must
 #   exit non-zero with a fixed message and must not leak password material.
 # Part 2 (defaults byte-identical, only when a base image is given): a
-#   standalone node and a replicated 2-node pair started in `admin` mode from
-#   BASE_IMAGE (unset env) and from IMAGE (LDAP_REPLICATION_IDENTITY=admin);
-#   `slapcat -n 0` (volatile attributes and password hashes removed) and the
-#   rendered olcSyncrepl lines must be identical.
+#   standalone node and a replicated 2-node pair started from IMAGE with the
+#   env unset and with LDAP_REPLICATION_IDENTITY=admin must give identical
+#   `slapcat -n 0` (volatile attributes and password hashes removed) and
+#   olcSyncrepl lines; both must also match BASE_IMAGE (unset env), except
+#   for olcAccess values that do not name the replication identity (D1).
+# D1 BASE_IMAGE is an older image (the PR base), so a deliberate image ACL
+#   change in the PR (e.g. #399) would fail the base diff although `admin`
+#   is still a no-op. The same-image diff stays strict on everything,
+#   olcAccess included; the base diff keeps every olcAccess value naming
+#   cn=replicator, so an `admin` start that installs the replication rule is
+#   still caught against main. Escape hatch: drop the filter in base_norm.
 #
 # Usage: scripts/test/test-replication-identity-env.sh [image] [base-image]
 #   image defaults to ldapium:e2e; base-image (e.g. built from origin/main)
@@ -237,6 +244,8 @@ warn_case "admin mode, custom bind DN + password does not warn" quiet \
 
 # --- Part 2: admin mode is byte-identical to the base image -------------------
 norm() { grep -v -E '^(entryCSN|entryUUID|modifyTimestamp|createTimestamp|olcRootPW|userPassword)'; }
+# D1: olcAccess values that do not mention the replication identity.
+base_norm() { grep -v -E '^olcAccess: ' "$1" || true; grep -i -E '^olcAccess: .*cn=replicator,' "$1" || true; }
 
 wait_ready() {
   local w=0
@@ -280,22 +289,30 @@ run_variant() { # label image [extra -e args...]
 if [ -n "$base_image" ]; then
   docker network create "$net" >/dev/null
   run_variant base "$base_image" || exit 1
+  run_variant unset "$image" || exit 1
   run_variant new "$image" -e LDAP_REPLICATION_IDENTITY=admin || exit 1
   for part in solo n1 n2; do
     [ -s "${work}/base.${part}.cfg" ] || bad "${part}: empty base dump"
-    if diff -u "${work}/base.${part}.cfg" "${work}/new.${part}.cfg" >"${work}/${part}.diff"; then
-      ok "${part}: cn=config identical to base image ($(wc -l <"${work}/base.${part}.cfg" | tr -d ' ') lines)"
+    if diff -u "${work}/unset.${part}.cfg" "${work}/new.${part}.cfg" >"${work}/${part}.diff"; then
+      ok "${part}: cn=config of admin mode identical to unset env, same image ($(wc -l <"${work}/new.${part}.cfg" | tr -d ' ') lines)"
+    else
+      bad "${part}: cn=config of admin mode differs from unset env"
+      head -n 40 "${work}/${part}.diff" >&2
+    fi
+    if diff -u <(base_norm "${work}/base.${part}.cfg") <(base_norm "${work}/new.${part}.cfg") >"${work}/${part}.base.diff"; then
+      ok "${part}: cn=config identical to base image (olcAccess compared for the replication identity only, D1)"
     else
       bad "${part}: cn=config differs from base image"
-      head -n 40 "${work}/${part}.diff" >&2
+      head -n 40 "${work}/${part}.base.diff" >&2
     fi
   done
   for part in n1 n2; do
     [ -s "${work}/base.${part}.syncrepl" ] || bad "${part}: no olcSyncrepl line rendered"
-    if diff -u "${work}/base.${part}.syncrepl" "${work}/new.${part}.syncrepl" >/dev/null; then
-      ok "${part}: olcSyncrepl identical to base image"
+    if diff -u "${work}/base.${part}.syncrepl" "${work}/new.${part}.syncrepl" >/dev/null &&
+      diff -u "${work}/unset.${part}.syncrepl" "${work}/new.${part}.syncrepl" >/dev/null; then
+      ok "${part}: olcSyncrepl identical to base image and to unset env"
     else
-      bad "${part}: olcSyncrepl differs from base image"
+      bad "${part}: olcSyncrepl differs from base image or unset env"
     fi
   done
 else
