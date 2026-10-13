@@ -20,6 +20,16 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
+  test only: the closed request-body guard is the sole defence against an objectClass
+  value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and
+  against `userPassword` on a `W_data` Add (#390, option (a): slapd checks only
+  entry/children on Add). Nested privileged members being lockable, the chart staying
+  read-only for write scopes, and over-refusal of non-ASCII `memberOf` are recorded as
+  accepted/by-design (#394 items 2, 5, 6). `TestMachineWriteClosedFieldSet` now covers
+  `userPassword` spelling variants on every machine write operation. See
+  [CHANGE.md](docs/changes/machine-write-scope/CHANGE.md) D17a/D17b/D18.
+
 - Optional LDAP machine-token revocation (#286), **default off**: validated tokens
   are checked against a background snapshot before request budgets or directory
   access. A revoked JTI or client cutoff returns `401 token_invalid`; missing,
