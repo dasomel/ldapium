@@ -47,6 +47,9 @@ type slowCredDialer struct {
 	credDN string
 	delay  atomic.Int64 // nanoseconds
 	exops  atomic.Int32
+	// failClear makes the pipeline's cleanup reach slapd with a policy value
+	// the entry does not carry, so the real Modify fails (cleanup=failed).
+	failClear atomic.Bool
 }
 
 func (d *slowCredDialer) Bind(ctx context.Context, dn, password string) (ldapclient.Client, error) {
@@ -71,6 +74,9 @@ func (c *slowCredClient) SetPassword(ctx context.Context, dn, oldPassword, newPa
 }
 
 func (c *slowCredClient) ClearCredentialPending(ctx context.Context, dn, tag, policyDN string) error {
+	if c.d.failClear.Load() {
+		policyDN = "cn=not-the-pending-policy," + policyDN
+	}
 	return c.Client.(ldapclient.CredentialPendingClearer).ClearCredentialPending(ctx, dn, tag, policyDN)
 }
 
@@ -223,10 +229,15 @@ func (l *credLive) attrs(dn string, names ...string) map[string][]string {
 	defer c.Close()
 	res, err := c.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 0, false,
 		"(objectClass=*)", names, nil))
-	out := map[string][]string{}
-	if err != nil || len(res.Entries) != 1 {
-		return out
+	// A failed read is a test failure, never an empty entry: gone() and the
+	// pwdChangedTime checks would otherwise pass on an error (Codex P2).
+	if err != nil {
+		l.t.Fatalf("admin read of %s: %v", dn, err)
 	}
+	if len(res.Entries) != 1 {
+		l.t.Fatalf("admin read of %s: %d entries, want 1", dn, len(res.Entries))
+	}
+	out := map[string][]string{}
 	for _, a := range res.Entries[0].Attributes {
 		out[strings.ToLower(a.Name)] = a.Values
 	}
@@ -481,6 +492,12 @@ func TestCredSecretLive(t *testing.T) {
 	} else {
 		l.check(false, "M bind for the F-5 control: "+err.Error())
 	}
+	unstuck := ldap.NewModifyRequest(p1, nil)
+	unstuck.Delete("employeeType", nil)
+	unstuck.Delete("pwdPolicySubentry", nil)
+	if err := l.adminModify(unstuck); err != nil {
+		t.Fatalf("manual cleanup of p1: %v", err)
+	}
 
 	// --- E-17 / AC-010c app path: two requests at once on one pending account ---
 	race := func(round int, clients [2]string) [2]liveResp {
@@ -523,6 +540,44 @@ func TestCredSecretLive(t *testing.T) {
 	}
 	out := race(5, [2]string{"machine-a", "machine-w2"})
 	l.check(out[1].status == 403, fmt.Sprintf("AC-010c (c): another client at the same time -> 403 (its tag; got %d)", out[1].status))
+
+	// --- cleanup=failed: the password is set, the real cleanup Modify fails twice ---
+	cf := l.pending("machine-a", "t024-cleanup-failed")
+	vcf := next()
+	l.dialer.failClear.Store(true)
+	r = l.setPassword("cleanup-failed", "machine-a", cf, vcf, l.key(), nil)
+	l.dialer.failClear.Store(false)
+	l.check(r.status == 200 && r.body == "{}" && l.binds(cf, vcf) && !gone(cf),
+		fmt.Sprintf("cleanup fails (real slapd refusal, both attempts): still 200 {}, the value binds, marker and policy stay (the stuck sweep's job; got %d)", r.status))
+	l.check(strings.Contains(l.cap.String(), `"cleanup":"failed"`) && strings.Contains(l.cap.String(), "machine_credential_cleanup_failed"),
+		"the audit line says cleanup=failed and the failure is logged without a value")
+	// The operator runbook (guide 8.9) clears it, so later start-ups are not refused for it.
+	manual := ldap.NewModifyRequest(cf, nil)
+	manual.Delete("employeeType", nil)
+	manual.Delete("pwdPolicySubentry", nil)
+	if err := l.adminModify(manual); err != nil {
+		t.Fatalf("manual cleanup of %s: %v", cf, err)
+	}
+
+	// --- the before-write premise check fails: 503, no write ---
+	setQuality := func(v string) error {
+		m := ldap.NewModifyRequest(pending, nil)
+		m.Replace("pwdCheckQuality", []string{v})
+		return l.adminModify(m)
+	}
+	pf := l.pending("machine-a", "t024-premise-failed")
+	if err := setQuality("1"); err != nil {
+		t.Fatalf("pending pwdCheckQuality 1: %v", err)
+	}
+	exops = l.dialer.exops.Load()
+	vpf := next()
+	r = l.setPassword("premise-503", "machine-a", pf, vpf, l.key(), nil)
+	if err := setQuality("2"); err != nil {
+		t.Fatalf("restore pending pwdCheckQuality: %v", err)
+	}
+	l.check(r.status == 503 && r.code == codeUnavailable && l.dialer.exops.Load() == exops && !l.binds(pf, vpf) && !gone(pf),
+		fmt.Sprintf("pending pwdCheckQuality 1 after start-up: the request's premise check answers 503 unavailable, no Password Modify (got %d %s)", r.status, r.code))
+	l.check(strings.Contains(l.cap.String(), "machine_cred_premise phase=request"), "the 503 logs the premise result code only")
 
 	// --- 429: the production password budget (1 rps, burst 1) ---
 	prod, err := newCredLimiter(1, 1, time.Now)

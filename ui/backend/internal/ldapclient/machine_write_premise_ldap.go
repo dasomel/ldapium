@@ -3,7 +3,7 @@ package ldapclient
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // {SSHA} is the pre-hashed form check 5 must see refused (EVIDENCE 2f D-4); a throwaway value
+	"crypto/sha1" //nolint:gosec // {SSHA} is the pre-hashed form check 5 must see refused (EVIDENCE 2f D-4); the public constant canaryHashedProbe
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -219,9 +219,10 @@ func (p *CredPremise) checkAsMachine(ctx context.Context, defaultPolicy string) 
 
 // probeCanaries is check 5 as W_cred, on every canary set: an exop on the
 // canary with a password and on the unmarked one (50 each), a 1-character
-// exop and a pre-hashed plain Modify on the pending one (19 each). The values
-// are throwaway random strings, never logged; a success means the canary needs
-// a reset (canary_*_accepted).
+// exop and a pre-hashed plain Modify on the pending one (19 each). The exop
+// values are throwaway random strings, never logged; the pre-hashed value is
+// the public constant canaryHashedProbe (T024-F1). A success means the canary
+// needs a reset (canary_*_accepted).
 func (p *CredPremise) probeCanaries(ctx context.Context) string {
 	c := p.cfg.Machine.Write.Cred
 	conn, done, ok := p.bind(ctx, c.BindDN, c.BindPassword)
@@ -286,15 +287,29 @@ func (p *CredPremise) cleanSwept(ctx context.Context, m, cred *ldap.Conn, e *lda
 	return false
 }
 
-// hashedProbe replaces userPassword with the {SSHA} hash of a random
-// 2-character value: under pwdCheckQuality 2 the policy cannot check a hash and
-// refuses it (19); quality 1 would store it (F-6).
+// canaryHashedProbe is the {SSHA} value check 5's plain Modify offers: the
+// hash of the fixed, PUBLIC 2-character string canaryHashedProbePlain with the
+// fixed salt canaryHashedProbeSalt. T024-F1 (maintainer 2026-10-14): the
+// refused Modify leaves this attempted value in cn=accesslog when writes are
+// logged (F-8), at start-up and every 60 s; it is a published constant, not a
+// secret and not derived from any request, account or configuration, so a
+// secret scan allowlists exactly this one string (and nothing else).
+const (
+	canaryHashedProbePlain = "zz"
+	canaryHashedProbeSalt  = "ldapium!"
+)
+
+var canaryHashedProbe = func() string {
+	sum := sha1.Sum([]byte(canaryHashedProbePlain + canaryHashedProbeSalt)) //nolint:gosec // see the import
+	return "{SSHA}" + base64.StdEncoding.EncodeToString(append(sum[:], canaryHashedProbeSalt...))
+}()
+
+// hashedProbe replaces userPassword with canaryHashedProbe: under
+// pwdCheckQuality 2 the policy cannot check a hash and refuses it (19);
+// quality 1 would store it (F-6).
 func hashedProbe(dn string) *ldap.ModifyRequest {
-	salt := make([]byte, 8)
-	_, _ = rand.Read(salt)
-	sum := sha1.Sum(append([]byte(randomValue(1)[:2]), salt...)) //nolint:gosec // see the import
 	mod := ldap.NewModifyRequest(dn, nil)
-	mod.Replace("userPassword", []string{"{SSHA}" + base64.StdEncoding.EncodeToString(append(sum[:], salt...))})
+	mod.Replace("userPassword", []string{canaryHashedProbe})
 	return mod
 }
 

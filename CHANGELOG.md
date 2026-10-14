@@ -76,9 +76,11 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   slapd and scans responses, headers, the UI log and audit, the slapd log and
   `cn=accesslog` (rootdn and `M`) for the one-time sentinels and for hash patterns: 0
   in the configuration the chart and T-028 accept; with `audit.enabled` the auditlog
-  carries hashes, which the chart refuses. No behavior change. Known: the T-028 canary
-  probe leaves the hash of a throwaway value in `cn=accesslog` at start-up and every
-  60 s when `writes` is logged (EVIDENCE.md §2k, T024-F1).
+  carries hashes, which the chart refuses. The T-028 check-5 pre-hashed probe is now
+  one fixed public constant (`{SSHA}` of `zz`, salt `ldapium!`; it was a random throwaway
+  value): its refused Modify still leaves that value in `cn=accesslog` at start-up and
+  every 60 s when `writes` is logged, and the scan allowlists exactly it (EVIDENCE.md
+  §2k, T024-F1).
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and

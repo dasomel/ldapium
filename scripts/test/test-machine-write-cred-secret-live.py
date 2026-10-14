@@ -29,6 +29,7 @@ Modify leaves the attempted hash in accesslog (F-8).
 
 Mutation self-test (LDAPIUM_T024_MUTATE builds the Go test from a patched copy):
   log-password             setPassword logs the request's password                      -> must FAIL (scan)
+  log-short                the too-short refusal logs the 11-character value             -> must FAIL (scan)
   drop-serialization       per-client write concurrency (D8d) raised AND the per-target
                            lock (T-023) admitting everything                             -> must FAIL (E-17 app path)
   drop-client-concurrency  only the per-client concurrency raised: the T-023 lock alone
@@ -40,6 +41,7 @@ Run (docker, go, helm): python3 scripts/test/test-machine-write-cred-secret-live
 Override LDAPIUM_IMAGE / LDAPIUM_TEST_PREFIX / LDAPIUM_T024_CONFIGS (accepted,auditlog).
 """
 import base64
+import hashlib
 import importlib.util
 import os
 import pathlib
@@ -52,7 +54,7 @@ import time
 
 repo_root = pathlib.Path(__file__).resolve().parents[2]
 mutation = os.environ.get('LDAPIUM_T024_MUTATE', '')
-MUTATIONS = ('log-password', 'drop-serialization', 'drop-client-concurrency', 'drop-target-lock')
+MUTATIONS = ('log-password', 'log-short', 'drop-serialization', 'drop-client-concurrency', 'drop-target-lock')
 if mutation not in ('',) + MUTATIONS:
   raise SystemExit('LDAPIUM_T024_MUTATE must be one of ' + ', '.join(MUTATIONS))
 os.environ.setdefault('LDAPIUM_TEST_PREFIX', 'ldapium-t024-')
@@ -65,6 +67,9 @@ configs = os.environ.get('LDAPIUM_T024_CONFIGS', 'accepted' if mutation else 'ac
 
 HASH_RE = re.compile(r'\{(SSHA(256|384|512)?|ARGON2|CRYPT|PBKDF2[^}]*|SHA(256|384|512)?|S?MD5)\}', re.I)
 HASH_B64 = ('userPassword::', 'e1NTSEF9', 'e1NTSEEy', 'e1NTSEEz', 'e1NTSEE1', 'e0FSR09OMn0', 'e0NSWVBUfQ', 'e1BCS0RGMi', 'e1NIQX0', 'e1NIQTI', 'e01ENX0', 'e1NNRDV9')
+SHORTEST = 11  # the shortest value the Go test sends (MACHINE_WRITE_CRED_MIN_LENGTH - 1)
+# ldapclient canaryHashedProbe: {SSHA} of the public 2-character 'zz' with the public salt 'ldapium!'
+PROBE_HASH = '{SSHA}' + base64.b64encode(hashlib.sha1(b'zzldapium!').digest() + b'ldapium!').decode()
 SENTINELS = ['Aa1-' + secrets.token_hex(14) for _ in range(60)]   # 32 characters each, one-time, never printed
 acl.passwords.update({f't024-{i}': s for i, s in enumerate(SENTINELS)})  # mask() hides them in any printed text
 
@@ -88,27 +93,35 @@ def b64_forms(value):
 
 
 def scan(text):
-  """(plaintext sentinel hits, base64 sentinel hits, hash hits) in text; never returns a value."""
-  plain = sum(text.count(s) for s in SENTINELS)
-  b64 = sum(text.count(f) for s in SENTINELS for f in b64_forms(s))
+  """(plaintext sentinel hits, base64 sentinel hits, hash hits) in text; never returns a value.
+  The Go test sends whole sentinels and 11-character prefixes of them (the short-value refusal), so every
+  form is searched at the shortest length sent: the 11-character prefix (which every whole value contains)
+  and the base64 spellings of both lengths."""
+  plain = sum(text.count(s[:SHORTEST]) for s in SENTINELS)
+  b64 = sum(text.count(f) for s in SENTINELS for v in (s, s[:SHORTEST]) for f in b64_forms(v))
   hashes = len(HASH_RE.findall(text)) + sum(text.count(p) for p in HASH_B64)
   return plain, b64, hashes
 
 
-def split_probe(text, canaries):
-  """T024-F1: the T-028 check-5 pre-hashed probe (W_cred plain Modify of a throwaway {SSHA}, refused 19)
-  leaves its attempted hash in accesslog (F-8). Those entries are counted apart: reqType modify,
-  reqAuthzID W_cred, reqDN a pending canary, reqResult 19. Returns (other entries, probe entry count)."""
+def allow_probe(text, canaries):
+  """T024-F1 (maintainer 2026-10-14): T-028 check 5's pre-hashed probe is the PUBLIC constant PROBE_HASH
+  (ldapclient canaryHashedProbe); its refused plain Modify leaves it in accesslog (F-8). Exactly that one
+  string is allowlisted, and only in entries that are that probe (reqType modify, W_cred, a pending canary,
+  reqResult 19). Returns (text without the allowlisted occurrences, their count, entries holding it elsewhere)."""
   pending = {c.split('|')[2].lower() for c in canaries}
-  keep, probes = [], 0
+  keep, allowed, stray = [], 0, 0
   for entry in text.split('\n\n'):
-    meta = dict((l.split(': ', 1) + [''])[:2] for l in entry.splitlines() if l.split(':')[0] in ('reqType', 'reqDN', 'reqAuthzID', 'reqResult'))
-    if (meta.get('reqType') == 'modify' and meta.get('reqResult') == '19' and meta.get('reqDN', '').lower() in pending
-        and meta.get('reqAuthzID', '').lower() == acl.wc_dn.lower()):
-      probes += 1
-    else:
-      keep.append(entry)
-  return '\n\n'.join(keep), probes
+    n = entry.count(PROBE_HASH)
+    if n:
+      meta = dict((l.split(': ', 1) + [''])[:2] for l in entry.splitlines() if l.split(':')[0] in ('reqType', 'reqDN', 'reqAuthzID', 'reqResult'))
+      if (meta.get('reqType') == 'modify' and meta.get('reqResult') == '19' and meta.get('reqDN', '').lower() in pending
+          and meta.get('reqAuthzID', '').lower() == acl.wc_dn.lower()):
+        allowed += n
+        entry = entry.replace(PROBE_HASH, '<allowlisted check-5 probe>')
+      else:
+        stray += 1
+    keep.append(entry)
+  return '\n\n'.join(keep), allowed, stray
 
 
 def build_binary():
@@ -125,6 +138,10 @@ def build_binary():
       patches.append(('internal/httpapi/machine_write_pipeline.go',
                       r'(func \(r \*wreq\) setPassword\(c echo\.Context, id config\.MachineWriteIdentity\) error \{\n)',
                       r'\1\tlog.Printf("machine_set_password debug value=%s", r.password)\n'))
+    if mutation == 'log-short':
+      patches.append(('internal/httpapi/machine_write_pipeline.go',
+                      r'(\t\treturn errors\.New\("password is shorter than the machine write minimum length"\))',
+                      r'\t\tlog.Printf("machine_set_password short value=%s", pw)\n\1'))
     if mutation in ('drop-serialization', 'drop-target-lock'):
       patches.append(('internal/httpapi/machine_write_cred_limiter.go', r'(func \(l \*credLimiter\) lock\(uuid string\) \(func\(\), error\) \{\n)',
                       r'\1\tif true {\n\t\treturn func() {}, nil\n\t}\n'))
@@ -210,10 +227,9 @@ def prove(node_key, label, binary):
         f'[{label}] control: accesslog recorded the Go test\'s writes ({n_since} entries, the W_cred cleanup Modify among them)')
   pre_hashes = scan(whole)[2] - scan(since)[2]
   check(pre_hashes > 0, f'[{label}] control: the hash scan finds the seed\'s plain userPassword Adds before the test ({pre_hashes} hits)')
-  since_other, n_probe = split_probe(since, canaries)
-  check(n_probe >= 2 and scan(since)[2] - scan(since_other)[2] == n_probe,
-        f'[{label}] T024-F1 (recorded): the only other hashes are the T-028 check-5 pre-hashed probes ({n_probe} entries, one hash each, throwaway values on the pending canaries)')
-  rows.append(('accesslog reqMod/reqOld, accesslog rootdn, written during the test, except the check-5 probes', since_other))
+  since_other, n_probe, stray = allow_probe(since, canaries)
+  check(n_probe >= 2 and stray == 0, f'[{label}] T024-F1: the allowlisted public check-5 probe constant appears {n_probe} times, only in the probe entries ({stray} elsewhere)')
+  rows.append(('accesslog reqMod/reqOld, accesslog rootdn, written during the test, the probe constant allowlisted', since_other))
   rows.append(('accesslog reqMod/reqOld, accesslog rootdn, whole log: sentinels only', whole))
   # 4. accesslog as M: the shipped ACL, then the M opt-in (f/accesslog-optin.ldif) for the read
   m_text, m_n = accesslog(node, 'machine')
@@ -223,9 +239,9 @@ def prove(node_key, label, binary):
   try:
     m_text, m_n = accesslog(node, 'machine', t0)
     check(m_n > 0, f'[{label}] with the M opt-in M reads the test\'s accesslog entries ({m_n})')
-    m_other, m_probe = split_probe(m_text, canaries)
-    check(m_probe == n_probe, f'[{label}] M with the opt-in sees the same {m_probe} check-5 probe hashes (T024-F1)')
-    rows.append(('accesslog reqMod/reqOld, M with the opt-in, written during the test, except the check-5 probes', m_other))
+    m_other, m_probe, m_stray = allow_probe(m_text, canaries)
+    check(m_probe == n_probe and m_stray == 0, f'[{label}] M with the opt-in sees the same {m_probe} allowlisted probe constants (T024-F1)')
+    rows.append(('accesslog reqMod/reqOld, M with the opt-in, written during the test, the probe constant allowlisted', m_other))
     p = go(node, canaries, 'TestCredSecretPremiseLive')
     check(re.search(r'^PREMISE check=accesslog_children_readable start=refused$', p, re.M) is not None,
           f'[{label}] the M opt-in configuration is one T-028 refuses: check 6 accesslog_children_readable, the server does not start')
