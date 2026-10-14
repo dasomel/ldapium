@@ -70,6 +70,17 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `ui.machineAuth.write.cred.enabled` (default `false`) exists only to refuse: next to
   `audit.enabled=true` (D379-14), next to an `audit.accessLog.ops` holding `extended`
   or `all` (F-7), and on its own until T-026.
+- Machine write v2c (#379, T-024) live proof of the password step, tests only, still
+  **not opened**: `scripts/test/test-machine-write-cred-secret-live.py` runs the real
+  pipeline (a `live`-tagged test server that adds `setPassword` to its own table) against
+  slapd and scans responses, headers, the UI log and audit, the slapd log and
+  `cn=accesslog` (rootdn and `M`) for the one-time sentinels and for hash patterns: 0
+  in the configuration the chart and T-028 accept; with `audit.enabled` the auditlog
+  carries hashes, which the chart refuses. The T-028 check-5 pre-hashed probe is now
+  one fixed public constant (`{SSHA}` of `zz`, salt `ldapium!`; it was a random throwaway
+  value): its refused Modify still leaves that value in `cn=accesslog` at start-up and
+  every 60 s when `writes` is logged, and the scan allowlists exactly it (EVIDENCE.md
+  §2k, T024-F1).
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and

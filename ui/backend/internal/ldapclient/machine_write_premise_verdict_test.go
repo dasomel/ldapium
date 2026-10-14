@@ -210,3 +210,16 @@ func TestAccesslogProbeFilter(t *testing.T) {
 		}
 	}
 }
+
+// T024-F1: the check-5 hashed probe is one published constant (the T-024
+// secret scan allowlists exactly this string), the same on every call.
+func TestCanaryHashedProbeIsTheFixedPublicConstant(t *testing.T) {
+	const want = "{SSHA}wRvhGzOlOIRbYCuyzJDhNpazw1RsZGFwaXVtIQ=="
+	for range 3 {
+		mod := hashedProbe("uid=c,dc=example,dc=org")
+		if len(mod.Changes) != 1 || mod.Changes[0].Modification.Type != "userPassword" ||
+			len(mod.Changes[0].Modification.Vals) != 1 || mod.Changes[0].Modification.Vals[0] != want {
+			t.Fatalf("hashedProbe = %+v, want the constant %s", mod.Changes, want)
+		}
+	}
+}

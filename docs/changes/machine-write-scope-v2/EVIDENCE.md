@@ -592,9 +592,107 @@ running UI (unit-tested with a 5 ms period), the UI process's own non-zero exit 
 multi-provider, and a policy-disabled container (`LDAP_PASSWORD_POLICY_ENABLED=false`; approximated by removing
 `olcPPolicyDefault`).
 
+### 2k. T-024: the password step through the app, secret scan (2026-10-14, branch `feat/379-t024-proof`)
+
+`setPassword` stays closed in production (T-026). The application side is the `live`-tagged Go test
+`TestCredSecretLive` (`ui/backend/internal/httpapi/machine_write_cred_live_test.go`): `newServer` with the
+production table plus the `setPassword` catalog row (`machineDeps.writeOps`, as the unit tests) and the
+`password.write` ceiling injected after construction; everything else is production (real dialer and
+`W_data`/`W_cred` binds, real `M` pre-reads, real T-028 `CredPremise` at start-up / before each write / every
+60 s, real limiters). Tokens come from the harness's in-process IdP (no Keycloak). It runs inside a fresh
+slapd (image `ldapium:t024` built from `6f455e9`, `sha256:3bb7c6de0de6`, Docker Desktop) after the T-028
+proof's setup (guide 4.2/4.3, 8.2–8.5, 8.8; two cred subtrees with canaries). Driver:
+`scripts/test/test-machine-write-cred-secret-live.py`; 60 one-time 32-character sentinels per run, passed in a
+0600 file, never printed (the driver's mask hides them).
+
+```
+LDAPIUM_IMAGE=ldapium:t024 python3 scripts/test/test-machine-write-cred-secret-live.py
+RESULT: 168 checks passed, 0 failed, mutation=none, 32s                                       (exit 0)
+LDAPIUM_T024_MUTATE=log-password             RESULT: 82 passed, 1 failed (UI log: sentinel found)   (exit 1)
+LDAPIUM_T024_MUTATE=log-short                RESULT: 82 passed, 1 failed (the 11-character value)    (exit 1)
+LDAPIUM_T024_MUTATE=drop-serialization       RESULT: 72 passed, 11 failed                           (exit 1)
+LDAPIUM_T024_MUTATE=drop-client-concurrency  RESULT: 77 passed, 0 failed (T-023 lock answers 429)   (exit 0, layer check)
+LDAPIUM_T024_MUTATE=drop-target-lock         RESULT: 77 passed, 0 failed (D8d answers 429)          (exit 0, layer check)
+```
+
+Configurations: `accepted` = accesslog `writes reads bind`, no auditlog (what the chart and T-028 accept);
+`auditlog` = the same plus `LDAP_AUDIT_ENABLED=true` (what the chart refuses, D379-14 (a)). Both run every
+path below.
+
+| Path (app, both configurations) | Result |
+|---|---|
+| machine `createUser` `credentialPending` (marker + pending policy on the Add) | 201 |
+| `setPassword` success | 200 `{}`; the value binds; marker and pending policy gone (cleanup, audit `cleanup=done`) |
+| same key + same body / same key + other value | 200 `{}` `Idempotent-Replayed: true` / 422 `idempotency_key_reused`; only the first value binds |
+| new key on the set and cleaned account | 403 (no marker), no Password Modify sent |
+| `If-Match` / no key / `oldPassword` / 11 characters / another client's tag | 400 / 428 / 400 / 400 / 403, no Password Modify, the account still pending |
+| E-10: pending `pwdMinLength` raised to 40, 32-character value | slapd 19 → **400 `invalid_request`**, nothing stored, no cleanup; the same key + body after restoring 12 runs again → 200 (the refusal released the key) |
+| privileged direct member (pending) | 403, no Password Modify |
+| cleanup fails (the cleanup Modify reaches slapd with a policy value the entry lacks, both attempts; review follow-up) | 200 `{}`, the value binds, marker and policy stay, audit `cleanup=failed`, log `machine_credential_cleanup_failed` without a value |
+| before-write premise fails (pending `pwdCheckQuality` set to 1 after start-up; review follow-up) | 503 `unavailable`, no Password Modify, log `machine_cred_premise phase=request` with the result code only |
+| LDAP ACL refusal: a pending account with a password and **no** `pwdChangedTime` (rootdn exop, then rootdn relax delete) | wrong value: W_cred 50 → 403 `forbidden`; the current value: 19 → 400 `invalid_request` (T024-D1) |
+| stuck entry (password + `pwdChangedTime` + marker + pending policy put back by the rootdn): current value / wrong value | 409 / 409, same code and message, no Password Modify; control: `M` by direct LDAP still gets 19 / 50 (F-5, the accepted Q14 window) |
+| E-17 / AC-010c (a): same client, two keys at once (Password Modify held 600 ms), 5 rounds | each round 200 + 429 `machine_rate_limited` with `Retry-After`, one Password Modify sent, only the winner binds |
+| AC-010c (c): another client at the same time | 200 + 403 (tag) |
+| production password budget (1 rps, burst 1), two accounts in one second | 200, then 429 + `Retry-After`; the second account untouched |
+| E-10 by direct `W_cred` (after the scans) | pre-hashed `{SSHA}` 2-char plain Modify 19 (quality 2); 10-character exop 19 |
+
+E-13 scan (plaintext sentinel searched at the shortest length sent, the 11-character prefix every sent value contains / base64 of the whole and the 11-character value at all three alignments / hash pattern: the E-13 regex,
+`userPassword::` and the base64 prefixes of `{SSHA}`, `{SSHA256..512}`, `{ARGON2}`, `{CRYPT}`, `{PBKDF2`, `{SHA}`,
+`{SHA2`, `{MD5}`, `{SMD5}`):
+
+| Where | accepted | auditlog |
+|---|---|---|
+| every HTTP response: status, headers, body (setPassword and createUser, all paths) + the server's log, UI audit lines included | 0 / 0 / 0 | 0 / 0 / 0 |
+| the Go test's own stdout/stderr | 0 / 0 / 0 | 0 / 0 / 0 |
+| slapd `docker logs` | 0 / 0 / 0 | 0 / 0 / **58** (auditlog stdout) |
+| `cn=accesslog` `reqMod`/`reqOld` as its rootdn, written during the test, the one public probe constant allowlisted (T024-F1) | 0 / 0 / 0 | 0 / 0 / 0 |
+| the same, whole log, sentinels only (the seed's plain `userPassword` Adds before the test are found by the hash scan: positive control) | 0 / 0 | 0 / 0 |
+| `cn=accesslog` as `M`: shipped ACL (0 entries readable); with the opt-in (`accesslog-optin.ldif`), the probe constant allowlisted | 0 / 0 / 0 | 0 / 0 / 0 |
+
+The hash-bearing configurations are refused, asserted in the same run: auditlog → `test-chart-machine-write.sh`
+"cred next to audit.enabled" (both variants) refuses to render; the `M` opt-in → T-028 check 6
+`accesslog_children_readable`, `newServer` refuses to start. Controls: accesslog recorded the test's writes (the
+`W_cred` cleanup Modify among them); the log-password mutation makes the UI-log row fail.
+
+Decisions and findings:
+
+- **T024-D1 (no response normalization; reversible).** The app path is not a password-confirmation oracle in the
+  states the app can reach: during the request the per-client concurrency and the per-target lock answer 429
+  whatever the value; after a set the pre-read answers 409 (`pwdChangedTime`, stuck or not) or 403 (no marker)
+  whatever the value, before any Password Modify (both live above). The only state with a value-dependent answer
+  (400 for the current value, 403 for a wrong one) is a password with no `pwdChangedTime`, which only the rootdn
+  (relax) or an offline import makes; there every authenticated identity already gets the same 19/50 split by
+  direct LDAP (F-5), so normalizing the app response would close nothing. Cost: in that state the app mirrors the
+  split. Escape hatch: map the setPassword exop's 19 and 50 to one response if a non-rootdn path to that state
+  appears.
+- **T024-D2 (LDAP 19 is mapped; no change).** On the wire slapd's 19 goes through `mapSetPasswordErr` → `mapErr`
+  → `domain.ErrInvalidInput` → 400 `invalid_request`, definitive (the key is released, the same key re-runs).
+  The 409 for "ldap result 19" in `TestPasswordPipeline_DirectoryErrorTextNeverLeaks` comes from a fake that
+  returns a raw `*ldap.Error` without `mapErr`; it tests text redaction, not the production mapping.
+- **T024-F1 (maintainer decision 2026-10-14: keep the probe).** T-028 check 5's pre-hashed probe (a `W_cred`
+  plain Modify, refused 19) leaves its attempted value in `cn=accesslog` (F-8) at start-up and every 60 s whenever
+  `writes` is logged: 2 entries per check here (one per pending canary), readable by the accesslog rootdn and any
+  accesslog reader. It was the hash of a random 2-character value (not secret, not request-derived); it is now the
+  fixed public constant `ldapclient.canaryHashedProbe` = `{SSHA}` of `zz` with salt `ldapium!`
+  (`{SSHA}wRvhGzOlOIRbYCuyzJDhNpazw1RsZGFwaXVtIQ==`, unit test `TestCanaryHashedProbeIsTheFixedPublicConstant`,
+  guide 8.8 check 5), so the scan allowlists exactly that string and only in the probe entries (`reqType modify`,
+  `W_cred`, a pending canary DN, `reqResult 19`); every other hash stays 0. The T-028 proof still passes on it
+  (77/77).
+- **T024-F2 (refines AC-010c (a)).** For one client the D8d per-client write concurrency (one in flight) answers
+  the second request first ("client write budget exhausted"); the T-023 per-target lock is the layer behind it
+  (it answers when the concurrency is raised: mutation `drop-client-concurrency`). With both removed the second
+  request reaches slapd, which still lets only one Password Modify succeed (50 → 403, 2 sent: the LDAP half of E-17
+  through the app). The 429 message names the budget, not the target.
+
+Not covered here: Keycloak (the harness's in-process IdP signs the tokens; the password never reaches the IdP), the
+UI as a container (`docker logs` of a UI image: the server ran in-process, its log captured whole), multi-provider
+(R-3 stays one provider), E-22 and E-14, `pwdInHistory` (not provable through an initial set, R-7), the 60 s cycle
+firing during the run (the run is shorter), and GitHub Actions.
+
 ## 3. Not verified
 
-§2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
+§2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) (2026-10-14 T-024, §2k: E-13을 `live` 시험 서버(프로세스 안 UI)·slapd 로그·accesslog(rootdn·`M`) 범위에서, E-17 앱 경로 절반(한 provider), E-10 앱 경로를 실측 — E-13의 Keycloak·UI 컨테이너 부분은 아님. 여전히 미실측: Keycloak 컨테이너 로그(토큰은 하니스 내장 IdP), UI 컨테이너 `docker logs`(서버는 프로세스 안에서 실행, 로그 전체를 수집), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions. T024-F1은 2026-10-14 결정(프로브 유지, 공개 상수로 고정·허용 목록).) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
