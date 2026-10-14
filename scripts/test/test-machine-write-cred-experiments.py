@@ -190,6 +190,14 @@ def final_phase():
               f'to dn.subtree="{PEOPLE}" attrs=pwdPolicySubentry val="{pol}" filter=(creatorsName={WDATA_DN}) by {wc} =z by * break',
               f'to attrs={secrets_list} by {wc} none by * break',
               f'to * by {wc} none by * break']
+  m3 = [f'to dn.subtree="{BASE_DN}" attrs=entry filter=(&(!(objectClass=groupOfNames))(!(creatorsName={WDATA_DN}))) by {wd} =rsc by * break',
+        f'to dn.exact="{PRIV}" attrs=member by {wd} =rsc by * break']
+  # T-021: the shipped fixtures must be exactly the rules measured here (one privileged group, cap = the root)
+  ftok = {'WDATA_DN': WDATA_DN, 'WCRED_DN': WCRED_DN, 'WRITE_DN': BASE_DN, 'CRED_DN': PEOPLE, 'SYSTEM_DN': SYSTEM_DN, 'REPL_DN': REPL_DN,
+          'PENDING_POLICY_DN': pol, 'PRIV_FILTER': f'(!(memberOf={PRIV}))', 'PRIV_GROUP_DN': PRIV, 'MAIN_DB_DN': main_db}
+  expect('FIXTURE', fixture_rules('write-cred.ldif', ftok) == wc_rules, 'write-cred.ldif is exactly the measured W_cred bundle (7 rules)')
+  expect('FIXTURE', fixture_rules('write-data-cred.ldif', ftok) == m3 + wd_extra,
+         'write-data-cred.ldif is exactly the measured W_data v2c rules: M-3 (a), (b), Add-only marker, Add-only policy')
   body = (f'dn: {main_db}\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: TRUE\n-\nadd: olcAccess\n'
           + ''.join(f'olcAccess: {{{3 + i}}}{r}\n' for i, r in enumerate(wd_rules + wc_rules)))
   r = cfg('ldapmodify', [], body)
@@ -259,8 +267,6 @@ def final_phase():
   expect('M-3', before['delete admin-made victim'] == (0, 'ok') and before['re-Add as pending'] == (0, 'ok') and before['takeover bind']
          and before['W_data adds it to admins'] == (0, 'ok'),
          'M-3 reproduced without mitigation: W_data deletes an admin-made privileged account, re-Adds it as pending, W_cred sets it, W_data re-privileges it')
-  m3 = [f'to dn.subtree="{BASE_DN}" attrs=entry filter=(&(objectClass=inetOrgPerson)(!(creatorsName={WDATA_DN}))) by {wd} =rsc by * break',
-        f'to dn.exact="{PRIV}" attrs=member by {wd} =rsc by * break']
   ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\nadd: olcAccess\n' + ''.join(f'olcAccess: {{{5 + i}}}{r}\n' for i, r in enumerate(m3))).returncode == 0, 'm3 rules')
   cs += len(m3)
   for i, rule in enumerate(m3):
@@ -1159,8 +1165,14 @@ def main():
   self_w = code(wcred('ldappasswd', ['-T', sentinel()[1], f'uid=human,{PEOPLE}']))
   self_orphan = 'uid=human' in ldap.tool('ldapsearch', ['-LLL', '-b', PEOPLE, f'(&(pwdPolicySubentry={POL})(!(employeeType=ldapium-credential-pending:*)))', 'dn'], *MID).stdout
   obs(f'D-2 F-9: the image rule `to * by self write` lets a user put ANY pwdPolicySubentry on itself: {h_self} -> {self_set}; W_cred on it {self_w}; M orphan sweep sees it {self_orphan}')
-  expect('D-2', h_self == (0, 'ok') and self_w[0] == 50 and self_orphan,
-         'F-9 known pre-existing (recorded, separate issue): a user can self-attach the pending policy; it is no W_cred target and the orphan sweep finds it')
+  # same detector as FINAL: an image rule naming pwdPolicySubentry with a `by self` limit is the #399 fix
+  d2_rules = cfg('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', main_db, '-s', 'base', 'olcAccess']).stdout
+  if re.search(r'olcAccess: \{\d+\}to attrs=[^ ]*pwdPolicySubentry[^\n]*by self (none|read|=)', d2_rules, re.I):
+    expect('D-2', h_self[0] == 50 and not self_set and not self_orphan,
+           'F-9 fixed in this image (#399): a user cannot self-attach the pending policy (50), nothing attached')
+  else:
+    expect('D-2', h_self == (0, 'ok') and self_w[0] == 50 and self_orphan,
+           'F-9 known pre-existing (recorded, separate issue): a user can self-attach the pending policy; it is no W_cred target and the orphan sweep finds it')
   # --- the same Adds with olcAddContentAcl TRUE (hardening candidate, a database-wide switch)
   ensure(cfg('ldapmodify', [], f'dn: {main_db}\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: TRUE\n').returncode == 0, 'aca on')
   t1, q1 = wadd('t1')

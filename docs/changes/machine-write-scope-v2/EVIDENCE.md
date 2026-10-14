@@ -496,6 +496,33 @@ to dn.exact="<each privileged group>" attrs=member by <W_data> =rsc by * break  
 Not measured: application parts (exactly-one-marker, 409, detached cleanup with `context.WithoutCancel` + timeout, sweep scheduling, backlog
 and throughput), multi-provider (pinning, direct `W_cred` writes to another provider), and a re-review of Revision 9.
 
+### 2i. T-021: the shipped W_cred / W_data v2c fragments (2026-10-14, branch `feat/379-t021-cred-acl`)
+
+Fixtures `scripts/test/fixtures/machine-acl/write-cred.ldif` (7 rules) and `write-data-cred.ldif` (M-3 (a), (b) per privileged
+group, Add-only marker, Add-only policy) carry the §2g/§2h rule texts; `docs/machine-write-account.md` section 8 installs them
+(switch → policy → W_data v2c → W_cred) and rolls back in the Revision 9 order. The image default is unchanged (no
+`olcAddContentAcl` in `image/entrypoint.sh`); only a v2c deployment sets it. Image `ldapium:t021` built from `197bb1b`.
+
+| Run | Result |
+|---|---|
+| `test-machine-write-cred-experiments.py` (adds `FIXTURE`: fixture text == measured text, both files) | 96 of 96, exit 0 (D-2 now follows the same #399 detector as FINAL: self-attach 50 on this image) |
+| `test-machine-write-acl-live.py`, 4 configurations, v2c phase each (guide blocks, every decision an assertion, E-17 10 parallel) | 2279 passed, 0 failed, exit 0 (after the Revision 11 fixes) |
+| same, `LDAPIUM_WACL_MUTATE=m3-inetorgperson-only` / `drop-cred-filter` / `drop-m3-entry` (n0) | 7 / 6 / 22 named failures, exit 1 (e.g. "W_data cannot delete an admin-made person (50)", "W_cred ldappasswd of a pending account that already has a password 50") |
+| `test-check-machine-write-acl-live.sh` (v2c section: pass with the v2c options; switch off, M-3 (a) removed, filter term dropped each non-zero; rollback byte-equal, order guards) | all passed, exit 0; real dump saved as `machine-acl-check/good-v2c.ldif` |
+| `test_machine_write_acl_check.py` (v2c templates == fixtures, real v2c dump, 17 v2c faults, partial options = usage) | 31 tests OK |
+| `test-machine-write-acl-smoke.sh`, `test-machine-acl-readonly-live.py` | all passed / 461 passed |
+
+Revision 11 (review of `3c831b6`), all asserted in the runs above: M-3 (a) is class-independent — `W_data` delete of an admin-made
+`person` / `organizationalPerson` / `account`+`posixAccount` / container 50, admin-made `groupOfNames` 0 (v2b `deleteGroup`); the pre-review
+filter (mutation) lets the first three be deleted. MAJOR-2 recorded as a limit: `W_data` replaces an admin-made privileged user's `mail`
+(0), a pending account takes the old value (0), `W_cred` sets it (0). Non-pinned provider (`write-cred-deny.ldif`): `W_cred` set 50,
+cleanup 50, reads nothing; checker passes only with `--wcred-unpinned`. Zero-pending check: unreachable node and failed bind both exit
+non-zero with `PENDING_LEFT=unknown`. After `docker restart`: `olcAddContentAcl: TRUE` and the v2c layout unchanged. The re-Add over a kept
+victim is exactly 68. The checker refuses `( ) * \ | & "` in DNs (usage, 2).
+
+Not covered here: the application parts (T-020 config, T-022 pre-checks and sweeps), multi-provider (`W_cred` on another provider),
+the `cn=config` reader identity (D379-16), and a security review of the shipped fragments.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.

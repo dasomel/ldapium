@@ -1,0 +1,17 @@
+# Machine WRITE v2c: W_cred on a NON-PINNED provider (#379 T-021, Codex P1;
+# docs/machine-write-account.md 8.5).
+#
+# Multi-provider replication resolves concurrent sets by entryCSN last-write-wins
+# (AGENTS.md): two providers could each accept "first password" for the same
+# pending account. W_cred therefore gets its 7-rule bundle (write-cred.ldif) on the
+# ONE provider the application is pinned to, and this single rule on every other
+# provider, in the same place. Without it W_cred would be an ordinary user there
+# (by users read / by self write of the image rules).
+#
+#   {0} everything                                       none
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@WCRED_DN@" none
+  by * break

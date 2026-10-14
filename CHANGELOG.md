@@ -33,6 +33,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `MACHINE_WRITE_CRED_POLICY_DNS`. The policy entries join the protected set, so a
   write ceiling holding one fails start-up. The chart is unchanged. See
   [machine-write-account.md](docs/machine-write-account.md) section 8.
+- Machine write v2c (#379, T-021) LDAP fragments, opt-in and not yet used by the app: `W_cred`
+  (`write-cred.ldif`, initial password on pending `W_data`-made accounts only, cleanup of the marker
+  and pending policy values) and the `W_data` v2c rules (`write-data-cred.ldif`). Installing them
+  requires `olcAddContentAcl TRUE` on the main database and narrows machine `deleteUser`/modrdn to
+  entries `W_data` created, groups excepted (Q16). Guide `docs/machine-write-account.md` section 8; the read-only
+  checker gains `--cred-dn`/`--pending-policy-dn`/`--privileged-group`/`--wcred-unpinned`; non-pinned
+  providers get `write-cred-deny.ldif`. Image defaults unchanged.
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and

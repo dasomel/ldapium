@@ -13,7 +13,9 @@
 - 이 ACL 변경은 Class D다. 적용 전 [`AGENTS.md`](../AGENTS.md)와 `.agents/skills/ldapium-directory-change/SKILL.md`를 읽는다.
 - 확정 LDIF(문서와 같은 텍스트):
   [`write-data.ldif`](../scripts/test/fixtures/machine-acl/write-data.ldif),
-  [`write-lock.ldif`](../scripts/test/fixtures/machine-acl/write-lock.ldif).
+  [`write-lock.ldif`](../scripts/test/fixtures/machine-acl/write-lock.ldif);
+  v2c(`W_cred`, 8절): [`write-data-cred.ldif`](../scripts/test/fixtures/machine-acl/write-data-cred.ldif),
+  [`write-cred.ldif`](../scripts/test/fixtures/machine-acl/write-cred.ldif).
 
 > **모든 LDAP 노드에 적용하고 6절로 확인하기 전에는 쓰기를 켜지 않는다.** `cn=config`의 ACL은 노드마다 따로이며 복제되지 않는다
 > ([machine-ldap-account.md](machine-ldap-account.md) 12절). 규칙이 없는 노드에서 쓰기 계정은 평범한 사용자라 `by users read`로 전체를 읽고
@@ -26,7 +28,7 @@
 | `M` | 읽기 전용 머신 계정([machine-ldap-account.md](machine-ldap-account.md)). 이 문서에서 **변하지 않는다** |
 | `W_data` (`$WDATA_DN`) | 사용자·그룹 멤버십 쓰기 계정(`createUser`/`patchUser`/`deleteUser`/`addGroupMember`/`removeGroupMember`) |
 | `W_lock` (`$WLOCK_DN`) | 잠금 계정(`pwdAccountLockedTime` 하나만, v2b 단계). 첫 출하에는 쓰이지 않지만 같은 방식으로 준비할 수 있다. 잠금은 v2b의 `lockUser`(T-014로 열림, `directory.users.lock`을 상한에 준 client만)만 쓰고, 해제는 사람 경로 전용이다(D379-7) |
-| `W_cred` | 비밀번호 계정. **설계만 있고 ACL 조각은 없다**(8절) |
+| `W_cred` (`$WCRED_DN`) | 비밀번호 계정(v2c, 8절): `W_data`가 대기 표지·대기 정책과 함께 만든 비밀번호 없는 계정의 **초기** `userPassword`만 설정하고, 그 뒤 표지·정책 값만 지운다 |
 | `$WRITE_DN` | 쓰기 subtree: **모든 client 상한의 합집합**을 덮는 한 지점 |
 | `$SYSTEM_DN` | `M`·`W_*`·서비스 계정을 두는 컨테이너(예 `ou=system,<root>`). `$WRITE_DN`이 넓어져도 쓰기 신원이 닿지 않게 하는 거부 백스톱 |
 | `$REPL_DN` | 복제 신원 항목 `cn=replicator,<root>`(엔트리포인트의 예약 DN, `image/entrypoint.sh`의 `ri_dn`). 루트 바로 아래라 `$SYSTEM_DN` 밖이다: 같은 이유의 거부 백스톱 |
@@ -79,8 +81,9 @@ ACL이 **보장하지 않는 것**(앱 가드 하나뿐인 것, D17/D19/D26):
 ```text
 {0}            복제 신원 규칙 (LDAP_REPLICATION_IDENTITY=prepare/dedicated일 때만; 항상 첫 값)
 {0}..{2} 또는 {1}..{3}   M 읽기 규칙 3개 (machine-ldap-account.md 5절/5.1)
-다음 9개        W_data 규칙 9개 (write-data.ldif)
+다음 9개        W_data 규칙 9개 (write-data.ldif); v2c를 켜면 그 {1}과 {2} 사이에 write-data-cred.ldif 3+그룹 수 개 (8절)
 다음 6개        W_lock 규칙 6개 (write-lock.ldif, 선택)
+다음 7개        W_cred 규칙 7개 (write-cred.ldif, v2c만, 8절)
 그 뒤           이미지의 기존 규칙, 원래 순서 그대로 (by self write / by users read / LDAP_ANONYMOUS_READ_BASE 규칙 …)
 ```
 
@@ -109,6 +112,11 @@ REPL_DN="cn=replicator,$ROOT_DN"   # image/entrypoint.sh의 예약 DN(스모크�
 CFG_URI='ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi'
 MACHINE_DN="uid=machine,$SYSTEM_DN"
 MAIN_DB_DN='olcDatabase={1}mdb,cn=config'
+# v2c(8절)에서만:
+WCRED_DN="uid=machine-write-cred,$SYSTEM_DN"
+CRED_DN="ou=people,$ROOT_DN"                               # MACHINE_WRITE_CRED_SUBTREES (WRITE_DN 안의 한 지점)
+PENDING_POLICY_DN="cn=credential-pending,ou=policies,$ROOT_DN"   # MACHINE_WRITE_CRED_PENDING_POLICY_DN
+PRIV_GROUPS="cn=admins,ou=groups,$ROOT_DN"                 # MACHINE_WRITE_PRIVILEGED_GROUPS와 같은 값(; 구분)
 ```
 
 - `WRITE_DN`은 **모든 client 쓰기 상한의 합집합을 덮는 가장 좁은 항목**이다. 사용자와 그룹을 모두 쓰면(`addGroupMember`) 그룹 컨테이너도 덮어야 하므로
@@ -254,7 +262,7 @@ $EXEC ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -
 기대: `[복제 신원 규칙] · M 3개 · W_data 9개 · [W_lock 6개] · 이미지 기존 규칙(원래 순서)`. 이 순서를 눈으로 대조하는 대신 읽기 전용 점검 스크립트
 [`scripts/check-machine-write-acl.sh`](../scripts/check-machine-write-acl.sh)를 **모든 노드**에서 돌린다(`--container`/`--kube-pod`/`--input`, 사용법은 스크립트 머리말).
 순서·누락·중복·비밀 속성 `none`·보호 항목 도달 불가 중 하나라도 어긋나면 비0으로 끝나고, 읽지 못했을 때도 통과로 처리하지 않는다(T-023). `W_data` DN이 들어간 값은 **정확히 9개**이고 연속이다.
-`W_lock`은 정확히 6개다. 읽은 순서가 다르면 규칙을 쓰지 말고 7절로 되돌린다.
+`W_lock`은 정확히 6개다. 읽은 순서가 다르면 규칙을 쓰지 말고 7절로 되돌린다. v2c를 켠 노드의 기대 배치와 점검 인자는 8.6이다.
 
 ### 6.2 쓰기 계정으로 직접 확인 (허용과 거부)
 
@@ -278,6 +286,7 @@ ACL 이전에 정책이 거부해 증명이 못 된다), `objectClass` replace, 
 각 조각의 규칙이 **연속한 9개(`W_data`) / 6개(`W_lock`)이고 모두 그 계정 DN을 이름으로 가질 때만** 인덱스로 지운다. 아니면 거부하고 아무것도 바꾸지 않는다
 (밀린 인덱스로 다른 규칙을 지우는 사고 방지). 복제 신원 규칙·`M` 규칙·이미지 규칙은 건드리지 않는다. 롤백하면 쓰기 계정은 일반 사용자로 돌아가므로
 **먼저** 쓰기를 끈다(`MACHINE_WRITE_ENABLED=false`로 전 replica 교체). `W_lock`은 `K=6 WHO="$WLOCK_DN"`으로 같은 블록을 쓴다.
+v2c 규칙을 넣은 노드는 **먼저 8.7**로 v2c를 되돌린다(그 전에는 `W_data`가 9개가 아니어서 이 블록이 거부한다).
 
 ```sh
 K="${K:-9}"; WHO="${WHO:-$WDATA_DN}"
@@ -293,10 +302,242 @@ fi
 
 롤백 후 6.1을 다시 읽어 `M`·복제·이미지 규칙만 원래대로 남았는지 확인한다(스모크는 적용 전 `olcAccess`와 **바이트 단위로 같게** 돌아감을 확인한다). 계정 항목은 남는다. 완전히 없애려면 관리자로 `ldapdelete`.
 
-## 8. `W_cred`: 설정 검증만 있고 ACL 조각·오퍼레이션이 없다
+## 8. `W_cred`: 초기 비밀번호 구획 (v2c, T-021)
 
-비밀번호 쓰기(`setPassword`, 서버 생성 비밀번호 금지)는 v2c([machine-write-scope-v2](changes/machine-write-scope-v2/CHANGE.md))로 단계적으로 들어오며 **아직 열리지 않았다.** `directory.users.password.write`는 상한에 쓰면 기동이 실패하고, 비밀번호 경로는 `MACHINE_WRITE_CRED_ENABLED`와 무관하게 403 `scope_denied`·bind 0이다.
-**`userPassword`/`pwd*`를 쓰는 ACL 조각은 아직 이 패키지에 없다**(T-021). `W_data`·`W_lock`은 비밀번호 속성에 `none`이고(AC-008), 직접 시도는 ACL로 거부된다. T-021 전에는 `W_cred` 계정을 만들지 않는다.
+비밀번호 쓰기(머신 `setPassword`)는 v2c 단계다(설계: [machine-write-scope-v2 CHANGE.md](changes/machine-write-scope-v2/CHANGE.md) D379-9/10/13/18, Revision 8–10).
+이 절은 그 **ACL 부분**만 다룬다. 앱 쪽 전제 검사·스윕·플래그(`MACHINE_WRITE_CRED_ENABLED`)는 T-020/T-022 이후이고, 이 ACL을 적용해도 앱 경로는 열리지 않는다.
+v2c를 켜지 않는 배포는 이 절 전체를 건너뛴다: `W_cred` 계정을 만들지 않고, 아래 어떤 규칙·스위치도 넣지 않는다(그때 `W_data`·`W_lock`은 비밀번호 속성에 `none`이고 직접 시도는 50이다, AC-008).
+
+`W_cred`가 할 수 있는 것은 두 가지뿐이다(모두 직접 `ldappasswd`/`ldapmodify`로 실측, [EVIDENCE §2g·§2h](changes/machine-write-scope-v2/EVIDENCE.md)):
+
+- `$CRED_DN` 아래 `inetOrgPerson` 중 **`W_data`가 만들었고**(`creatorsName`, 서버가 채워 위조 불가), 대기 표지(`employeeType: ldapium-credential-pending:<16 hex>`)와 대기 정책(`pwdPolicySubentry: $PENDING_POLICY_DN`)을 갖고, **비밀번호가 없고**, 특권 그룹의 **직접** 멤버가 아닌 항목의 `userPassword`를 `=w`로 설정한다. `manage`가 아니므로 ppolicy(대기 정책: 길이, `pwdCheckQuality 2`)가 적용된다: 짧은 값·사전 해시 값은 19.
+- 그 뒤 정리: `W_data`가 만든 항목에서 표지 **값 하나**와 대기 정책 **값 하나**만 지운다(`=z`). 속성 전체 삭제·다른 값·정책 추가·다른 신원이 만든 항목은 50.
+
+`W_data` 쪽 v2c 규칙([`write-data-cred.ldif`](../scripts/test/fixtures/machine-acl/write-data-cred.ldif))은 표지와 정책을 **Add 안에서만** 붙이게 하고(Q15 `olcAddContentAcl TRUE` 필요: FALSE에서는 Add가 속성 ACL을 보지 않는다), M-3 완화 두 규칙을 더한다:
+(a) `W_data`가 만들지 않은 항목의 `entry`는 객체 클래스와 무관하게 `=rsc`(`groupOfNames`만 제외: v2b `deleteGroup`) — **v2c를 켠 배포에서 머신 `deleteUser`와 modrdn은 `W_data`가 만든 항목에만 동작한다**(관리자가 만든 `inetOrgPerson`·`person`·`organizationalPerson`·`account`/`posixAccount`·컨테이너는 LDAP 50, Q16 수용, v2a 계약 축소). `inetOrgPerson`만 막으면 다른 클래스의 관리자 항목을 지우고 같은 DN의 대기 `inetOrgPerson`으로 다시 만들 수 있었다(검토 MAJOR-1);
+(b) 특권 그룹마다 `member`는 `=rsc`(탈취한 계정의 특권 재가입 차단).
+남는 위험(수용, Q16): `W_data`가 **스스로 만든** 계정(v2a `createUser`로 만든 SSO 신원 등)은 삭제→대기 재생성→설정할 수 있다 — **v2a로 만든 계정을 SSO 신원으로 쓰는 배포는 v2c를 켜지 않는다.** 특권 그룹의 **중첩** 그룹은 (b)가 덮지 않는다 — 하위 그룹도 `MACHINE_WRITE_PRIVILEGED_GROUPS`(= `$PRIV_GROUPS`)에 함께 나열한다.
+**세 번째 남는 위험(수용, 검토 MAJOR-2)**: (a)는 삭제·이름 변경만 막고 속성 쓰기는 막지 않는다. 유출된 `W_data`는 관리자가 만든(특권 포함) 사용자의 `mail`·`uid`를 다른 값으로 바꾼 뒤, 그 **옛 값**을 가진 대기 계정을 만들고 `password.write` client로 설정할 수 있다 — **로그인 이름이 `mail`·`uid`로 해석되는 소비자**(SSO·애플리케이션)에서는 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`가 관리자가 만든 사용자의 `mail`을 못 바꾸게 되어 Q16이 수용한 축소(삭제·modrdn)를 넘으므로 넣지 않았다. 완화는 운영 쪽이다: 소비자가 사용자를 `entryUUID` 같은 불변 식별자로 묶거나, `mail`·`uid` 변경을 감사에서 경보한다. 이것을 받아들일 수 없는 배포는 v2c를 켜지 않는다.
+이미 대기인 항목에 **두 번째** 표지 값은 Modify로 붙는다(filter가 참이므로): 앱 사전 읽기가 표지 값 정확히 하나를 요구한다(T-022).
+설정과 정리 사이(Q14 창)에는 대기 정책(`pwdSafeModify FALSE`)이 그 계정에 적용된다: 이미지의 `by self write`로 사용자 자신도 옛 비밀번호 없이 `userPassword`를 바꿀 수 있고, 인증된 누구나 19/50 오라클을 쓸 수 있다. 정리가 실패하면 그 상태가 남으므로 stuck 스윕(`pwdChangedTime` 있음, T-022)이 정리를 재시도하고 경보한다 — 정리 전 자기 변경은 창을 다시 여는 것이 아니라 같은 창 안에 있다.
+**다중 provider**(Codex P1): 같은 대기 계정에 두 provider가 동시에 "첫 비밀번호"를 받아들이면 복제가 `entryCSN` last-write-wins로 하나를 조용히 버린다(AGENTS.md). 그래서 `W_cred` 묶음(`write-cred.ldif`)은 앱이 비밀번호 쓰기를 고정한 **provider 하나에만** 넣고, 다른 모든 provider에는 같은 자리에 [`write-cred-deny.ldif`](../scripts/test/fixtures/machine-acl/write-cred-deny.ldif)(`to * by W_cred none`)를 넣는다(8.5). 규칙이 없으면 그 노드에서 `W_cred`는 평범한 사용자다.
+
+`olcAddContentAcl TRUE`는 **메인 DB 전체 스위치**다: rootdn이 아닌 모든 Add 주체가 실는 속성마다 `add` 권한을 받아야 한다. 이 이미지의 규칙에서 실측한 영향: `W_data`의 정상 `createUser`(닫힌 목록)·`createGroup`(+`description`)은 0, `userPassword`·사용자 `description`을 실은 `W_data` Add는 50(#386 한계가 닫힘). 관리자(rootdn)·복제는 ACL을 거치지 않는다. 그 밖에 rootdn이 아닌 신원으로 Add하는 운영 자동화가 있으면 켜기 전에 그 신원으로 시험한다.
+
+### 8.0 순서 (설치와 롤백, Revision 8–9)
+
+설치(모든 노드에서, 이 순서대로): **8.2 스위치 → 8.3 대기 정책 항목 → 8.4 `W_data` v2c 규칙 → 8.5 `W_cred` 묶음(고정 provider) 또는 거부 규칙(그 밖의 provider) → 8.6 확인.** 그 뒤에만 앱 플래그를 켠다. 8.3(데이터, 한 노드에서 한 번)은 8.2와 순서가 바뀌어도 되지만 둘 다 8.4보다 먼저다.
+스위치가 먼저인 이유: 스위치 없이 8.4를 넣으면 Add 안의 표지·정책이 ACL 검사 없이 들어간다(D-1). `W_data` 규칙이 `W_cred`보다 먼저인 이유: `W_cred` 규칙은 표지·정책이 붙은 항목이 있어야 의미가 있고, 정리 권한은 부착 권한보다 오래 살아 있어야 한다.
+
+롤백(8.7, 이 순서대로): **앱 플래그·scope 끄기 + 진행 중 요청 drain → 모든 provider에서 `W_data` 부착 규칙 2개 제거 → 모든 provider에서 대기 정책이 붙은 항목 0건 확인(남으면 정리) → `W_cred` 묶음 제거 → M-3 규칙 제거 → 스위치 끄기.**
+부착 규칙을 먼저 빼야 한다: 부착 권한이 살아 있는 동안 늦게 도착한 Add는 "0건"을 확인한 뒤에도 다시 붙인다(실측, Codex P1). 정리 권한(`W_cred`)을 먼저 빼면 남은 부착을 `W_cred`가 지울 수 없다(50, 실측). M-3 규칙은 `W_cred`가 사라진 뒤에 뺀다(`W_cred`가 있는 동안 삭제→재생성 탈취를 막는다).
+
+### 8.1 계정
+
+4.1과 같다(강한 비밀번호, 자기 파일):
+
+```sh
+umask 077
+openssl rand -base64 33 | tr -d '\n' > wcred.pw
+printf 'dn: %s\nobjectClass: inetOrgPerson\nuid: machine-write-cred\ncn: machine-write-cred\nsn: machine-write-cred\nuserPassword:: %s\n' "$WCRED_DN" "$(base64 < wcred.pw | tr -d '\n')" | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
+$EXEC sh -c 'umask 077; cat > /tmp/.pw-wcred' < wcred.pw
+```
+
+`$WCRED_DN`은 `$SYSTEM_DN` 아래에 두고 `M`·`W_data`·`W_lock`·관리자·복제 신원과 달라야 한다. `$CRED_DN`은 `$WRITE_DN` 안이어야 한다(Q9).
+
+### 8.2 스위치 `olcAddContentAcl TRUE` (Q15)
+
+```sh
+# v2c-switch-on
+printf 'dn: %s\nchangetype: modify\nreplace: olcAddContentAcl\nolcAddContentAcl: TRUE\n' "$MAIN_DB_DN" | $EXEC env CFG_URI="$CFG_URI" sh -c 'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
+```
+
+출하 이미지는 이 값을 설정하지 않는다(slapd 기본 FALSE). 이미지 기본값은 바꾸지 않는다: v2c를 켜는 배포만 켠다.
+
+### 8.3 대기 정책 항목 (D379-18)
+
+기본 정책(`cn=default,ou=policies,<root>`)의 **사본**에 `pwdSafeModify: FALSE`와 `pwdCheckQuality: 2`만 바꾼 항목이다. safeModify TRUE(기본)는 rootdn·비밀번호 관리자가 아닌 요청자의 관리자형 설정을 비밀번호가 없는 대상에도 거부하고(F-4), quality 1에서는 `W_cred`를 직접 쓰는 주체가 사전 해시 값으로 길이 규칙을 우회한다(F-6). 표지 계정에만 붙고 정리 단계가 지운다(그 뒤 기본 정책으로 돌아가 F-5 오라클이 사라진다). 기본 정책을 바꾸면 이 사본도 다시 만든다(8.7 후 8.3부터).
+
+```sh
+# v2c-policy
+$EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "cn=default,ou=policies,$ROOT_DN" -s base \
+  | awk -v dn="$PENDING_POLICY_DN" 'BEGIN { cn = dn; sub(/^cn=/, "", cn); sub(/,.*$/, "", cn) } /^dn: / { print "dn: " dn; next } /^(cn|pwdSafeModify|pwdCheckQuality):/ || /^$/ { next } { print } END { print "cn: " cn; print "pwdSafeModify: FALSE"; print "pwdCheckQuality: 2" }' \
+  | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
+```
+
+`$PENDING_POLICY_DN`은 `cn=<이름>,ou=policies,<root>` 형태여야 한다(RDN이 `cn`). 항목은 데이터라 복제된다(한 노드에서 한 번).
+
+### 8.4 `W_data` v2c 규칙 (4.2의 `W_data` 9개 **안에** 넣는다)
+
+[`write-data-cred.ldif`](../scripts/test/fixtures/machine-acl/write-data-cred.ldif)(아래 블록과 같다). `{1}`은 특권 그룹마다 한 번씩 쓰인다(8.5의 명령이 펼친다).
+
+```ldif
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@WRITE_DN@" attrs=entry filter=(&(!(objectClass=groupOfNames))(!(creatorsName=@WDATA_DN@)))
+  by dn.exact="@WDATA_DN@" =rsc
+  by * break
+olcAccess: {1}to dn.exact="@PRIV_GROUP_DN@" attrs=member
+  by dn.exact="@WDATA_DN@" =rsc
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WDATA_DN@" add
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WDATA_DN@" add
+  by * break
+```
+
+위치는 `W_data`의 백스톱 두 개(`{0}` SYSTEM, `{1}` REPL) **바로 뒤**, 그 비밀·`pwd*` `none` 규칙 **앞**이다(그 규칙이 `pwdPolicySubentry`를 `none`으로 막기 전에 Add 전용 허용이 와야 한다). 8.5의 명령을 `FRAG=write-data-cred.ldif`로 실행한다. `W_data`가 4.2의 연속 9개를 정확히 갖고 있을 때만 적용하고(이미 v2c 규칙이 있거나 개수가 다르면 거부), 결과 `W_data` 규칙 수는 `9 + 3 + 특권 그룹 수`다.
+
+### 8.5 `W_cred` 묶음 (`W_lock` 뒤)
+
+[`write-cred.ldif`](../scripts/test/fixtures/machine-acl/write-cred.ldif)(아래 블록과 같다):
+
+```ldif
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {1}to dn.exact="@REPL_DN@"
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=userPassword filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WCRED_DN@" =w
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(creatorsName=@WDATA_DN@)(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WCRED_DN@" =z
+  by * break
+olcAccess: {4}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(creatorsName=@WDATA_DN@)
+  by dn.exact="@WCRED_DN@" =z
+  by * break
+olcAccess: {5}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {6}to *
+  by dn.exact="@WCRED_DN@" none
+  by * break
+```
+
+고정 provider가 아닌 노드의 거부 규칙 [`write-cred-deny.ldif`](../scripts/test/fixtures/machine-acl/write-cred-deny.ldif):
+
+```ldif
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@WCRED_DN@" none
+  by * break
+```
+
+`@PRIV_FILTER@`는 `$PRIV_GROUPS`의 그룹마다 `(!(memberOf=<그룹>))`를 이어 붙인 것이다. filter·`sed`에 그대로 들어가므로 쓰이는 DN(`$PRIV_GROUPS`·`$CRED_DN`·`$PENDING_POLICY_DN`·`$WDATA_DN`·`$WCRED_DN`)에 `( ) * \ | & "`가 하나라도 있으면 블록이 거부한다(그런 DN은 LDIF를 직접 편집하고 점검 스크립트도 거부한다). **고정 provider가 아닌 노드는 `FRAG=write-cred-deny.ldif`로 실행한다**(같은 자리, 규칙 1개). 아래 블록이 8.4와 8.5를 모두 적용한다: `FRAG=write-data-cred.ldif`는 8.4의 위치(`W_data` 첫 규칙 + 2), 기본값 `FRAG=write-cred.ldif`는 4.2의 `BASE`(앞에서부터 이어지는 복제·`M`·`W_data`·`W_lock` 값의 수, `W_lock`이 없으면 `W_data` 바로 뒤)에 놓는다. 인덱스는 위치부터 차례로 다시 매긴다. `W_cred`가 이미 있거나, `W_data` v2c 규칙이 아직 없거나(순서 위반), `$PRIV_GROUPS`가 비어 있으면 아무것도 바꾸지 않고 거부한다. fixture가 있는 디렉터리에서 실행한다.
+
+```sh
+FRAG="${FRAG:-write-cred.ldif}"
+ACLS=$($EXEC env MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess')
+PRIV_FILTER=$(printf '%s' "$PRIV_GROUPS" | awk -v RS=';' '{ gsub(/^[ \t\n]+|[ \t\n]+$/, "") } $0 != "" { printf "(!(memberOf=%s))", $0 }')
+NPRIV=$(printf '%s' "$PRIV_FILTER" | awk '{ print gsub(/memberOf=/, "") }')
+WD_RULES=$(printf '%s\n' "$ACLS" | awk -v x="dn.exact=\"$WDATA_DN\"" '/^olcAccess: \{[0-9]+\}/ && index($0,x) { s=$0; sub(/^olcAccess: \{/,"",s); i=s+0; if (n == 0) f=i; l=i; n++ } END { if (n && l - f == n - 1) print n, f; else print 0, -1 }')
+V2C_AT=
+if printf '%s' "$PRIV_GROUPS$CRED_DN$PENDING_POLICY_DN$WDATA_DN$WCRED_DN" | grep -q '[()*\\|&"]'; then
+  WHY='a DN contains ( ) * \ | & or ": not safe in a filter or the sed substitution; edit the LDIF by hand'
+elif [ -z "$PRIV_FILTER" ]; then
+  WHY='PRIV_GROUPS is empty (MACHINE_WRITE_PRIVILEGED_GROUPS is required for v2c)'
+elif [ "$FRAG" = write-data-cred.ldif ]; then
+  WHY='W_data must hold exactly its 9 contiguous rules of 4.2 and no v2c rules yet'
+  set -- $WD_RULES; [ "$1" = 9 ] && V2C_AT=$(($2 + 2))
+else
+  WHY="W_cred is already present, or the W_data v2c rules (8.4, $((12 + NPRIV)) contiguous W_data rules) are not installed yet"
+  HAVE=$(printf '%s\n' "$ACLS" | awk -v x="dn.exact=\"$WCRED_DN\"" 'index($0,x) { n++ } END { print n+0 }')
+  set -- $WD_RULES
+  if [ "$HAVE" = 0 ] && [ "$1" = $((12 + NPRIV)) ]; then
+    V2C_AT=$(printf '%s\n' "$ACLS" | awk -v m="dn.exact=\"$MACHINE_DN\"" -v r="dn.exact=\"$REPL_DN\"" -v d="dn.exact=\"$WDATA_DN\"" -v l="dn.exact=\"$WLOCK_DN\"" '/^olcAccess: \{[0-9]+\}/ { if (stop) next; if (index($0,m) || index($0,r) || index($0,d) || index($0,l)) n++; else stop=1 } END { print n+0 }')
+  fi
+fi
+if [ -z "$V2C_AT" ]; then
+  echo "refusing: $WHY" >&2
+else
+  awk -v at="$V2C_AT" -v pg="$PRIV_GROUPS" '
+    function flush(   k, n, g, d, r) { if (rule == "") return
+      if (index(rule, "@PRIV_GROUP_DN@")) { n = split(pg, g, ";"); for (k = 1; k <= n; k++) { d = g[k]; gsub(/^[ \t]+|[ \t]+$/, "", d); if (d == "") continue; r = rule; gsub(/@PRIV_GROUP_DN@/, d, r); printf "olcAccess: {%d}%s", at + c++, r } }
+      else printf "olcAccess: {%d}%s", at + c++, rule
+      rule = "" }
+    /^olcAccess: \{[0-9]+\}/ { flush(); s = $0; sub(/^olcAccess: \{[0-9]+\}/, "", s); rule = s "\n"; next }
+    /^  / && rule != "" { rule = rule $0 "\n"; next }
+    { flush(); print }
+    END { flush() }' "$FRAG" | $EXEC env WDATA_DN="$WDATA_DN" WCRED_DN="$WCRED_DN" WRITE_DN="$WRITE_DN" CRED_DN="$CRED_DN" SYSTEM_DN="$SYSTEM_DN" REPL_DN="$REPL_DN" PENDING_POLICY_DN="$PENDING_POLICY_DN" PRIV_FILTER="$PRIV_FILTER" MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'sed -e "s|@WDATA_DN@|$WDATA_DN|g" -e "s|@WCRED_DN@|$WCRED_DN|g" -e "s|@WRITE_DN@|$WRITE_DN|g" -e "s|@CRED_DN@|$CRED_DN|g" -e "s|@SYSTEM_DN@|$SYSTEM_DN|g" -e "s|@REPL_DN@|$REPL_DN|g" -e "s|@PENDING_POLICY_DN@|$PENDING_POLICY_DN|g" -e "s|@PRIV_FILTER@|$PRIV_FILTER|g" -e "s|@MAIN_DB_DN@|$MAIN_DB_DN|g" | ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
+fi
+echo "V2C_AT=$V2C_AT"
+```
+
+### 8.6 확인 (모든 노드)
+
+`olcAccess`(6.1): `[복제] · M 3 · W_data 2 · W_data v2c 3+그룹 수 · W_data 7 · [W_lock 6] · W_cred 7(고정 provider) 또는 1(그 밖) · 이미지 규칙`, 그리고 메인 DB에 `olcAddContentAcl: TRUE`. 재시작 뒤에도 같다(라이브 증명이 확인한다). 고정 provider가 아닌 노드는 점검 스크립트에 `--wcred-unpinned`를 더한다: 그 노드에 7개 묶음이 있으면(=`W_cred`가 비밀번호를 쓸 수 있으면) 비0이다. `--privileged-group`에는 `MACHINE_WRITE_PRIVILEGED_GROUPS`를 **그대로** 준다: 설치와 인자에서 같이 빠진 그룹은 스크립트가 알아낼 방법이 없다(디렉터리에 "특권 그룹" 표시가 없다). 점검 스크립트를 v2c 인자와 함께 돌린다(`--wcred-dn`·`--cred-dn`·`--pending-policy-dn`·`--privileged-group`을 모두 주면 v2c 배치를 요구하고, 빠지거나 `olcAddContentAcl`이 TRUE가 아니면 비0):
+
+```sh
+scripts/check-machine-write-acl.sh --container ldapium --root-dn "$ROOT_DN" --machine-dn "$MACHINE_DN" --system-dn "$SYSTEM_DN" --write-dn "$WRITE_DN" \
+  --wdata-dn "$WDATA_DN" --wlock-dn "$WLOCK_DN" --wcred-dn "$WCRED_DN" --cred-dn "$CRED_DN" --pending-policy-dn "$PENDING_POLICY_DN" --privileged-group "cn=admins,ou=groups,$ROOT_DN"
+```
+
+직접 확인(라이브 증명 [`test-machine-write-acl-live.py`](../scripts/test/test-machine-write-acl-live.py)가 전부 단언한다): `W_data` Add — 표지+정책 0, 정상 사용자 0, `userPassword`·정책만·표지만·다른 정책·`$CRED_DN` 밖 표지 50; `W_data` Modify로 표지·정책 붙이기·떼기 50; `W_data`가 관리자가 만든 사용자 삭제·modrdn 50, 자기가 만든 사용자 삭제 0, 특권 그룹 `member` 50; `W_cred` `ldappasswd` — 대기 계정 0(그 값으로 bind), 비밀번호 있는 계정·관리자가 만든 대기형 항목·표지 없는 계정·특권 직접 멤버 50, 짧은 값 19; 정리(표지 값+정책 값 한 Modify) 0, 속성 전체 삭제 50; 정리 후 그 계정은 기본 정책(`M`의 같은 값 재설정 50, 오라클 없음).
+
+### 8.7 롤백 (8.0의 순서)
+
+먼저 앱의 비밀번호 플래그·scope를 끄고 모든 replica에서 진행 중 요청이 끝나기를 기다린다. 그다음 아래 블록을 `WHAT=attach` → (0건 확인) → `WHAT=cred` → `WHAT=m3` 순서로 실행한다. 블록은 그 부분의 값들이 연속이고 개수가 맞을 때만(`attach` 2개, `cred` 7개 또는 고정 provider가 아닌 노드의 거부 규칙 1개, `m3` 1+그룹 수) 지우고, 순서를 어기면(`attach`가 남은 채 `cred`·`m3`, `W_cred`가 남은 채 `m3`) 아무것도 바꾸지 않고 거부한다.
+
+```sh
+WHAT="${WHAT:-attach}"
+ACLS=$($EXEC env MAIN_DB_DN="$MAIN_DB_DN" CFG_URI="$CFG_URI" sh -c 'ldapsearch -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$MAIN_DB_DN" -s base olcAccess')
+pick() { printf '%s\n' "$ACLS" | awk -v x="dn.exact=\"$1\"" -v p="$2" '/^olcAccess: \{[0-9]+\}/ && index($0,x) && (p == "" || index($0,p)) { s=$0; sub(/^olcAccess: \{/,"",s); i=s+0; if (n && i != l + 1) bad=1; l=i; out = i " " out; n++ } END { if (bad) print "x"; else print n+0, out }'; }
+ATTACH=$(pick "$WDATA_DN" ldapium-credential-pending); CRED=$(pick "$WCRED_DN" ''); M3=$(pick "$WDATA_DN" '=rsc')
+case "$WHAT" in
+  attach) SEL="$ATTACH"; OKN=2; GUARD=0 ;;
+  cred) SEL="$CRED"; OKN="${CRED%% *}"; GUARD=0; [ "$OKN" = 1 ] || { OKN=7; GUARD="${ATTACH%% *}"; } ;;
+  m3) SEL="$M3"; OKN="${M3%% *}"; GUARD="${ATTACH%% *}${CRED%% *}"; [ "$GUARD" = 00 ] && GUARD=0 ;;
+  *) SEL=x; GUARD=x ;;
+esac
+set -- $SEL
+if [ "$1" = x ] || [ "$1" = 0 ] || [ "$1" != "$OKN" ] || { [ "$WHAT" = m3 ] && [ "$1" -lt 2 ]; } || [ "$GUARD" != 0 ]; then
+  echo "refusing: $WHAT rules are not the expected contiguous values, or an earlier rollback step is missing (section 8.0 order)" >&2
+else
+  shift; { printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\n' "$MAIN_DB_DN"; for i in "$@"; do printf 'olcAccess: {%s}\n' "$i"; done; } | $EXEC env CFG_URI="$CFG_URI" sh -c 'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
+  echo "removed $WHAT"
+fi
+```
+
+0건 확인(부착 규칙을 **모든 provider에서** 뺀 뒤, `W_cred` 묶음을 빼기 전). **provider마다** `EXEC`를 그 노드로 바꿔 실행하고 모두 `PENDING_LEFT=0`일 때만 넘어간다: 한 노드의 0은 복제가 아직 가져오지 않은 다른 provider의 늦은 Add를 보지 못한다(복제 지연). 검색이 실패하면(bind 실패·노드 응답 없음·잘못된 base) 0이 아니라 `PENDING_LEFT=unknown`과 비0 종료다:
+
+```sh
+LEFT_OUT=$($EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$ROOT_DN" "(pwdPolicySubentry=$PENDING_POLICY_DN)" dn); LEFT_RC=$?
+if [ "$LEFT_RC" != 0 ]; then
+  echo "refusing: the zero check search failed (rc $LEFT_RC): this is not a zero" >&2; echo "PENDING_LEFT=unknown"; false
+else
+  PENDING_LEFT=$(printf '%s\n' "$LEFT_OUT" | awk '/^dn: / { n++ } END { print n+0 }'); echo "PENDING_LEFT=$PENDING_LEFT"
+fi
+```
+
+0이 아니면 남은 항목에서 대기 정책 값과 표지 값만 지운다(관리자 런북; `W_data`가 만든 항목은 `W_cred`로도 같은 Modify가 된다). 그다음 0건을 다시 확인하고 `WHAT=cred`로 넘어간다.
+
+```sh
+# v2c-cleanup
+$EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$ROOT_DN" "(pwdPolicySubentry=$PENDING_POLICY_DN)" employeeType \
+  | awk -v p="$PENDING_POLICY_DN" '/^dn: / { if (seen) print ""; seen = 1; print; print "changetype: modify"; print "delete: pwdPolicySubentry"; print "pwdPolicySubentry: " p; next } /^employeeType: ldapium-credential-pending:/ { print "-"; print "delete: employeeType"; print }' \
+  | $EXEC ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
+```
+
+마지막으로 스위치를 끈다(출하 상태처럼 값이 없게 된다). 대기 정책 항목은 아무 항목에도 붙어 있지 않으면 지워도 되고 남겨도 해가 없다. `W_cred` 계정은 남는다(지우려면 관리자 `ldapdelete`).
+
+```sh
+# v2c-switch-off
+printf 'dn: %s\nchangetype: modify\ndelete: olcAddContentAcl\n' "$MAIN_DB_DN" | $EXEC env CFG_URI="$CFG_URI" sh -c 'ldapmodify -x -H "$CFG_URI" -D cn=admin,cn=config -y /tmp/.pw-admin'
+```
+
+그 뒤 6.1이 4.2–4.3 직후와 **바이트 단위로 같다**(라이브 증명이 확인한다). `W_data`·`W_lock`까지 되돌리려면 그 다음에 7절이다(v2c 규칙이 남아 있으면 7절의 `K=9`는 "not 9 contiguous values"로 거부한다).
+
+### 8.0 앱 설정 값 (T-020)
 
 T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`이고 `MACHINE_WRITE_CRED_ENABLED=true`일 때만 읽으며, 꺼져 있으면 다른 `MACHINE_WRITE_CRED_*`는 읽지 않는다(REQ-001, 기본 `false`):
 
@@ -310,7 +551,7 @@ T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`�
 | `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
 
 대기 정책과 허용 목록의 정책 항목도 보호 집합에 들어간다: 머신 쓰기는 정책 항목을 고칠 수 없고, 그 항목을 담는 쓰기 상한은 기동 실패다.
-`olcAccess` 원문 대조·카나리·설정 읽기 신원(`MACHINE_WRITE_CRED_ACL_READER_*`)·정책 값 하한 비교는 아직 없다(T-028). ACL 조각은 같은 방식(자기 DN에만 작용, 이미지 규칙 앞, 정해진 순서의 `W_lock` 뒤)으로 T-021에서 추가하고 이 절을 갱신한다.
+`olcAccess` 원문 대조·카나리·설정 읽기 신원(`MACHINE_WRITE_CRED_ACL_READER_*`)·정책 값 하한 비교는 아직 없다(T-028).
 
 ## 9. 비밀번호 회전·다중 노드·잠금
 

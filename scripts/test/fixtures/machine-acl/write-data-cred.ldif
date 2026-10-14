@@ -1,0 +1,48 @@
+# Machine WRITE v2c rules for W_data in the MAIN database (#379 T-021;
+# docs/changes/machine-write-scope-v2 D379-18 Revision 8, M-3 Revision 9, Q16;
+# operator guide docs/machine-write-account.md section 8).
+#
+# NOT part of write-data.ldif on purpose: these rules are installed only when
+# v2c (W_cred) is enabled (Q16). Rule (a) narrows the v2a contract: W_data can
+# no longer delete or rename an entry it did not create, groups excepted (50).
+#
+# Inserted INSIDE the W_data block, directly after its two backstops ({0} SYSTEM,
+# {1} REPL) and before its secrets/pwd* `none` rule: the guide's command (8.3)
+# computes the position, renumbers, and writes rule {1} once per privileged
+# group. Same single-source rule as write-data.ldif; the experiments script
+# (FINAL) asserts this text equals what it measured. Tokens: those of
+# write-data.ldif and write-cred.ldif, plus
+#
+#   @PRIV_GROUP_DN@  one MACHINE_WRITE_PRIVILEGED_GROUPS group (rule {1} is
+#                    repeated for each)
+#
+#   {0} (M-3 a) entry of any non-groupOfNames entry W_data did not create
+#               =rsc (no delete, modrdn: a leaked W_data cannot delete an
+#               admin-made account of ANY class - inetOrgPerson, person,
+#               account/posixAccount ... - and re-create it as pending; groups
+#               stay deletable for v2b deleteGroup)
+#   {1} (M-3 b) member of each privileged group                   =rsc (cannot
+#               re-privilege a taken-over account; nested groups NOT covered)
+#   {2} the pending marker, only in an Add (olcAddContentAcl TRUE)   add
+#   {3} the pending policy DN, only in an Add                        add
+#
+# {2} and {3} are Add-only because their filter requires the attribute they
+# guard: a new entry carrying both satisfies it at Add, an existing entry
+# without them cannot satisfy it on Modify (EVIDENCE 2g M-1). A SECOND marker
+# value on an already pending entry is still accepted: the application requires
+# exactly one.
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@WRITE_DN@" attrs=entry filter=(&(!(objectClass=groupOfNames))(!(creatorsName=@WDATA_DN@)))
+  by dn.exact="@WDATA_DN@" =rsc
+  by * break
+olcAccess: {1}to dn.exact="@PRIV_GROUP_DN@" attrs=member
+  by dn.exact="@WDATA_DN@" =rsc
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WDATA_DN@" add
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WDATA_DN@" add
+  by * break

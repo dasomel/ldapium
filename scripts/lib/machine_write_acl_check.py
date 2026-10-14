@@ -12,6 +12,16 @@ Decisions (D-ids local to this tool):
      text: slapd's stored spelling may differ in case and spacing, never in meaning.
   D3 never a false pass: unreadable/empty/unparseable input, a rule the static evaluator
      cannot decide, or a count that is not exactly the fragment size is a failure.
+  D4 v2c (#379 T-021) is opt-in by arguments: --wcred-dn together with --cred-dn,
+     --pending-policy-dn and --privileged-group expects the W_data v2c rules inside the
+     W_data block, the W_cred bundle, and olcAddContentAcl TRUE. --wcred-dn alone keeps
+     its old meaning (no rule may name it). The filtered pwdPolicySubentry / userPassword
+     grants are pinned structurally (filter and val= are compared), not evaluated, so the
+     static secrets check leaves exactly those attributes out for that identity.
+  D5 --wcred-unpinned: on every provider but the one the application is pinned to, W_cred
+     must hold only write-cred-deny.ldif (one `none` rule); the 7-rule bundle there fails.
+  D6 the privileged groups cannot be read from the directory: a group missing from BOTH the
+     install and --privileged-group is not detected. Pass exactly MACHINE_WRITE_PRIVILEGED_GROUPS.
 """
 import argparse
 import base64
@@ -80,6 +90,48 @@ olcAccess: {5}to *
   by dn.exact="@WHO@" none
   by * break
 '''
+# v2c (docs/machine-write-account.md 8.4 / 8.5, fixtures write-data-cred.ldif / write-cred.ldif).
+# @WHO@ is the fragment's own identity; rule {1} of CRED_DATA_RULES is repeated per privileged group.
+CRED_DATA_RULES = '''olcAccess: {0}to dn.subtree="@WRITE_DN@" attrs=entry filter=(&(!(objectClass=groupOfNames))(!(creatorsName=@WHO@)))
+  by dn.exact="@WHO@" =rsc
+  by * break
+olcAccess: {1}to dn.exact="@PRIV_GROUP_DN@" attrs=member
+  by dn.exact="@WHO@" =rsc
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WHO@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WHO@" add
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(&(objectClass=inetOrgPerson)(creatorsName=@WHO@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WHO@" add
+  by * break
+'''
+CRED_RULES = '''olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
+  by dn.exact="@WHO@" none
+  by * break
+olcAccess: {1}to dn.exact="@REPL_DN@"
+  by dn.exact="@WHO@" none
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=userPassword filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WHO@" =w
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(creatorsName=@WDATA_DN@)(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WHO@" =z
+  by * break
+olcAccess: {4}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(creatorsName=@WDATA_DN@)
+  by dn.exact="@WHO@" =z
+  by * break
+olcAccess: {5}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WHO@" none
+  by * break
+olcAccess: {6}to *
+  by dn.exact="@WHO@" none
+  by * break
+'''
+# A non-pinned provider (Codex P1, write-cred-deny.ldif): W_cred has no access at all there.
+CRED_DENY_RULES = '''olcAccess: {0}to *
+  by dn.exact="@WHO@" none
+  by * break
+'''
 # What each position of a fragment is for, for the failure message.
 DATA_LABELS = ['SYSTEM_DN none backstop', 'replication identity entry none backstop',
                'secret/pwd*/memberOf attributes none', 'entry+children write inside WRITE_DN',
@@ -90,6 +142,12 @@ LOCK_LABELS = ['SYSTEM_DN none backstop', 'replication identity entry none backs
                'secret/pwd*/memberOf attributes none', 'pwdAccountLockedTime add inside WRITE_DN',
                'rest of WRITE_DN read', 'everything else none']
 M_LABELS = ['M secret attributes none', 'M read under ALLOWED_DN', 'M everything else none']
+CRED_DATA_LABELS = ['v2c M-3 (a): entry of a non-group entry W_data did not create =rsc', 'v2c M-3 (b): privileged group member =rsc',
+                    'v2c Add-only pending marker (filter)', 'v2c Add-only pending policy (filter)']
+CRED_LABELS = ['SYSTEM_DN none backstop', 'replication identity entry none backstop',
+               'userPassword =w on a pending W_data-made account (filter)', 'cleanup: marker value =z (filter)',
+               'cleanup: pending policy value =z (filter)', 'secret/pwd*/memberOf attributes none', 'everything else none']
+CRED_DENY_LABELS = ['non-pinned provider: everything none']
 
 # Attributes no W identity may read or write (the secrets rule of both fragments), plus the
 # lock attribute that only W_lock owns.
@@ -127,6 +185,7 @@ class Rule:
     self.dn_sel = None      # ('exact'|'subtree'|..., normalized dn) or None = every entry
     self.attrs = None       # frozenset(lowercase) or None = every attribute
     self.filter = None      # lowercase filter= text (compared, never evaluated: opaque)
+    self.val = None         # val= / val.regex= selector (compared, never evaluated: opaque)
     self.opaque = False     # selector the static evaluator cannot decide
     self.by = []            # (who, modifiers frozenset, access, control)
     self._parse()
@@ -156,6 +215,11 @@ class Rule:
         self.dn_sel = (m.group(1), dn_norm(t.split('=', 1)[1]))
       elif low.startswith('filter=') and self.filter is None:
         self.filter = low[len('filter='):]
+        self.opaque = True
+      elif re.match(r'val(\.[a-z]+)?=', low) and self.val is None:
+        style, value = t.split('=', 1)
+        # a DN value compares normalized; a regex compares exactly (its case is meaning)
+        self.val = (style.lower(), value if style.lower() == 'val.regex' else dn_norm(value))
         self.opaque = True
       elif low.startswith('attrs='):
         names = [a for a in low[len('attrs='):].split(',') if a]
@@ -200,7 +264,7 @@ class Rule:
     return (low, None)
 
   def sig(self):
-    return (self.dn_sel, self.attrs, self.filter, self.opaque, tuple(self.by))
+    return (self.dn_sel, self.attrs, self.filter, self.val, self.opaque, tuple(self.by))
 
   def names(self, dn):
     # True when a by-clause names dn as its identity.
@@ -228,6 +292,11 @@ def parse_rule_lines(lines):
 
 
 def main_db_rules(dump, main_db_dn):
+  return parse_rule_lines(main_db_values(dump, main_db_dn)[0])
+
+
+def main_db_values(dump, main_db_dn):
+  # -> (olcAccess values, olcAddContentAcl values) of the main database entry
   text = unfold(dump)
   entries = [b for b in re.split(r'\r?\n\s*\r?\n', text) if b.strip()]
   want = main_db_dn.lower()
@@ -236,6 +305,7 @@ def main_db_rules(dump, main_db_dn):
   for block in entries:
     dn = None
     vals = []
+    aca = []
     for line in block.splitlines():
       if line.startswith('#'):
         continue
@@ -247,24 +317,29 @@ def main_db_rules(dump, main_db_dn):
         vals.append(base64.b64decode(line[len('olcAccess:: '):].strip()).decode('utf-8', 'replace'))
       elif line.startswith('olcAccess:'):
         vals.append(line[len('olcAccess:'):].strip())
+      elif line.lower().startswith('olcaddcontentacl:'):
+        aca.append(line.split(':', 1)[1].strip())
     if dn is not None:
       has_dn = True
       if dn.strip().lower() == want:
-        chosen.append(vals)
+        chosen.append((vals, aca))
     elif not has_dn and vals:
-      chosen.append(vals)
+      chosen.append((vals, aca))
   if has_dn and not chosen:
     raise Unreadable('the dump has no entry %s (wrong database or truncated slapcat output)' % main_db_dn)
   if len(chosen) != 1:
     raise Unreadable('expected exactly one main database olcAccess list, found %d' % len(chosen))
-  if not chosen[0]:
+  if not chosen[0][0]:
     raise Unreadable('the main database entry carries no olcAccess values')
-  return parse_rule_lines(chosen[0])
+  return chosen[0]
 
 
-def expected_rules(template, subst):
+def expected_rules(template, subst, groups=()):
   out = []
-  for n, line in enumerate(re.split(r'(?m)^olcAccess: ', template)[1:]):
+  lines = []
+  for line in re.split(r'(?m)^olcAccess: ', template)[1:]:
+    lines += [line.replace('@PRIV_GROUP_DN@', g) for g in groups] if '@PRIV_GROUP_DN@' in line else [line]
+  for n, line in enumerate(lines):
     text = unfold(line)
     for k, v in subst.items():
       text = text.replace(k, v)
@@ -368,8 +443,9 @@ def effective_access(rules, identity, target, attr):
   return best
 
 
-def check(rules, a, rep):
+def check(rules, a, rep, aca=()):
   repl = a.repl_dn
+  v2c = a.v2c
   # --- the dump itself -----------------------------------------------------------------
   bad_rules = [r for r in rules if r.parse_error]
   rep.check(not bad_rules, '%d olcAccess rules parsed' % len(rules),
@@ -402,14 +478,27 @@ def check(rules, a, rep):
   pos += len(m_exp)
 
   # --- (2)(3)(6) W fragments: complete, in order, tiled right after M, no duplicates ----
+  sub = {'@SYSTEM_DN@': a.system_dn, '@REPL_DN@': repl, '@WRITE_DN@': a.write_dn}
+  if v2c:
+    sub.update({'@CRED_DN@': a.cred_dn, '@PENDING_POLICY_DN@': a.pending_policy_dn, '@WDATA_DN@': a.wdata_dn or '',
+                '@PRIV_FILTER@': ''.join('(!(memberOf=%s))' % g for g in a.privileged_group)})
   frags = []
   if a.wdata_dn:
     frags.append(('W_data', a.wdata_dn, DATA_RULES, DATA_LABELS))
   if a.wlock_dn:
     frags.append(('W_lock', a.wlock_dn, LOCK_RULES, LOCK_LABELS))
+  if v2c:
+    frags.append(('W_cred', a.wcred_dn[0], CRED_DENY_RULES if a.wcred_unpinned else CRED_RULES,
+                  CRED_DENY_LABELS if a.wcred_unpinned else CRED_LABELS))
+    rep.check([v.upper() for v in aca] == ['TRUE'], 'olcAddContentAcl is TRUE on the main database (v2c, Q15)',
+              'olcAddContentAcl must be TRUE for v2c (guide 8.2), found %s: without it an Add is not checked per attribute' % (aca or 'none (default FALSE)'))
   located = []
   for name, dn, tpl, labels in frags:
-    exp = expected_rules(tpl, {'@WHO@': dn, '@SYSTEM_DN@': a.system_dn, '@REPL_DN@': repl, '@WRITE_DN@': a.write_dn})
+    exp = expected_rules(tpl, dict(sub, **{'@WHO@': dn}))
+    if v2c and name == 'W_data':
+      extra = expected_rules(CRED_DATA_RULES, dict(sub, **{'@WHO@': dn}), a.privileged_group)
+      exp = exp[:2] + extra + exp[2:]
+      labels = labels[:2] + CRED_DATA_LABELS[:1] + [CRED_DATA_LABELS[1]] * len(a.privileged_group) + CRED_DATA_LABELS[2:] + labels[2:]
     have = [r for r in rules if r.names(dn)]
     if len(have) > len(exp):
       rep.bad('duplicate: %d rules name %s, expected exactly %d (the fragment was applied twice; roll back first, guide section 7)' % (len(have), name, len(exp)))
@@ -442,9 +531,11 @@ def check(rules, a, rep):
   rep.check(pos < len(rules), 'the image\'s own rules follow the W block',
             'no rules follow the W block: the image rules (by self write / by users read ...) are missing')
 
-  # --- (4) no write ACL for W_cred ---------------------------------------------------------
+  # --- (4) no write ACL for W_cred (unless v2c, where it is the fragment checked above) ------
   known = {a.machine_dn, repl, a.wdata_dn, a.wlock_dn} - {None}
-  for cred in a.wcred_dn:
+  if v2c:
+    known.add(a.wcred_dn[0])
+  for cred in ([] if v2c else a.wcred_dn):
     hit = [r for r in rules if r.mentions(cred)]
     rep.check(not hit, 'no rule names W_cred %s' % cred,
               'W_cred %s is named by rule(s) %s: W_cred has no ACL fragment (guide section 8)' % (cred, ','.join('{%d}' % r.index for r in hit)))
@@ -461,7 +552,8 @@ def check(rules, a, rep):
   # --- (3)(5) static reach of every W identity -------------------------------------------
   probe = 'uid=probe,' + a.write_dn
   protected = [('M', a.machine_dn), ('replication identity', repl)] + [('admin', d) for d in a.admin_dn] + \
-      [('W_data', a.wdata_dn) if a.wdata_dn else None, ('W_lock', a.wlock_dn) if a.wlock_dn else None]
+      [('W_data', a.wdata_dn) if a.wdata_dn else None, ('W_lock', a.wlock_dn) if a.wlock_dn else None,
+       ('W_cred', a.wcred_dn[0]) if v2c else None]
   protected = [p for p in protected if p] + [('protected', d) for d in a.protected_dn]
   for name, dn, _t, _l in frags:
     for label, target in protected:
@@ -472,7 +564,10 @@ def check(rules, a, rep):
         rep.check(res == 0, '%s has no %s access to %s (%s)' % (name, attr, label, target),
                   '%s can reach %s %s (%s)%s' % (name, label, attr, target,
                     ': ' + res if isinstance(res, str) else ' with access rank %d: the entry is inside WRITE_DN and no earlier rule denies it (guide section 3: move it under SYSTEM_DN)' % res))
-    secrets = SECRET_ATTRS + ([LOCK_ATTR] if name == 'W_data' else [])
+    secrets = SECRET_ATTRS + ([LOCK_ATTR] if name in ('W_data', 'W_cred') else [])
+    if v2c:  # D4: the filtered grants are pinned by the structural comparison above
+      pinned = {'W_data': ('pwdPolicySubentry',), 'W_cred': ('userPassword', 'pwdPolicySubentry')}.get(name, ())
+      secrets = [s for s in secrets if s not in pinned]
     bad = []
     for attr in secrets:
       res = effective_access(rules, dn, probe, attr)
@@ -537,7 +632,12 @@ def parser():
   d.add_argument('--write-dn', required=True, help='WRITE_DN, union of the client caps')
   d.add_argument('--wdata-dn')
   d.add_argument('--wlock-dn')
-  d.add_argument('--wcred-dn', action='append', default=[], help='W_cred DN: no rule may name it (repeatable)')
+  d.add_argument('--wcred-dn', action='append', default=[], help='W_cred DN: no rule may name it (repeatable); with the v2c options: the W_cred fragment owner')
+  v = p.add_argument_group('v2c (guide section 8; all four, or none)')
+  v.add_argument('--cred-dn', help='CRED_DN, the password subtree (inside --write-dn)')
+  v.add_argument('--pending-policy-dn', help='the pending-account policy entry')
+  v.add_argument('--privileged-group', action='append', default=[], help='a MACHINE_WRITE_PRIVILEGED_GROUPS group, in the installed order (repeatable)')
+  v.add_argument('--wcred-unpinned', action='store_true', help='this provider is NOT the pinned one: W_cred must hold only the deny rule')
   d.add_argument('--allowed-dn', help='M read base (default --root-dn)')
   d.add_argument('--repl-dn', help='default cn=replicator,<root-dn>')
   d.add_argument('--admin-dn', action='append', default=[], help='admin entry W must not reach (default cn=admin,<root-dn>; repeatable)')
@@ -553,8 +653,16 @@ def main(argv):
     print('machine-write-acl-check: give --wdata-dn and/or --wlock-dn', file=sys.stderr)
     print('RESULT status=error reason=usage')
     return USAGE
-  dns = [a.root_dn, a.machine_dn, a.system_dn, a.write_dn, a.wdata_dn, a.wlock_dn, a.allowed_dn, a.repl_dn] + a.wcred_dn
-  if any(d and ('"' in d or '\n' in d) for d in dns):
+  v2c_opts = [a.cred_dn, a.pending_policy_dn, a.privileged_group]
+  a.v2c = all(v2c_opts)
+  if (any(v2c_opts) or a.wcred_unpinned) and not (a.v2c and len(a.wcred_dn) == 1 and a.wdata_dn):
+    print('machine-write-acl-check: v2c needs --wdata-dn, exactly one --wcred-dn, --cred-dn, --pending-policy-dn and --privileged-group', file=sys.stderr)
+    print('RESULT status=error reason=usage')
+    return USAGE
+  dns = [a.root_dn, a.machine_dn, a.system_dn, a.write_dn, a.wdata_dn, a.wlock_dn, a.allowed_dn, a.repl_dn,
+         a.cred_dn, a.pending_policy_dn] + a.wcred_dn + a.privileged_group
+  # filter / sed metacharacters (guide 8.5 refuses the same set): a DN carrying one cannot be pinned safely
+  if any(d and any(ch in d for ch in '"\n()*\\|&') for d in dns):
     print('machine-write-acl-check: a DN contains a character this tool refuses', file=sys.stderr)
     print('RESULT status=error reason=usage')
     return USAGE
@@ -569,20 +677,28 @@ def main(argv):
   a.admin_dn = [dn_norm(d) for d in a.admin_dn] or ['cn=admin,' + a.root_dn]
   a.protected_dn = [dn_norm(d) for d in a.protected_dn]
   a.wcred_dn = [dn_norm(d) for d in a.wcred_dn]
+  a.cred_dn = dn_norm(a.cred_dn) if a.cred_dn else None
+  a.pending_policy_dn = dn_norm(a.pending_policy_dn) if a.pending_policy_dn else None
+  a.privileged_group = [dn_norm(d) for d in a.privileged_group]
+  if a.v2c and not dn_under(a.cred_dn, a.write_dn):
+    print('machine-write-acl-check: --cred-dn must lie inside --write-dn (Q9)', file=sys.stderr)
+    print('RESULT status=error reason=usage')
+    return USAGE
   ids = [x for x in (a.machine_dn, a.wdata_dn, a.wlock_dn, a.repl_dn) + tuple(a.wcred_dn) if x]
   if len(set(ids)) != len(ids):
     print('machine-write-acl-check: M, W_data, W_lock, W_cred and the replication identity must be different DNs', file=sys.stderr)
     print('RESULT status=error reason=usage')
     return USAGE
   try:
-    rules = main_db_rules(read_dump(a), a.main_db_dn)
+    values, aca = main_db_values(read_dump(a), a.main_db_dn)
+    rules = parse_rule_lines(values)
   except Unreadable as e:
     print('machine-write-acl-check: cannot verify, treating as FAILED: %s' % e, file=sys.stderr)
     print('RESULT status=error reason=unreadable')
     return UNREADABLE
   rep = Report()
   try:
-    check(rules, a, rep)
+    check(rules, a, rep, aca)
   except Exception as e:  # a crash must never read as a verdict
     print('machine-write-acl-check: internal error, treating as FAILED: %r' % e, file=sys.stderr)
     print('RESULT status=error reason=internal')
