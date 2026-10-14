@@ -49,11 +49,12 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   compartment, tests and docs only, `setPassword` still closed (T-026 opens it). New
   `scripts/test/test-machine-write-cred-drill.py` and a `live`-tagged Go test measure the
   `MACHINE_WRITE_CRED_ENABLED=false` redeploy, the `W_cred` rotation (old credential refused,
-  `W_data`/`W_lock`/read unaffected), the `MACHINE_REQUEST_TIMEOUT` bound of an in-flight request
-  (8.0 s at 10 s, 2.0 s at 4 s) and the Revision 8 manual cleanup of a stuck entry, run live.
-  `docs/machine-auth-operations.md` gains "Password compartment emergency block" with the
-  measured values and the manual procedure. A flag-only redeploy answers 503, not the 403 of
-  AC-011 (a); recorded in EVIDENCE 2k for T-026.
+  `W_data`/`W_lock`/read unaffected on running replicas, restarts fail until the new Secret is
+  rolled out), the `MACHINE_REQUEST_TIMEOUT` bound of an in-flight request (8.0 s at 10 s, 2.0 s
+  at 4 s), the `W_cred` lockout at `pwdMaxFailure` and the Revision 8 manual cleanup of a stuck
+  entry, run live. `docs/machine-auth-operations.md` gains "Password compartment emergency
+  block". A flag-only redeploy answers 503, not the 403 of AC-011 (a); AC-011 is corrected. The
+  `W_cred` lockout policy is an open maintainer decision (CHANGE.md Q17).
 - Machine write v2c (#379, T-028) run-time premise checks and sweeps, still **not
   opened** (`setPassword` stays unreachable until T-026). With
   `MACHINE_WRITE_CRED_ENABLED=true` start-up now also requires

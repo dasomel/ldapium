@@ -30,6 +30,7 @@ Mutation self-test (LDAPIUM_T025_MUTATE; the first two build the Go test from a 
   cred-flag-ignored the W_cred identity no longer depends on MACHINE_WRITE_CRED_ENABLED       -> must FAIL
   rotate-noop       the drill's W_cred rotation is skipped                                    -> must FAIL
   runbook-noop      the manual procedure's administrator Modify is skipped                    -> must FAIL
+  runbook-wholeattr the manual Modify deletes the whole employeeType attribute                -> must FAIL
 
 Run (docker, go): LDAPIUM_IMAGE=ldapium:t025 python3 scripts/test/test-machine-write-cred-drill.py
 Override LDAPIUM_IMAGE / LDAPIUM_TEST_PREFIX.
@@ -45,7 +46,7 @@ import time
 
 repo_root = pathlib.Path(__file__).resolve().parents[2]
 mutation = os.environ.get('LDAPIUM_T025_MUTATE', '')
-MUTATIONS = ('timeout-ignored', 'cred-flag-ignored', 'rotate-noop', 'runbook-noop')
+MUTATIONS = ('timeout-ignored', 'cred-flag-ignored', 'rotate-noop', 'runbook-noop', 'runbook-wholeattr')
 if mutation not in ('',) + MUTATIONS:
   raise SystemExit('LDAPIUM_T025_MUTATE must be one of ' + ', '.join(MUTATIONS))
 os.environ.setdefault('LDAPIUM_TEST_PREFIX', 'ldapium-t025-')
@@ -119,9 +120,11 @@ def main():
              '-LLL', '-o', 'ldif-wrap=no', '-b', 'cn=accesslog', '-s', 'sub',
              f'(&(reqType=bind)(reqDN={acl.wc_dn})(reqResult=49)(reqStart>={t0}))', 'reqDN'])
   failed = len(acl.dn_set(res.stdout)) if res.returncode == 0 else -1
-  seen = [int(m.group(1)) for m in re.finditer(r'failed W_cred binds on replica 1 so far: (\d+)', out)]
-  print(f'OBS slapd accesslog: {failed} failed W_cred binds (reqResult 49) during the drill; the application counted {seen} on replica 1', flush=True)
-  check(failed >= 0 and seen and failed >= seen[0] >= 1, 'slapd saw at least as many failed W_cred binds as the application counted on replica 1 (>= 1)')
+  seen = [int(m.group(1)) for m in re.finditer(r'application failed W_cred binds, all servers: (\d+)', out)]
+  print(f'OBS slapd accesslog: {failed} failed W_cred binds (reqResult 49) during the drill; the application counted {seen} over all its servers', flush=True)
+  # slapd also sees the binds of the premise checks and sweeps, which do not go through the application's dialer counter
+  check(failed >= 0 and len(seen) == 1 and seen[0] >= 13 and failed >= seen[0],
+        f'slapd saw at least as many failed W_cred binds as the application counted over all servers (slapd {failed} >= application {seen}; the application count is >= 13)')
   node.stop()
 
 

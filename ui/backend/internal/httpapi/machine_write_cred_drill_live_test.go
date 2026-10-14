@@ -253,6 +253,7 @@ type drillRig struct {
 	keySeq  atomic.Int64
 	secret  string // the W_cred password the NEXT built server carries (the Secret)
 	current string // the W_cred password slapd holds now
+	servers []*drillSrv
 }
 
 type drillOpt struct {
@@ -345,6 +346,7 @@ func (r *drillRig) build(name string, opt drillOpt) *drillSrv {
 	}
 	h := newHarness(r.t, harnessOpt{defaultEx: true, dialer: d, writeOps: ops, cfg: cfgFn, credPremise: premise, startErr: opt.startErr})
 	s := &drillSrv{rig: r, h: h, dialer: d, cfg: cfg, name: name}
+	r.servers = append(r.servers, s)
 	if opt.startErr {
 		return s
 	}
@@ -522,6 +524,15 @@ func (r *drillRig) rotate(to string) {
 	r.current = to
 }
 
+// clearFailures is a successful W_cred bind with the value slapd holds: ppolicy
+// resets the failure count, so the phases below do not add up towards
+// pwdMaxFailure (a stale-Secret start-up probe is a failed bind too).
+func (r *drillRig) clearFailures() {
+	if !r.binds(r.env("T_WCRED_DN"), r.current) {
+		r.t.Fatalf("W_cred does not bind with the value slapd holds (locked?)")
+	}
+}
+
 func (r *drillRig) unlockWCred() bool {
 	m := ldap.NewModifyRequest(r.env("T_WCRED_DN"), nil)
 	m.Delete("pwdAccountLockedTime", nil)
@@ -538,6 +549,11 @@ func drillRandom(n int) string {
 		panic(err)
 	}
 	return "Aa1-" + hex.EncodeToString(b)
+}
+
+// drillPolicyDN is the policy entry cn=<cn> next to the pending policy.
+func drillPolicyDN(pendingDN, cn string) string {
+	return "cn=" + cn + pendingDN[strings.Index(pendingDN, ","):]
 }
 
 func sec(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
@@ -595,15 +611,17 @@ func TestCredDrillLive(t *testing.T) {
 	closed := time.Duration(r.proxy.closedAt.Load() - start.UnixNano())
 	r.proxy.release()
 	r.obs("MACHINE_REQUEST_TIMEOUT=10s: a setPassword stalled at the LDAP connection ended after %s (UI closed the connection %s after the request started), status %d %s", sec(got.elapsed), sec(closed), got.status, got.code)
-	r.check(got.elapsed <= 10*time.Second+500*time.Millisecond && got.elapsed >= 7*time.Second,
-		fmt.Sprintf("(c1) the stalled request ended within MACHINE_REQUEST_TIMEOUT (10 s): measured %s", sec(got.elapsed)))
+	r.check(got.elapsed <= 8500*time.Millisecond && got.elapsed >= 7500*time.Millisecond,
+		fmt.Sprintf("(c1) the stalled request ended at MACHINE_REQUEST_TIMEOUT (10 s) minus the 2 s cleanup reserve: measured %s", sec(got.elapsed)))
 	r.check(closed > 0 && closed <= got.elapsed+200*time.Millisecond,
 		fmt.Sprintf("(c1) the UI closed the LDAP connection itself (%s), the held message never reached slapd", sec(closed)))
-	r.check(got.status >= 400 && !r.hasPassword(pa) && !r.pendingGone(pa),
-		fmt.Sprintf("(c1) refused (%d), the account is unchanged: still pending, no password", got.status))
+	r.check(got.status == 409 && got.code == codeIdempotencyOutcomeUnknown && !r.hasPassword(pa) && !r.pendingGone(pa),
+		fmt.Sprintf("(c1) 409 idempotency_outcome_unknown, the account is unchanged: still pending, no password (got %d %s)", got.status, got.code))
 	again := t10.send("hold10-retry", http.MethodPost, "/api/users/password",
 		`{"dn":`+jsonStr(pa)+`,"password":`+jsonStr(vHold)+`}`, key)
 	r.obs("same Idempotency-Key and body retried after the timeout (proxy released): status %d %s", again.status, again.code)
+	r.check(again.status == 409 && again.code == codeIdempotencyOutcomeUnknown,
+		fmt.Sprintf("(c1) the same key and body again is 409 idempotency_outcome_unknown, not a replay and not a second write (got %d %s)", again.status, again.code))
 
 	// (c2) the same, MACHINE_REQUEST_TIMEOUT 4 s, W_cred rotated 1 s into the stall
 	t4 := r.build("T4", drillOpt{timeout: 4 * time.Second, credEnabled: true, ceiling: true})
@@ -622,9 +640,10 @@ func TestCredDrillLive(t *testing.T) {
 	got = <-done
 	r.proxy.release()
 	r.obs("MACHINE_REQUEST_TIMEOUT=4s, W_cred rotated %s into the request: ended after %s, %s after the rotation, status %d %s", sec(rotatedAt.Sub(start)), sec(got.elapsed), sec(time.Since(rotatedAt)), got.status, got.code)
-	r.check(got.elapsed <= 4*time.Second+500*time.Millisecond && got.elapsed >= 1500*time.Millisecond,
-		fmt.Sprintf("(c2) the stalled request ended within MACHINE_REQUEST_TIMEOUT (4 s): measured %s", sec(got.elapsed)))
-	r.check(!r.hasPassword(pb) && !r.pendingGone(pb), "(c2) the account is unchanged")
+	r.check(got.elapsed <= 2500*time.Millisecond && got.elapsed >= 1500*time.Millisecond,
+		fmt.Sprintf("(c2) the stalled request ended at MACHINE_REQUEST_TIMEOUT (4 s) minus the 2 s cleanup reserve: measured %s", sec(got.elapsed)))
+	r.check(got.status == 409 && got.code == codeIdempotencyOutcomeUnknown && !r.hasPassword(pb) && !r.pendingGone(pb),
+		fmt.Sprintf("(c2) 409 idempotency_outcome_unknown, the account is unchanged (got %d %s)", got.status, got.code))
 	if r.mutate != "rotate-noop" {
 		r.rotate(orig)
 	}
@@ -651,65 +670,110 @@ func TestCredDrillLive(t *testing.T) {
 	r.check(auditField(got.audit, "cleanup") == "failed" && !r.pendingGone(pc),
 		"(c3) its pending cleanup could not run (W_cred's old password is refused): audit cleanup=failed, marker and policy stay (a stuck entry)")
 
+	_, cleanupFails := t10c.dialer.counts(wc)
+	r.check(cleanupFails == 2, fmt.Sprintf("(c3) the cleanup tried twice (the request's own retry) and both W_cred binds were refused (failed binds: %d)", cleanupFails))
+	// the account also carries another employeeType value, which the manual procedure must keep
+	extra := ldap.NewModifyRequest(pc, nil)
+	extra.Add("employeeType", []string{"contractor"})
+	if err := r.adminModify(extra); err != nil {
+		t.Fatalf("add a second employeeType value: %v", err)
+	}
+
 	// ---- Revision 8: while W_cred is rotated, the sweep cannot clean; the manual procedure does ----
 	ctx := context.Background()
+	r.clearFailures() // not binding with the rotated value: slapd holds `rotated` here
+
 	stale := ldapclient.NewCredPremise(t10c.cfg)
 	sw := stale.Sweep(ctx, true)
 	r.obs("sweep with the stale W_cred Secret: found stuck=%d cleaned=%d failed=%t code=%s", sw.Found["stuck"], sw.Cleaned, sw.Failed, sw.Code)
 	r.check(sw.Found["stuck"] >= 1 && sw.Cleaned == 0 && sw.Failed,
 		"Rev. 8: during the rotation the stuck sweep finds the entry but cannot clean it (W_cred bind refused)")
+	r.clearFailures()
 	staleStart := r.build("B0a", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
 	r.check(staleStart.h.startErr != nil && strings.Contains(staleStart.h.startErr.Error(), "wcred_bind_failed"),
 		fmt.Sprintf("Rev. 8: a replica started with the OLD Secret refuses to start on the canary probe (%v)", staleStart.h.startErr))
+	r.clearFailures()
 	r.secret = rotated
 	refused := r.build("B0b", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
 	r.check(refused.h.startErr != nil && strings.Contains(refused.h.startErr.Error(), "sweep_stuck_at_startup"),
 		fmt.Sprintf("Rev. 8: a replica started with the ROTATED Secret refuses to start while the stuck entry is present (%v)", refused.h.startErr))
 	// the procedure of docs/machine-auth-operations.md: M searches, the administrator modifies
 	pol := r.env("T_PENDING")
-	m, err := r.conn(r.env("T_M_DN"), pw("machine"))
-	if err != nil {
-		t.Fatalf("M bind: %v", err)
+	canary := map[string]bool{} // the configured canary DNs, not a name heuristic
+	for _, set := range drillList(r.env("T_CANARIES")) {
+		for _, dn := range strings.Split(set, "|") {
+			canary[strings.ToLower(dn)] = true
+		}
 	}
-	found, err := m.Search(ldap.NewSearchRequest(r.base, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 100, 10, false,
-		"(pwdPolicySubentry="+pol+")", []string{"employeeType", "pwdChangedTime", "creatorsName"}, nil))
-	if err == nil {
-		narrowed := 0
-		for _, e := range found.Entries {
-			if len(e.GetAttributeValues("pwdChangedTime")) > 0 && !strings.Contains(strings.ToLower(e.DN), "canary") {
-				narrowed++
+	mSearch := func(filter string) []*ldap.Entry {
+		m, err := r.conn(r.env("T_M_DN"), pw("machine"))
+		if err != nil {
+			t.Fatalf("M bind: %v", err)
+		}
+		defer m.Close()
+		res, err := m.Search(ldap.NewSearchRequest(r.base, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 100, 10, false,
+			filter, []string{"employeeType", "pwdChangedTime", "creatorsName"}, nil))
+		if err != nil {
+			t.Fatalf("M search: %v", err)
+		}
+		return res.Entries
+	}
+	stuckNow := func() []*ldap.Entry {
+		var out []*ldap.Entry
+		for _, e := range mSearch("(&(pwdPolicySubentry=" + pol + ")(pwdChangedTime=*))") {
+			if !canary[strings.ToLower(e.DN)] {
+				out = append(out, e)
 			}
 		}
-		r.obs("of those, the ones that have a password (pwdChangedTime) and are not canaries: %d", narrowed)
-		r.check(narrowed == 1, "the narrowed form (password present, canaries excluded) names exactly the stuck account")
+		return out
 	}
-	m.Close()
-	if err != nil {
-		t.Fatalf("M search: %v", err)
-	}
-	var stuck, canaries int
-	var target *ldap.Entry
-	for _, e := range found.Entries {
-		switch {
-		case strings.EqualFold(e.DN, pc):
-			target = e
-			stuck++
-		case strings.Contains(strings.ToLower(e.DN), "canary"):
-			canaries++
+	broad := mSearch("(pwdPolicySubentry=" + pol + ")")
+	nCanary := 0
+	for _, e := range broad {
+		if canary[strings.ToLower(e.DN)] {
+			nCanary++
 		}
 	}
-	r.obs("M search (pwdPolicySubentry=<pending policy>) found %d entries: the stuck account, %d canaries, %d others", len(found.Entries), canaries, len(found.Entries)-stuck-canaries)
-	r.check(target != nil && len(target.GetAttributeValues("pwdChangedTime")) == 1 && len(target.GetAttributeValues("employeeType")) == 1,
-		"the M search finds the stuck account with its marker value and pwdChangedTime (the values the Modify needs)")
+	r.obs("step 1, M search (pwdPolicySubentry=<pending policy>): %d entries: %d configured canaries, the stuck account, %d legitimate pending accounts", len(broad), nCanary, len(broad)-nCanary-1)
+	r.check(nCanary == 6 && len(broad)-nCanary >= 2, "the broad M search also returns the 6 configured canaries and accounts that are only pending (no password): it cannot be the delete list")
+	first := stuckNow()
+	r.check(len(first) == 1 && strings.EqualFold(first[0].DN, pc),
+		"step 1: the narrowed search (password present, configured canaries excluded) names exactly the stuck account")
+	// step 2: wait for work that may still be in flight (one MACHINE_REQUEST_TIMEOUT), then search again
+	time.Sleep(10 * time.Second)
+	second := stuckNow()
+	r.check(len(second) == 1 && strings.EqualFold(second[0].DN, pc), "step 2: after one MACHINE_REQUEST_TIMEOUT the search names the same single stuck account")
+	var target *ldap.Entry
+	if len(second) == 1 {
+		target = second[0]
+	}
+	var markers []string
+	hasOther := false
+	if target != nil {
+		for _, v := range target.GetAttributeValues("employeeType") {
+			if strings.HasPrefix(v, ldapclient.CredentialPendingPrefix) {
+				markers = append(markers, v)
+			} else {
+				hasOther = true
+			}
+		}
+	}
+	r.check(len(markers) == 1 && hasOther, "the stuck account has exactly one marker value and another employeeType value that must survive")
 	if r.mutate != "runbook-noop" && target != nil {
 		fix := ldap.NewModifyRequest(target.DN, nil)
-		fix.Delete("employeeType", target.GetAttributeValues("employeeType"))
+		if r.mutate == "runbook-wholeattr" {
+			fix.Delete("employeeType", nil)
+		} else {
+			fix.Delete("employeeType", markers)
+		}
 		fix.Delete("pwdPolicySubentry", []string{pol})
 		if err := r.adminModify(fix); err != nil {
 			t.Fatalf("the manual Modify: %v", err)
 		}
 	}
-	r.check(r.pendingGone(pc) && r.binds(pc, vc), "the administrator's Modify removed marker and policy value; the set password still binds")
+	a2 := r.attrs(pc, "employeeType", "pwdPolicySubentry")
+	r.check(len(a2["pwdpolicysubentry"]) == 0 && len(a2["employeetype"]) == 1 && a2["employeetype"][0] == "contractor" && r.binds(pc, vc),
+		"step 3: the Modify removed the marker value and the policy value only; the other employeeType value stays and the set password still binds")
 	sw = stale.Sweep(ctx, false)
 	r.check(sw.Found["stuck"] == 0 && !sw.Failed, fmt.Sprintf("a sweep (read-only, stale Secret) now finds no stuck entry (stuck=%d)", sw.Found["stuck"]))
 	// the rotated Secret is rolled out: a new replica starts and sets a password
@@ -724,7 +788,8 @@ func TestCredDrillLive(t *testing.T) {
 	// ---- AC-011 (b): rotation of W_cred, replicas still on the old Secret ----
 	r1 := r.build("R1", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
 	r2 := r.build("R2", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
-	q1, q2 := r1.pending("t025-rot1"), r2.pending("t025-rot2")
+	r3 := r.build("R3", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	q1, q2, q3 := r1.pending("t025-rot1"), r2.pending("t025-rot2"), r3.pending("t025-rot3")
 	rot := drillRandom(14)
 	t0 := time.Now()
 	r.rotate(rot)
@@ -741,21 +806,27 @@ func TestCredDrillLive(t *testing.T) {
 		"(b) both audit lines say reason=bind_failed")
 	r.check(!r.hasPassword(q1) && !r.hasPassword(q2) && !r.pendingGone(q1) && !r.pendingGone(q2), "(b) no directory change: both accounts stay pending")
 	r.check(!r.binds(wc, rotated) && r.binds(wc, rot), "(b) the previous W_cred credential is refused by slapd after the rotation")
-	_, f1 := r1.dialer.counts(wc)
-	r.obs("failed W_cred binds on replica 1 so far: %d (one per refused request)", f1)
+	_, fr1 := r1.dialer.counts(wc)
+	_, fr2 := r2.dialer.counts(wc)
+	r.check(fr1 == 1 && fr2 == 1, fmt.Sprintf("(b) one refused request = one failed W_cred bind per replica (%d, %d)", fr1, fr2))
 	r1.otherCompartments("rotation", "t025-rot-other1")
 	r2.otherCompartments("rotation", "t025-rot-other2")
 
-	// the lockout trap (D24) for W_cred: every refused request is one more failed bind
-	locked := r.wcredLocked()
-	n := 0
-	for !locked && n < 8 {
-		r1.setPassword("lockout-probe", q1, drillRandom(14))
+	// the lockout trap (D24) for W_cred: every refused request is one more failed bind. From a clean
+	// failure count (the successful bind above) replica 3 alone refuses until slapd locks the account.
+	maxFail := 0
+	if v := r.attrs(drillPolicyDN(r.env("T_PENDING"), "default"), "pwdMaxFailure")["pwdmaxfailure"]; len(v) == 1 {
+		fmt.Sscanf(v[0], "%d", &maxFail)
+	}
+	r.clearFailures()
+	locked, n := false, 0
+	for !locked && n < 12 {
+		r3.setPassword("lockout-probe", q3, drillRandom(14))
 		n++
 		locked = r.wcredLocked()
 	}
-	_, failedAll := r1.dialer.counts(wc)
-	r.obs("W_cred lockout trap (default policy): locked=%t after %d more refused requests (%d failed W_cred binds on replica 1, 1 on replica 2)", locked, n, failedAll)
+	r.obs("W_cred lockout trap, default policy (pwdMaxFailure %d): locked=%t after %d refused requests from a clean count", maxFail, locked, n)
+	r.check(maxFail > 0 && locked && n == maxFail, fmt.Sprintf("(b) the default policy locks W_cred at exactly pwdMaxFailure refused requests (%d of %d, locked=%t)", n, maxFail, locked))
 
 	// the periodic premise cycle on a replica with the stale Secret closes the password operation by itself
 	ccx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -766,16 +837,15 @@ func TestCredDrillLive(t *testing.T) {
 	r1.h.s.machineWrite.premise.mu.Unlock()
 	xc := r1.setPassword("rotated-after-cycle", q1, drillRandom(14))
 	r.obs("premise cycle on the stale replica: result=%q; the next setPassword: %d %s, reason=%s", cycleCode, xc.status, xc.code, auditField(xc.audit, "reason"))
-	r.check(cycleCode != "" && xc.status == 503, "(b) the periodic premise cycle fails on the stale replica (canary probe as W_cred) and the password operation stays 503")
+	r.check(cycleCode == "wcred_bind_failed" && xc.status == 503, fmt.Sprintf("(b) the periodic premise cycle fails on the stale replica (canary probe as W_cred: %q) and the password operation stays 503", cycleCode))
 
 	// restore by rollout of the rotated Secret
 	r.secret = rot
-	if locked {
-		bl := r.build("BL", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
-		r.obs("a replica built with the right Secret while W_cred is locked: start-up error %v", bl.h.startErr)
-		r.check(bl.h.startErr != nil, "locked W_cred: even the correct Secret does not start a replica (the canary probe cannot bind)")
-		r.check(r.unlockWCred() && !r.wcredLocked(), "the administrator's delete of pwdAccountLockedTime unlocks W_cred")
-	}
+	bl := r.build("BL", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
+	r.check(bl.h.startErr != nil && strings.Contains(bl.h.startErr.Error(), "wcred_bind_failed"),
+		fmt.Sprintf("locked W_cred: even the correct Secret does not start a replica (%v)", bl.h.startErr))
+	r.check(r.unlockWCred() && !r.wcredLocked(), "the administrator's delete of pwdAccountLockedTime unlocks W_cred")
+	r.clearFailures()
 	rb := r.build("RB", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
 	qb := rb.pending("t025-rot-rollout")
 	vb := drillRandom(14)
@@ -783,6 +853,37 @@ func TestCredDrillLive(t *testing.T) {
 	r.check(resp.status == 200 && r.binds(qb, vb), fmt.Sprintf("(b) restore: a replica rolled out with the rotated Secret sets a password: 200 (got %d)", resp.status))
 	still := r1.setPassword("stale-still", q1, drillRandom(14))
 	r.check(still.status == 503, fmt.Sprintf("(b) the replica that was not rolled out stays 503 (got %d)", still.status))
+
+	// the same failures under the W_data policy of guide 9.1 (pwdLockout FALSE, no pwdMaxFailure) applied to W_cred
+	noLock := drillPolicyDN(r.env("T_PENDING"), "machine-writers")
+	addPol := ldap.NewAddRequest(noLock, nil)
+	addPol.Attribute("objectClass", []string{"top", "device", "pwdPolicy"})
+	addPol.Attribute("cn", []string{"machine-writers"})
+	addPol.Attribute("pwdAttribute", []string{"userPassword"})
+	addPol.Attribute("pwdLockout", []string{"FALSE"})
+	ac := r.admin()
+	if err := ac.Add(addPol); err != nil {
+		t.Fatalf("add the no-lockout policy: %v", err)
+	}
+	ac.Close()
+	setPol := ldap.NewModifyRequest(wc, nil)
+	setPol.Replace("pwdPolicySubentry", []string{noLock})
+	if err := r.adminModify(setPol); err != nil {
+		t.Fatalf("attach the policy to W_cred: %v", err)
+	}
+	r.clearFailures()
+	refusedAll := true
+	for i := 0; i < 2*maxFail+3; i++ {
+		x := r3.setPassword("nolock-probe", q3, drillRandom(14))
+		refusedAll = refusedAll && x.status == 503
+	}
+	r.obs("W_cred under pwdLockout FALSE: %d refused requests, locked=%t", 2*maxFail+3, r.wcredLocked())
+	r.check(refusedAll && !r.wcredLocked(), fmt.Sprintf("W_cred under the no-lockout policy: %d refused requests (every one 503), the account is not locked", 2*maxFail+3))
+	rb2 := r.build("RB2", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	qb2 := rb2.pending("t025-nolock-rollout")
+	vb2 := drillRandom(14)
+	resp = rb2.setPassword("nolock-rollout", qb2, vb2)
+	r.check(resp.status == 200 && r.binds(qb2, vb2), fmt.Sprintf("W_cred under the no-lockout policy: the T-028 start-up checks pass and a new replica sets a password: 200 (got %d)", resp.status))
 
 	// ---- AC-011 (a): MACHINE_WRITE_CRED_ENABLED=false redeploy ----
 	g := r.build("G", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
@@ -806,6 +907,12 @@ func TestCredDrillLive(t *testing.T) {
 	vf := drillRandom(14)
 	back := g.setPassword("flag-back", pa1, vf)
 	r.check(back.status == 200 && r.binds(pa1, vf), fmt.Sprintf("(a) the replica with the flag on (not redeployed), the same account, sets the password: 200 (got %d)", back.status))
+	total := 0
+	for _, sv := range r.servers {
+		_, f := sv.dialer.counts(wc)
+		total += f
+	}
+	r.obs("application failed W_cred binds, all servers: %d", total)
 }
 
 func auditField(line, field string) string {

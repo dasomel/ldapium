@@ -703,33 +703,39 @@ replaced by a deep one (the T-024 proof covers the 429).
 
 ```
 LDAPIUM_IMAGE=ldapium:t025 python3 scripts/test/test-machine-write-cred-drill.py
-RESULT: 58 checks passed, 0 failed, mutation=none, 24s                                  (exit 0)
-LDAPIUM_T025_MUTATE=timeout-ignored   ... RESULT: 55 passed, 3 failed (c1 measured 28.0 s, c2 10.0 s)       (exit 1)
-LDAPIUM_T025_MUTATE=cred-flag-ignored ... RESULT: 56 passed, 2 failed (flag off: 429, not 503)             (exit 1)
-LDAPIUM_T025_MUTATE=rotate-noop       ... RESULT: 19 passed, 9 failed                                       (exit 1)
-LDAPIUM_T025_MUTATE=runbook-noop      ... RESULT: 23 passed, 5 failed (stuck entry remains)                 (exit 1)
+RESULT: 68 checks passed, 0 failed, mutation=none, 39s                                  (exit 0)
+LDAPIUM_T025_MUTATE=timeout-ignored   ... RESULT: 65 passed, 3 failed (c1 28.0 s, c2 10.0 s)               (exit 1)
+LDAPIUM_T025_MUTATE=cred-flag-ignored ... RESULT: 66 passed, 2 failed (flag off: 429, not 503)             (exit 1)
+LDAPIUM_T025_MUTATE=rotate-noop       ... RESULT: 21 passed, 11 failed                                      (exit 1)
+LDAPIUM_T025_MUTATE=runbook-noop      ... RESULT: 27 passed, 5 failed (stuck entry remains)                 (exit 1)
+LDAPIUM_T025_MUTATE=runbook-wholeattr ... RESULT: 66 passed, 2 failed (the other employeeType value is lost) (exit 1)
 ```
 
-Measured values (OBS lines of the run; the table is also in docs/machine-auth-operations.md):
+Measured values (OBS lines and asserted checks of the run; the same table is in docs/machine-auth-operations.md). "Asserted" means a check fails
+if the value differs; the rest is observation only.
 
 | AC-011 | Measurement |
 |---|---|
-| (c) in-flight bound | Password Modify held at the `W_cred` connection: `MACHINE_REQUEST_TIMEOUT=10s` ended after **8.0 s** (the UI closed the connection at 8.0 s; the held message never reached slapd), `4s` with a rotation 1.1 s in ended after **2.0 s** (0.9 s after the rotation); both 409 `idempotency_outcome_unknown`, account unchanged, same key + body again 409. The Password Modify gets timeout minus the 2 s cleanup reserve (`credCleanupReserve`), so a stalled request ends **within** `MACHINE_REQUEST_TIMEOUT`; the v2a `W_data` drill measured the full timeout (10.0 s) |
-| (c) already bound | held 1.3 s while `W_cred` was rotated, then released: **200**, the value binds; the cleanup (fresh `W_cred` bind with the old Secret) was refused: audit `cleanup=failed`, marker and pending policy stay (a stuck entry) |
-| (b) rotation | first `setPassword` after the Modify: 503 `unavailable` on replica 1 at +0.1 s, replica 2 at +0.2 s, audit `reason=bind_failed`, no change; slapd refuses the old credential, accepts the new; `W_data` createUser 201, `W_lock` lockUser 204 and the account locked at slapd, `M` listUsers 200 on both replicas; the T-028 cycle on a stale replica: `wcred_bind_failed`, the next request 503 |
-| (b) lockout trap | default policy: `W_cred` locked after the 6th refused request on one replica (7 failed binds in total); with it locked a replica built with the right Secret does not start; administrator `delete: pwdAccountLockedTime` unlocks; rollout then 200; the replica left on the old Secret stays 503. slapd accesslog: 15 failed `W_cred` binds (reqResult 49) over the drill, >= the application's count |
-| (a) flag off | `MACHINE_WRITE_CRED_ENABLED=false` (identity values and ceiling left in place): `setPassword` **503** `unavailable`, `reason=bind_failed`, **0** `W_cred` binds ok or failed, account unchanged; `createUser` `credentialPending` 400; `W_data`/`W_lock`/`M` unaffected; with the scope also absent from the ceiling: **403** `scope_denied`; the replica with the flag on sets the same account (200) |
-| Rev. 8 manual procedure | during the rotation the sweep (stale Secret) found `stuck=1`, `cleaned=0`, `wcred_bind_failed`; a replica started with the old Secret is refused on the canary probe, with the rotated Secret `sweep_stuck_at_startup`; `M` search `(pwdPolicySubentry=<pending>)` returned 9 entries (the stuck account, 6 canaries, 2 legitimate pending accounts), the narrowed `(&(pwdPolicySubentry=<pending>)(pwdChangedTime=*))` minus canaries exactly the stuck one; the administrator's Modify (exact marker value + policy value) removed both, the set password still binds, a read-only sweep found `stuck=0`, the rotated Secret then rolled out and set a password (200) |
+| (c) in-flight bound | Password Modify held at the `W_cred` connection: `MACHINE_REQUEST_TIMEOUT=10s` ended after **8.0 s** (asserted 7.5-8.5 s; the UI closed the connection itself, asserted; the held message never reached slapd), `4s` with a rotation 1.1 s in ended after **2.0 s** (asserted 1.5-2.5 s; 0.9 s after the rotation, observation); both 409 `idempotency_outcome_unknown` (asserted), account unchanged (asserted), same key + body again 409 `idempotency_outcome_unknown` (asserted). The Password Modify gets timeout minus the 2 s cleanup reserve (`credCleanupReserve`), so a stalled request ends **within** `MACHINE_REQUEST_TIMEOUT`; the v2a `W_data` drill measured the full timeout (10.0 s) |
+| (c) already bound | held 1.3 s while `W_cred` was rotated, then released: **200**, the value binds (asserted); the cleanup (fresh `W_cred` bind with the old Secret) was refused on both attempts (2 failed binds, asserted): audit `cleanup=failed`, marker and pending policy stay (asserted, a stuck entry) |
+| (b) rotation | first `setPassword` after the Modify: 503 `unavailable` on every replica (asserted; +0.1 s and +0.2 s observed), audit `reason=bind_failed`, one failed `W_cred` bind per refused request (asserted), no change; slapd refuses the old credential, accepts the new; `W_data` createUser 201, `W_lock` lockUser 204 and the account locked at slapd, `M` listUsers 200 on running replicas (asserted); the T-028 cycle on a stale replica: `wcred_bind_failed` (asserted), the next request 503. A replica **started** with the old Secret is refused (`wcred_bind_failed`, asserted): lever 1 breaks restarts and new pods (T025-F2) |
+| (b) lockout trap | from a clean failure count (a successful bind resets it) the default policy locked `W_cred` at exactly the **5th** refused request = `pwdMaxFailure` 5 (asserted equal). With it locked, a replica built with the right Secret does not start (asserted); administrator `delete: pwdAccountLockedTime` unlocks (asserted); rollout then 200. The earlier "7th bind" reading was the accumulation of the stale-Secret probes and the cycle, now cleared between phases |
+| (b) no-lockout policy for `W_cred` | the guide 9.1 policy (`pwdLockout FALSE`, no `pwdMaxFailure`) attached to `W_cred`: 13 refused requests (all 503), **not locked**; a new replica passed the T-028 start-up checks and set a password (200) (all asserted). Brute-force trade-off recorded as CHANGE.md Q17 (maintainer decision) |
+| (a) flag off | `MACHINE_WRITE_CRED_ENABLED=false` (identity values and ceiling left in place): `setPassword` **503** `unavailable`, `reason=bind_failed`, **0** `W_cred` binds ok or failed, account unchanged (asserted); `createUser` `credentialPending` 400; `W_data`/`W_lock`/`M` unaffected; with the scope also absent from the ceiling: **403** `scope_denied`; the replica with the flag on sets the same account (200) |
+| Rev. 8 manual procedure | during the rotation the sweep (stale Secret) found `stuck=1`, `cleaned=0`, `wcred_bind_failed`; a replica started with the old Secret is refused on the canary probe, with the rotated Secret `sweep_stuck_at_startup`. Step 1: the broad M search `(pwdPolicySubentry=<pending>)` returned 9 entries (6 configured canaries, the stuck account, 2 legitimate pending accounts), the narrowed search minus the **configured canary DNs** exactly the stuck one. Step 2: after one `MACHINE_REQUEST_TIMEOUT` (10 s) the search returned the same single account. Step 3: the stuck account had two `employeeType` values; the administrator's Modify removed only the `ldapium-credential-pending:` value and the policy value, `contractor` stayed (asserted; mutation `runbook-wholeattr` loses it and fails), the set password still binds, a read-only sweep found `stuck=0`, the rotated Secret then rolled out and set a password (200) |
+| slapd side | accesslog: 28 failed `W_cred` binds (reqResult 49) over the drill against the application's own count of 22 across all its servers; asserted `slapd >= application` (slapd also sees the premise checks' and sweeps' binds, which the application counter does not) and `application >= 13` |
 
-- **T025-F1 (escalated, not decided):** AC-011 (a) says 403. The code answers 403 only when the scope is also missing from the client's ceiling;
-  with only the flag flipped it answers 503 (`writeBindIdentity` finds no cred identity). Either closes the operation with no write and no `W_cred`
-  bind, but T-026 must decide what a ceiling with `password.write` and the flag off means (config refusal, 403, or this 503) and the AC text should match.
-- **T025-F2:** while `W_cred` is rotated or locked a stuck entry cannot be swept and blocks every new replica's start-up (`sweep_stuck_at_startup`);
-  the manual procedure is the only way out, and in-flight completion during a rotation (above) is a way to create one.
+- **T025-F1 (maintainer decision 2026-10-14: 503 is right):** AC-011 (a) said 403. The code answers 403 only when the scope is also missing from the
+  client's ceiling; with only the flag flipped it answers 503 (`writeBindIdentity` finds no cred identity), no write, no `W_cred` bind. AC-011 (a) is corrected
+  (CHANGE.md). The 503 is kept so that an emergency block never becomes a start-up failure; T-026 confirms what a ceiling with `password.write` and the flag off means.
+- **T025-F2:** lever 1 (rotation) fails every restart and new pod until the new Secret is rolled out (start-up canary probe), and a stuck entry (below) blocks
+  every start-up too; the operations doc orders rotation and Secret rollout as one rollout. While `W_cred` is rotated a stuck entry cannot be swept; the manual
+  procedure is the only way out, and in-flight completion during a rotation is a way to create one.
+- **T025-F3 (user decision, CHANGE.md Q17):** the default policy lets anyone who can reach LDAP lock `W_cred` with 5 wrong binds; the no-lockout policy removes that and removes
+  the guess limit. Not applied by default; no code or guide change beyond one measured sentence in guide 9.1.
 
 Not covered here: a Kubernetes rolling update and the real Secret rollout, multi-provider, `MACHINE_REQUEST_TIMEOUT` values other than 10 s and 4 s (and the
-10 s stall with a rotation, the 4 s stall without one), the natural expiry of the 900 s `W_cred` lock, the lockout trap under a policy without lockout for
-`W_cred`, the 60 s timer itself (the cycle was called directly), a real `Idempotency-Key` retry after the stuck entry is cleaned, and CI (T-027 wires it).
+10 s stall with a rotation, the 4 s stall without one), the natural expiry of the 900 s `W_cred` lock, the 60 s timer itself (the cycle was called directly), a real `Idempotency-Key` retry after the stuck entry is cleaned, and CI (T-027 wires it).
 
 ## 3. Not verified
 
@@ -738,4 +744,4 @@ Not covered here: a Kubernetes rolling update and the real Secret rollout, multi
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
 
-T-025 드릴(§2k)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, `W_cred`에 잠금 없는 정책을 쓴 경우, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
+T-025 드릴(§2k)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
