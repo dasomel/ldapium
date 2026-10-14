@@ -127,3 +127,33 @@ func TestCheckNotPrivilegedRejectsBeforeDial(t *testing.T) {
 		t.Errorf("writes off: %v", err)
 	}
 }
+
+// v2c T-020 (T020-D5): with the cred compartment on, W_cred is denied lexically
+// before any dial and is not a protected identity resolved on every write, so
+// data and lock writes never depend on the W_cred entry existing.
+func TestWriteIdentityCredDeniedLexicallyNotResolved(t *testing.T) {
+	const cred = "cn=cred,ou=system,dc=example,dc=org"
+	cfg := config.Config{LDAPURL: "ldap://127.0.0.1:1", BaseDN: "dc=example,dc=org", Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, BindDN: "cn=reader,dc=example,dc=org"}}
+	cfg.Machine.Write.CredEnabled = true
+	cfg.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: cred, BindPassword: "private-cred"}
+	r := NewWriteIdentityReader(cfg, []string{"cn=writer,ou=system,dc=example,dc=org"})
+	for _, p := range r.protected {
+		if strings.EqualFold(p, cred) {
+			t.Fatal("W_cred is resolved on every write")
+		}
+	}
+	for _, target := range []string{cred, "CN=CRED,OU=SYSTEM,DC=EXAMPLE,DC=ORG", "uid=x," + cred} {
+		if err := r.Check(context.Background(), target, "inetOrgPerson"); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Errorf("%s: %v, want a denial before dial", target, err)
+		}
+	}
+	// Any other target reaches the directory (here: the closed port), not a denial.
+	if err := r.Check(context.Background(), "uid=bob,ou=people,dc=example,dc=org", "inetOrgPerson"); !errors.Is(err, errWriteIdentityDirectory) {
+		t.Fatalf("ordinary target = %v, want the dial failure", err)
+	}
+	// Off: the DN is not special.
+	cfg.Machine.Write.CredEnabled = false
+	if err := NewWriteIdentityReader(cfg, nil).Check(context.Background(), cred, "inetOrgPerson"); !errors.Is(err, errWriteIdentityDirectory) {
+		t.Fatalf("cred off = %v, want the dial failure", err)
+	}
+}

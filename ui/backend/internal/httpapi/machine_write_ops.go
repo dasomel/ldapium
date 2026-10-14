@@ -104,6 +104,12 @@ func writeBindIdentity(w config.MachineWriteConfig, compartment string) (config.
 		if w.LockEnabled && w.Lock.BindDN != "" {
 			return w.Lock, true
 		}
+	case "cred":
+		// v2c T-020: selectable, but no catalog operation names this
+		// compartment until T-022/T-026.
+		if w.CredEnabled && w.Cred.BindDN != "" {
+			return w.Cred, true
+		}
 	}
 	return config.MachineWriteIdentity{}, false
 }

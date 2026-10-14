@@ -293,11 +293,24 @@ fi
 
 롤백 후 6.1을 다시 읽어 `M`·복제·이미지 규칙만 원래대로 남았는지 확인한다(스모크는 적용 전 `olcAccess`와 **바이트 단위로 같게** 돌아감을 확인한다). 계정 항목은 남는다. 완전히 없애려면 관리자로 `ldapdelete`.
 
-## 8. `W_cred`: 설계만 있고 ACL 조각이 없다
+## 8. `W_cred`: 설정 검증만 있고 ACL 조각·오퍼레이션이 없다
 
-비밀번호 쓰기(`setPassword`, 서버 생성 비밀번호 금지)는 별도 승인 단계(Resolved Q1·D15·D16)이고 구현되지 않았다. 따라서 **`userPassword`/`pwd*`를 쓰는 ACL 조각은
-이 패키지에 없다.** `W_data`·`W_lock`은 비밀번호 속성에 `none`이고(AC-008), 비밀번호 scope가 꺼진 배포에서 직접 시도는 ACL로 거부된다. `W_cred` 계정을 만들지 않는다.
-후속 승인 시 별도 LDIF를 같은 방식(자기 DN에만 작용, 이미지 규칙 앞, 정해진 순서의 `W_lock` 뒤)으로 추가하고 이 절을 갱신한다.
+비밀번호 쓰기(`setPassword`, 서버 생성 비밀번호 금지)는 v2c([machine-write-scope-v2](changes/machine-write-scope-v2/CHANGE.md))로 단계적으로 들어오며 **아직 열리지 않았다.** `directory.users.password.write`는 상한에 쓰면 기동이 실패하고, 비밀번호 경로는 `MACHINE_WRITE_CRED_ENABLED`와 무관하게 403 `scope_denied`·bind 0이다.
+**`userPassword`/`pwd*`를 쓰는 ACL 조각은 아직 이 패키지에 없다**(T-021). `W_data`·`W_lock`은 비밀번호 속성에 `none`이고(AC-008), 직접 시도는 ACL로 거부된다. T-021 전에는 `W_cred` 계정을 만들지 않는다.
+
+T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`이고 `MACHINE_WRITE_CRED_ENABLED=true`일 때만 읽으며, 꺼져 있으면 다른 `MACHINE_WRITE_CRED_*`는 읽지 않는다(REQ-001, 기본 `false`):
+
+| 변수 | 규칙(어기면 기동 실패, 진단에 값 없음) |
+|---|---|
+| `MACHINE_WRITE_CRED_BIND_DN`/`_PASSWORD` | 둘 다 필수, 비밀번호는 다른 `W_*`와 같은 Secret 관례. DN은 D26 형식(`uid`/`cn`/`ou`/`dc`, 별칭·OID·이상한 공백 거부)이고 `M`·`W_data`·`W_lock`(켠 경우)·관리자·서비스 계정·rootdn·복제 신원과 `ParseDN` 동등이면 거부(REQ-009). 보호 집합에 들어가므로 이 DN을 담는 `MACHINE_WRITE_SUBTREES` 상한도 거부된다. |
+| `MACHINE_WRITE_CRED_SUBTREES` | `client=dn|dn;…`, 비어 있으면 거부(검사 8). 각 DN은 **같은 client의** `MACHINE_WRITE_SUBTREES` 상한과 같거나 그 안이어야 하고(Q9), 특권 그룹 자신이나 그 아래는 거부. |
+| `MACHINE_WRITE_PRIVILEGED_GROUPS` | v2c를 켜면 비어 있으면 거부(검사 8). |
+| `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. |
+| `MACHINE_WRITE_CRED_PENDING_POLICY_DN` | 필수(D379-18). D26 형식, `LDAP_BASE_DN`의 엄격한 하위, 이미지 기본 정책(`cn=default,ou=policies,<base>`)과 다르고 보호 신원·특권 그룹·seed와 달라야 한다. |
+| `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
+
+대기 정책과 허용 목록의 정책 항목도 보호 집합에 들어간다: 머신 쓰기는 정책 항목을 고칠 수 없고, 그 항목을 담는 쓰기 상한은 기동 실패다.
+`olcAccess` 원문 대조·카나리·설정 읽기 신원(`MACHINE_WRITE_CRED_ACL_READER_*`)·정책 값 하한 비교는 아직 없다(T-028). ACL 조각은 같은 방식(자기 DN에만 작용, 이미지 규칙 앞, 정해진 순서의 `W_lock` 뒤)으로 T-021에서 추가하고 이 절을 갱신한다.
 
 ## 9. 비밀번호 회전·다중 노드·잠금
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
@@ -29,12 +30,26 @@ type MachineWriteIdentity struct {
 	BindPassword string
 }
 
-// MachineWriteConfig separates data and lock identities (D3). Credential
-// writes require separate approval (Resolved Q1); they have no config here.
+// MachineWriteConfig separates data, lock and credential identities (D3,
+// D379-2). The credential compartment (v2c) is configuration only: no
+// operation uses it until T-026 opens setPassword.
 type MachineWriteConfig struct {
 	Data        MachineWriteIdentity
 	LockEnabled bool
 	Lock        MachineWriteIdentity
+	// CredEnabled is MACHINE_WRITE_CRED_ENABLED (REQ-001, default false); when
+	// false no other MACHINE_WRITE_CRED_* variable is read and every Cred*
+	// field stays zero.
+	CredEnabled bool
+	Cred        MachineWriteIdentity
+	// CredSubtrees is MACHINE_WRITE_CRED_SUBTREES, per client and inside that
+	// client's Subtrees (Q9). CredMinLength is the policy floor checked at run
+	// time (D379-15 check 2), CredPolicyDNs the per-target policy allowlist
+	// (check 3) and CredPendingPolicyDN the pending-account policy (D379-18).
+	CredSubtrees        []MachineWriteClientDNs
+	CredMinLength       int
+	CredPolicyDNs       []string
+	CredPendingPolicyDN string
 	// Subtrees/Groups are per-client write ceilings and writable groups,
 	// PrivilegedGroups the deny set, Limits the write budget (T-012/T-016/T-019).
 	Subtrees         []MachineWriteClientDNs
@@ -81,17 +96,52 @@ func loadMachineWriteIdentities(getenv func(string) string, cfg Config, m Machin
 				}
 			}
 		}
-		return w, nil
+	} else {
+		if w.Lock, err = machineWriteIdentity(getenv, "MACHINE_WRITE_LOCK", cfg, m); err != nil {
+			return w, err
+		}
+		data, _ := ldap.ParseDN(w.Data.BindDN)
+		lock, _ := ldap.ParseDN(w.Lock.BindDN)
+		if data.EqualFold(lock) {
+			return w, fmt.Errorf("MACHINE_WRITE_DATA_BIND_DN and MACHINE_WRITE_LOCK_BIND_DN must be distinct")
+		}
 	}
-	if w.Lock, err = machineWriteIdentity(getenv, "MACHINE_WRITE_LOCK", cfg, m); err != nil {
-		return w, err
+	return w, loadMachineWriteCredIdentity(getenv, cfg, m, &w)
+}
+
+// loadMachineWriteCredIdentity reads MACHINE_WRITE_CRED_ENABLED and, only when it
+// is on, the W_cred identity (REQ-009, D379-2): required, D26 form, and
+// ParseDN-distinct from M, administrators, service accounts, rootdns, the
+// replication identity, W_data and W_lock. Errors never echo the values; the
+// password follows the bind-password Secret convention of the other W_*.
+func loadMachineWriteCredIdentity(getenv func(string) string, cfg Config, m MachineConfig, w *MachineWriteConfig) error {
+	// Unlike boolEnv, the diagnostic never echoes the raw value: a secret
+	// mis-mapped into this variable must not reach the start-up log.
+	if raw := strings.TrimSpace(getenv("MACHINE_WRITE_CRED_ENABLED")); raw != "" {
+		on, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("MACHINE_WRITE_CRED_ENABLED must be true or false")
+		}
+		w.CredEnabled = on
 	}
-	data, _ := ldap.ParseDN(w.Data.BindDN)
-	lock, _ := ldap.ParseDN(w.Lock.BindDN)
-	if data.EqualFold(lock) {
-		return w, fmt.Errorf("MACHINE_WRITE_DATA_BIND_DN and MACHINE_WRITE_LOCK_BIND_DN must be distinct")
+	if !w.CredEnabled {
+		return nil
 	}
-	return w, nil
+	var err error
+	if w.Cred, err = machineWriteIdentity(getenv, "MACHINE_WRITE_CRED", cfg, m); err != nil {
+		return err
+	}
+	cred, _ := ldap.ParseDN(w.Cred.BindDN)
+	others := []string{w.Data.BindDN}
+	if w.LockEnabled {
+		others = append(others, w.Lock.BindDN)
+	}
+	for _, raw := range others {
+		if other, _ := ldap.ParseDN(raw); other.EqualFold(cred) {
+			return fmt.Errorf("MACHINE_WRITE_CRED_BIND_DN must be distinct from MACHINE_WRITE_DATA_BIND_DN and MACHINE_WRITE_LOCK_BIND_DN")
+		}
+	}
+	return nil
 }
 
 func machineWriteIdentity(getenv func(string) string, prefix string, cfg Config, m MachineConfig) (MachineWriteIdentity, error) {
