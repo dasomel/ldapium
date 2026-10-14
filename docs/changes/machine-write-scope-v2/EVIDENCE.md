@@ -781,7 +781,7 @@ Mutations (unit, each restored after):
 Not covered here: `config.Load` from a real environment in the live proofs (the unit tests cover the parse; the live
 configurations are built in code), Keycloak tokens, a UI container (`docker logs` of the UI image) and a Kubernetes
 rollout, the chart rendered into a running cluster (render-time assertions only, `test-chart-machine-write.sh`), multi-provider,
-E-22, E-14, `pwdInHistory`, the 60 s timer firing during a run, GitHub Actions, a T-028 check of the `W_cred` policy (not in this run; added and measured in §2n), and the independent Class D review and dedicated security-reviewer round.
+E-22, E-14, `pwdInHistory`, the 60 s timer firing during a run, GitHub Actions, a T-028 check of the `W_cred` policy (not in this run; added and measured in §2n), (the independent Class D review and dedicated security-reviewer round were later done: §2n, Revision 15).
 
 ### 2n. T-026 review follow-up: Q18 (b) enforced, Q19 403, Q16 app path, in-lock re-read (2026-10-14, same branch)
 
@@ -811,13 +811,39 @@ test-chart-machine-write.sh                                  97 PASS, exit 0 (of
 Not covered here: everything in §2m's list except the Q16 app path and the `W_cred` policy check, which are now measured; the `config.Load` shape of the
 flag-off redeploy is still built in code in the drill (no live run reads real environment variables).
 
+### 2o. Verification run 2026-10-14 (T-040)
+
+Tree: main `d1953c2` (worktree, clean), macOS, no Docker, no kind. Helper/unit and static evidence only; no live LDAP.
+
+```
+cd ui/backend && go test ./internal/httpapi ./internal/machineauth ./internal/config ./internal/ldapclient -count=1
+  ok httpapi 23.0s | machineauth 9.6s | config 0.4s | ldapclient 3.7s
+same with -race
+  ok httpapi 37.1s | machineauth 15.5s | config 1.5s | ldapclient 5.3s
+go vet ./internal/...  -> exit 0      go vet -tags live ./internal/... -> exit 0      gofmt -l . -> empty
+scripts/test/test-chart-machine-write.sh -> 97 PASS, 0 FAIL, "chart machine-write assertions passed" (5.4s)
+helm lint charts/ldapium -> 1 chart(s) linted, 0 failed (info: icon recommended)
+scripts/check-versions.sh -> "versions agree"      scripts/check-modules.sh -> "module inventory agrees ..."
+scripts/test-incident-evidence.sh -> 13 passed, 0 failed
+shellcheck image/entrypoint.sh scripts/*.sh scripts/test/*.sh charts/ldapium/files/tests/*.sh -> exit 0
+```
+
+Not run, and why: `go test ./...` / `go build ./...` / `go vet ./...` over `cmd/server` (`ui/backend/web/dist` is empty in a fresh worktree; needs
+`ui/frontend` build); `ui/frontend` `npm run lint && npm run build` (not needed for this docs/verification scope); `scripts/licenses.sh --check`,
+`check-make-parity.sh` and the remaining `scripts/test/test-chart-*.sh`, `test-export-audit-log.sh` and similar `make check` tail (not run in this pass);
+`shellcheck -s sh image/entrypoint.sh` was run without `-s sh`. Every Docker/kind/live-slapd script (the v2b/v2c drills, ACL live, secret scan) was not rerun
+here; their results stay as recorded in §2b–§2n and CI (`machine-write-e2e.yml`, joined to `release_critical` by PR #412). The mutation list of CHANGE.md
+"Verification plan" was not rerun. T-027's "success at the tag SHA" is checked at the v0.2.0 tag only.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) (2026-10-14 T-024, §2k: E-13을 `live` 시험 서버(프로세스 안 UI)·slapd 로그·accesslog(rootdn·`M`) 범위에서, E-17 앱 경로 절반(한 provider), E-10 앱 경로를 실측 — E-13의 Keycloak·UI 컨테이너 부분은 아님. 여전히 미실측: Keycloak 컨테이너 로그(토큰은 하니스 내장 IdP), UI 컨테이너 `docker logs`(서버는 프로세스 안에서 실행, 로그 전체를 수집), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions. T024-F1은 2026-10-14 결정(프로브 유지, 공개 상수로 고정·허용 목록).) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
-T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
+T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), v2b 보안 검토는 PR #395 안에서 수행(#394, NO BLOCKER; 항목 1·3·4는 #397, 2·5·6은 #396).
 
-T-026(§2m·§2n)의 Not verified (§2n에서 Q16 앱 경로 403은 실측으로 옮김): 실제 환경 변수의 `config.Load`를 거친 라이브 서버(라이브 구성은 코드로 만듦), Keycloak 토큰, UI 컨테이너·Kubernetes 롤아웃, 클러스터에 배포한 차트(렌더 단언만), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions, `W_cred` 정책 검사는 §2n에서 구현·실측, Class D 독립 검토·전용 security-reviewer(미실시). AC-011 (a)는 403으로 개정(Q19); 플래그 끈 Load 구성은 드릴에서 코드로 만들었다(실제 환경 변수 Load 라이브 실행 없음).
+T-026(§2m·§2n)의 Not verified (§2n에서 Q16 앱 경로 403은 실측으로 옮김): 실제 환경 변수의 `config.Load`를 거친 라이브 서버(라이브 구성은 코드로 만듦), Keycloak 토큰, UI 컨테이너·Kubernetes 롤아웃, 클러스터에 배포한 차트(렌더 단언만), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions, `W_cred` 정책 검사는 §2n에서 구현·실측, Class D 독립 검토·전용 security-reviewer는 §2n·Revision 15에서 완료(BLOCKER 0). AC-011 (a)는 403으로 개정(Q19); 플래그 끈 Load 구성은 드릴에서 코드로 만들었다(실제 환경 변수 Load 라이브 실행 없음).
 
 T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
+
+T-040 (2026-10-14, §2o)의 Not verified: 위 "Not run, and why" 목록 전부(`cmd/server` 포함 `go test ./...`, 프런트엔드 빌드, `licenses.sh`·`check-make-parity.sh`·나머지 차트 스크립트, 라이브 드릴 재실행, 변이 목록 재실행), 태그 SHA에서의 T-027 게이트.
