@@ -1,7 +1,7 @@
 # ADR: 머신 쓰기 v2b·v2c — 그룹·잠금·비밀번호 구획 (D379-1–D379-18)
 
-- Status: v2b 결정(D379-3/4/5/6/7, 2026-10-12 유지보수자 수용: Q2·Q3·Q4·Q7 권고대로; 구현 단위가 병합되면 `Accepted`로 승격) · v2c 결정(D379-9–D379-16)은 **`Accepted for implementation start (2026-10-13), pending security-reviewer + Codex gate`**(유지보수자: Q1 승인, Q5·Q6 권고대로; Q11–Q13 잠정 — 권고, 명시 확인 아님). F-4는 유지보수자가 2026-10-13에 D379-18(대기 계정 전용 정책)로 결정했고 D379-9·D379-13은 그에 맞춰 개정됐다(Revision 7). [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
-- Owner: 유지보수자(v2b 수용 2026-10-12, v2c 착수 승인 2026-10-13 — security-reviewer·Codex 게이트 대기)
+- Status: v2b 결정(D379-3/4/5/6/7, 2026-10-12 유지보수자 수용: Q2·Q3·Q4·Q7 권고대로; 구현 단위가 병합되면 `Accepted`로 승격) · v2c 결정(D379-9–D379-16, D379-18)은 **`Accepted` — 구현·개방 병합됨(2026-10-14, T-020–T-026, PR #403–#411)**; 근거: 전용 security-reviewer BLOCKER 0, Class D critic ACCEPT-WITH-RESERVATIONS 후 반영(Revision 15), Codex PASS, 유지보수자 결정 Q16(v2a `deleteUser`·modrdn 축소 수용)·Q17(`W_cred` 무잠금)·Q18 (b)(기동·주기 검사로 강제)·Q19(플래그만 끈 재배포 403 유지)·M-3 `mail`·`uid` 수용(2026-10-14)·T028-F1(좁아진 카나리 역할, Revision 12) 수용. Q11–Q13은 잠정(권고, 명시 확인 아님). T-027(CI·릴리스 게이트, PR #412)은 병합 전이다. F-4는 유지보수자가 2026-10-13에 D379-18(대기 계정 전용 정책)로 결정했고 D379-9·D379-13은 그에 맞춰 개정됐다(Revision 7). [CHANGE.md](CHANGE.md)의 되돌리기 어려운 결정 요약. Revision 1·2(2026-10-11)가 Codex 1·2차 보안 검토를 반영했다(D379-7·D379-10·D379-14·D379-15·D379-16). 실측 전에는 닫을 수 없는 출하 차단 위험은 CHANGE.md "Ship-gating open risks". 구현 단위가 병합되면 해당 결정을 `Accepted`로 승격한다.
+- Owner: 유지보수자(v2b 수용 2026-10-12, v2c 착수 승인 2026-10-13, 개방 검토 완료 2026-10-14 — security-reviewer BLOCKER 0, Codex PASS)
 - Related issue: [#379](https://github.com/dasomel/ldapium/issues/379)(닫지 않음). 부모: [machine-write-scope ADR](../machine-write-scope/ADR.md)(D1/D3/D4/D5/D9, D19–D22, D26)
 - 위치 규약: 변경 패키지 안의 `ADR.md`(부모와 같음). 근거·대안·위협 모델 전문은 CHANGE.md에 있다.
 
@@ -42,6 +42,8 @@ D379-6(그룹 삭제 조건)은 되돌리기 쉬운 운영 결정이라 CHANGE.m
 - 그룹 권한이 그룹 멤버십으로 주어지는 사용자를 보호하려면 운영자가 `MACHINE_WRITE_PRIVILEGED_GROUPS`를 정확히 설정해야 한다.
 - Revision 15 (2026-10-14, T-026 검토 반영·유지보수자 결정): 기동·주기 검사가 `W_cred` 무잠금 정책을 강제한다(Q18 (b)); 플래그만 끈 재배포는 403(Q19); M-3 `mail`·`uid` 바꿔치기는 수용 위험(문서 경고).
 - Revision 14 (2026-10-14, T-026 개방): `setPassword`가 열렸다(D379-9/10). Q17 결정(무잠금): `W_cred`는 9.1 무잠금 정책을 갖고 무차별 대입 완화(긴 무작위 비밀번호·네트워크 제한·실패 bind 경보)는 운영자 책임이다. 플래그만 끈 재배포는 기동하고 `setPassword`는 bind 없이 거부된다(실제 Load 경로 403, 상태 코드는 Q19). T-028이 `W_cred` 정책을 강제할지는 Q18.
+- Revision 13 (2026-10-14, T-025 드릴 검토): AC-011 (a)와 `W_cred` 잠금 정책 질문(Q17) 추가; 결정 문구 불변. 상태 코드는 Revision 15에서 403으로 확정(Q19).
+- Revision 12 (2026-10-14, T-028 구현 검토): T028-F1 수용 — 대기 카나리의 19는 정책 적용만 증명하고 50 두 개가 비밀번호 항·표지 항을 격리 확인한다; 특권 filter·`CRED_DN` 경계 항은 검사 1(원문 대조)이 유일한 통제. D379-16은 설정 읽기 신원이 메인 DB `olcAddContentAcl`도 읽도록 확장(Q15 선행 조건 확인).
 - Revision 10 (2026-10-14, 유지보수자 Q16 수용): v2c를 켜면 머신 `deleteUser`·modrdn은 `W_data`가 만들지 않은 사용자에게 50(v2a 계약 축소, 의도된 결과). 잔여 위험(스스로 만든 계정, 중첩 특권 그룹) 수용.
 - Revision 9 (2026-10-13, Revision 8 재검토 반영, EVIDENCE.md §2h): M-3(유출된 `W_data` + `password.write` client로 삭제→대기 재생성→설정→특권 재가입) 완화 — 비-`W_data` 사용자 `entry` `=rsc`, 특권 그룹 `member` `=rsc`(둘 다 실측 50). 결과: v2c를 켜면 머신 `deleteUser`·modrdn이 `W_data`가 만든 사용자로 좁아진다; 잔여 위험(스스로 만든 계정, 중첩 특권 그룹)은 Q16. 롤백은 부착 차단 → 0건 확인 → 정리 권한 제거. R-3·AC-010c는 provider 하나 안에서만.
 - Revision 8 (2026-10-13, 독립 검토 security-reviewer BLOCKER 0·MAJOR 2, Codex P1 3·P2 2 반영; 유지보수자 Q14 수용+스윕 강화, Q15 `olcAddContentAcl TRUE` 채택, F-9 #399 선행 조건; EVIDENCE.md §2g): 표지 규칙이 Modify에도 적용되던 문제(M-1)를 Add 전용 filter로 닫음, R-3은 단일 slapd에서만(다중 provider는 last-write-wins), 롤백 시 남은 부착을 정리 권한보다 먼저 지움, 정리 실패 창의 상한은 LDAP·`W_cred`가 살아 있을 때만 "스윕 한 주기".
