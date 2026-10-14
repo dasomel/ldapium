@@ -496,6 +496,20 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   ppolicy attributes a user can still write on itself, measured and left as they are:
   `pwdReset`, `pwdStartTime`, `pwdEndTime` (replace and delete) and
   `pwdAccountLockedTime` (add, i.e. locking itself out).
+- **Security / behaviour change:** a user can no longer write its own ppolicy state
+  (#400, D400-1). The #399 rule's `attrs=` list now also covers `pwdReset`,
+  `pwdStartTime`, `pwdEndTime` and `pwdAccountLockedTime`, so the entry itself gets
+  `read` only: it can no longer clear its own forced reset, extend its own validity
+  window or lock itself. No new rule, so the rule count and every `{n}` position stay
+  as they were. The ppolicy overlay's own lock/unlock/reset writes and the admin are
+  unaffected (live-verified, including lock/unlock replicating to a second node).
+  **Users who relied on self-writing these attributes now get Insufficient access
+  (50); there is no escape hatch, an operator who wants self-managed validity windows
+  must use an admin identity.** `pwdChangedTime`, `pwdFailureTime`, `pwdGraceUseTime`,
+  `pwdLastSuccess` and `pwdHistory` were already refused by the schema
+  (NO-USER-MODIFICATION, 19). **Upgrade:** bootstrap only, as for #399; existing
+  volumes keep the old behaviour until the rule is replaced by hand (image/README.md
+  "Access control").
 - A kept config volume with a lost data volume now refuses to start in every mode
   with a message naming the missing database directory and the recovery (delete BOTH
   the data and the config claims; the node refills from its peers). `dedicated` no

@@ -245,7 +245,42 @@ jobs:
           changetype: modify
           delete: pwdPolicySubentry
           EOF
-              echo "PASS: a user can read but not choose its own password policy"
+              # #400: the same rule makes the ppolicy state attributes read-only for
+              # self. A user that can rewrite its own pwdReset/pwdStartTime/pwdEndTime
+              # could clear a forced reset or extend its own validity window, and add
+              # pwdAccountLockedTime to lock itself. Each of add/replace/delete must be
+              # refused by the ACL (50); the admin sets and clears them, and the user
+              # reads them back.
+              self_refused() {
+                if printf "dn: %s\nchangetype: modify\n%b\n" "$bob" "$1" |
+                  ldapmodify -x -H "$url" -D "$bob" -w BobPassword1! >/tmp/self-state.out 2>&1; then
+                  echo "::error::a bound user changed its own ppolicy state ($2)"
+                  exit 1
+                fi
+                grep -q "Insufficient access (50)" /tmp/self-state.out || {
+                  echo "::error::self ppolicy state change was not refused by the ACL ($2)"
+                  cat /tmp/self-state.out
+                  exit 1
+                }
+              }
+              admin_mod() {
+                printf "dn: %s\nchangetype: modify\n%b\n" "$bob" "$1" |
+                  ldapmodify -x -H "$url" -D "$admin" -w security-e2e-password
+              }
+              for pair in pwdReset:TRUE:FALSE pwdStartTime:20200101000000Z:20300101000000Z pwdEndTime:20990101000000Z:20300101000000Z pwdAccountLockedTime:20990101000000Z:20300101000000Z; do
+                attr=${pair%%:*}
+                rest=${pair#*:}
+                val=${rest%%:*}
+                newval=${rest#*:}
+                self_refused "add: $attr\n$attr: $val" "add $attr"
+                admin_mod "add: $attr\n$attr: $val"
+                ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base "$attr" |
+                  grep -q "^$attr: $val$"
+                self_refused "replace: $attr\n$attr: $newval" "replace $attr"
+                self_refused "delete: $attr" "delete $attr"
+                admin_mod "delete: $attr"
+              done
+              echo "PASS: a user can read but not choose its own password policy or ppolicy state"
             '
 
       - name: Verify a user cannot choose their own password policy (default ACL branch)
@@ -312,7 +347,41 @@ jobs:
           fi
           echo "$out"
           case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self delete not refused with 50"; exit 1 ;; esac
-          echo "PASS: default ACL branch - a user can read but not choose its own password policy"
+
+          # #400: pwdReset/pwdStartTime/pwdEndTime/pwdAccountLockedTime are read-only for
+          # self too (same rule). add/replace/delete must each be refused with 50.
+          admin_mod() {
+            printf 'dn: %s\nchangetype: modify\n%b\n' "$bob" "$1" |
+              docker exec -i "$c" ldapmodify -x -H "$url" -D "$admin" -w "$pw"
+          }
+          for pair in pwdReset:TRUE:FALSE pwdStartTime:20200101000000Z:20300101000000Z pwdEndTime:20990101000000Z:20300101000000Z pwdAccountLockedTime:20990101000000Z:20300101000000Z; do
+            attr=${pair%%:*}
+            rest=${pair#*:}
+            val=${rest%%:*}
+            newval=${rest#*:}
+            if ! out=$(self_mod "add: $attr
+          $attr: $val"); then
+              echo "::error::a bound user set $attr on its own entry (default ACL branch)"
+              exit 1
+            fi
+            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self add $attr not refused with 50"; exit 1 ;; esac
+            admin_mod "add: $attr\n$attr: $val"
+            read_back=$(docker exec "$c" ldapsearch -LLL -x -H "$url" -D "$bob" -w 'BobPassword1!' -b "$bob" -s base "$attr")
+            case "$read_back" in *"$attr: $val"*) ;; *) echo "::error::bob cannot read its own $attr"; exit 1 ;; esac
+            if ! out=$(self_mod "replace: $attr
+          $attr: $newval"); then
+              echo "::error::a bound user replaced its own $attr (default ACL branch)"
+              exit 1
+            fi
+            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self replace $attr not refused with 50"; exit 1 ;; esac
+            if ! out=$(self_mod "delete: $attr"); then
+              echo "::error::a bound user deleted its own $attr (default ACL branch)"
+              exit 1
+            fi
+            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self delete $attr not refused with 50"; exit 1 ;; esac
+            admin_mod "delete: $attr"
+          done
+          echo "PASS: default ACL branch - a user can read but not choose its own password policy or ppolicy state"
 
       - name: Verify an authenticated user cannot change group membership
         run: |

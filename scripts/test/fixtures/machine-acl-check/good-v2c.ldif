@@ -32,6 +32,6 @@ olcAccess: {29}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey
 olcAccess: {30}to * by dn.exact="uid=machine-write-cred,ou=system,dc=example,dc=org" none by * break
 olcAccess: {31}to attrs=userPassword,shadowLastChange by self write by anonymous auth by * none
 olcAccess: {32}to attrs=entry,uid,objectClass by anonymous read by users read
-olcAccess: {33}to attrs=pwdPolicySubentry by self read by * break
+olcAccess: {33}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime by self read by * break
 olcAccess: {34}to * by self write by users read by anonymous none
 olcAddContentAcl: TRUE

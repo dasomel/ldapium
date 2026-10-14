@@ -467,12 +467,17 @@ The `mdb` database ships with a default-deny-to-anonymous ACL (`olcAccess` on
    `(uid=...)` search fails with `No such object (32)` — the attribute is
    readable but the entry's existence is never disclosed — and uid login
    breaks entirely. Verified the hard way.
-3. `pwdPolicySubentry` only: the entry itself may **read** it and nothing
-   more; every other identity falls through to rule 4 (`by * break`), so
-   their access is unchanged. Without this rule, rule 4's `by self write`
-   let any user point its own entry at any `pwdPolicy` subentry, i.e. pick a
-   policy with no lockout, no quality check or no history for itself (#399).
-   Only the admin assigns a policy to a user.
+3. `pwdPolicySubentry` and the ppolicy state attributes `pwdReset`,
+   `pwdStartTime`, `pwdEndTime`, `pwdAccountLockedTime` only: the entry itself
+   may **read** them and nothing more; every other identity falls through to
+   rule 4 (`by * break`), so their access is unchanged. Without this rule,
+   rule 4's `by self write` let any user point its own entry at any
+   `pwdPolicy` subentry, i.e. pick a policy with no lockout, no quality check
+   or no history for itself (#399), clear its own forced reset, extend its own
+   validity window or lock itself (#400). Only the admin sets them; the
+   `ppolicy` overlay's own lock/unlock/reset bookkeeping is internal and is
+   not subject to the ACL. There is no per-user escape hatch: self-managed
+   validity windows need an admin identity (D400-1).
 4. Everything else: the entry itself may write, any authenticated user may
    read, anonymous gets nothing.
 
@@ -485,7 +490,7 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 |---|---|---|---|---|
 | `userPassword`, `shadowLastChange` | bind only, never read | none | write | write |
 | `entry`, `uid`, `objectClass` | read — DIT-wide by default, only under `LDAP_ANONYMOUS_READ_BASE` when that is set (see below) | read | read (see below) | write |
-| `pwdPolicySubentry` | none | read | **read** | write |
+| `pwdPolicySubentry`, `pwdReset`, `pwdStartTime`, `pwdEndTime`, `pwdAccountLockedTime` | none | read | **read** | write |
 | every other attribute | none | read | write | write |
 | another user's entry (write or delete) | none | **none** | n/a | write |
 | `cn=config` | none | none | n/a | no — it is a separate database with its own admin identity, `cn=admin,cn=config` |
@@ -549,7 +554,9 @@ user modifying, deleting and reading the password of *another* user, and
 `cn=config` over the LDAP service all have to be refused — and, because a
 deny-everything ACL would satisfy all of that, a user writing their own entry
 has to still succeed. A user setting or removing its own `pwdPolicySubentry`
-has to be refused too (rule 3), while the admin can still assign one.
+has to be refused too (rule 3), while the admin can still assign one; the same
+goes for add, replace and delete of its own `pwdReset`, `pwdStartTime`,
+`pwdEndTime` and `pwdAccountLockedTime` (#400).
 
 **Existing volumes keep their old ACL.** The rules are written at bootstrap
 only, so a volume created by an image before #399 still lets a user choose its
@@ -571,6 +578,28 @@ EOF
 
 Then look for values users may already have set on themselves:
 `ldapsearch -x -H ldap://<host> -D <admin DN> -W -b <root DN> '(pwdPolicySubentry=*)' pwdPolicySubentry modifiersName`.
+
+A volume created with the #399 rule but before #400 still has the short
+`attrs=pwdPolicySubentry` list, so a user can still rewrite its own `pwdReset`,
+`pwdStartTime`, `pwdEndTime` and add `pwdAccountLockedTime`. Replace that one
+rule in place (same index `N`, so nothing shifts), as `cn=admin,cn=config`:
+
+```sh
+ldapmodify -x -H ldap://<host> -D cn=admin,cn=config -W <<'EOF'
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcAccess
+olcAccess: {N}
+-
+add: olcAccess
+olcAccess: {N}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime by self read by * break
+EOF
+```
+
+(Verified live on a running node, #400: the old short rule was replaced in place,
+the list kept its order, and a user's add/replace/delete on these attributes then
+returned 50, also after a restart.) Then check what users may already have written:
+`ldapsearch -x -H ldap://<host> -D <admin DN> -W -b <root DN> '(|(pwdReset=*)(pwdStartTime=*)(pwdEndTime=*)(pwdAccountLockedTime=*))' pwdReset pwdStartTime pwdEndTime pwdAccountLockedTime modifiersName`.
 
 This is one ordered multi-valued attribute, not hardcoded logic — replace it
 wholesale for a different policy via `ldapmodify` as `cn=admin,cn=config`
