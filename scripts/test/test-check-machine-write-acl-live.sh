@@ -234,7 +234,10 @@ v2c_install="$(guide_sh 'V2C_AT=')"
 v2c_rollback="$(guide_sh 'WHAT=')"
 v2c_on="$(guide_sh 'v2c-switch-on')"
 v2c_off="$(guide_sh 'v2c-switch-off')"
-[ -n "$v2c_install" ] && [ -n "$v2c_rollback" ] && [ -n "$v2c_on" ] && [ -n "$v2c_off" ] || { echo "cannot cut the v2c blocks out of ${guide}" >&2; exit 1; }
+if [ -z "$v2c_install" ] || [ -z "$v2c_rollback" ] || [ -z "$v2c_on" ] || [ -z "$v2c_off" ]; then
+  echo "cannot cut the v2c blocks out of ${guide}" >&2
+  exit 1
+fi
 # shellcheck disable=SC2030,SC2031 # the guide commands run in subshells on purpose
 v2c_frag() { (cd "$fix" && export FRAG="$1" && eval "$v2c_install") 2>&1; }
 # shellcheck disable=SC2030,SC2031
