@@ -439,7 +439,7 @@ and no write field is emitted). `operation` carries the operation id.
 | Field | Meaning |
 | --- | --- |
 | `write_scope` | the write scope the operation required (closed set: the `directory.*` write scopes), else `unknown` |
-| `compartment` | `data`, `lock` or `cred` (the `W_*` identity class; `lock` is `lockUser`, which binds `W_lock`; `cred` is `setPassword`, which binds `W_cred` — v2c, not opened yet: T-026), else `unknown` |
+| `compartment` | `data`, `lock` or `cred` (the `W_*` identity class; `lock` is `lockUser`, which binds `W_lock`; `cred` is `setPassword`, which binds `W_cred` — v2c, opened by T-026), else `unknown` |
 | `target_kind` | `user` or `group`, else `unknown` |
 | `target_dn_fingerprint` | first 8 bytes of SHA-256 over the target DN, hex (the same fingerprint the human audit lines use). Always present when a target is named. |
 | `target_dn` | the target DN in plaintext, **only** when the operator sets `MACHINE_WRITE_AUDIT_TARGET_DN=true` (default false, Resolved Q4; read only when `MACHINE_WRITE_ENABLED=true`). With it on the log is as sensitive as the directory's DN space. |
@@ -447,7 +447,7 @@ and no write field is emitted). `operation` carries the operation id.
 | `idempotency_subject_fingerprint` | fingerprint of the idempotency principal (the client), **never** the `Idempotency-Key` value |
 | `if_match` | whether an `If-Match` header was present (the value is never logged) |
 | `ldap_result` | the directory result code when the request reached the directory, otherwise absent |
-| `cleanup` | `setPassword` only (v2c, not opened yet: T-026): `done` or `failed` for the `W_cred` removal of the pending marker and pending policy after the password was set; absent on every other operation. `failed` still answers the success (the password was applied); the entry keeps its pending state until the stuck sweep (T-028) or an operator clears it |
+| `cleanup` | `setPassword` only (v2c, opened by T-026): `done` or `failed` for the `W_cred` removal of the pending marker and pending policy after the password was set; absent on every other operation. `failed` still answers the success (the password was applied); the entry keeps its pending state until the stuck sweep (T-028) or an operator clears it |
 
 `replayed` from D6 is carried by `outcome=replayed` instead of a separate field.
 A `compartment=cred` line carries no password field of any kind: not the value,

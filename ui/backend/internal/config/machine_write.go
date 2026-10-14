@@ -32,8 +32,7 @@ type MachineWriteIdentity struct {
 }
 
 // MachineWriteConfig separates data, lock and credential identities (D3,
-// D379-2). The credential compartment (v2c) is configuration only: no
-// operation uses it until T-026 opens setPassword.
+// D379-2). The credential compartment (v2c) is used by setPassword (T-026).
 type MachineWriteConfig struct {
 	Data        MachineWriteIdentity
 	LockEnabled bool

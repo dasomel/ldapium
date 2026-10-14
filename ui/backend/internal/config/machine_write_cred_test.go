@@ -72,10 +72,19 @@ func TestMachineWriteCredValid(t *testing.T) {
 			t.Errorf("%s missing from the protected set", want)
 		}
 	}
-	// Enabling the compartment opens nothing: the password scope stays refused.
-	_, err = Load(credEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.password.write;machine-b=audit.read"}))
-	if err == nil || !strings.Contains(err.Error(), "no operation uses yet") {
+	// T-026: the password scope is opened; with the compartment on it loads.
+	if _, err = Load(credEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.password.write;machine-b=audit.read"})); err != nil {
 		t.Fatalf("password scope with W_cred on: %v", err)
+	}
+	// T026-D1 (AC-011 (a)): with the compartment off the same ceiling still
+	// starts (setPassword answers 503 at request time), unlike the lock scope.
+	off, err := Load(credEnv(map[string]string{"MACHINE_WRITE_CRED_ENABLED": "false", "MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.password.write;machine-b=audit.read"}))
+	if err != nil || off.Machine.Write.CredEnabled {
+		t.Fatalf("password scope with W_cred off: %v", err)
+	}
+	// unlock stays refused (D379-7).
+	if _, err = Load(credEnv(map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.unlock;machine-b=audit.read"})); err == nil || !strings.Contains(err.Error(), "no operation uses yet") {
+		t.Fatalf("unlock scope: %v", err)
 	}
 }
 

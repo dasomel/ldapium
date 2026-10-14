@@ -302,8 +302,9 @@ func TestMachineWriteSwitchRefusesItself(t *testing.T) {
 }
 
 // A write scope in a ceiling is accepted only for an opened operation; unlock
-// and password stay refused (lock and the group scopes opened with T-014; they
-// bring their own prerequisites, supplied below). With the switch off the
+// stays refused (lock and the group scopes opened with T-014 and bring their own
+// prerequisites, supplied below; the password scope opened with T-026 and starts
+// with or without its compartment, T026-D1). With the switch off the
 // opened scopes still parse (they grant nothing), so the emergency "write-only
 // redeploy" that flips only MACHINE_WRITE_ENABLED=false can start.
 func TestMachineWriteScopesInCeiling(t *testing.T) {
@@ -311,8 +312,8 @@ func TestMachineWriteScopesInCeiling(t *testing.T) {
 	for _, s := range MachineWriteOpenScopes {
 		open[s] = true
 	}
-	if len(open) != 9 || open["directory.users.unlock"] || open["directory.users.password.write"] {
-		t.Fatalf("opened write scopes = %d (unlock %v, password %v), want 9 without unlock or password", len(open), open["directory.users.unlock"], open["directory.users.password.write"])
+	if len(open) != 10 || open["directory.users.unlock"] || !open["directory.users.password.write"] {
+		t.Fatalf("opened write scopes = %d (unlock %v, password %v), want 10 with password and without unlock", len(open), open["directory.users.unlock"], open["directory.users.password.write"])
 	}
 	for _, s := range MachineWriteScopes {
 		clients := map[string]string{"MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read," + s + ";machine-b=audit.read"}

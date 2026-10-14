@@ -381,8 +381,7 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 	}
 }
 
-// scopePasswordWrite is the v2c scope (still unopened: a ceiling naming it fails
-// start-up until T-026, so credentialPending is refused in every deployment).
+// scopePasswordWrite is the v2c scope, opened by T-026 (setPassword).
 const scopePasswordWrite = "directory.users.password.write"
 
 // parsePending reads credentialPending (REQ-018) from a body the closed set

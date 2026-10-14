@@ -20,6 +20,33 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- **Machine write v2c opened (#379, T-026): machine `setPassword`.** With
+  `MACHINE_WRITE_ENABLED` and `MACHINE_WRITE_CRED_ENABLED` on and
+  `directory.users.password.write` in a client's ceiling, a machine client sets the
+  **initial** password of an account it created itself with `createUser`
+  `credentialPending: true` (body exactly `{dn, password}`, `Idempotency-Key`
+  required, no `If-Match`, response `{}`; any other target 403, an account whose
+  password was already set 409). It runs as the separate `W_cred` identity behind
+  the T-028 premise checks. OpenAPI marks it `machineBearer` /
+  `x-machine-scope: directory.users.password.write`. A ceiling may now name the
+  password scope; with `MACHINE_WRITE_CRED_ENABLED=false` it still starts and the
+  request is 403 `scope_denied` without any `W_cred` bind (the emergency block).
+  Unlock stays human-only and is the only write scope still refused in a ceiling.
+- **Contract narrowing with v2c on (Q16, accepted 2026-10-14):** a deployment that
+  installs the v2c LDAP rules narrows machine `deleteUser` and rename (modrdn) to
+  entries `W_data` created; deleting an administrator-made user (any class) or a
+  container is refused by the directory (LDAP 50) and answered 403 `forbidden`.
+  Groups (v2b `deleteGroup`) and deployments without v2c are unchanged.
+- `W_cred` gets a no-lockout password policy (CHANGE.md Q17, decided 2026-10-14):
+  guide `docs/machine-write-account.md` 8.1 attaches `wcred-policy.ldif`
+  (`pwdLockout FALSE`, no `pwdMaxFailure`), so wrong binds can no longer lock
+  `W_cred` and stop `setPassword`; the operator owns brute-force mitigation (long
+  random password, network restriction, failed-bind alert).
+- Chart: `ui.machineAuth.write.cred.*` renders the `W_cred` identity, the
+  configuration reader and the canaries (`MACHINE_WRITE_CRED_*`; passwords are
+  Secret references only, every identity and Secret key distinct). It still
+  refuses next to `audit.enabled=true` or an accesslog ops list holding
+  `extended`/`all`. The chart still grants no write scope in `allowedClients`.
 - Machine write v2c (#379, T-020) configuration and start-up validation only; **no
   operation is opened** (`directory.users.password.write` is still refused in a
   ceiling and the password routes stay 403 `scope_denied` with no bind). New

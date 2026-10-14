@@ -737,11 +737,59 @@ if the value differs; the rest is observation only.
 Not covered here: a Kubernetes rolling update and the real Secret rollout, multi-provider, `MACHINE_REQUEST_TIMEOUT` values other than 10 s and 4 s (and the
 10 s stall with a rotation, the 4 s stall without one), the natural expiry of the 900 s `W_cred` lock, the 60 s timer itself (the cycle was called directly), a real `Idempotency-Key` retry after the stuck entry is cleaned, and CI (T-027 wires it).
 
+### 2m. T-026: setPassword opened, Q17 no-lockout policy, the proofs on the opened path (2026-10-14, branch `feat/379-t026-open`)
+
+The production write table (`machineWriteOps`) and `config.MachineWriteOpenScopes` now hold `setPassword` /
+`directory.users.password.write`; `machineWriteOpenedBy` cites D379-9 and D379-10. The T-024 and T-025 live tests no longer
+inject anything: no `machineDeps.writeOps` (the production table), no ceiling written after construction (the clients'
+configured scopes; the T-024 test asserts the scope is there instead of adding it). What is still not production: the
+configuration is built in code (not `config.Load` from the environment), the tokens come from the harness's in-process IdP
+(no Keycloak), and the server runs in-process (no UI container). Guide 8.1 now attaches the Q17 no-lockout policy to
+`W_cred` (`wcred-policy.ldif`, block `v2c-wcred-policy`), and the shared setup of all three proofs runs that block twice
+(the second run only re-checks). Image `ldapium:t026` built from `73f6cf4` (`image/` unchanged), `sha256:e0f91d64e479`,
+Docker Desktop.
+
+```
+LDAPIUM_IMAGE=ldapium:t026 python3 scripts/test/test-machine-write-cred-premise-live.py   RESULT: 78 checks passed, 0 failed, 19s   (exit 0)
+LDAPIUM_IMAGE=ldapium:t026 python3 scripts/test/test-machine-write-cred-secret-live.py    RESULT: 170 checks passed, 0 failed, 32s  (exit 0)
+LDAPIUM_IMAGE=ldapium:t026 python3 scripts/test/test-machine-write-cred-drill.py          RESULT: 70 checks passed, 0 failed, 35s   (exit 0)
+LDAPIUM_T025_MUTATE=cred-flag-ignored  (drill)       RESULT: 68 passed, 2 failed ("flag off, cred values kept ... 503" got 429)  (exit 1)
+LDAPIUM_T024_MUTATE=log-password       (secret)      RESULT: 83 passed, 1 failed (UI log: sentinel found)                         (exit 1)
+```
+
+Against §2j–§2l: +1 check per proof for the 8.1 policy (`W_cred` carries it after the guide block), +1 in the drill for
+the second flag-off shape. Every earlier assertion passed unchanged on the opened path, including E-13 (plaintext and hash
+scan: 0 everywhere in the accepted configuration, only the auditlog stdout in the refused one), E-17 app path (five rounds,
+200 + 429, one Password Modify each), E-10, the Q14 stuck state 409, the cleanup failure 200 + `cleanup=failed`, the T-028
+before-write 503, AC-011 (b)/(c) and the Revision 8 manual cleanup.
+
+| Finding / decision | Measurement |
+|---|---|
+| **Q17 applied** | guide 8.1 block: policy entry added once, attached to `W_cred`; second run re-checks and changes nothing; `W_cred` `pwdPolicySubentry` = the policy (asserted in all three proofs). T-028 start-up, request and periodic checks pass with it (premise 78/78, every scenario as §2j). Drill: with it attached 13 refused requests, every one 503, **not locked**, a new replica starts and sets a password (200). The default-policy trap is measured by detaching it first: locked at exactly the 5th refused request (`pwdMaxFailure` 5), a locked `W_cred` refuses a correctly configured replica |
+| **T026-D1** (decision, reversible) | a ceiling naming `directory.users.password.write` is accepted with `MACHINE_WRITE_CRED_ENABLED=false` (unit: `TestMachineWriteCredValid`), unlike `directory.users.lock` without `W_lock`. Reason: the flag-only emergency block must not become a start-up failure (T025-F1). Cost: that misconfiguration surfaces only as request-time 403. Escape hatch: refuse it at start-up like the lock scope |
+| **T026-F1** (escalated: CHANGE.md Q19) | the flag-off redeploy as `config.Load` builds it (no other `MACHINE_WRITE_CRED_*` read, so no cred ceiling) answers **403 `scope_denied`** ("dn is not permitted for this machine client", `reason=scope`), 0 `W_cred` binds ok/failed, no connection; the T-025 shape (every cred value kept, only the flag off; only code can build it) answers 503 `unavailable` `reason=bind_failed`, 0 binds. Both asserted in the drill and in `TestWritePipeline_CredCompartmentIsSetPasswordOnly`. AC-011 (a)'s 503 was the code-built shape |
+| AC-001 | writes off: all 37 non-read operations 403 with zero binds, the ten opened writes included, with the full v2c configuration switched on (`TestMachineWriteOffNoOpenedOperationReachable`, `TestMachineWriteRuntimeOffBuildsNothing`, `TestMachine_EveryProtectedOperationExercised`); writes on: 18 allowed (8 reads + 10 writes), 27 denied (`TestMachine_EveryProtectedOperationExercisedWritesOn`, `TestMachineWriteRuntimeEnabledOpensOnlyTheTen`) |
+
+Mutations (unit, each restored after):
+
+| Mutation | Result |
+|---|---|
+| `directory.users.password.write` removed from `config.MachineWriteOpenScopes` | 4 failures: `TestMachineWriteOpenScopesEqualTheTable`, `TestPasswordPipeline_OpenedByT026`, `TestMachineWriteCredValid`, `TestMachineWriteScopesInCeiling` |
+| `setPassword` removed from `machineWriteOps` | 11 failures (contract: allowlist = OpenAPI, deny-list shrink gate, open scopes = table, every-protected-operation counts both modes, `TestPasswordPipeline_OpenedByT026`, ...) and one password-limit test blocked until the 10-minute `go test` timeout (it waits for a request the closed route never runs) |
+
+Not covered here: `config.Load` from a real environment in the live proofs (the unit tests cover the parse; the live
+configurations are built in code), Keycloak tokens, a UI container (`docker logs` of the UI image) and a Kubernetes
+rollout, the chart rendered into a running cluster (render-time assertions only, `test-chart-machine-write.sh`), multi-provider,
+E-22, E-14, `pwdInHistory`, the 60 s timer firing during a run, GitHub Actions, a T-028 check of the `W_cred` policy (not
+implemented; CHANGE.md Q18), and the independent Class D review and dedicated security-reviewer round.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) (2026-10-14 T-024, §2k: E-13을 `live` 시험 서버(프로세스 안 UI)·slapd 로그·accesslog(rootdn·`M`) 범위에서, E-17 앱 경로 절반(한 provider), E-10 앱 경로를 실측 — E-13의 Keycloak·UI 컨테이너 부분은 아님. 여전히 미실측: Keycloak 컨테이너 로그(토큰은 하니스 내장 IdP), UI 컨테이너 `docker logs`(서버는 프로세스 안에서 실행, 로그 전체를 수집), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions. T024-F1은 2026-10-14 결정(프로브 유지, 공개 상수로 고정·허용 목록).) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
+
+T-026(§2m)의 Not verified: 실제 환경 변수의 `config.Load`를 거친 라이브 서버(라이브 구성은 코드로 만듦), Keycloak 토큰, UI 컨테이너·Kubernetes 롤아웃, 클러스터에 배포한 차트(렌더 단언만), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions, `W_cred` 정책의 T-028 검사(미구현, Q18), Class D 독립 검토·전용 security-reviewer(미실시). AC-011 (a)의 503은 코드로 만든 구성에서만 재현되고 실제 Load 경로는 403(T026-F1, Q19).
 
 T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.

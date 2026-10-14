@@ -27,10 +27,11 @@ import (
 // machine-write-scope-v2 T-024 (AC-009, AC-010, AC-010c; E-10, E-13, E-17): the
 // machine setPassword through the real HTTP pipeline against the real slapd of
 // scripts/test/test-machine-write-cred-secret-live.py (inside its container,
-// ldap://127.0.0.1). setPassword is still closed in production (T-026); this
-// TEST-ONLY server opens it the way the unit tests do (machineDeps.writeOps =
-// the production table plus the setPassword catalog row, the password.write
-// ceiling injected after construction). Everything else is production: the real
+// ldap://127.0.0.1). Since T-026 the server runs the production write table
+// (setPassword opened) and the clients' configured ceilings (every scope,
+// password.write included); the configuration is built in code, not by
+// config.Load, and the tokens come from the harness's in-process IdP.
+// Everything else is production: the real
 // dialer and W_data/W_cred binds, the real M pre-reads, the real T-028 premise
 // checker (start-up, before every write, the 60 s cycle) and the real limiter.
 //
@@ -307,23 +308,19 @@ func newCredLive(t *testing.T, startErr bool) *credLive {
 	var cfg config.Config
 	cfgFn(&cfg)
 	cfg.Machine.Enabled = true
-	ops := append([]machineOp(nil), machineWriteOps...)
-	for _, o := range machineWriteCatalog {
-		if o.ID == "setPassword" {
-			ops = append(ops, o.machineOp)
-		}
-	}
 	l.dialer = &slowCredDialer{Dialer: ldapclient.NewDialer(cfg), credDN: env("T_WCRED_DN")}
 	log.SetOutput(l.cap)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	l.cfg = cfg
-	l.h = newHarness(t, harnessOpt{defaultEx: true, dialer: l.dialer, writeOps: ops, cfg: cfgFn,
+	l.h = newHarness(t, harnessOpt{defaultEx: true, dialer: l.dialer, cfg: cfgFn,
 		credPremise: ldapclient.NewCredPremise(cfg), startErr: startErr})
 	if startErr {
 		return l
 	}
 	for _, id := range clients {
-		l.h.s.machine.ceilings[id][scopePasswordWrite] = true
+		if !l.h.s.machine.ceilings[id][scopePasswordWrite] {
+			t.Fatalf("%s: password.write is not in the configured ceiling", id)
+		}
 	}
 	// Deep budget for the tables; the 429 step installs the production shape.
 	cred, err := newCredLimiter(100, 100, time.Now)

@@ -22,10 +22,8 @@ import (
 )
 
 // machine-write-scope-v2 T-022 (REQ-007, REQ-011, REQ-012, D379-9/10/18): the
-// machine setPassword through the real HTTP path with the TEST-ONLY table
-// (machineDeps.writeOps = the catalog). setPassword is not in the production
-// table and directory.users.password.write is not an open scope
-// (TestPasswordPipeline_ProductionStaysClosed): T-026 opens it.
+// machine setPassword through the real HTTP path with the production table
+// (T-026 opened it: TestPasswordPipeline_OpenedByT026).
 
 const (
 	credWriterDN = "cn=cred,ou=system," + rtBase
@@ -94,8 +92,8 @@ func (s *credState) sent() []string {
 	return append([]string(nil), s.passwords...)
 }
 
-// credHarness: v2c on, W_cred configured, password.write in the ceilings (it
-// cannot be configured yet: injected, as in pendingHarness), machine-a's cred
+// credHarness: v2c on, W_cred configured, the production table, password.write
+// in the ceilings (the harness ceilings are every scope), machine-a's cred
 // subtree is ou=staff below its ceiling ou=people.
 func credHarness(t *testing.T, mod func(*config.Config)) *wh {
 	t.Helper()
@@ -110,10 +108,7 @@ func credHarness(t *testing.T, mod func(*config.Config)) *wh {
 		if mod != nil {
 			mod(c)
 		}
-	}, catalogOps())
-	for _, id := range []string{"machine-a", "machine-w2"} {
-		w.s.machine.ceilings[id][scopePasswordWrite] = true
-	}
+	}, nil)
 	// T-023: the production budget is 1 rps, burst 1; the T-022 tables send
 	// many requests at one instant, so they get a deep bucket on the fixed
 	// clock. The T-023 tests rebuild it with the production shape.
@@ -156,32 +151,32 @@ func TestPasswordPipeline_CatalogRow(t *testing.T) {
 	}
 }
 
-// Until T-026 the production table and the open scopes do not name setPassword,
-// so a full token and a W_cred configuration still answer 403 before any bind.
-func TestPasswordPipeline_ProductionStaysClosed(t *testing.T) {
-	for _, op := range machineWriteOps {
-		if op.ID == "setPassword" || op.Route == "/api/users/password" {
-			t.Errorf("%s is in the production table before T-026", op.ID)
+// T-026 opens setPassword: it is in the production table with exactly the
+// catalog row, its scope is an open scope, and the opening cites D379-9 and
+// D379-10. The production table and the catalog are the same ten rows, so no
+// test needs an injected table any more (credHarness runs the production one).
+func TestPasswordPipeline_OpenedByT026(t *testing.T) {
+	var row *machineOp
+	for i := range machineWriteOps {
+		if machineWriteOps[i].ID == "setPassword" {
+			row = &machineWriteOps[i]
 		}
 	}
+	if row == nil || row.Method != "POST" || row.Route != "/api/users/password" || row.Scope != scopePasswordWrite {
+		t.Fatalf("setPassword in the production table = %+v", row)
+	}
+	open := false
 	for _, s := range config.MachineWriteOpenScopes {
-		if s == scopePasswordWrite {
-			t.Errorf("%s is an open scope before T-026", s)
-		}
+		open = open || s == scopePasswordWrite
 	}
-	if _, opened := machineWriteOpenedBy["setPassword"]; opened {
-		t.Error("setPassword has an opening D-id before T-026")
+	if !open {
+		t.Errorf("%s is not an open scope", scopePasswordWrite)
 	}
-	w := writeHarness(t, func(c *config.Config) {
-		c.Machine.Write.CredEnabled = true
-		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: credWriterDN, BindPassword: "private-cred"}
-		c.Machine.Write.CredPendingPolicyDN = credPending
-		c.Machine.Write.CredSubtrees = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: []string{credStaff}}}
-	}, nil)
-	w.s.machine.ceilings["machine-a"][scopePasswordWrite] = true
-	wantCode(t, w.send(pwReq(credBob, "a-long-enough-pw", hdr(key()))), 403, codeScopeDenied)
-	if w.dir.binds() != 0 || len(w.dir.callList()) != 0 || len(w.ident.callList()) != 0 || w.stages() != "" || w.s.idem.Len() != 0 {
-		t.Errorf("a closed setPassword reached binds=%d calls=%v ident=%v stages=%q", w.dir.binds(), w.dir.callList(), w.ident.callList(), w.stages())
+	if by := machineWriteOpenedBy["setPassword"]; !strings.Contains(by, "D379-9") || !strings.Contains(by, "D379-10") {
+		t.Errorf("setPassword opened by %q, want D379-9 and D379-10", by)
+	}
+	if len(machineWriteOps) != len(machineWriteCatalog) {
+		t.Errorf("production table %d rows, catalog %d", len(machineWriteOps), len(machineWriteCatalog))
 	}
 }
 

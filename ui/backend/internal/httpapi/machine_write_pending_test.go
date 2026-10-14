@@ -13,8 +13,8 @@ import (
 )
 
 // machine-write-scope-v2 T-029 (REQ-018, D379-18): the credential pending marker
-// on a machine createUser. Nothing is opened: directory.users.password.write in a
-// ceiling still fails start-up, so these tests inject the ceiling directly.
+// on a machine createUser. The tests set directory.users.password.write in or out
+// of the ceilings explicitly (the harness ceilings are every scope).
 
 const pendingPolicy = "cn=pending,ou=policies,dc=example,dc=org"
 

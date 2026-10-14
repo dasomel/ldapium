@@ -30,10 +30,11 @@ import (
 // emergency block of the password compartment, measured against the real slapd
 // of scripts/test/test-machine-write-cred-drill.py (inside its container,
 // ldap://127.0.0.1, reached through a TCP proxy so one message can be held).
-// setPassword is still closed in production (T-026); this TEST-ONLY server opens
-// it the way the T-024 proof does (machineDeps.writeOps = the production table
-// plus the setPassword catalog row, the password.write ceiling injected after
-// construction). Each "server" is one in-process replica (own IdP, own issuer);
+// Since T-026 the server runs the production write table (setPassword opened)
+// and machine-a's ceiling comes from its configured scopes; the configuration is
+// built in code, not by config.Load, so a flag-off redeploy is built in both
+// shapes (cred values dropped as config.Load drops them, and kept). The tokens
+// come from the harness's in-process IdP. Each "server" is one in-process replica (own IdP, own issuer);
 // a redeploy is a new server built from a changed config. Nothing here is a
 // Kubernetes rollout. It prints "T025 PASS|FAIL <name>" and "T025 OBS <measured>"
 // lines; the driver asserts and quotes them.
@@ -259,7 +260,10 @@ type drillRig struct {
 type drillOpt struct {
 	timeout     time.Duration
 	credEnabled bool
-	ceiling     bool // password.write in machine-a's ceiling (injected after construction)
+	ceiling     bool // password.write in machine-a's configured ceiling
+	// keepCred keeps the W_cred values with the flag off (a configuration only
+	// code can build: config.Load reads none of them when the flag is off).
+	keepCred    bool
 	startErr    bool
 	realPremise bool // the production T-028 checker; false = no gate (flag-off servers build none)
 }
@@ -318,9 +322,27 @@ func (r *drillRig) build(name string, opt drillOpt) *drillSrv {
 			Limits:      config.MachineWriteLimits{RPS: 100, Burst: 100, GlobalSlots: 8},
 			LockEnabled: true, Lock: config.MachineWriteIdentity{BindDN: env("T_WLOCK_DN"), BindPassword: pw("wlock")},
 		}
-		// A redeploy with the flag off keeps every other cred value here: the
-		// gate under test is the flag itself (config.Load would not even read them).
+		if !opt.ceiling {
+			for i := range c.Machine.Clients {
+				if c.Machine.Clients[i].ID != "machine-a" {
+					continue
+				}
+				var kept []string
+				for _, s := range c.Machine.Clients[i].Scopes {
+					if s != scopePasswordWrite {
+						kept = append(kept, s)
+					}
+				}
+				c.Machine.Clients[i].Scopes = kept
+			}
+		}
+		// T026-F1: a flag-off redeploy through config.Load carries no other cred
+		// value; keepCred builds the shape T-025 measured (every value kept, the
+		// flag the only gate), which only code can produce.
 		c.Machine.Write.CredEnabled = opt.credEnabled
+		if !opt.credEnabled && !opt.keepCred {
+			return
+		}
 		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: env("T_WCRED_DN"), BindPassword: r.secret}
 		c.Machine.Write.CredSubtrees = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: drillList(env("T_CRED"))}}
 		c.Machine.Write.CredMinLength = 12
@@ -333,27 +355,16 @@ func (r *drillRig) build(name string, opt drillOpt) *drillSrv {
 	var cfg config.Config
 	cfgFn(&cfg)
 	cfg.Machine.Enabled = true
-	ops := append([]machineOp(nil), machineWriteOps...)
-	for _, o := range machineWriteCatalog {
-		if o.ID == "setPassword" {
-			ops = append(ops, o.machineOp)
-		}
-	}
 	d := &drillDialer{Dialer: ldapclient.NewDialer(cfg), ok: map[string]int{}, failed: map[string]int{}}
 	var premise credPremiseChecker
 	if opt.credEnabled {
 		premise = ldapclient.NewCredPremise(cfg)
 	}
-	h := newHarness(r.t, harnessOpt{defaultEx: true, dialer: d, writeOps: ops, cfg: cfgFn, credPremise: premise, startErr: opt.startErr})
+	h := newHarness(r.t, harnessOpt{defaultEx: true, dialer: d, cfg: cfgFn, credPremise: premise, startErr: opt.startErr})
 	s := &drillSrv{rig: r, h: h, dialer: d, cfg: cfg, name: name}
 	r.servers = append(r.servers, s)
 	if opt.startErr {
 		return s
-	}
-	if opt.ceiling {
-		h.s.machine.ceilings["machine-a"][scopePasswordWrite] = true
-	} else {
-		delete(h.s.machine.ceilings["machine-a"], scopePasswordWrite)
 	}
 	if h.s.machineWrite.cred != nil {
 		// Deep budget: the 1 rps production budget would answer 429 before the bind
@@ -814,6 +825,17 @@ func TestCredDrillLive(t *testing.T) {
 
 	// the lockout trap (D24) for W_cred: every refused request is one more failed bind. From a clean
 	// failure count (the successful bind above) replica 3 alone refuses until slapd locks the account.
+	// Q17 (2026-10-14): the guide (8.1) attaches the no-lockout policy to W_cred, so this phase first
+	// detaches it: what a deployment that skipped that step gets (the default policy).
+	noLock := r.env("T_WCRED_POLICY")
+	if got := r.attrs(wc, "pwdPolicySubentry")["pwdpolicysubentry"]; len(got) != 1 || !strings.EqualFold(got[0], noLock) {
+		t.Fatalf("W_cred does not carry the guide's no-lockout policy (%v)", got)
+	}
+	detach := ldap.NewModifyRequest(wc, nil)
+	detach.Delete("pwdPolicySubentry", nil)
+	if err := r.adminModify(detach); err != nil {
+		t.Fatalf("detach the no-lockout policy from W_cred: %v", err)
+	}
 	maxFail := 0
 	if v := r.attrs(drillPolicyDN(r.env("T_PENDING"), "default"), "pwdMaxFailure")["pwdmaxfailure"]; len(v) == 1 {
 		fmt.Sscanf(v[0], "%d", &maxFail)
@@ -854,18 +876,8 @@ func TestCredDrillLive(t *testing.T) {
 	still := r1.setPassword("stale-still", q1, drillRandom(14))
 	r.check(still.status == 503, fmt.Sprintf("(b) the replica that was not rolled out stays 503 (got %d)", still.status))
 
-	// the same failures under the W_data policy of guide 9.1 (pwdLockout FALSE, no pwdMaxFailure) applied to W_cred
-	noLock := drillPolicyDN(r.env("T_PENDING"), "machine-writers")
-	addPol := ldap.NewAddRequest(noLock, nil)
-	addPol.Attribute("objectClass", []string{"top", "device", "pwdPolicy"})
-	addPol.Attribute("cn", []string{"machine-writers"})
-	addPol.Attribute("pwdAttribute", []string{"userPassword"})
-	addPol.Attribute("pwdLockout", []string{"FALSE"})
-	ac := r.admin()
-	if err := ac.Add(addPol); err != nil {
-		t.Fatalf("add the no-lockout policy: %v", err)
-	}
-	ac.Close()
+	// the same failures with the guide's no-lockout policy (8.1, Q17; the 9.1 policy: pwdLockout FALSE,
+	// no pwdMaxFailure) attached to W_cred again
 	setPol := ldap.NewModifyRequest(wc, nil)
 	setPol.Replace("pwdPolicySubentry", []string{noLock})
 	if err := r.adminModify(setPol); err != nil {
@@ -888,14 +900,24 @@ func TestCredDrillLive(t *testing.T) {
 	// ---- AC-011 (a): MACHINE_WRITE_CRED_ENABLED=false redeploy ----
 	g := r.build("G", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
 	pa1 := g.pending("t025-flag-off")
+	// T026-F1: the redeploy as config.Load builds it (the flag off, no other cred
+	// value read, the password.write ceiling left in place): the target guard has
+	// no cred subtree and answers 403 before any connection.
 	fo := r.build("F", drillOpt{timeout: 10 * time.Second, credEnabled: false, ceiling: true})
-	_, wcFailedBefore := fo.dialer.counts(wc)
-	wcOkBefore, _ := fo.dialer.counts(wc)
+	wcOkBefore, wcFailedBefore := fo.dialer.counts(wc)
 	ff := fo.setPassword("flag-off", pa1, drillRandom(14))
 	wcOk, wcFailed := fo.dialer.counts(wc)
-	r.obs("MACHINE_WRITE_CRED_ENABLED=false redeploy (identity values and password.write ceiling left in place): setPassword -> %d %s (%s), reason=%s, W_cred binds %d ok / %d failed", ff.status, ff.code, ff.msg, auditField(ff.audit, "reason"), wcOk-wcOkBefore, wcFailed-wcFailedBefore)
-	r.check(ff.status == 503 && ff.code == codeUnavailable && wcOk == wcOkBefore && wcFailed == wcFailedBefore,
-		fmt.Sprintf("(a) flag off: setPassword is refused (503, no W_cred identity) without a single W_cred bind (got %d)", ff.status))
+	r.obs("MACHINE_WRITE_CRED_ENABLED=false redeploy as config.Load builds it (password.write ceiling left in place): setPassword -> %d %s (%s), reason=%s, W_cred binds %d ok / %d failed", ff.status, ff.code, ff.msg, auditField(ff.audit, "reason"), wcOk-wcOkBefore, wcFailed-wcFailedBefore)
+	r.check(ff.status == 403 && ff.code == codeScopeDenied && wcOk == wcOkBefore && wcFailed == wcFailedBefore,
+		fmt.Sprintf("(a) flag off (config.Load shape): setPassword is refused (403 scope_denied, no cred ceiling) without a single W_cred bind (got %d %s)", ff.status, ff.code))
+	// The T-025 shape: every cred value kept, only the flag off (code-built).
+	fk := r.build("F1", drillOpt{timeout: 10 * time.Second, credEnabled: false, ceiling: true, keepCred: true})
+	kOkBefore, kFailedBefore := fk.dialer.counts(wc)
+	fkr := fk.setPassword("flag-off-kept", pa1, drillRandom(14))
+	kOk, kFailed := fk.dialer.counts(wc)
+	r.obs("flag off with every other cred value kept (code-built, the T-025 shape): setPassword -> %d %s, reason=%s, W_cred binds %d ok / %d failed", fkr.status, fkr.code, auditField(fkr.audit, "reason"), kOk-kOkBefore, kFailed-kFailedBefore)
+	r.check(fkr.status == 503 && fkr.code == codeUnavailable && kOk == kOkBefore && kFailed == kFailedBefore,
+		fmt.Sprintf("(a) flag off, cred values kept: setPassword is refused (503, no W_cred identity) without a single W_cred bind (got %d)", fkr.status))
 	r.check(!r.hasPassword(pa1) && !r.pendingGone(pa1), "(a) the pending account is unchanged")
 	fn := r.build("F2", drillOpt{timeout: 10 * time.Second, credEnabled: false, ceiling: false})
 	f2 := fn.setPassword("flag-off-no-scope", pa1, drillRandom(14))

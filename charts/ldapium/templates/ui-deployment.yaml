@@ -30,13 +30,41 @@
   v2c (#379 T-028, D379-14): the credential compartment never renders next to the
   auditlog overlay (it writes the hash of every password set to the slapd log, which
   the UI cannot see) or an accesslog ops list holding extended/all (F-7: one Password
-  Modify aborts slapd). T028-D11: until T-026 renders the W_cred identity, the reader
-  and the canaries, cred.enabled=true refuses on its own, after these two messages.
+  Modify aborts slapd). T-026 renders the W_cred identity, the configuration reader
+  and the canaries: every value the application cannot start without is checked in
+  one pass, passwords are Secret references only, and each identity differs from the
+  others (the application re-validates all of it at start-up).
 */ -}}
 {{- if .Values.ui.machineAuth.write.cred.enabled }}
 {{- if .Values.audit.enabled }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.enabled=true (the auditlog overlay writes every password hash to the slapd log, D379-14)" }}{{ end }}
 {{- if regexMatch `(?i)(^|[\s,])(extended|all)([\s,]|$)` (.Values.audit.accessLog.ops | default "") }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.accessLog.ops containing extended or all (a Password Modify aborts slapd, F-7)" }}{{ end }}
-{{- fail "ui.machineAuth.write.cred.enabled=true is not available yet: the chart renders the W_cred compartment from T-026 on" }}
+{{- $ma := .Values.ui.machineAuth -}}
+{{- $w := $ma.write -}}
+{{- $c := $w.cred -}}
+{{- if not $w.enabled }}{{ fail "ui.machineAuth.write.cred.enabled=true requires ui.machineAuth.write.enabled=true" }}{{ end -}}
+{{- $cmiss := list -}}
+{{- range $k := list "bindDN" "existingSecret" "existingSecretKey" "subtrees" "pendingPolicyDN" "canaries" }}
+{{- if not (index $c $k) }}{{ $cmiss = append $cmiss (printf "ui.machineAuth.write.cred.%s" $k) }}{{ end }}
+{{- end }}
+{{- range $k := list "dn" "existingSecret" "existingSecretKey" }}
+{{- if not (index $c.aclReader $k) }}{{ $cmiss = append $cmiss (printf "ui.machineAuth.write.cred.aclReader.%s" $k) }}{{ end }}
+{{- end }}
+{{- if $cmiss }}{{ fail (printf "ui.machineAuth.write.cred.enabled=true requires: %s" (join ", " $cmiss)) }}{{ end -}}
+{{- $adminDN := .Values.ldap.adminDN | default (printf "cn=admin,%s" .Values.ldap.rootDN) -}}
+{{- $cn := dict "m" (lower (replace ", " "," (trim $ma.ldapBindDN))) "d" (lower (replace ", " "," (trim $w.data.bindDN))) "l" (lower (replace ", " "," (trim $w.lock.bindDN))) "a" (lower (replace ", " "," (trim $adminDN))) "c" (lower (replace ", " "," (trim $c.bindDN))) "r" (lower (replace ", " "," (trim $c.aclReader.dn))) -}}
+{{- if or (eq $cn.c $cn.m) (eq $cn.c $cn.d) (eq $cn.c $cn.a) (and $w.lock.enabled (eq $cn.c $cn.l)) }}{{ fail "ui.machineAuth.write.cred.bindDN must differ from the read identity, the data and lock identities and the LDAP administrator DN" }}{{ end -}}
+{{- if or (eq $cn.r $cn.m) (eq $cn.r $cn.d) (eq $cn.r $cn.a) (eq $cn.r $cn.c) (and $w.lock.enabled (eq $cn.r $cn.l)) }}{{ fail "ui.machineAuth.write.cred.aclReader.dn must differ from the read identity, every write identity and the LDAP administrator DN" }}{{ end -}}
+{{- $refs := list (printf "%s/%s" $ma.existingSecret $ma.existingSecretKey) (printf "%s/%s" $w.data.existingSecret $w.data.existingSecretKey) -}}
+{{- if $w.lock.enabled }}{{ $refs = append $refs (printf "%s/%s" $w.lock.existingSecret $w.lock.existingSecretKey) }}{{ end -}}
+{{- $credRef := printf "%s/%s" $c.existingSecret $c.existingSecretKey -}}
+{{- $readerRef := printf "%s/%s" $c.aclReader.existingSecret $c.aclReader.existingSecretKey -}}
+{{- if has $credRef $refs }}{{ fail "ui.machineAuth.write.cred must not reuse the Secret key of the read, data or lock identity" }}{{ end -}}
+{{- if or (has $readerRef $refs) (eq $readerRef $credRef) }}{{ fail "ui.machineAuth.write.cred.aclReader must not reuse the Secret key of another identity" }}{{ end -}}
+{{- $subIDs := list -}}
+{{- range $e := $w.subtrees }}{{ $subIDs = append $subIDs $e.client }}{{ end -}}
+{{- range $e := $c.subtrees }}
+{{- if not (has $e.client $subIDs) }}{{ fail (printf "ui.machineAuth.write.cred.subtrees client %q has no ui.machineAuth.write.subtrees entry" $e.client) }}{{ end }}
+{{- end }}
 {{- end }}
 {{- if .Values.ui.machineAuth.enabled }}
 {{- /*
@@ -533,6 +561,50 @@ spec:
               value: {{ $w.limits.burst | quote }}
             - name: MACHINE_WRITE_GLOBAL_SLOTS
               value: {{ $w.limits.globalSlots | quote }}
+            {{- if $w.cred.enabled }}
+            {{- $c := $w.cred }}
+            {{- /* v2c (#379 T-026): the W_cred identity, the cn=config reader and the canaries; passwords are Secret references only. */}}
+            - name: MACHINE_WRITE_CRED_ENABLED
+              value: "true"
+            - name: MACHINE_WRITE_CRED_BIND_DN
+              value: {{ $c.bindDN | quote }}
+            - name: MACHINE_WRITE_CRED_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.existingSecret | quote }}
+                  key: {{ $c.existingSecretKey | quote }}
+            {{- $csubs := list }}
+            {{- range $e := $c.subtrees }}
+            {{- $csubs = append $csubs (printf "%s=%s" $e.client (join "|" $e.dns)) }}
+            {{- end }}
+            - name: MACHINE_WRITE_CRED_SUBTREES
+              value: {{ join ";" $csubs | quote }}
+            - name: MACHINE_WRITE_CRED_PENDING_POLICY_DN
+              value: {{ $c.pendingPolicyDN | quote }}
+            {{- if $c.policyDNs }}
+            - name: MACHINE_WRITE_CRED_POLICY_DNS
+              value: {{ join ";" $c.policyDNs | quote }}
+            {{- end }}
+            - name: MACHINE_WRITE_CRED_MIN_LENGTH
+              value: {{ $c.minLength | quote }}
+            - name: MACHINE_WRITE_CRED_RATE_LIMIT_RPS
+              value: {{ $c.rateLimitRPS | quote }}
+            - name: MACHINE_WRITE_CRED_PENDING_TTL
+              value: {{ $c.pendingTTL | quote }}
+            - name: MACHINE_WRITE_CRED_ACL_READER_DN
+              value: {{ $c.aclReader.dn | quote }}
+            - name: MACHINE_WRITE_CRED_ACL_READER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.aclReader.existingSecret | quote }}
+                  key: {{ $c.aclReader.existingSecretKey | quote }}
+            {{- $cans := list }}
+            {{- range $e := $c.canaries }}
+            {{- $cans = append $cans (printf "%s|%s|%s" $e.withPassword $e.unmarked $e.pending) }}
+            {{- end }}
+            - name: MACHINE_WRITE_CRED_CANARIES
+              value: {{ join ";" $cans | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.ui.sso.enabled }}

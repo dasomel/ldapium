@@ -6,12 +6,12 @@ ldapclient.CredPremise checker the UI runs at start-up, before every setPassword
 60 s; this script runs that exact code (the `live`-tagged Go test binary,
 TestCredPremiseLive, inside the container) and asserts its result codes. The gate around
 it (start-up refusal, 503, the 60 s cycle) is unit-tested in internal/httpapi; the
-operation itself stays unreachable until T-026.
+opened operation (T-026) runs through it in the T-024/T-025 proofs.
 
 One fresh container (no replication identity, accesslog on with `writes reads bind`),
 built with the base proof's helpers (scripts/test/test-machine-write-acl-live.py, imported:
 its main() does not run) and the DOCUMENTED procedure: guide 4.2/4.3 W_data and W_lock,
-8.2-8.5 v2c, then the new 8.8 blocks cut out of docs/machine-write-account.md (the
+8.1 the no-lockout policy of W_cred (Q17), 8.2-8.5 v2c, then the new 8.8 blocks cut out of docs/machine-write-account.md (the
 configuration reader account and ACL, the canaries in TWO cred subtrees). Then:
 
   * the baseline passes (start-up/periodic check with canaries, and the request check);
@@ -66,6 +66,7 @@ wd_dn, wl_dn, wc_dn, machine_dn, priv, pending_pol, default_pol = (acl.wd_dn, ac
                                                                    acl.pending_pol, acl.default_pol)
 reader_dn = 'uid=machine-cred-acl-reader,' + system_dn
 sub_a, sub_b = 'ou=a,' + people, 'ou=b,' + people        # two cred subtrees; their common ancestor is the CRED_DN people
+wcred_policy = 'cn=machine-writers,ou=policies,' + base_dn  # guide 8.1 no-lockout policy of W_cred (Q17)
 CMARK = 'ldapium-credential-pending:0000000000000000'
 MAIN = 'olcDatabase={1}mdb,cn=config'
 CFGDB = 'olcDatabase={0}config,cn=config'
@@ -210,13 +211,20 @@ def setup(node):
                 {'MACHINE_DN': machine_dn, 'ALLOWED_DN': base_dn, 'MAIN_DB_DN': node.main_db, 'CFG_URI': acl.ldapi_uri})
   require(res.returncode == 0, 'M apply: ' + mask(res.stderr))
   node.fragdir = acl.fragdir_for(node, 'premise')
-  for name in ('config-reader.ldif', 'config-reader-main.ldif'):
+  for name in ('config-reader.ldif', 'config-reader-main.ldif', 'wcred-policy.ldif'):
     shutil.copy(acl.fixtures / name, node.fragdir)
   for frag, who in (('write-data.ldif', wd_dn), ('write-lock.ldif', wl_dn)):
     out = acl.guide_install(node, node.fragdir, frag, who, managed)
     require('BASE=' in out and 'refusing' not in out, f'guide 4.2 {frag}: {out[-200:]}')
   # v2c accounts and data (as the base proof's v2c phase)
   admin(node, acl.person(wc_dn, 'machine-write-cred', f'userPassword: {acl.passwords["wcred"]}\n'))
+  # 8.1, Q17 (2026-10-14): W_cred carries the no-lockout policy (a second apply only re-checks it)
+  for _ in range(2):
+    out = acl.guide_v2c(node, 'v2c-wcred-policy', {'WCRED_POLICY_DN': wcred_policy})
+    require('refusing' not in out and f'WCRED_POLICY={wcred_policy}' in out, 'guide 8.1 no-lockout policy: ' + mask(out[-300:]))
+  res = node.search('admin', wc_dn, '(objectClass=*)', ['pwdPolicySubentry'], 'base')
+  check(res.returncode == 0 and re.search(rf'^pwdPolicySubentry: {re.escape(wcred_policy)}$', res.stdout, re.M | re.I) is not None,
+        'guide 8.1: W_cred carries the no-lockout policy (Q17)')
   admin(node, f'dn: {priv}\nchangetype: add\nobjectClass: groupOfNames\ncn: admins\nmember: uid=u01,{people}\n')
   for ou in (sub_a, sub_b):
     admin(node, f'dn: {ou}\nchangetype: add\nobjectClass: organizationalUnit\nou: {ou.split(",")[0][3:]}\n')

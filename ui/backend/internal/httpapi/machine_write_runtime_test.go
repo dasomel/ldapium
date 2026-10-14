@@ -71,16 +71,18 @@ func TestMachineWriteSettingsOffKeepV1Byte(t *testing.T) {
 			denied++
 		}
 	}
-	// AC-001: with writes off all 37 non-read operations are 403, the nine opened
-	// writes (T-014 added four) included, which are only reachable with the switch on.
-	if denied != 37 || len(machineWriteOps) != 9 || set.dialer.binds.Load() != 0 {
-		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 9, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
+	// AC-001: with writes off all 37 non-read operations are 403, the ten opened
+	// writes (T-014 added four, T-026 setPassword) included, which are only
+	// reachable with the switch on.
+	if denied != 37 || len(machineWriteOps) != 10 || set.dialer.binds.Load() != 0 {
+		t.Fatalf("denied=%d ops=%d binds=%d, want 37, 10, 0", denied, len(machineWriteOps), set.dialer.binds.Load())
 	}
 }
 
-// AC-001 / T-014 default-off guarantee: with MACHINE_WRITE_ENABLED false (the
-// default) none of the nine opened operations is reachable, whatever the client
-// ceiling and token carry and however fully the write settings are populated:
+// AC-001 / T-014 / T-026 default-off guarantee: with MACHINE_WRITE_ENABLED false
+// (the default) none of the ten opened operations is reachable, whatever the client
+// ceiling and token carry and however fully the write settings (the v2c W_cred
+// compartment switched on included) are populated:
 // each is 403 scope_denied, nothing reaches the execution boundary, no bind, and
 // no write pipeline exists.
 func TestMachineWriteOffNoOpenedOperationReachable(t *testing.T) {
@@ -91,6 +93,10 @@ func TestMachineWriteOffNoOpenedOperationReachable(t *testing.T) {
 		c.Machine.Write.LockEnabled = true
 		c.Machine.Write.Lock = config.MachineWriteIdentity{BindDN: "cn=locker,ou=system," + rtBase, BindPassword: "private-lock"}
 		c.Machine.Write.GroupSeedDN = "cn=group-seed,ou=system," + rtBase
+		c.Machine.Write.CredEnabled = true
+		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: "cn=cred,ou=system," + rtBase, BindPassword: "private-cred"}
+		c.Machine.Write.CredPendingPolicyDN = "cn=pending,ou=policies," + rtBase
+		c.Machine.Write.CredSubtrees = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: []string{rtPeop}}}
 	}})
 	if h.s.machineWrite != nil || h.s.machine.write != nil {
 		t.Fatal("write runtime or pipeline built while off")
@@ -114,11 +120,11 @@ func TestMachineWriteOffNoOpenedOperationReachable(t *testing.T) {
 	}
 }
 
-// Enabled and fully configured: the objects exist and exactly the nine
+// Enabled and fully configured: the objects exist and exactly the ten
 // registered operations get past the scope gate (the stub requests are then
 // rejected by the pipeline for lack of body, key or If-Match); every other write
 // route stays 403 before execution and no bind happens.
-func TestMachineWriteRuntimeEnabledOpensOnlyTheNine(t *testing.T) {
+func TestMachineWriteRuntimeEnabledOpensOnlyTheTen(t *testing.T) {
 	h := newHarness(t, harnessOpt{cfg: func(c *config.Config) {
 		w := writeRuntimeConfig(true)
 		c.IdempotencyEnabled = true
@@ -152,7 +158,7 @@ func TestMachineWriteRuntimeEnabledOpensOnlyTheNine(t *testing.T) {
 			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
 		}
 	}
-	if opened != 9 || closed == 0 || h.dialer.binds.Load() != 0 {
+	if opened != 10 || closed == 0 || h.dialer.binds.Load() != 0 {
 		t.Fatalf("opened=%d closed=%d binds=%d", opened, closed, h.dialer.binds.Load())
 	}
 }
