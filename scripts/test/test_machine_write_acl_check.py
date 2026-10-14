@@ -35,6 +35,12 @@ REPL = 'cn=replicator,' + BASE
 HEAD = 'dn: olcDatabase={1}mdb,cn=config\n'
 ARGS = ['--root-dn', BASE, '--machine-dn', MDN, '--system-dn', SYS, '--write-dn', WRITE,
         '--wdata-dn', WD, '--wlock-dn', WL, '--replication-identity', 'required']
+WC = 'uid=machine-write-cred,ou=system,' + BASE
+CRED = 'ou=people,' + WRITE
+POL = 'cn=credential-pending,ou=policies,' + BASE
+PRIVS = ['cn=admins,ou=groups,' + WRITE, 'cn=subadmins,ou=groups,' + WRITE]
+V2C = ['--wcred-dn', WC, '--cred-dn', CRED, '--pending-policy-dn', POL] + sum((['--privileged-group', g] for g in PRIVS), [])
+HEAD_V2C = HEAD + 'olcAddContentAcl: TRUE\n'
 IMAGE_RULES = ['to attrs=userPassword,shadowLastChange by self write by anonymous auth by * none',
                'to attrs=entry,uid,objectClass by anonymous read by users read',
                'to * by self write by users read by anonymous none']
@@ -64,6 +70,18 @@ def synthetic(write=WRITE, repl=True, image=True, wdata=True, wlock=True):
   if wlock:
     out += [r.text for r in lib.expected_rules(lib.LOCK_RULES, dict(sub, **{'@WHO@': WL}))]
   return out + (IMAGE_RULES if image else [])
+
+
+def synthetic_v2c(groups=PRIVS):
+  # The v2c good state: the W_data v2c rules inside W_data after its two backstops, W_cred after W_lock.
+  sub = {'@SYSTEM_DN@': SYS, '@REPL_DN@': REPL, '@WRITE_DN@': WRITE, '@CRED_DN@': CRED, '@PENDING_POLICY_DN@': POL,
+         '@WDATA_DN@': WD, '@PRIV_FILTER@': ''.join('(!(memberOf=%s))' % g for g in groups)}
+  out = synthetic(image=False)
+  first = 4  # replication rule + 3 M rules
+  extra = [r.text for r in lib.expected_rules(lib.CRED_DATA_RULES, dict(sub, **{'@WHO@': WD}), groups)]
+  out = out[:first + 2] + extra + out[first + 2:]
+  out += [r.text for r in lib.expected_rules(lib.CRED_RULES, dict(sub, **{'@WHO@': WC}))]
+  return out + IMAGE_RULES
 
 
 class Run:
@@ -112,6 +130,90 @@ class CheckTests(unittest.TestCase):
       body = text[text.index('olcAccess: {0}'):]
       norm = lambda s: re.sub(r'@(WDATA|WLOCK)_DN@', '@WHO@', ' '.join(s.split()))
       self.assertEqual(norm(body), norm(tpl), name)
+
+  def test_v2c_templates_equal_the_fixtures(self):
+    for name, tpl, who in (('write-data-cred.ldif', lib.CRED_DATA_RULES, 'WDATA'), ('write-cred.ldif', lib.CRED_RULES, 'WCRED')):
+      text = '\n'.join(l for l in (FIX / name).read_text().splitlines() if not l.startswith('#'))
+      body = text[text.index('olcAccess: {0}'):]
+      norm = lambda s: ' '.join(s.split()).replace('@%s_DN@' % who, '@WHO@')
+      self.assertEqual(norm(body), norm(tpl), name)
+
+  def test_real_v2c_dump_passes(self):
+    # good-v2c.ldif: the REAL main-database entry (dn, olcAddContentAcl, olcAccess) after the guide's section 8
+    # blocks on top of good-prepare (test-check-machine-write-acl-live.sh, CHKACL_SAVE_DUMP_V2C).
+    text = (DUMPS / 'good-v2c.ldif').read_text()
+    self.assertIn('olcAddContentAcl: TRUE', text)
+    r = check_dump(text, V2C)
+    self.assertEqual(r.rc, 0, r.out + r.err)
+    real = values(text)
+    good = synthetic_v2c()
+    n = len(good) - len(IMAGE_RULES)  # the image tail of the live node may differ (#399 added a rule)
+    self.assertEqual([lib.Rule(i, ' '.join(strip_idx(v).split())).sig() for i, v in enumerate(real[:n])],
+                     [lib.Rule(i, r).sig() for i, r in enumerate(good[:n])])
+
+  def test_v2c_good_state_passes(self):
+    r = check_dump(render(synthetic_v2c(), HEAD_V2C), V2C)
+    self.assertEqual(r.rc, 0, r.out + r.err)
+    self.assertIn('olcAddContentAcl is TRUE', r.out)
+    self.assertRegex(r.out, r'W_data has exactly 14 rules')  # 9 + (a) + 2 x (b) + marker + policy
+    self.assertRegex(r.out, r'W_cred has exactly 7 rules')
+    one = synthetic_v2c(PRIVS[:1])
+    self.assertEqual(check_dump(render(one, HEAD_V2C), V2C[:6] + ['--privileged-group', PRIVS[0]]).rc, 0)
+
+  def test_v2c_faults_fail(self):
+    good = synthetic_v2c()
+    wd0 = 4
+    wc0 = len(good) - 3 - 7
+    at = lambda i, f: [f(r) if k == i else r for k, r in enumerate(good)]
+    cases = {
+      'olcAddContentAcl missing': (good, HEAD),
+      'olcAddContentAcl FALSE': (good, HEAD + 'olcAddContentAcl: FALSE\n'),
+      'W_cred filter without (!(userPassword=*))': (at(wc0 + 2, lambda r: r.replace('(!(userPassword=*))', '')), HEAD_V2C),
+      'W_cred filter without creatorsName': (at(wc0 + 2, lambda r: r.replace('(creatorsName=%s)' % WD, '')), HEAD_V2C),
+      'W_cred filter without a privileged group': (at(wc0 + 2, lambda r: r.replace('(!(memberOf=%s))' % PRIVS[1], '')), HEAD_V2C),
+      'W_cred manage (=wm skips the policy)': (at(wc0 + 2, lambda r: r.replace(' =w ', ' =wm ')), HEAD_V2C),
+      'W_cred cleanup of any employeeType value': (at(wc0 + 3, lambda r: r.replace(' val.regex="^ldapium-credential-pending:[0-9a-f]{16}$"', '')), HEAD_V2C),
+      'W_cred cleanup regex widened': (at(wc0 + 3, lambda r: r.replace('[0-9a-f]{16}', '.*')), HEAD_V2C),
+      'W_cred cleanup of another policy DN': (at(wc0 + 4, lambda r: r.replace('val="%s"' % POL, 'val="cn=default,ou=policies,%s"' % BASE)), HEAD_V2C),
+      'W_cred bundle missing': (good[:wc0] + good[wc0 + 7:], HEAD_V2C),
+      'W_cred entry rule added (=x)': (good[:wc0 + 5] + ['to dn.subtree="%s" attrs=entry by dn.exact="%s" =x by * break' % (CRED, WC)] + good[wc0 + 5:], HEAD_V2C),
+      'M-3 (a) removed': (good[:wd0 + 2] + good[wd0 + 3:], HEAD_V2C),
+      'M-3 (b) of one privileged group removed': (good[:wd0 + 4] + good[wd0 + 5:], HEAD_V2C),
+      'attach rule without its filter (Modify attach, M-1)': (at(wd0 + 6, lambda r: r.split(' filter=')[0] + ' by dn.exact="%s" add by * break' % WD), HEAD_V2C),
+      'attach rule write instead of add': (at(wd0 + 6, lambda r: r.replace('" add by', '" write by')), HEAD_V2C),
+      'attach rules behind the W_data secrets rule': (good[:wd0 + 5] + good[wd0 + 7:wd0 + 8] + good[wd0 + 5:wd0 + 7] + good[wd0 + 8:], HEAD_V2C),
+      'v2c W_data rules missing (only the 9)': (good[:wd0 + 2] + good[wd0 + 7:], HEAD_V2C),
+    }
+    for label, (rules, head) in cases.items():
+      with self.subTest(label):
+        self.assertFails(check_dump(render(rules, head), V2C))
+
+  def test_v2c_unpinned_provider(self):
+    # Codex P1: W_cred has its bundle on the pinned provider only; elsewhere exactly the deny rule.
+    good = synthetic_v2c()
+    deny = good[:-3 - 7] + ['to * by dn.exact="%s" none by * break' % WC] + good[-3:]
+    self.assertEqual(check_dump(render(deny, HEAD_V2C), V2C + ['--wcred-unpinned']).rc, 0)
+    self.assertFails(check_dump(render(good, HEAD_V2C), V2C + ['--wcred-unpinned']))  # the full bundle on a non-pinned node
+    self.assertFails(check_dump(render(deny, HEAD_V2C), V2C))                          # the pinned node without the bundle
+    self.assertFails(check_dump(render(good[:-3 - 7] + good[-3:], HEAD_V2C), V2C + ['--wcred-unpinned']))  # no W_cred rule at all
+    self.assertFails(check_dump(render(deny, HEAD_V2C), ['--wcred-unpinned']), 2)
+
+  def test_v2c_unsafe_dn_characters_are_refused(self):
+    for bad in ('cn=a(b),ou=groups,' + WRITE, 'cn=a*,ou=groups,' + WRITE, 'cn=a|b,ou=groups,' + WRITE, 'cn=a&b,ou=groups,' + WRITE, 'cn=a\\2cb,ou=groups,' + WRITE):
+      with self.subTest(bad):
+        self.assertFails(check_dump(render(synthetic_v2c(), HEAD_V2C), V2C + ['--privileged-group', bad]), 2)
+
+  def test_v2c_state_without_v2c_arguments_fails(self):
+    # A node that carries the v2c rules is not the v2b layout: checked without the v2c options it must fail.
+    self.assertFails(check_dump(render(synthetic_v2c(), HEAD_V2C)))
+    self.assertFails(check_dump(render(synthetic_v2c(), HEAD_V2C), ['--wcred-dn', WC]), 1, 'W_cred')
+
+  def test_v2c_partial_arguments_are_a_usage_error(self):
+    for cut in (V2C[:6], V2C[2:], ['--wcred-dn', WC, '--cred-dn', CRED, '--privileged-group', PRIVS[0]]):
+      with self.subTest(cut):
+        self.assertFails(check_dump(render(synthetic_v2c(), HEAD_V2C), cut), 2)
+    outside = [x if x != CRED else 'ou=people,' + BASE for x in V2C]
+    self.assertFails(check_dump(render(synthetic_v2c(), HEAD_V2C), outside), 2)
 
   def test_static_unreadable_dumps_fail(self):
     for name in ('empty.ldif', 'no-main-database.ldif'):

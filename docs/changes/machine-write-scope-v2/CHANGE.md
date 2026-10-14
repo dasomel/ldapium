@@ -378,6 +378,11 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 ## Revision
 
+- 2026-10-14 Revision 11 (T-021 구현 검토: security-reviewer MAJOR 2·MINOR 4, Codex P1 3; 실측 EVIDENCE.md §2i). 결정 문구 중 M-3 (a)와 배포 형태만 바뀐다.
+  - **MAJOR-1**: M-3 (a)가 `inetOrgPerson`만 덮어, 관리자가 만든 `person`·`organizationalPerson`·`account`/`posixAccount` 항목은 지우고 같은 DN의 대기 `inetOrgPerson`으로 재생성할 수 있었다. (a)의 filter를 클래스와 무관하게 `(&(!(objectClass=groupOfNames))(!(creatorsName=<W_data>)))`로 바꿨다(그룹은 v2b `deleteGroup` 때문에 제외). Q16의 축소는 "W_data가 만들지 않은 사용자"에서 "W_data가 만들지 않은 그룹 아닌 항목"(컨테이너 포함, 앱은 원래 컨테이너 삭제를 거부)으로 표현만 넓어진다.
+  - **MAJOR-2 (세 번째 수용 위험, Q16과 같은 범주)**: (a)는 삭제·modrdn만 막는다. 유출된 `W_data`가 관리자가 만든 (특권) 사용자의 `mail`·`uid`를 바꾸고 그 옛 값의 대기 계정을 만들어 설정하면, 로그인 이름을 `mail`·`uid`로 해석하는 소비자에서 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`(관리자가 만든 사용자의 `mail` 변경)가 Q16 수용 범위 밖으로 좁아지므로 넣지 않고 문서화했다(운영 가이드 8절: 불변 식별자 바인딩·변경 경보, 아니면 v2c를 켜지 않음). **유지보수자 확인 필요**로 남긴다.
+  - **Codex P1**: `W_cred` 묶음은 고정 provider 하나에만, 다른 provider에는 `write-cred-deny.ldif`(`to * by W_cred none`), 점검 스크립트 `--wcred-unpinned`. 롤백 0건 확인은 검색 실패를 0으로 보지 않고(fail closed) provider마다 실행한다(복제 지연).
+  - MINOR: DN의 filter·`sed` 메타문자 거부(가이드·점검 스크립트), 점검 스크립트가 설치와 인자에서 함께 빠진 특권 그룹을 알 수 없음을 명시, Q14 창 안의 자기 비밀번호 변경 명시, 재시작 후 `olcAddContentAcl`·배치 유지 실측.
 - 2026-10-14 Revision 10 (유지보수자 Q16 수용). **v2a 계약 축소(Q16, 2026-10-14 유지보수자 수용)**: v2c를 켠 배포(M-3 완화 규칙 (a) 설치)에서는 머신 `deleteUser`와 modrdn이 `W_data`가 만들지 않은 사용자(`creatorsName` ≠ `W_data`)에 대해 LDAP 50으로 거부되고 앱은 그것을 기존 매핑의 거부로 돌려준다. `W_data`가 만든 사용자와 v2c를 켜지 않은 배포는 바뀌지 않는다. 문서 동기화 목록과 T-021/T-026에 반영.
 - 2026-10-13 Revision 9 (Revision 8 재검토 반영; 실측 EVIDENCE.md §2h, 93/93, exit 0). Q16 추가.
   - **M-3**: `W_data`의 `entry` write는 Delete도 허용해, 유출된 `W_data` + `password.write` client로 관리자가 만든 특권 계정을 삭제→대기 재생성→설정→특권 재가입할 수 있었다(실측 재현). 완화 (a) 비-`W_data` `inetOrgPerson`의 `entry`는 `W_data`에 `=rsc`, (b) 특권 그룹 `member`는 `W_data`에 `=rsc` — 둘 다 성립(50). 부작용·잔여 위험은 Q16과 위협 표(정정).

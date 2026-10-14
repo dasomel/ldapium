@@ -11,10 +11,15 @@
 #        b. the W_data secrets rule removed
 #        c. the W_data fragment applied twice (bypassing the guide's own refusal)
 #   3. an unreadable source (no such container) must exit non-zero
+#   4. v2c (#379 T-021): the guide's section 8 blocks (switch, W_data v2c rules, W_cred) must pass
+#      with the v2c options and fail without them; the switch off, M-3 (a) removed and a W_cred
+#      filter term dropped must each fail; the guide's rollback (8.7 order) restores the v2b state
+#      byte for byte, and its order guard refuses removing W_cred while the attach rules remain;
+#      4b. a non-pinned provider (W_cred deny rule) passes only with --wcred-unpinned
 # Not wired into CI (needs Docker and an image). Throwaway passwords only.
 #
 # Usage: scripts/test/test-check-machine-write-acl-live.sh [image]    image defaults to ldapium:e2e
-# CHKACL_SAVE_DUMP=FILE additionally writes the good olcAccess list there. Resources are named ldapium-chkacl-l285o* (override the suffix with CHKACL_SUFFIX) and only
+# CHKACL_SAVE_DUMP=FILE additionally writes the good olcAccess list there (CHKACL_SAVE_DUMP_V2C=FILE: the v2c state). Resources are named ldapium-chkacl-l285o* (override the suffix with CHKACL_SUFFIX) and only
 # those are removed on exit.
 set -euo pipefail
 
@@ -30,6 +35,7 @@ sysdn="ou=system,${base}"
 mdn="uid=machine,${sysdn}"
 wddn="uid=machine-write-data,${sysdn}"
 wldn="uid=machine-write-lock,${sysdn}"
+wcdn="uid=machine-write-cred,${sysdn}"
 wrdn="ou=managed,${base}"
 maindb="olcDatabase={1}mdb,cn=config"
 ldapi='ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi'
@@ -53,7 +59,11 @@ MAIN_DB_DN="$maindb"
 CFG_URI="$ldapi"
 ROOT_DN="$base"
 WRITE_DN="$wrdn"
-export EXEC MACHINE_DN WDATA_DN WLOCK_DN SYSTEM_DN REPL_DN MAIN_DB_DN CFG_URI ROOT_DN WRITE_DN
+WCRED_DN="$wcdn"
+CRED_DN="ou=people,${wrdn}"
+PENDING_POLICY_DN="cn=credential-pending,ou=policies,${base}"
+PRIV_GROUPS="cn=admins,ou=groups,${wrdn};cn=subadmins,ou=groups,${wrdn}"
+export EXEC MACHINE_DN WDATA_DN WLOCK_DN SYSTEM_DN REPL_DN MAIN_DB_DN CFG_URI ROOT_DN WRITE_DN WCRED_DN CRED_DN PENDING_POLICY_DN PRIV_GROUPS
 
 fail=0
 ok() { printf 'PASS: %s\n' "$1"; }
@@ -71,7 +81,7 @@ cleanup() {
   if ! docker rm -fv "$c" >/dev/null 2>&1; then echo "cleanup: container ${c} not removed" >&2; fi
   if ! docker volume rm -f "${c}-cfg" "${c}-data" "$certs" >/dev/null 2>&1; then echo "cleanup: volumes not removed" >&2; fi
   if ! docker network rm "$net" >/dev/null 2>&1; then echo "cleanup: network ${net} not removed" >&2; fi
-  rm -rf "$envfile" "$stubdir" "$dump" "${dump}.out" "${dump}.good"
+  rm -rf "$envfile" "$stubdir" "$dump" "${dump}.out" "${dump}.good" "${dump}.v2c" "${dump}.back"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -218,6 +228,80 @@ breakage "W_data applied twice"
 restore_acl "${dump}.good"
 run_chk --container "$c"
 expect_rc "restored after the duplicate" 0 "$rc"
+
+echo "=== 4. v2c: the guide's section 8 ==="
+v2c_install="$(guide_sh 'V2C_AT=')"
+v2c_rollback="$(guide_sh 'WHAT=')"
+v2c_on="$(guide_sh 'v2c-switch-on')"
+v2c_off="$(guide_sh 'v2c-switch-off')"
+[ -n "$v2c_install" ] && [ -n "$v2c_rollback" ] && [ -n "$v2c_on" ] && [ -n "$v2c_off" ] || { echo "cannot cut the v2c blocks out of ${guide}" >&2; exit 1; }
+# shellcheck disable=SC2030,SC2031 # the guide commands run in subshells on purpose
+v2c_frag() { (cd "$fix" && export FRAG="$1" && eval "$v2c_install") 2>&1; }
+# shellcheck disable=SC2030,SC2031
+v2c_back() { (cd "$fix" && export WHAT="$1" && eval "$v2c_rollback") 2>&1; }
+v2c_args=(--wcred-dn "$wcdn" --cred-dn "$CRED_DN" --pending-policy-dn "$PENDING_POLICY_DN"
+          --privileged-group "cn=admins,ou=groups,${wrdn}" --privileged-group "cn=subadmins,ou=groups,${wrdn}")
+out="$(v2c_frag write-cred.ldif)"
+case "$out" in *"refusing: "*) ok "order guard: W_cred before the W_data v2c rules is refused" ;; *) bad "W_cred applied before the W_data v2c rules: $out" ;; esac
+(eval "$v2c_on") >/dev/null
+out="$(v2c_frag write-data-cred.ldif)"; printf '%s\n' "$out" | tail -n 1
+out="$(v2c_frag write-data-cred.ldif)"
+case "$out" in *"refusing: "*) ok "a second W_data v2c apply is refused" ;; *) bad "second W_data v2c apply not refused: $out" ;; esac
+out="$(v2c_frag write-cred.ldif)"; printf '%s\n' "$out" | tail -n 1
+acl_list >"${dump}.v2c"
+if [ -n "${CHKACL_SAVE_DUMP_V2C:-}" ]; then  # the real entry, only dn / olcAddContentAcl / olcAccess (no olcRootPW)
+  docker exec "$c" slapcat -n 0 -o ldif-wrap=no 2>/dev/null | sed -n "/^dn: ${maindb}\$/,/^\$/p" | grep -E '^(dn|olcAddContentAcl|olcAccess): ' >"$CHKACL_SAVE_DUMP_V2C"
+fi
+echo "--- v2c olcAccess: $(wc -l <"${dump}.v2c" | tr -d ' ') values ---"
+run_chk --container "$c" "${v2c_args[@]}"
+expect_rc "v2c installed by the guide, checked with the v2c options" 0 "$rc"
+run_chk --container "$c"
+expect_nonzero "v2c state checked WITHOUT the v2c options (not the v2b layout)" "$rc"
+v2c_breakage() { run_chk --container "$c" "${v2c_args[@]}"; expect_nonzero "$1" "$rc"; awk '/^FAIL/ && n++ < 2' "$dump.out" | cut -c1-220; }
+(eval "$v2c_off") >/dev/null
+v2c_breakage "olcAddContentAcl switched off"
+(eval "$v2c_on") >/dev/null
+wd_first="$(awk -v x="dn.exact=\"${wddn}\"" 'index($0, x) { sub(/^olcAccess: \{/, ""); print $0 + 0; exit }' "${dump}.v2c")"
+printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {%s}\n' "$maindb" "$((wd_first + 2))" | cfg_apply
+v2c_breakage "M-3 (a) rule removed"
+restore_acl "${dump}.v2c"
+wc_first="$(awk -v x="dn.exact=\"${wcdn}\"" 'index($0, x) { sub(/^olcAccess: \{/, ""); print $0 + 0; exit }' "${dump}.v2c")"
+k=$((wc_first + 2))
+{ printf 'dn: %s\nchangetype: modify\ndelete: olcAccess\nolcAccess: {%s}\n-\nadd: olcAccess\n' "$maindb" "$k"
+  sed -n "$((k + 1))p" "${dump}.v2c" | sed -e 's/(!(userPassword=\*))//'; } | cfg_apply
+v2c_breakage "W_cred userPassword filter without (!(userPassword=*))"
+restore_acl "${dump}.v2c"
+run_chk --container "$c" "${v2c_args[@]}"
+expect_rc "restored v2c state" 0 "$rc"
+out="$(v2c_back cred)"
+case "$out" in *"refusing: "*) ok "rollback order guard: W_cred cannot go while the attach rules remain" ;; *) bad "W_cred removed before the attach rules: $out" ;; esac
+for part in attach cred m3; do
+  out="$(v2c_back "$part")"
+  case "$out" in *"removed ${part}"*) ok "guide 8.7 removed ${part}" ;; *) bad "guide 8.7 ${part}: $out" ;; esac
+done
+(eval "$v2c_off") >/dev/null
+acl_list >"${dump}.back"
+if cmp -s "${dump}.back" "${dump}.good"; then ok "after the v2c rollback olcAccess equals the v2b state byte for byte"; else bad "olcAccess differs from the v2b state after the v2c rollback"; diff "${dump}.good" "${dump}.back" | head -n 6 >&2; fi
+aca="$(docker exec "$c" slapcat -n 0 -o ldif-wrap=no 2>/dev/null | sed -n "/^dn: ${maindb}\$/,/^\$/p" | grep -ci '^olcAddContentAcl:' || true)"
+expect_rc "olcAddContentAcl absent again (the shipped state)" 0 "$aca"
+run_chk --container "$c"
+expect_rc "v2b check passes again after the v2c rollback" 0 "$rc"
+
+echo "=== 4b. v2c on a NON-pinned provider (write-cred-deny.ldif) ==="
+(eval "$v2c_on") >/dev/null
+out="$(v2c_frag write-data-cred.ldif)"; printf '%s\n' "$out" | tail -n 1
+out="$(v2c_frag write-cred-deny.ldif)"; printf '%s\n' "$out" | tail -n 1
+run_chk --container "$c" "${v2c_args[@]}" --wcred-unpinned
+expect_rc "non-pinned provider checked with --wcred-unpinned" 0 "$rc"
+run_chk --container "$c" "${v2c_args[@]}"
+expect_nonzero "non-pinned layout checked as the pinned provider (W_cred bundle missing)" "$rc"
+for part in cred attach m3; do
+  out="$(v2c_back "$part")"
+  case "$out" in *"removed ${part}"*) ok "guide 8.7 removed ${part} (non-pinned; the deny rule may go first)" ;; *) bad "guide 8.7 ${part} (non-pinned): $out" ;; esac
+done
+(eval "$v2c_off") >/dev/null
+acl_list >"${dump}.back"
+if cmp -s "${dump}.back" "${dump}.good"; then ok "non-pinned rollback: olcAccess equals the v2b state byte for byte"; else bad "non-pinned rollback differs from the v2b state"; fi
 
 echo "=== 3. unreadable source => non-zero ==="
 run_chk --container "ldapium-chkacl-nonexistent-${suffix}"

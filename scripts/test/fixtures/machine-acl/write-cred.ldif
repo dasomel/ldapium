@@ -1,0 +1,65 @@
+# Machine WRITE identity W_cred ACL for the MAIN database (v2c, #379 T-021;
+# docs/changes/machine-write-scope-v2 D379-10/13/18 Revision 8; operator guide
+# docs/machine-write-account.md section 8).
+#
+# Same single-source rule as write-data.ldif: the guide embeds this text verbatim,
+# the live proofs apply it with the guide's own command, and
+# scripts/test/test-machine-write-cred-experiments.py (FINAL) asserts that this
+# text equals the rules it measured (EVIDENCE.md 2g/2h). Tokens:
+#
+#   @WCRED_DN@          the dedicated password account (under @SYSTEM_DN@)
+#   @WDATA_DN@          the data-write account: only entries IT created are targets
+#   @CRED_DN@           the password subtree (MACHINE_WRITE_CRED_SUBTREES, inside
+#                       @WRITE_DN@): one point, like @WRITE_DN@
+#   @SYSTEM_DN@         the container of M and the W identities: a deny backstop
+#   @REPL_DN@           the replication identity entry: the same backstop
+#   @PENDING_POLICY_DN@ the pending-account policy (copy of the default with
+#                       pwdSafeModify FALSE and pwdCheckQuality 2, guide 8.2)
+#   @PRIV_FILTER@       (!(memberOf=<group>)) once per MACHINE_WRITE_PRIVILEGED_GROUPS
+#                       group, concatenated (the guide computes it)
+#   @MAIN_DB_DN@        the config entry of the main database
+#
+# Prerequisites (guide 8, in this order): olcAddContentAcl TRUE on the main
+# database, the pending policy entry, the W_data v2c rules
+# (write-data-cred.ldif). Placement: after the W_data / W_lock rules, before
+# every image allow rule. Every rule names only W_cred and ends in "by * break".
+#
+# W_cred can set userPassword (=w, never manage: manage skips the policy) ONLY
+# on an inetOrgPerson that W_data created with the pending marker and the
+# pending policy, that has no password yet and is not a direct member of a
+# privileged group. Its only other write is the cleanup: delete exactly the
+# marker value and exactly the pending policy value (=z) on W_data-made
+# entries. Password Modify needs no `entry` access (EVIDENCE 2e), so there is
+# no entry rule.
+#
+#   {0} anything under @SYSTEM_DN@                       none
+#   {1} the replication identity entry @REPL_DN@         none
+#   {2} userPassword of a pending W_data-made account    =w (filter)
+#   {3} the marker value on a W_data-made pending entry  =z (cleanup)
+#   {4} the pending policy value on a W_data-made entry  =z (cleanup)
+#   {5} secrets, pwd* state, memberOf                    none
+#   {6} everything else                                  none
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="@SYSTEM_DN@"
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {1}to dn.exact="@REPL_DN@"
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {2}to dn.subtree="@CRED_DN@" attrs=userPassword filter=(&(objectClass=inetOrgPerson)(creatorsName=@WDATA_DN@)(employeeType=ldapium-credential-pending:*)(!(userPassword=*))@PRIV_FILTER@(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WCRED_DN@" =w
+  by * break
+olcAccess: {3}to dn.subtree="@CRED_DN@" attrs=employeeType val.regex="^ldapium-credential-pending:[0-9a-f]{16}$" filter=(&(creatorsName=@WDATA_DN@)(pwdPolicySubentry=@PENDING_POLICY_DN@))
+  by dn.exact="@WCRED_DN@" =z
+  by * break
+olcAccess: {4}to dn.subtree="@CRED_DN@" attrs=pwdPolicySubentry val="@PENDING_POLICY_DN@" filter=(creatorsName=@WDATA_DN@)
+  by dn.exact="@WCRED_DN@" =z
+  by * break
+olcAccess: {5}to attrs=userPassword,shadowLastChange,pwdHistory,pKCS8PrivateKey,userPKCS12,oathSecret,oathEncKey,oathTokenPIN,memberOf,pwdAccountLockedTime,pwdChangedTime,pwdFailureTime,pwdGraceUseTime,pwdReset,pwdPolicySubentry,pwdStartTime,pwdEndTime,pwdLastSuccess
+  by dn.exact="@WCRED_DN@" none
+  by * break
+olcAccess: {6}to *
+  by dn.exact="@WCRED_DN@" none
+  by * break

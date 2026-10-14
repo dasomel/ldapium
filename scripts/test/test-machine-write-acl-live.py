@@ -28,7 +28,17 @@ blocks are cut out of docs/machine-write-account.md and run as written):
   * M writes nothing, ever; the v1 read-only facts are re-asserted on the COMBINED layout;
   * the offset-aware rollback restores the olcAccess byte for byte (two orders, a refusal
     for a not-installed fragment), and the write subtree widened to the root keeps the
-    SYSTEM_DN / REPL_DN deny backstops.
+    SYSTEM_DN / REPL_DN deny backstops;
+  * v2c (#379 T-021, guide section 8): the switch olcAddContentAcl TRUE, the pending policy, the
+    W_data v2c rules (write-data-cred.ldif) and the W_cred bundle (write-cred.ldif), each by the
+    guide's own block and in its order (its order guards refuse W_cred first and a second apply);
+    the existing identities' access results are identical before and after; every ACL decision of
+    EVIDENCE 2g/2h as a direct ldapadd/ldapmodify/ldapdelete/ldapmodrdn/ldappasswd (Q15 Add table,
+    M-1 Modify refusals, M-3 (a)/(b) and the v2a deleteUser contract with v2c off/on/off, the
+    W_cred cross matrix, the pending policy, the accepted window, cleanup negatives, E-17 with
+    10 parallel sets), M read-only again on the v2c layout, and the guide's rollback in the
+    Revision 9 order (attach grant first, zero pending entries, then W_cred, then M-3, then the
+    switch) back to the v2b olcAccess byte for byte.
 
 Mutation self-test: LDAPIUM_WACL_MUTATE installs a broken variant of the W fragments and
 the proof must FAIL with named checks:
@@ -36,6 +46,9 @@ the proof must FAIL with named checks:
   loosen-objectclass      the W_data objectClass rule {4} grants write instead of add
   reorder                 the W fragments are placed after the image's allow rules
   drop-replicator-deny    the REPL_DN deny rule {1} dropped from both fragments
+  drop-cred-filter        the W_cred userPassword rule loses (!(userPassword=*)) (v2c)
+  drop-m3-entry           the M-3 (a) rule dropped from write-data-cred.ldif (v2c)
+  m3-inetorgperson-only   M-3 (a) back to the pre-review filter (inetOrgPerson only, MAJOR-1) (v2c)
 LDAPIUM_WACL_CONFIGS limits the run to some of the configurations n0 n1 p0 p1
 (<identity: n = none, p = prepare><anonymous read base: 0 = unset, 1 = set>).
 
@@ -67,8 +80,8 @@ mutation = os.environ.get('LDAPIUM_WACL_MUTATE', '')
 only_configs = os.environ.get('LDAPIUM_WACL_CONFIGS', 'n0,n1,p0,p1').split(',')
 if not (only_configs and set(only_configs) <= {'n0', 'n1', 'p0', 'p1'}):
   raise SystemExit('LDAPIUM_WACL_CONFIGS is a comma list of n0, n1, p0, p1')
-if mutation not in ('', 'loosen-secrets', 'loosen-objectclass', 'reorder', 'drop-replicator-deny'):
-  raise SystemExit('LDAPIUM_WACL_MUTATE must be loosen-secrets, loosen-objectclass, reorder or drop-replicator-deny')
+if mutation not in ('', 'loosen-secrets', 'loosen-objectclass', 'reorder', 'drop-replicator-deny', 'drop-cred-filter', 'drop-m3-entry', 'm3-inetorgperson-only'):
+  raise SystemExit('LDAPIUM_WACL_MUTATE must be loosen-secrets, loosen-objectclass, reorder, drop-replicator-deny, drop-cred-filter, drop-m3-entry or m3-inetorgperson-only')
 run_id = uuid.uuid4().hex[:6]
 name_prefix = prefix + run_id
 
@@ -79,6 +92,7 @@ system_dn = 'ou=system,' + base_dn
 machine_dn = 'uid=machine,' + system_dn       # M
 wd_dn = 'uid=machine-write-data,' + system_dn
 wl_dn = 'uid=machine-write-lock,' + system_dn
+wc_dn = 'uid=machine-write-cred,' + system_dn
 managed = 'ou=managed,' + base_dn             # WRITE_DN, also M's allowed subtree B
 people = 'ou=people,' + managed
 groups = 'ou=groups,' + managed
@@ -88,11 +102,14 @@ secrets_dn = 'uid=secrets,' + people
 dave = 'uid=dave,' + people                   # locked by the admin
 g1 = 'cn=g1,' + groups
 outsider = 'uid=outsider,' + other
+priv = 'cn=admins,' + groups                  # the one MACHINE_WRITE_PRIVILEGED_GROUPS group of the v2c phase
+pending_pol = 'cn=credential-pending,ou=policies,' + base_dn
+default_pol = 'cn=default,ou=policies,' + base_dn
 cfg_dn = 'cn=admin,cn=config'
 ldapi_uri = 'ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi'
 ldap_uri = 'ldap://127.0.0.1'
 
-passwords = {k: k[:3] + '-' + secrets.token_urlsafe(24) for k in ('admin', 'machine', 'wdata', 'wlock', 'human', 'id')}
+passwords = {k: k[:3] + '-' + secrets.token_urlsafe(24) for k in ('admin', 'machine', 'wdata', 'wlock', 'wcred', 'human', 'id')}
 human_new = 'HumanNew-' + secrets.token_urlsafe(12)
 
 SECRET_ATTRS = ('userPassword', 'shadowLastChange', 'pwdHistory', 'pKCS8PrivateKey', 'userPKCS12',
@@ -263,7 +280,19 @@ def mutate(name, text, shift):
     return out
   if mutation == 'reorder':
     return re.sub(r'^olcAccess: \{(\d+)\}', lambda m: f'olcAccess: {{{int(m.group(1)) + shift}}}', text, flags=re.M)
-  if mutation == 'drop-replicator-deny':
+  if mutation == 'drop-cred-filter' and name == 'write-cred.ldif':
+    out, n = re.subn(r'(attrs=userPassword filter=\(&[^\n]*?)\(!\(userPassword=\*\)\)', r'\1', text)
+    require(n == 1, 'drop-cred-filter did not apply')
+    return out
+  if mutation == 'drop-m3-entry' and name == 'write-data-cred.ldif':
+    out, n = re.subn(r'olcAccess: \{0\}to dn\.subtree="@WRITE_DN@" attrs=entry [^\n]*\n  by [^\n]*\n  by \* break\n', '', text)
+    require(n == 1, 'drop-m3-entry did not apply')
+    return out
+  if mutation == 'm3-inetorgperson-only' and name == 'write-data-cred.ldif':
+    out, n = re.subn(r'attrs=entry filter=\(&\(!\(objectClass=groupOfNames\)\)', 'attrs=entry filter=(&(objectClass=inetOrgPerson)', text)
+    require(n == 1, 'm3-inetorgperson-only did not apply')
+    return out
+  if mutation == 'drop-replicator-deny' and name in ('write-data.ldif', 'write-lock.ldif'):
     out, n = re.subn(r'olcAccess: \{1\}to dn\.exact="@REPL_DN@"\n  by dn\.exact="@\w+@" none\n  by \* break\n', '', text)
     require(n == 1, 'drop-replicator-deny did not apply')
     for i in range(2, 9):
@@ -280,7 +309,7 @@ tmp_dirs.append(secret_dir)
 
 WHO = {  # identity -> (bind DN, password file in the container)
     'admin': (admin_dn, '/tmp/.pw-admin'), 'machine': (machine_dn, '/tmp/.pw-machine'),
-    'wdata': (wd_dn, '/tmp/.pw-wdata'), 'wlock': (wl_dn, '/tmp/.pw-wlock'),
+    'wdata': (wd_dn, '/tmp/.pw-wdata'), 'wlock': (wl_dn, '/tmp/.pw-wlock'), 'wcred': (wc_dn, '/tmp/.pw-wcred'),
     'human': (alice, '/tmp/.pw-human'), 'id': (repl_dn, '/tmp/.pw-id'),
 }
 
@@ -361,7 +390,7 @@ class Node:
         return False
       return self.tool('admin', 'ldapsearch', ['-b', base_dn, '-s', 'base', 'dn']).returncode == 0
     wait_until(ready, f'{self.key}: slapd readiness')
-    for name in ('machine', 'wdata', 'wlock', 'id'):
+    for name in ('machine', 'wdata', 'wlock', 'wcred', 'id'):
       self.put(f'/tmp/.pw-{name}', passwords[name])
     self.put('/tmp/.pw-human', self.human_pw)
     if getattr(self, 'secrets_pw', None):
@@ -544,7 +573,9 @@ M_ROLLBACK_NOTE = 'M rules stay installed: the v1 proof owns the M rollback'
 
 def tokens(write_dn):
   return {'@MACHINE_DN@': machine_dn, '@ALLOWED_DN@': managed, '@WDATA_DN@': wd_dn, '@WLOCK_DN@': wl_dn,
-          '@WRITE_DN@': write_dn, '@SYSTEM_DN@': system_dn, '@REPL_DN@': repl_dn, '@MAIN_DB_DN@': 'olcDatabase={1}mdb,cn=config'}
+          '@WRITE_DN@': write_dn, '@SYSTEM_DN@': system_dn, '@REPL_DN@': repl_dn, '@MAIN_DB_DN@': 'olcDatabase={1}mdb,cn=config',
+          '@WCRED_DN@': wc_dn, '@CRED_DN@': people, '@PENDING_POLICY_DN@': pending_pol, '@PRIV_FILTER@': f'(!(memberOf={priv}))',
+          '@PRIV_GROUP_DN@': priv}
 
 
 def subst(text, write_dn):
@@ -561,7 +592,8 @@ def guide_env(node, write_dn):
   env = os.environ.copy()
   env.update({'EXEC': f'docker exec -i {node.container}', 'MACHINE_DN': machine_dn, 'WDATA_DN': wd_dn, 'WLOCK_DN': wl_dn,
               'SYSTEM_DN': system_dn, 'REPL_DN': repl_dn, 'MAIN_DB_DN': node.main_db, 'CFG_URI': ldapi_uri,
-              'ROOT_DN': base_dn, 'WRITE_DN': write_dn})
+              'ROOT_DN': base_dn, 'WRITE_DN': write_dn,
+              'WCRED_DN': wc_dn, 'CRED_DN': people, 'PENDING_POLICY_DN': pending_pol, 'PRIV_GROUPS': priv})
   return env
 
 
@@ -615,6 +647,8 @@ def fragdir_for(node, tag):
   shifts = {'write-data.ldif': n_image, 'write-lock.ldif': n_image + 9}
   for name in ('write-data.ldif', 'write-lock.ldif'):
     pathlib.Path(d, name).write_text(mutate(name, fixture_text(name), shifts[name]))
+  for name in ('write-data-cred.ldif', 'write-cred.ldif', 'write-cred-deny.ldif'):
+    pathlib.Path(d, name).write_text(mutate(name, fixture_text(name), 0))
   return d
 
 
@@ -977,6 +1011,311 @@ def machine_proof(node):
   check(node.tool('machine', 'ldapwhoami', []).returncode == 0, m('still binds with its password after the attempts'))
 
 
+# ---- v2c: W_cred and the W_data v2c rules (guide section 8, #379 T-021) ---------------------------------
+
+MARKER_TAG = secrets.token_hex(8)
+MARKER = 'ldapium-credential-pending:' + MARKER_TAG
+
+
+def lcode(res):
+  """The LDAP result code of a tool run (ldappasswd prints it, ldapmodify also exits with it)."""
+  if res.returncode == 0:
+    return 0
+  m = re.search(r'\((\d+)\)', res.stdout + res.stderr)
+  return int(m.group(1)) if m else -res.returncode
+
+
+def guide_v2c(node, marker, extra, rc=False):
+  env = guide_env(node, managed)
+  env.update(extra)
+  res = run(['bash', '-c', guide_sh(marker), '-'], env=env, cwd=node.fragdir)
+  return (res.returncode, res.stdout + res.stderr) if rc else res.stdout + res.stderr
+
+
+def v2c_layout(node, cred='write-cred.ldif'):
+  """[replication] M x3, W_data {0}{1}, the W_data v2c rules, W_data {2}..{8}, W_lock x6, W_cred x7 (x1 unpinned), image rules."""
+  wd = fixture_bodies('write-data.ldif', managed)
+  return (list(node.repl_rules) + fixture_bodies('main-database.ldif', managed) + wd[:2] + fixture_bodies('write-data-cred.ldif', managed)
+          + wd[2:] + fixture_bodies('write-lock.ldif', managed) + fixture_bodies(cred, managed) + node.image_rules)
+
+
+def layout_is(node, want, label):
+  got = acl_bodies(node)
+  check(got == want, label)
+  if got != want:
+    for i, (g, w) in enumerate(zip(got + [''] * len(want), want + [''] * len(got))):
+      if g != w:
+        print(f'  first difference at {{{i}}}:\n    got : {g[:170]}\n    want: {w[:170]}', flush=True)
+        break
+
+
+def cred_phase(node, raw_w):
+  cfg = node.cfg
+  c = lambda m: f'[{cfg}] v2c {m}'
+  n = [0]
+
+  def sentinel(prefix='Cp'):
+    n[0] += 1
+    key = f'sentinel{n[0]}'
+    passwords[key] = f'{prefix}{n[0]}-' + secrets.token_urlsafe(18)
+    node.put(f'/tmp/.cp-{n[0]}', passwords[key])
+    return passwords[key], f'/tmp/.cp-{n[0]}'
+
+  def binds(dn, path):
+    return run(['docker', 'exec', '-i', node.container, 'ldapwhoami', '-x', '-H', ldap_uri, '-D', dn, '-y', path]).returncode == 0
+
+  def code(who, ldif):
+    return lcode(node.tool(who, 'ldapmodify', [], ldif))
+
+  def setpw(who, dn, path=None):
+    return lcode(node.tool(who, 'ldappasswd', ['-T', path or sentinel()[1], dn]))
+
+  def add(uid, who='wdata', mark=True, pol=pending_pol, parent=people, extra=''):
+    dn = f'uid={uid},{parent}'
+    body = person(dn, uid, (f'employeeType: {MARKER}\n' if mark else '') + (f'pwdPolicySubentry: {pol}\n' if pol else '') + extra)
+    return dn, code(who, body)
+
+  def vals(dn, *names):
+    return [l for l in node.search('admin', dn, '(objectClass=*)', list(names), 'base').stdout.splitlines() if l and not l.startswith('dn: ')]
+
+  def victim(uid):
+    dn = f'uid={uid},{people}'
+    require(node.rc('admin', person(dn, uid, f'mail: {uid}@example.org\n')) == 0, 'admin-made victim ' + uid)
+    require(node.rc('admin', mod(priv, ('add', 'member', [dn]))) == 0, 'victim into the privileged group')
+    return dn
+
+  print(f'--- {cfg}: v2c setup (accounts, privileged group, v2a deleteUser with v2c OFF) ---', flush=True)
+  require(node.rc('admin', person(wc_dn, 'machine-write-cred', f'userPassword: {passwords["wcred"]}\n')) == 0, 'W_cred account')
+  require(node.rc('admin', f'dn: {priv}\nchangetype: add\nobjectClass: groupOfNames\ncn: admins\nmember: uid=u01,{people}\n') == 0, 'privileged group')
+  off_victim = victim('cvoff')
+  check(code('wdata', f'dn: {off_victim}\nchangetype: delete\n') == 0, c('switch off: W_data deletes an admin-made user (the v2a deleteUser contract, Q16 column off)'))
+  check(setpw('wcred', f'uid=u01,{people}') == 50, c('switch off: W_cred is an ordinary user, its Password Modify of another user is refused (50)'))
+  node.fragdir = fragdir_for(node, cfg + '-v2c')
+  o = len(node.repl_rules)
+
+  print(f'--- {cfg}: v2c install (guide 8.3 data first, then the ACL steps 8.2, 8.4, 8.5) ---', flush=True)
+  out = guide_v2c(node, 'v2c-policy', {})
+  pol = vals(pending_pol, 'pwdSafeModify', 'pwdCheckQuality', 'pwdMinLength', 'pwdInHistory', 'pwdLockout')
+  dflt = vals(default_pol, 'pwdMinLength', 'pwdInHistory', 'pwdLockout')
+  check('pwdSafeModify: FALSE' in pol and 'pwdCheckQuality: 2' in pol and all(d in pol for d in dflt) and dflt,
+        c(f'guide 8.3 made the pending policy: a copy of the default with pwdSafeModify FALSE, pwdCheckQuality 2 ({len(pol)} values) {out.strip()[-60:]}'))
+  probes(node)
+  pre = probes(node)  # the ACL steps below must not change any existing identity's access
+  out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-cred.ldif'})
+  check('refusing: ' in out and node.olc_access()[0] == raw_w, c('guide order guard: W_cred before the W_data v2c rules is refused and changes nothing'))
+  out = guide_v2c(node, 'v2c-switch-on', {})
+  aca = node.cfgtool('ldapsearch', ['-LLL', '-b', node.main_db, '-s', 'base', 'olcAddContentAcl']).stdout
+  check('olcAddContentAcl: TRUE' in aca, c(f'guide 8.2 switched olcAddContentAcl TRUE {out.strip()[-60:]}'))
+  out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-data-cred.ldif'})
+  check(re.search(rf'^V2C_AT={o + 5}$', out, re.M) is not None, c(f'guide 8.4 placed the W_data v2c rules at {{{o + 5}}} (W_data first + 2): {out.strip()[-40:]}'))
+  acl1 = acl_bodies(node)
+  out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-data-cred.ldif'})
+  check('refusing: ' in out and acl_bodies(node) == acl1, c('a second W_data v2c apply is refused and changes nothing'))
+  n_wd = 9 + len(ldif_values(mutate('write-data-cred.ldif', fixture_text('write-data-cred.ldif'), 0)))
+  # a NON-pinned provider first (Codex P1): the deny rule in W_cred's place, W_cred can do nothing there
+  out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-cred-deny.ldif'})
+  check(re.search(rf'^V2C_AT={o + 3 + n_wd + 6}$', out, re.M) is not None, c(f'guide 8.5 (non-pinned provider) placed the W_cred deny rule at {{{o + 3 + n_wd + 6}}}'))
+  layout_is(node, v2c_layout(node, 'write-cred-deny.ldif'), c('olcAccess layout on a non-pinned provider: W_cred x1 (deny)'))
+  unp, r_unp = add('cunp')
+  check(r_unp == 0 and setpw('wcred', unp) == 50, c('non-pinned provider: W_cred cannot set a pending account (50)'))
+  check(code('wcred', mod(unp, ('delete', 'employeeType', [MARKER]), ('delete', 'pwdPolicySubentry', [pending_pol]))) == 50,
+        c('non-pinned provider: W_cred cannot clean up either (50)'))
+  check(not dn_set(node.search('wcred', managed, '(objectClass=*)', ['dn']).stdout), c('non-pinned provider: W_cred reads nothing'))
+  require(node.rc('admin', f'dn: {unp}\nchangetype: delete\n') == 0, 'remove the non-pinned probe entry (the identity probes compare data too)')
+  out = guide_v2c(node, 'WHAT=', {'WHAT': 'cred'})
+  check('removed cred' in out, c('guide 8.7 removes the single deny rule (allowed in any order)'))
+  out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-cred.ldif'})
+  check(re.search(rf'^V2C_AT={o + 3 + n_wd + 6}$', out, re.M) is not None, c(f'guide 8.5 placed W_cred after W_lock at {{{o + 3 + n_wd + 6}}}: {out.strip()[-40:]}'))
+  want = v2c_layout(node)
+  layout_is(node, want, c(f'olcAccess layout: exactly {len(want)} rules in the defined order (W_data 9 + 4 v2c, W_lock 6, W_cred 7)'))
+  node.restart()
+  for name in ('machine', 'wdata', 'wlock', 'wcred', 'id'):
+    node.put(f'/tmp/.pw-{name}', passwords[name])
+  node.put('/tmp/.pw-human', node.human_pw)
+  node.put('/tmp/.pw-secrets', node.secrets_pw)
+  aca = node.cfgtool('ldapsearch', ['-LLL', '-b', node.main_db, '-s', 'base', 'olcAddContentAcl']).stdout
+  check('olcAddContentAcl: TRUE' in aca, c('after a slapd restart olcAddContentAcl is still TRUE'))
+  layout_is(node, want, c('after a slapd restart the v2c layout is unchanged'))
+  check(idx_of(node, wc_dn) == list(range(o + 3 + n_wd + 6, o + 3 + n_wd + 13)), c('W_cred is named by exactly 7 contiguous values'))
+  _, rules = node.olc_access()
+  check(all(set(re.findall(r'by dn\.exact="([^"]*)"', r)) == {wc_dn} and r.rstrip().endswith('by * break') for r in rules if f'by dn.exact="{wc_dn}"' in r),
+        c('every W_cred rule names only W_cred and ends in `by * break`'))
+  raw_c, _ = node.olc_access()
+  post = probes(node)
+  for name in pre:
+    check(pre[name] == post[name], c(f'unchanged for existing identities: {name} (rc {pre[name][0]})'))
+
+  print(f'--- {cfg}: v2c Q15: what W_data can put in an Add ---', flush=True)
+  a, ra = add('ca')
+  plain, rp = add('cplain', mark=False, pol=None, extra='mail: cplain@example.org\n')
+  check(ra == 0 and vals(a, 'employeeType', 'pwdPolicySubentry') == [f'employeeType: {MARKER}', f'pwdPolicySubentry: {pending_pol}'],
+        c('W_data Add of a pending account (marker + pending policy) 0, both values stored'))
+  check(rp == 0, c('W_data ordinary createUser (closed list, no marker) still 0 with olcAddContentAcl TRUE'))
+  for label, args in (('carrying userPassword', dict(mark=False, pol=None, extra=f'userPassword: {sentinel()[0]}\n')),
+                      ('the pending policy without the marker', dict(mark=False)),
+                      ('the marker without the pending policy', dict(pol=None)),
+                      ('the marker with the DEFAULT policy', dict(pol=default_pol)),
+                      ('marker + policy + userPassword', dict(extra=f'userPassword: {sentinel()[0]}\n')),
+                      ('marker + policy outside the cred subtree (ou=groups)', dict(parent=groups)),
+                      ('a user carrying description', dict(mark=False, pol=None, extra='description: on a user\n'))):
+    uid = 'cq' + secrets.token_hex(3)
+    check(add(uid, **args)[1] == 50, c(f'W_data Add {label} 50'))
+  check(code('wdata', f'dn: cn=cgrp,{groups}\nchangetype: add\nobjectClass: groupOfNames\ncn: cgrp\ndescription: d\nmember: {alice}\n') == 0,
+        c('W_data createGroup-shaped Add (groupOfNames + description) still 0'))
+
+  print(f'--- {cfg}: v2c M-1: W_data cannot mark or attach by Modify ---', flush=True)
+  sso, _ = add('csso', who='admin', mark=False, pol=None)
+  for label, ldif in (('mark a v2a-made entry', mod(plain, ('add', 'employeeType', [MARKER]))),
+                      ('mark an admin-made SSO entry', mod(sso, ('add', 'employeeType', [MARKER]))),
+                      ('attach the pending policy to a v2a-made entry', mod(plain, ('add', 'pwdPolicySubentry', [pending_pol]))),
+                      ('marker + policy in one Modify', mod(plain, ('add', 'employeeType', [MARKER]), ('add', 'pwdPolicySubentry', [pending_pol]))),
+                      ('delete the marker of a pending entry', mod(a, ('delete', 'employeeType', [MARKER]))),
+                      ('delete the policy of a pending entry', mod(a, ('delete', 'pwdPolicySubentry', [pending_pol])))):
+    check(code('wdata', ldif) == 50, c(f'W_data Modify: {label} 50'))
+  other_tag = 'ldapium-credential-pending:' + secrets.token_hex(8)
+  limit(code('wdata', mod(a, ('add', 'employeeType', [other_tag]))) == 0 and len(vals(a, 'employeeType')) == 2,
+        c('a SECOND marker value is accepted on an already pending entry: the app must require exactly one'))
+  require(node.rc('admin', mod(a, ('delete', 'employeeType', [other_tag]))) == 0, 'remove the second marker')
+
+  print(f'--- {cfg}: v2c M-3: W_data cannot delete/rename admin-made users nor write privileged membership ---', flush=True)
+  v = victim('cvic')
+  check(code('wdata', f'dn: {v}\nchangetype: delete\n') == 50 and len(vals(v, 'uid')) == 1,
+        c('switch on: W_data delete of an admin-made user 50, the entry is kept (M-3 a; v2a deleteUser narrowed, Q16 column on)'))
+  check(code('wdata', f'dn: {v}\nchangetype: modrdn\nnewrdn: uid=cvicx\ndeleteoldrdn: 1\n') == 50, c('W_data modrdn of an admin-made user 50 (M-3 a)'))
+  check(add('cvic')[1] == 68 and setpw('wcred', v) == 50, c('the takeover chain stops: the re-Add as pending is 68 (exists), W_cred cannot set it (50)'))
+  for label, ldif in (('person', 'objectClass: person\ncn: {u}\nsn: {u}\n'),
+                      ('organizationalPerson', 'objectClass: organizationalPerson\ncn: {u}\nsn: {u}\n'),
+                      ('account + posixAccount', 'objectClass: account\nobjectClass: posixAccount\nuid: {u}\ncn: {u}\nuidNumber: 5001\ngidNumber: 5001\nhomeDirectory: /home/{u}\n')):
+    u = 'cx' + secrets.token_hex(3)
+    dn = (f'uid={u},{people}' if 'posix' in label else f'cn={u},{people}')
+    require(node.rc('admin', f'dn: {dn}\nchangetype: add\n' + ldif.format(u=u)) == 0, 'admin-made ' + label)
+    check(code('wdata', f'dn: {dn}\nchangetype: delete\n') == 50 and len(vals(dn, 'objectClass')) >= 1,
+          c(f'M-3 (a) is class-independent: W_data cannot delete an admin-made {label} (50, kept), so no pending re-Add at its DN'))
+  adm_grp = f'cn=cadmgrp,{groups}'
+  require(node.rc('admin', f'dn: {adm_grp}\nchangetype: add\nobjectClass: groupOfNames\ncn: cadmgrp\nmember: {alice}\n') == 0, 'admin-made group')
+  check(code('wdata', f'dn: {adm_grp}\nchangetype: delete\n') == 0, c('W_data still deletes an admin-made groupOfNames (v2b deleteGroup unchanged)'))
+  check(code('wdata', f'dn: {people}\nchangetype: delete\n') == 50, c('W_data cannot delete an admin-made container (50)'))
+  # MAJOR-2, the third accepted risk: (a) does not stop attribute writes (mail/uid) on admin-made users
+  vm = sentinel('Cm')
+  limit(code('wdata', mod(v, ('replace', 'mail', ['cvic-moved@example.org']))) == 0
+        and add('cvicmail', extra='mail: cvic@example.org\n')[1] == 0 and setpw('wcred', f'uid=cvicmail,{people}', vm[1]) == 0,
+        c('RESIDUAL (accepted, MAJOR-2): W_data moves an admin-made privileged user\'s mail away, a pending account takes the old value, W_cred sets it'))
+  wmade, _ = add('cwmade', mark=False, pol=None)
+  check(code('wdata', f'dn: {wmade}\nchangetype: delete\n') == 0, c('W_data still deletes a user it created (0)'))
+  check(code('wdata', mod(v, ('replace', 'mail', ['cvic2@example.org']))) == 0, c('W_data still patches mail of an admin-made user (0)'))
+  check(code('wdata', mod(priv, ('add', 'member', [plain]))) == 50, c('W_data cannot add a member to the privileged group (M-3 b, 50)'))
+  check(code('wdata', mod(priv, ('delete', 'member', [f'uid=u01,{people}']))) == 50, c('W_data cannot remove a member of the privileged group (50)'))
+  check(code('wdata', mod(g1, ('add', 'member', [plain]))) == 0 and code('wdata', mod(g1, ('delete', 'member', [plain]))) == 0,
+        c('W_data still adds/removes members of an ordinary group (0)'))
+  r_del = code('wdata', f'dn: {plain}\nchangetype: delete\n')
+  plain2, r_re = add('cplain')
+  limit(r_del == 0 and r_re == 0, c('RESIDUAL (Q16 accepted): an account W_data itself created can be deleted and re-created as pending'))
+
+  print(f'--- {cfg}: v2c W_cred: the cross matrix (direct ldappasswd) ---', flush=True)
+  va, pa = sentinel('Ca')
+  t = {}
+  t['b'], _ = add('cb')
+  bpw = sentinel('Cb')
+  require(node.rc('admin', mod(t['b'], ('add', 'userPassword', [bpw[0]]))) == 0, 'b gets a password')
+  t['c'], _ = add('cc', who='admin')
+  t['d'], _ = add('cd', mark=False, pol=None)
+  t['f'], _ = add('cf')
+  require(node.rc('admin', mod(priv, ('add', 'member', [t['f']]))) == 0, 'f into the privileged group')
+  t['m'] = sso
+  require(node.rc('admin', mod(sso, ('add', 'employeeType', [MARKER]), ('add', 'pwdPolicySubentry', [pending_pol]))) == 0, 'admin marks the SSO entry')
+  check(setpw('wcred', a, pa) == 0 and binds(a, pa), c('W_cred sets the pending account and the value binds'))
+  for k, label in (('b', 'a pending account that already has a password'), ('c', 'an admin-made pending-shaped entry (creatorsName = admin)'),
+                   ('d', 'a W_data-made account without marker/policy'), ('f', 'a pending account that is a direct privileged member'),
+                   ('m', 'an admin-made SSO entry the admin marked')):
+    check(setpw('wcred', t[k]) == 50, c(f'W_cred ldappasswd of {label} 50'))
+  check(binds(t['b'], bpw[1]), c('b keeps its original password'))
+  for label, dn in (('W_data', wd_dn), ('M', machine_dn), ('itself', wc_dn), ('the admin entry', admin_dn), ('alice (ordinary user)', alice)):
+    check(setpw('wcred', dn) == 50, c(f'W_cred ldappasswd of {label} 50'))
+  p2, _ = add('cp2')
+  short = sentinel('aB3$')  # 7 characters: below the default minimum length
+  node.put(short[1], short[0][:7])
+  hashed = run(['docker', 'exec', node.container, 'slappasswd', '-h', '{SSHA}', '-s', 'y1']).stdout.strip()
+  check(setpw('wcred', p2, short[1]) == 19, c('pending policy: a short value 19'))
+  check(code('wcred', mod(p2, ('add', 'userPassword', [hashed]))) == 19, c('pending policy: a pre-hashed {SSHA} plain Modify 19 (pwdCheckQuality 2, F-6)'))
+  check(code('wcred', mod(t['b'], ('replace', 'userPassword', [sentinel()[0]]))) == 50, c('W_cred plain Modify of userPassword on an account with a password 50'))
+  for label, ldif in (('write mail of the pending account', mod(p2, ('replace', 'mail', ['x@example.org']))),
+                      ('write description', mod(p2, ('add', 'description', ['x']))),
+                      ('add the marker', mod(t['d'], ('add', 'employeeType', [MARKER]))),
+                      ('create an entry', person(f'uid=cwc,{people}', 'cwc')),
+                      ('delete an entry', f'dn: {t["d"]}\nchangetype: delete\n'),
+                      ('rename an entry', f'dn: {t["d"]}\nchangetype: modrdn\nnewrdn: uid=cdx\ndeleteoldrdn: 1\n'),
+                      ('touch cn=config', mod(node.main_db, ('replace', 'olcSizeLimit', ['5'])))):
+    check(code('wcred', ldif) == 50, c(f'W_cred cannot {label} (50)'))
+  seen = node.search('wcred', managed, '(objectClass=*)', ['dn', 'uid'])
+  check(not dn_set(seen.stdout), c(f'W_cred reads nothing (to * none; rc {seen.returncode})'))
+  check(setpw('wcred', p2) == 0, c('pending policy: a compliant value 0'))
+
+  print(f'--- {cfg}: v2c window, cleanup, E-17 ---', flush=True)
+  oracle = (setpw('machine', a, pa), setpw('machine', a))
+  check(oracle == (19, 50), c(f'the accepted window (Q14) before cleanup: M new=current 19 / wrong 50, got {oracle}'))
+  clean = lambda dn: code('wcred', mod(dn, ('delete', 'employeeType', [MARKER]), ('delete', 'pwdPolicySubentry', [pending_pol])))
+  for label, ldif in (('delete the whole employeeType', mod(a, ('delete', 'employeeType', []))),
+                      ('delete the whole pwdPolicySubentry', mod(a, ('delete', 'pwdPolicySubentry', []))),
+                      ('add the pending policy', mod(t['d'], ('add', 'pwdPolicySubentry', [pending_pol]))),
+                      ('delete the pending policy of an admin-made entry', mod(t['m'], ('delete', 'pwdPolicySubentry', [pending_pol])))):
+    check(code('wcred', ldif) == 50, c(f'W_cred cleanup negative: {label} 50'))
+  check(clean(t['c']) == 50, c('W_cred cleanup of an admin-made entry 50'))
+  check(clean(a) == 0 and vals(a, 'employeeType', 'pwdPolicySubentry') == [], c('W_cred cleanup (marker value + policy value, one Modify) 0, both gone'))
+  check(setpw('machine', a, pa) == 50 and binds(a, pa), c('after cleanup the default policy applies (M new=current 50, no oracle) and the password binds'))
+  for k in (p2, t['b'], plain2):
+    require(clean(k) == 0, 'clean ' + k)
+  race, _ = add('crace')
+  paths = [sentinel('Cr')[1] for _ in range(10)]
+  script = ''.join(f'( ldappasswd -x -H {ldap_uri} -D "{wc_dn}" -y /tmp/.pw-wcred -T {p} "{race}" > /tmp/.ro{i} 2>&1; echo $? > /tmp/.rr{i} ) &\n'
+                   for i, p in enumerate(paths)) + 'wait\n' + ''.join(f'echo "@@ $(cat /tmp/.rr{i}) $(tr "\\n" " " < /tmp/.ro{i})"\n' for i in range(10))
+  rcs = []
+  for line in node.sh(script).stdout.splitlines():
+    if line.startswith('@@ '):
+      m = re.search(r'\((\d+)\)', line)
+      rcs.append(0 if line.split()[1] == '0' else (int(m.group(1)) if m else -1))
+  win = [i for i, x in enumerate(rcs) if x == 0]
+  check(len(rcs) == 10 and len(win) == 1 and sorted(set(rcs)) == [0, 50] and binds(race, paths[win[0]]),
+        c(f'E-17: 10 parallel W_cred sets on one pending account, exactly one 0 and nine 50, the winner binds: {rcs}'))
+  require(clean(race) == 0, 'clean race')
+
+  saved = node.cfg
+  node.cfg = cfg + ' v2c'
+  machine_proof(node)
+  node.cfg = saved
+
+  print(f'--- {cfg}: v2c rollback (guide 8.7, Revision 9 order) ---', flush=True)
+  out = guide_v2c(node, 'WHAT=', {'WHAT': 'cred'})
+  check('refusing: ' in out and node.olc_access()[0] == raw_c, c('rollback order guard: W_cred cannot go while the attach rules remain'))
+  out = guide_v2c(node, 'WHAT=', {'WHAT': 'm3'})
+  check('refusing: ' in out and node.olc_access()[0] == raw_c, c('rollback order guard: M-3 cannot go while attach/W_cred remain'))
+  out = guide_v2c(node, 'WHAT=', {'WHAT': 'attach'})
+  check('removed attach' in out, c(f'guide removed the attach rules first {out.strip()[-40:]}'))
+  check(add('clate')[1] == 50, c('a late pending Add after the attach grant is gone 50 (nothing can re-attach)'))
+  left, _ = add('cleft', who='admin')  # a leftover the zero check must find
+  rcx, out = guide_v2c(node, 'PENDING_LEFT=', {'EXEC': f'docker exec -i {node.container}-absent'}, rc=True)
+  check(rcx != 0 and 'PENDING_LEFT=unknown' in out and 'PENDING_LEFT=0' not in out, c('zero check fails closed when the node cannot be searched (rc != 0, unknown)'))
+  node.put('/tmp/.pw-admin', 'wrong-' + secrets.token_hex(8))
+  rcx, out = guide_v2c(node, 'PENDING_LEFT=', {}, rc=True)
+  node.put('/tmp/.pw-admin', passwords['admin'])
+  check(rcx != 0 and 'PENDING_LEFT=unknown' in out and 'PENDING_LEFT=0' not in out, c('zero check fails closed on a failed bind (rc != 0, unknown)'))
+  out = guide_v2c(node, 'PENDING_LEFT=', {})
+  check(re.search(r'^PENDING_LEFT=[1-9]', out, re.M) is not None, c(f'zero check finds the leftover attachments: {out.strip()[-20:]}'))
+  run(['bash', '-c', guide_sh('v2c-cleanup'), '-'], env=dict(guide_env(node, managed)), cwd=node.fragdir)
+  out = guide_v2c(node, 'PENDING_LEFT=', {})
+  check(re.search(r'^PENDING_LEFT=0$', out, re.M) is not None and vals(left, 'employeeType', 'pwdPolicySubentry') == [],
+        c('after the runbook cleanup: zero entries carry the pending policy, the leftover lost marker and policy'))
+  for part in ('cred', 'm3'):
+    out = guide_v2c(node, 'WHAT=', {'WHAT': part})
+    check(f'removed {part}' in out, c(f'guide removed {part}'))
+  guide_v2c(node, 'v2c-switch-off', {})
+  check('olcAddContentAcl' not in node.cfgtool('ldapsearch', ['-LLL', '-b', node.main_db, '-s', 'base', 'olcAddContentAcl']).stdout,
+        c('olcAddContentAcl is absent again (the shipped state)'))
+  check(node.olc_access()[0] == raw_w, c('olcAccess after the v2c rollback equals the v2b state byte for byte'))
+  back_victim = victim('cvback')
+  check(code('wdata', f'dn: {back_victim}\nchangetype: delete\n') == 0, c('switch off again: W_data deletes an admin-made user (Q16 column off restored)'))
+  check(setpw('wcred', f'uid=u01,{people}') == 50, c('after the rollback W_cred sets nothing (50)'))
+
+
 # ---- one configuration ---------------------------------------------------------------------------------
 
 def layout_check(node, label, write_dn, **kw):
@@ -1061,7 +1400,7 @@ def run_config(node):
     layout_check(node, 'after a restart (prepare keeps its rule first)', managed)
     check(idx_of(node, repl_dn)[0] == 0, f'[{cfg}] the replication rule is still {{0}} after the restart')
     node.put('/tmp/.pw-secrets', node.secrets_pw)
-    for name in ('machine', 'wdata', 'wlock', 'id'):
+    for name in ('machine', 'wdata', 'wlock', 'wcred', 'id'):
       node.put(f'/tmp/.pw-{name}', passwords[name])
     node.put('/tmp/.pw-human', node.human_pw)
   raw_w, _ = node.olc_access()
@@ -1073,6 +1412,7 @@ def run_config(node):
   wdata_proof(node)
   wlock_proof(node)
   machine_proof(node)
+  cred_phase(node, raw_w)
 
   # ---- rollback: refusal, offset-aware order, byte for byte
   print(f'--- {cfg}: rollback ---', flush=True)
@@ -1136,7 +1476,7 @@ def run_config(node):
 def main():
   print(f'Run {name_prefix}: image {ldap_image}, mutation={mutation or "none"}', flush=True)
   require(run(['docker', 'version', '--format', 'ok']).returncode == 0, 'docker is not available')
-  for name in ('write-data.ldif', 'write-lock.ldif'):
+  for name in ('write-data.ldif', 'write-lock.ldif', 'write-data-cred.ldif', 'write-cred.ldif', 'write-cred-deny.ldif'):
     want = significant(fixture_text(name))
     check(any(significant(b) == want for b in guide_ldif_blocks(write_guide)), f'write guide contains the committed {name} verbatim as one block')
   for name in ('main-database.ldif',):

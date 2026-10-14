@@ -26,6 +26,10 @@
 #     cn=replicator,<root>)   --admin-dn DN (repeatable; default cn=admin,<root>)
 #     --wcred-dn DN (repeatable; no rule may name it)   --protected-dn DN (repeatable)
 #     --replication-identity auto|required   --main-db-dn DN (default olcDatabase={1}mdb,cn=config)
+#   v2c (guide section 8, #379 T-021): ONE --wcred-dn plus --cred-dn DN --pending-policy-dn DN and
+#     --privileged-group DN (repeatable, installed order) expects instead: olcAddContentAcl TRUE, the
+#     W_data v2c rules (write-data-cred.ldif) right after W_data's two backstops, and the 7 W_cred
+#     rules (write-cred.ldif) as a further contiguous fragment; filter= and val= are compared.
 #
 # Output: PASS/FAIL lines, then ONE machine-readable summary line
 #   RESULT status=pass|fail|error checks=N failed=M rules=R
