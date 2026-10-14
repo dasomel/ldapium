@@ -520,17 +520,14 @@ ACCESSLOG_DIR="${DATA_DIR}/accesslog"
 # token would hide that, so start-up fails instead. Escape hatch: none — the
 # only way back is an upstream OpenLDAP fix, then relax this check. Use
 # `writes reads bind` instead. Only checked when the overlay is switched on,
-# since the value is inert otherwise. Same token regex as the chart's check
-# in ui-deployment.yaml.
+# since the value is inert otherwise. Same tokens the chart's check in
+# ui-deployment.yaml refuses.
 case "$LDAP_ACCESSLOG_ENABLED" in
   true|1)
-    for _al_op in $(printf '%s' "$LDAP_ACCESSLOG_OPS" | tr ',[:upper:]' ' [:lower:]'); do
-      case "$_al_op" in
-        extended|all)
-          die "LDAP_ACCESSLOG_OPS contains '${_al_op}' (got: ${LDAP_ACCESSLOG_OPS}): OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password Modify extended operation (accesslog.c:1623 assertion, F-7, #398). Use 'writes reads bind' instead; there is no override until upstream fixes it" ;;
-      esac
-    done
-    unset _al_op ;;
+    case " $(printf '%s' "$LDAP_ACCESSLOG_OPS" | tr ',[:upper:]' ' [:lower:]') " in
+      *" extended "*|*" all "*)
+        die "LDAP_ACCESSLOG_OPS contains extended or all (got: ${LDAP_ACCESSLOG_OPS}): OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password Modify extended operation (accesslog.c:1623 assertion, F-7, #398). Use 'writes reads bind' instead; there is no override until upstream fixes it" ;;
+    esac ;;
 esac
 
 # Password policy (see image/ldifs/03-base-structure.ldif and
@@ -1144,6 +1141,8 @@ d}" "$cn_config"
   # pwdHistory are NO-USER-MODIFICATION (19) already and stay out of the list.
   # Bootstrap only, like the rest of this block: an existing volume keeps its
   # stored olcAccess (image/README.md, "Access control").
+  # rendered in both branches below; D400-1
+  self_read_attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime
   anon_read_access="${work}/anon-read-access.ldif"
   if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
     {
@@ -1155,7 +1154,7 @@ d}" "$cn_config"
       printf '  by users read\n'
       printf 'olcAccess: {3}to attrs=uid,objectClass\n'
       printf '  by users read\n'
-      printf 'olcAccess: {4}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime\n'
+      printf 'olcAccess: {4}to attrs=%s\n' "$self_read_attrs"
       printf '  by self read\n'
       printf '  by * break\n'
       printf 'olcAccess: {5}to *\n'
@@ -1169,7 +1168,7 @@ d}" "$cn_config"
       printf 'olcAccess: {1}to attrs=entry,uid,objectClass\n'
       printf '  by anonymous read\n'
       printf '  by users read\n'
-      printf 'olcAccess: {2}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime\n'
+      printf 'olcAccess: {2}to attrs=%s\n' "$self_read_attrs"
       printf '  by self read\n'
       printf '  by * break\n'
       printf 'olcAccess: {3}to *\n'
