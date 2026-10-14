@@ -854,8 +854,9 @@ ui:
     #    process memory; persistent store is a separate change), otherwise the
     #    render fails. Bind passwords are Secret references only; each identity
     #    must differ from the read identity (ldapBindDN) and from each other.
-    #    The credential (W_cred) compartment has only cred.enabled until T-026;
-    #    other unknown keys are refused. Setting this opens no operation by itself.
+    #    Unknown keys are refused. Setting this opens no operation by itself: the
+    #    application also needs a write scope in a client's ceiling, which this
+    #    chart does not grant (allowedClients takes read scopes only, #394).
     write:
       enabled: false
       # -- W_data: users/groups general attributes and membership.
@@ -869,15 +870,49 @@ ui:
         bindDN: ""
         existingSecret: ""
         existingSecretKey: machine-ldap-write-lock-password
-      # -- v2c W_cred, the machine setPassword (#379). Only `enabled` exists, and
-      #    true refuses to render until T-026 adds the identity, the configuration
-      #    reader and the canaries. The refusal says so; next to audit.enabled=true
-      #    it refuses with its own message first (the auditlog overlay writes the
-      #    hash of every password set to the slapd log, D379-14), as it does for an
-      #    audit.accessLog.ops list holding `extended` or `all` (one Password Modify
-      #    aborts slapd, F-7).
+      # -- v2c W_cred, the machine setPassword (#379, T-026; MACHINE_WRITE_CRED_*,
+      #    docs/machine-write-account.md section 8). Off renders nothing. On
+      #    requires write.enabled, every value below except policyDNs, and the
+      #    LDAP side of guide section 8 (ACL fragments, the pending policy, the
+      #    W_cred no-lockout policy of 8.1, the reader and the canaries of 8.8);
+      #    the application refuses to start otherwise. It never renders next to
+      #    audit.enabled=true (the auditlog overlay writes the hash of every
+      #    password set to the slapd log, D379-14) or an audit.accessLog.ops list
+      #    holding `extended` or `all` (one Password Modify aborts slapd, F-7).
+      #    Turning it on narrows machine deleteUser (and W_data's direct LDAP
+      #    modrdn) to entries W_data created (Q16, docs/api.md). Passwords are Secret references only.
       cred:
         enabled: false
+        # -- MACHINE_WRITE_CRED_BIND_DN, distinct from every other identity.
+        bindDN: ""
+        existingSecret: ""
+        existingSecretKey: machine-ldap-write-cred-password
+        # -- MACHINE_WRITE_CRED_SUBTREES: per client, inside that client's
+        #    write.subtrees entry.
+        #      - client: svc-provisioning
+        #        dns: ["ou=people,dc=example,dc=org"]
+        subtrees: []
+        # -- MACHINE_WRITE_CRED_PENDING_POLICY_DN (D379-18), not the default policy.
+        pendingPolicyDN: ""
+        # -- MACHINE_WRITE_CRED_MIN_LENGTH, the policy floor (12-1024).
+        minLength: 12
+        # -- MACHINE_WRITE_CRED_POLICY_DNS, optional per-target policy allowlist.
+        policyDNs: []
+        # -- MACHINE_WRITE_CRED_RATE_LIMIT_RPS, the global password budget (1-10).
+        rateLimitRPS: 1
+        # -- MACHINE_WRITE_CRED_PENDING_TTL, the TTL sweep's age (1h-720h).
+        pendingTTL: 24h
+        # -- MACHINE_WRITE_CRED_ACL_READER_DN/_PASSWORD (D379-16), guide 8.8.
+        aclReader:
+          dn: ""
+          existingSecret: ""
+          existingSecretKey: machine-ldap-cred-acl-reader-password
+        # -- MACHINE_WRITE_CRED_CANARIES (guide 8.8): one set inside every
+        #    subtrees DN.
+        #      - withPassword: "uid=canary-a-pw,ou=people,dc=example,dc=org"
+        #        unmarked: "uid=canary-a-unmarked,ou=people,dc=example,dc=org"
+        #        pending: "uid=canary-a-pending,ou=people,dc=example,dc=org"
+        canaries: []
       # -- Per-client write subtree ceilings (strict descendants of ldap.rootDN),
       #    required non-empty when write is on. Each client must be in allowedClients.
       #      - client: svc-provisioning

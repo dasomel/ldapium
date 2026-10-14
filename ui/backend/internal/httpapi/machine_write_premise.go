@@ -18,8 +18,7 @@ import (
 //   - every 60 s with the sweeps: a failure closes the password operation
 //     (503) until the next passing cycle; the other compartments go on.
 // Only result codes and counts are logged, never a DN or a value (REQ-012).
-// setPassword itself stays unreachable until T-026; this is the gate it will
-// pass through.
+// setPassword (opened by T-026) passes through this gate.
 
 // credPremisePeriod is the D379-15 cycle; credPremiseTimeout bounds one
 // start-up or periodic run (checks plus sweeps).

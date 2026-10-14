@@ -6,9 +6,11 @@ import "net/http"
 // machine-write-scope-v2 REQ-002): the only place a machine write is opened.
 // The first-ship five (Resolved Q2, appendix A: createUser WITHOUT a password
 // (D15), patchUser, deleteUser, addGroupMember, removeGroupMember) plus the four
-// v2b operations T-014 opened (createGroup, patchGroup, deleteGroup, lockUser).
-// PUT (updateUser, updateGroup), unlock and every password operation are
-// deliberately not here: unlock stays human-only (D379-7). The table is a grant
+// v2b operations T-014 opened (createGroup, patchGroup, deleteGroup, lockUser)
+// plus the v2c setPassword T-026 opened (D379-9/10/18: the initial password of a
+// W_data-made pending account, as W_cred, MACHINE_WRITE_CRED_ENABLED on).
+// PUT (updateUser, updateGroup) and unlock are deliberately not here: unlock
+// stays human-only (D379-7). The table is a grant
 // only when MACHINE_WRITE_ENABLED is on (otherwise no pipeline is built and every
 // write stays 403), and resolveMachineWriteOps refuses an entry that disagrees
 // with machineWriteCatalog. Each operation must also be recorded in
@@ -23,4 +25,5 @@ var machineWriteOps = []machineOp{
 	{"patchGroup", http.MethodPatch, "/api/groups", "directory.groups.update"},
 	{"deleteGroup", http.MethodDelete, "/api/groups", "directory.groups.delete"},
 	{"lockUser", http.MethodPost, "/api/users/lock", "directory.users.lock"},
+	{"setPassword", http.MethodPost, "/api/users/password", "directory.users.password.write"},
 }

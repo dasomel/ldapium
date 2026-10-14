@@ -2,8 +2,9 @@
 # Render-time assertions for ui.machineAuth.write.* (change package
 # docs/changes/machine-write-scope, T-024, #285): off by default and rendering
 # nothing, every gate refusing with its own message, bind passwords only ever
-# Secret references, no credential (W_cred) identity (cred.enabled only refuses
-# until T-026, and never renders next to auditlog or accesslog extended/all), no HPA.
+# Secret references, the credential (W_cred) compartment rendered only when
+# cred.enabled (T-026: identity, cn=config reader, canaries; never next to
+# auditlog or accesslog extended/all), no HPA.
 #
 # BASE_REF (default origin/main) names the ref whose chart the off-render must be
 # byte-identical to; when the ref is not available (shallow clone) that one
@@ -100,6 +101,27 @@ ui:
         existingSecret: machine-ldap-write-lock
 YAML
 lock=(-f "$tmp/lock.yaml")
+cat >"$tmp/cred.yaml" <<'YAML'
+ui:
+  machineAuth:
+    write:
+      cred:
+        enabled: true
+        bindDN: uid=w-cred,ou=system,dc=example,dc=org
+        existingSecret: machine-ldap-write-cred
+        subtrees:
+          - client: svc-provisioning
+            dns: ['ou=people,dc=example,dc=org']
+        pendingPolicyDN: cn=credential-pending,ou=policies,dc=example,dc=org
+        aclReader:
+          dn: uid=cred-reader,ou=system,dc=example,dc=org
+          existingSecret: machine-ldap-cred-reader
+        canaries:
+          - withPassword: uid=canary-pw,ou=people,dc=example,dc=org
+            unmarked: uid=canary-unmarked,ou=people,dc=example,dc=org
+            pending: uid=canary-pending,ou=people,dc=example,dc=org
+YAML
+cred=(-f "$tmp/cred.yaml")
 
 # --- off: nothing rendered, identical to the base ref -------------------------------
 check "default render has no MACHINE_WRITE variable" lacks "$(full)" 'MACHINE_WRITE_'
@@ -140,7 +162,7 @@ rs=$(render "${wr[@]}" --set 'ui.machineAuth.write.groupSeedDN=uid=group-seed\,o
 check "group seed renders as a plain value when set" has "$rs" 'name: MACHINE_WRITE_GROUP_SEED_DN
               value: "uid=group-seed,ou=system,dc=example,dc=org"'
 check "lock identity absent by default" lacks "$r" 'MACHINE_WRITE_LOCK'
-check "no credential identity variable" lacks "$r" 'MACHINE_WRITE_CRED'
+check "no credential identity variable while cred is off" lacks "$r" 'MACHINE_WRITE_CRED'
 check "Recreate strategy with idempotency" has "$r" 'type: Recreate'
 check "replicas is 1" has "$r" 'replicas: 1'
 check "grace period covers the request timeout (30 s floor)" has "$r" 'terminationGracePeriodSeconds: 30'
@@ -149,11 +171,39 @@ check "grace period follows a longer request timeout (60+15)" has "$rg" 'termina
 rl=$(render "${wr[@]}" "${lock[@]}")
 check "lock identity renders when enabled" has "$rl" 'name: MACHINE_WRITE_LOCK_BIND_DN'
 check "lock password is a secretKeyRef" test "$(printf '%s\n' "$rl" | grep -A4 'name: MACHINE_WRITE_LOCK_BIND_PASSWORD' | grep -c 'secretKeyRef')" = 1
+# --- v2c (#379 T-026): the W_cred compartment -------------------------------------
+rc=$(render "${wr[@]}" "${lock[@]}" "${cred[@]}" --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind')
+check "cred flag renders" has "$rc" 'name: MACHINE_WRITE_CRED_ENABLED
+              value: "true"'
+check "cred bind DN is a plain value" has "$rc" 'name: MACHINE_WRITE_CRED_BIND_DN
+              value: "uid=w-cred,ou=system,dc=example,dc=org"'
+check "cred bind password is a secretKeyRef (name, default key)" test "$(printf '%s\n' "$rc" | grep -A4 'name: MACHINE_WRITE_CRED_BIND_PASSWORD' | grep -c -e 'secretKeyRef' -e 'name: "machine-ldap-write-cred"' -e 'key: "machine-ldap-write-cred-password"')" = 3
+check "reader password is a secretKeyRef (name, default key)" test "$(printf '%s\n' "$rc" | grep -A4 'name: MACHINE_WRITE_CRED_ACL_READER_PASSWORD' | grep -c -e 'secretKeyRef' -e 'name: "machine-ldap-cred-reader"' -e 'key: "machine-ldap-cred-acl-reader-password"')" = 3
+check "cred subtrees are client=dn" has "$rc" 'name: MACHINE_WRITE_CRED_SUBTREES
+              value: "svc-provisioning=ou=people,dc=example,dc=org"'
+check "pending policy DN is rendered" has "$rc" 'name: MACHINE_WRITE_CRED_PENDING_POLICY_DN
+              value: "cn=credential-pending,ou=policies,dc=example,dc=org"'
+check "canaries are with-password|unmarked|pending" has "$rc" 'name: MACHINE_WRITE_CRED_CANARIES
+              value: "uid=canary-pw,ou=people,dc=example,dc=org|uid=canary-unmarked,ou=people,dc=example,dc=org|uid=canary-pending,ou=people,dc=example,dc=org"'
+check "cred defaults: min length 12, 1 rps, 24h TTL" has "$rc" 'name: MACHINE_WRITE_CRED_MIN_LENGTH
+              value: "12"
+            - name: MACHINE_WRITE_CRED_RATE_LIMIT_RPS
+              value: "1"
+            - name: MACHINE_WRITE_CRED_PENDING_TTL
+              value: "24h"'
+check "policy allowlist absent by default" lacks "$rc" 'MACHINE_WRITE_CRED_POLICY_DNS'
+rp=$(render "${wr[@]}" "${cred[@]}" --set-json 'ui.machineAuth.write.cred.policyDNs=["cn=a,ou=policies,dc=example,dc=org","cn=b,ou=policies,dc=example,dc=org"]')
+check "policy allowlist renders ;-joined when set" has "$rp" 'name: MACHINE_WRITE_CRED_POLICY_DNS
+              value: "cn=a,ou=policies,dc=example,dc=org;cn=b,ou=policies,dc=example,dc=org"'
+check "no cred or reader password has an inline value" test "$(printf '%s\n' "$rc" | grep -A1 -E 'name: MACHINE_WRITE_CRED_(BIND|ACL_READER)_PASSWORD' | grep -c 'value:')" = 0
+check "cred.enabled=false renders no MACHINE_WRITE_CRED variable even with cred values set" lacks "$(render "${wr[@]}" "${cred[@]}" --set ui.machineAuth.write.cred.enabled=false)" 'MACHINE_WRITE_CRED'
 
 whole=$(full "${wr[@]}" "${lock[@]}")
 without=$(full "${read[@]}")
 check "enabling write adds no Secret object" test "$(printf '%s\n' "$whole" | grep -c '^kind: Secret$')" = "$(printf '%s\n' "$without" | grep -c '^kind: Secret$')"
 check "enabling write adds no HorizontalPodAutoscaler" lacks "$whole" 'kind: HorizontalPodAutoscaler'
+wholec=$(full "${wr[@]}" "${lock[@]}" "${cred[@]}")
+check "enabling cred adds no Secret object" test "$(printf '%s\n' "$wholec" | grep -c '^kind: Secret$')" = "$(printf '%s\n' "$without" | grep -c '^kind: Secret$')"
 check "no write bind password has an inline value" test "$(printf '%s\n' "$whole" | grep -A1 -E 'name: MACHINE_WRITE_(DATA|LOCK)_BIND_PASSWORD' | grep -c 'value:')" = 0
 
 # --- gates: each refusal has its own message ---------------------------------------
@@ -190,7 +240,12 @@ refuses "groups name a client without subtrees" 'write.groups client "svc-monito
 	--set-json 'ui.machineAuth.write.groups=[{"client":"svc-monitor","dns":["cn=g,ou=groups,dc=example,dc=org"]}]'
 
 # --- schema: types, ranges, unknown keys --------------------------------------------
-refuses "credential identity is not a key (W_cred)" 'ui.machineAuth.write.cred' "${wr[@]}" --set ui.machineAuth.write.cred.bindDN=x
+refuses "inline cred password is not a key" 'ui.machineAuth.write.cred' "${wr[@]}" "${cred[@]}" --set ui.machineAuth.write.cred.bindPassword=x
+refuses "inline reader password is not a key" 'ui.machineAuth.write.cred.aclReader' "${wr[@]}" "${cred[@]}" --set ui.machineAuth.write.cred.aclReader.password=x
+refuses "cred min length below the floor" 'ui.machineAuth.write.cred.minLength' "${wr[@]}" "${cred[@]}" --set ui.machineAuth.write.cred.minLength=8
+refuses "cred rate above 10" 'ui.machineAuth.write.cred.rateLimitRPS' "${wr[@]}" "${cred[@]}" --set ui.machineAuth.write.cred.rateLimitRPS=11
+refuses "cred canary set needs three DNs" 'pending' "${wr[@]}" "${cred[@]}" \
+	--set-json 'ui.machineAuth.write.cred.canaries=[{"withPassword":"uid=a,ou=people,dc=example,dc=org","unmarked":"uid=b,ou=people,dc=example,dc=org"}]'
 refuses "cred.enabled must be boolean" 'ui.machineAuth.write.cred.enabled' "${wr[@]}" --set-string ui.machineAuth.write.cred.enabled=yes
 # --- v2c (#379 T-028, D379-14, F-7): never next to auditlog or a crashing accesslog ops list
 refuses "cred next to audit.enabled (auditlog writes password hashes)" 'cannot be combined with audit.enabled=true' "${wr[@]}" \
@@ -205,8 +260,32 @@ refuses "cred next to accessLog ops EXTENDED, any case (F-7)" 'audit.accessLog.o
 	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes EXTENDED'
 refuses "cred next to accessLog ops All after a tab (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
 	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set-string "audit.accessLog.ops=writes$(printf '\t')All"
-refuses "cred alone refuses until T-026" 'is not available yet' "${wr[@]}" --set ui.machineAuth.write.cred.enabled=true \
-	--set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind'
+refuses "cred without write.enabled" 'write.cred.enabled=true requires ui.machineAuth.write.enabled=true' "${read[@]}" "${cred[@]}"
+refuses "cred without its values (all named)" 'requires: ui.machineAuth.write.cred.bindDN, ui.machineAuth.write.cred.existingSecret, ui.machineAuth.write.cred.subtrees, ui.machineAuth.write.cred.pendingPolicyDN, ui.machineAuth.write.cred.canaries, ui.machineAuth.write.cred.aclReader.dn, ui.machineAuth.write.cred.aclReader.existingSecret' \
+	"${wr[@]}" --set ui.machineAuth.write.cred.enabled=true
+refuses "cred DN equals data DN" 'write.cred.bindDN must differ' "${wr[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.bindDN=UID=w-data\, ou=system\,dc=example\,dc=org'
+refuses "cred DN equals lock DN" 'write.cred.bindDN must differ' "${wr[@]}" "${lock[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.bindDN=uid=w-lock\,ou=system\,dc=example\,dc=org'
+refuses "cred DN equals read DN" 'write.cred.bindDN must differ' "${wr[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.bindDN=uid=machine\,ou=system\,dc=example\,dc=org'
+refuses "cred DN is the administrator" 'write.cred.bindDN must differ' "${wr[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.bindDN=cn=admin\,dc=example\,dc=org'
+refuses "reader DN equals cred DN" 'write.cred.aclReader.dn must differ' "${wr[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.aclReader.dn=uid=w-cred\,ou=system\,dc=example\,dc=org'
+refuses "reader DN equals data DN" 'write.cred.aclReader.dn must differ' "${wr[@]}" "${cred[@]}" --set 'ui.machineAuth.write.cred.aclReader.dn=uid=w-data\,ou=system\,dc=example\,dc=org'
+refuses "cred reuses the data Secret key" 'write.cred must not reuse' "${wr[@]}" "${cred[@]}" \
+	--set ui.machineAuth.write.cred.existingSecret=machine-ldap-write --set ui.machineAuth.write.cred.existingSecretKey=machine-ldap-write-data-password
+refuses "cred reuses the read Secret key" 'write.cred must not reuse' "${wr[@]}" "${cred[@]}" \
+	--set ui.machineAuth.write.cred.existingSecret=machine-ldap --set ui.machineAuth.write.cred.existingSecretKey=machine-ldap-bind-password
+refuses "data reuses the LDAP administrator Secret key" 'write.data must not reuse the LDAP administrator' "${wr[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.data.existingSecret=ldap-admin --set ui.machineAuth.write.data.existingSecretKey=admin-password
+refuses "lock reuses the LDAP administrator Secret key" 'write.lock must not reuse the LDAP administrator' "${wr[@]}" "${lock[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.lock.existingSecret=ldap-admin --set ui.machineAuth.write.lock.existingSecretKey=admin-password
+refuses "cred reuses the LDAP administrator Secret key" 'or of the LDAP administrator' "${wr[@]}" "${cred[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.cred.existingSecret=ldap-admin --set ui.machineAuth.write.cred.existingSecretKey=admin-password
+refuses "reader reuses the LDAP administrator Secret key" 'write.cred.aclReader must not reuse' "${wr[@]}" "${cred[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.cred.aclReader.existingSecret=ldap-admin --set ui.machineAuth.write.cred.aclReader.existingSecretKey=admin-password
+refuses "reader reuses the cred Secret key" 'write.cred.aclReader must not reuse' "${wr[@]}" "${cred[@]}" \
+	--set ui.machineAuth.write.cred.aclReader.existingSecret=machine-ldap-write-cred --set ui.machineAuth.write.cred.aclReader.existingSecretKey=machine-ldap-write-cred-password
+refuses "cred subtrees name a client without write subtrees" 'write.cred.subtrees client "svc-monitor" has no ui.machineAuth.write.subtrees entry' "${wr[@]}" "${cred[@]}" \
+	--set-json 'ui.machineAuth.write.cred.subtrees=[{"client":"svc-monitor","dns":["ou=people,dc=example,dc=org"]}]'
+check "cred with the accepted accesslog ops renders" renders "${wr[@]}" "${cred[@]}" --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind'
 check "cred off with audit.enabled renders" renders "${wr[@]}" --set audit.enabled=true
 refuses "inline bind password is not a key" 'ui.machineAuth.write.data' "${wr[@]}" --set ui.machineAuth.write.data.bindPassword=x
 refuses "inline lock password is not a key" 'ui.machineAuth.write.lock' "${wr[@]}" --set ui.machineAuth.write.lock.bindPassword=x

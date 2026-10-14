@@ -124,7 +124,7 @@ func (p *CredPremise) Check(ctx context.Context, canaries bool) string {
 	if len(addContent) != 1 || !strings.EqualFold(strings.TrimSpace(addContent[0]), "TRUE") {
 		return premiseACLAddContentOff
 	}
-	if code := p.checkAsMachine(ctx, defaultPolicy); code != "" {
+	if code := p.checkAsMachine(ctx, defaultPolicy, canaries); code != "" {
 		return code
 	}
 	if canaries {
@@ -170,8 +170,12 @@ func (p *CredPremise) readConfig(ctx context.Context) ([]string, []string, strin
 }
 
 // checkAsMachine is check 2 (default, pending and allowlisted policy values)
-// and check 6 (the accesslog children), all as M.
-func (p *CredPremise) checkAsMachine(ctx context.Context, defaultPolicy string) string {
+// and check 6 (the accesslog children), all as M; with wcred (start-up and the
+// 60 s cycle, not before every write) also the W_cred policy (T026-D2): M reads
+// W_cred's pwdPolicySubentry and that policy entry. M's read base must cover
+// both (the documented default, the root; the image ACL has no self read the
+// W_cred bundle would not deny: its {0} gives W_cred none on SYSTEM_DN).
+func (p *CredPremise) checkAsMachine(ctx context.Context, defaultPolicy string, wcred bool) string {
 	w := p.cfg.Machine.Write
 	def, err := ldap.ParseDN(defaultPolicy)
 	pending, perr := ldap.ParseDN(w.CredPendingPolicyDN)
@@ -201,6 +205,21 @@ func (p *CredPremise) checkAsMachine(ctx context.Context, defaultPolicy string) 
 	}
 	for _, dn := range w.CredPolicyDNs {
 		if code := policyVerdict(read(dn), policyAllowed, w.CredMinLength); code != "" {
+			return code
+		}
+	}
+	if wcred {
+		var subentries []string
+		if e, err := readEntryAttr(ctx, conn, w.Cred.BindDN, "pwdPolicySubentry"); err == nil {
+			subentries = attrValues(e, "pwdPolicySubentry")
+		}
+		var policy *ldap.Entry
+		if len(subentries) == 1 {
+			if e, err := readEntryAttr(ctx, conn, subentries[0], wcredPolicyAttrs...); err == nil {
+				policy = e
+			}
+		}
+		if code := wcredPolicyVerdict(subentries, policy, defaultPolicy, w.CredPendingPolicyDN); code != "" {
 			return code
 		}
 	}

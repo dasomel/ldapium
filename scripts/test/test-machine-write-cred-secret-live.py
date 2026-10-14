@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Live proof of the v2c password step (#379, T-024; AC-009, AC-010, AC-010c; E-10, E-13, E-17).
 
-docs/changes/machine-write-scope-v2, against real slapd. setPassword is still closed in production
-(T-026), so the application side is the `live`-tagged Go test TestCredSecretLive
-(ui/backend/internal/httpapi/machine_write_cred_live_test.go): the real HTTP pipeline, real dialer,
-real M pre-reads, real T-028 premise checker and limiter, with the TEST-ONLY table that adds the
-setPassword catalog row (as the unit tests do). It runs inside the slapd container against
+docs/changes/machine-write-scope-v2, against real slapd. The application side is the `live`-tagged Go
+test TestCredSecretLive (ui/backend/internal/httpapi/machine_write_cred_live_test.go): the real HTTP
+pipeline with the production write table (setPassword opened by T-026) and the configured ceilings,
+real dialer, real M pre-reads, real T-028 premise checker and limiter; the configuration is built in
+code (not config.Load) and the tokens come from an in-process IdP. It runs inside the slapd container against
 ldap://127.0.0.1, as the T-028 proof does.
 
-Per configuration, one fresh container built with the T-028 proof's setup (guide 4.2/4.3, 8.2-8.5,
-8.8: reader, canaries in two cred subtrees):
+Per configuration, one fresh container built with the T-028 proof's setup (guide 4.2/4.3, 8.1 no-lockout
+policy of W_cred, 8.2-8.5, 8.8: reader, canaries in two cred subtrees):
 
   accepted  accesslog `writes reads bind`, no auditlog: what the chart and T-028 accept
   auditlog  the same plus LDAP_AUDIT_ENABLED=true: what the chart refuses (D379-14 (a))

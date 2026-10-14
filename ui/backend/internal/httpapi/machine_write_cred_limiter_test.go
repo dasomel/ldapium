@@ -230,7 +230,7 @@ func TestPasswordLimits_SameTargetSerializedAcrossClients(t *testing.T) {
 	}
 	first := make(chan *httptest.ResponseRecorder, 1)
 	go func() { first <- w.send(pwReq(credBob, sentinel(t), hdr(key()))) }()
-	<-entered
+	awaitEntered(t, entered)
 	if w.s.machineWrite.cred.held() != 1 {
 		t.Fatalf("held = %d while bob's write runs", w.s.machineWrite.cred.held())
 	}
@@ -261,7 +261,7 @@ func TestPasswordLimits_SameTargetSerializedAcrossClients(t *testing.T) {
 	calls.Store(0)
 	entered, unblock = make(chan struct{}), make(chan struct{})
 	go func() { first <- w.send(pwReq(credBob, sentinel(t), hdr(key()))) }()
-	<-entered
+	awaitEntered(t, entered)
 	other.headers = hdr(key())
 	rec = w.send(other)
 	wantCode(t, rec, 429, codeMachineRateLimited)
@@ -358,7 +358,7 @@ func TestPasswordLimits_CancelKeepsHoldUntilWorkEnds(t *testing.T) {
 		defer close(done)
 		w.s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	}()
-	<-entered
+	awaitEntered(t, entered)
 	cancel()
 	time.Sleep(50 * time.Millisecond) // room for any cancellation-triggered release
 	if n := w.s.machineWrite.cred.held(); n != 1 {
@@ -456,5 +456,17 @@ func TestPasswordLimits_RuntimeShape(t *testing.T) {
 		if _, err := rt.cred.spend(); err == nil {
 			t.Fatalf("rps %d: a second token at the same instant (burst must be 1)", rps)
 		}
+	}
+}
+
+// awaitEntered bounds the wait for a request to reach the directory (T-026
+// review MINOR e): a request refused earlier (a mutation that closes the route)
+// fails the test instead of blocking until the go test timeout.
+func awaitEntered(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request never reached the Password Modify")
 	}
 }

@@ -2,15 +2,16 @@
 """Per-compartment emergency block drill of the v2c password compartment (#379, T-025; AC-011, REQ-017).
 
 docs/changes/machine-write-scope-v2, against real slapd, the sibling of test-machine-write-drill.py (the
-v2a W_data drill). setPassword is still closed in production (T-026), so the application side is the
-`live`-tagged Go test TestCredDrillLive (ui/backend/internal/httpapi/machine_write_cred_drill_live_test.go):
-the real HTTP pipeline, real dialer, real M pre-reads, real T-028 premise checker, with the TEST-ONLY table
-that adds the setPassword catalog row (as the T-024 proof does). It runs inside the slapd container against
+v2a W_data drill). The application side is the `live`-tagged Go test TestCredDrillLive
+(ui/backend/internal/httpapi/machine_write_cred_drill_live_test.go): the real HTTP pipeline with the production
+write table (setPassword opened by T-026) and the configured ceilings, real dialer, real M pre-reads, real T-028
+premise checker; the configuration is built in code (not config.Load). It runs inside the slapd container against
 ldap://127.0.0.1 through a TCP proxy that can hold one LDAP message. A "replica" is one in-process server
 (own IdP and issuer); a "redeploy" is a new server from a changed config. No Kubernetes rollout is involved.
 
-One fresh container built with the T-028 proof's setup (guide 4.2/4.3, 8.2-8.5, 8.8: reader, canaries in two
-cred subtrees; accesslog `writes reads bind`). The Go test measures and asserts:
+One fresh container built with the T-028 proof's setup (guide 4.2/4.3, 8.1 no-lockout policy of W_cred (Q17),
+8.2-8.5, 8.8: reader, canaries in two cred subtrees; accesslog `writes reads bind`). The Go test measures and
+asserts (the lockout trap detaches the 8.1 policy first, then attaches it again):
 
   * AC-011 (c): MACHINE_REQUEST_TIMEOUT is the bound of a stalled in-flight setPassword (10 s and 4 s, the
     proxy holds the Password Modify), with and without a W_cred rotation during the stall; an already-bound
@@ -20,7 +21,8 @@ cred subtrees; accesslog `writes reads bind`). The Go test measures and asserts:
     clears it; then the rotated Secret rolls out
   * AC-011 (b): W_cred rotation -> the next setPassword on every replica 503 bind_failed, the old credential
     refused by slapd, W_data/W_lock/M unaffected, the premise cycle, the lockout trap, restore by rollout
-  * AC-011 (a): MACHINE_WRITE_CRED_ENABLED=false redeploy -> setPassword refused with zero W_cred binds, other
+  * AC-011 (a): MACHINE_WRITE_CRED_ENABLED=false redeploy -> setPassword refused with zero W_cred binds (403 in
+    the shape config.Load builds, 503 with the cred values kept: T026-F1), other
     compartments unaffected, credentialPending refused, and the same account served again with the flag on
 
 This driver adds the slapd side: the accesslog's failed W_cred binds against the application's count.
@@ -90,7 +92,7 @@ def go(node, canaries):
   env = {'LDAPIUM_CRED_DRILL_LIVE': '1', 'T_BASE': acl.base_dn, 'T_M_DN': acl.machine_dn, 'T_WDATA_DN': acl.wd_dn, 'T_WLOCK_DN': acl.wl_dn,
          'T_WCRED_DN': acl.wc_dn, 'T_READER_DN': pre.reader_dn, 'T_CEIL': acl.managed, 'T_CRED': pre.sub_a + ';' + pre.sub_b,
          'T_CREATE_BASE': pre.sub_a, 'T_PRIV': acl.priv, 'T_PENDING': acl.pending_pol, 'T_CANARIES': ';'.join(canaries),
-         'T_CAPTURE': '/tmp/.t025-capture', 'LDAPIUM_T025_MUTATE': mutation}
+         'T_CAPTURE': '/tmp/.t025-capture', 'LDAPIUM_T025_MUTATE': mutation, 'T_WCRED_POLICY': pre.wcred_policy}
   cmd = ['docker', 'exec']
   for k, v in env.items():
     cmd += ['-e', f'{k}={v}']

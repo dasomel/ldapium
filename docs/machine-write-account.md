@@ -120,6 +120,7 @@ WCRED_DN="uid=machine-write-cred,$SYSTEM_DN"
 CRED_DN="ou=people,$ROOT_DN"                               # MACHINE_WRITE_CRED_SUBTREES (WRITE_DN 안의 한 지점)
 READER_DN="uid=machine-cred-acl-reader,$SYSTEM_DN"         # MACHINE_WRITE_CRED_ACL_READER_DN (8.8)
 PENDING_POLICY_DN="cn=credential-pending,ou=policies,$ROOT_DN"   # MACHINE_WRITE_CRED_PENDING_POLICY_DN
+WCRED_POLICY_DN="cn=machine-writers,ou=policies,$ROOT_DN"  # W_cred 무잠금 정책(8.1, Q17; 9.1의 W_* 정책과 같은 항목)
 PRIV_GROUPS="cn=admins,ou=groups,$ROOT_DN"                 # MACHINE_WRITE_PRIVILEGED_GROUPS와 같은 값(; 구분)
 ```
 
@@ -308,8 +309,8 @@ fi
 
 ## 8. `W_cred`: 초기 비밀번호 구획 (v2c, T-021)
 
-비밀번호 쓰기(머신 `setPassword`)는 v2c 단계다(설계: [machine-write-scope-v2 CHANGE.md](changes/machine-write-scope-v2/CHANGE.md) D379-9/10/13/18, Revision 8–10).
-이 절은 그 **ACL 부분**만 다룬다. 앱 쪽 전제 검사·스윕·플래그(`MACHINE_WRITE_CRED_ENABLED`)는 T-020/T-022 이후이고, 이 ACL을 적용해도 앱 경로는 열리지 않는다.
+비밀번호 쓰기(머신 `setPassword`)는 v2c 단계다(설계: [machine-write-scope-v2 CHANGE.md](changes/machine-write-scope-v2/CHANGE.md) D379-9/10/13/18, Revision 8–14).
+이 절은 그 **LDAP 부분**(계정·무잠금 정책·ACL·전제 검사 준비)을 다룬다. 앱 경로는 T-026부터 열려 있다: `MACHINE_WRITE_ENABLED`·`MACHINE_WRITE_CRED_ENABLED`(8.0 앱 설정 값)가 켜지고 client 상한에 `directory.users.password.write`가 있을 때만 머신 `setPassword`가 동작한다([api.md](api.md)). 이 절의 ACL만 적용하고 플래그를 끈 채로 두면 앱 경로는 동작하지 않는다(설정 읽기·전제 검사도 하지 않는다).
 v2c를 켜지 않는 배포는 이 절 전체를 건너뛴다: `W_cred` 계정을 만들지 않고, 아래 어떤 규칙·스위치도 넣지 않는다(그때 `W_data`·`W_lock`은 비밀번호 속성에 `none`이고 직접 시도는 50이다, AC-008).
 
 `W_cred`가 할 수 있는 것은 두 가지뿐이다(모두 직접 `ldappasswd`/`ldapmodify`로 실측, [EVIDENCE §2g·§2h](changes/machine-write-scope-v2/EVIDENCE.md)):
@@ -318,10 +319,10 @@ v2c를 켜지 않는 배포는 이 절 전체를 건너뛴다: `W_cred` 계정�
 - 그 뒤 정리: `W_data`가 만든 항목에서 표지 **값 하나**와 대기 정책 **값 하나**만 지운다(`=z`). 속성 전체 삭제·다른 값·정책 추가·다른 신원이 만든 항목은 50.
 
 `W_data` 쪽 v2c 규칙([`write-data-cred.ldif`](../scripts/test/fixtures/machine-acl/write-data-cred.ldif))은 표지와 정책을 **Add 안에서만** 붙이게 하고(Q15 `olcAddContentAcl TRUE` 필요: FALSE에서는 Add가 속성 ACL을 보지 않는다), M-3 완화 두 규칙을 더한다:
-(a) `W_data`가 만들지 않은 항목의 `entry`는 객체 클래스와 무관하게 `=rsc`(`groupOfNames`만 제외: v2b `deleteGroup`) — **v2c를 켠 배포에서 머신 `deleteUser`와 modrdn은 `W_data`가 만든 항목에만 동작한다**(관리자가 만든 `inetOrgPerson`·`person`·`organizationalPerson`·`account`/`posixAccount`·컨테이너는 LDAP 50, Q16 수용, v2a 계약 축소). `inetOrgPerson`만 막으면 다른 클래스의 관리자 항목을 지우고 같은 DN의 대기 `inetOrgPerson`으로 다시 만들 수 있었다(검토 MAJOR-1);
+(a) `W_data`가 만들지 않은 항목의 `entry`는 객체 클래스와 무관하게 `=rsc`(`groupOfNames`만 제외: v2b `deleteGroup`) — **v2c를 켠 배포에서 머신 `deleteUser`(와 `W_data`로 LDAP에 직접 하는 modrdn — 머신 API에는 이름 변경이 없다)는 `W_data`가 만든 항목에만 동작한다**(관리자가 만든 `inetOrgPerson`·`person`·`organizationalPerson`·`account`/`posixAccount`·컨테이너는 LDAP 50, Q16 수용, v2a 계약 축소). `inetOrgPerson`만 막으면 다른 클래스의 관리자 항목을 지우고 같은 DN의 대기 `inetOrgPerson`으로 다시 만들 수 있었다(검토 MAJOR-1);
 (b) 특권 그룹마다 `member`는 `=rsc`(탈취한 계정의 특권 재가입 차단).
 남는 위험(수용, Q16): `W_data`가 **스스로 만든** 계정(v2a `createUser`로 만든 SSO 신원 등)은 삭제→대기 재생성→설정할 수 있다 — **v2a로 만든 계정을 SSO 신원으로 쓰는 배포는 v2c를 켜지 않는다.** 특권 그룹의 **중첩** 그룹은 (b)가 덮지 않는다 — 하위 그룹도 `MACHINE_WRITE_PRIVILEGED_GROUPS`(= `$PRIV_GROUPS`)에 함께 나열한다.
-**세 번째 남는 위험(수용, 검토 MAJOR-2)**: (a)는 삭제·이름 변경만 막고 속성 쓰기는 막지 않는다. 유출된 `W_data`는 관리자가 만든(특권 포함) 사용자의 `mail`·`uid`를 다른 값으로 바꾼 뒤, 그 **옛 값**을 가진 대기 계정을 만들고 `password.write` client로 설정할 수 있다 — **로그인 이름이 `mail`·`uid`로 해석되는 소비자**(SSO·애플리케이션)에서는 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`가 관리자가 만든 사용자의 `mail`을 못 바꾸게 되어 Q16이 수용한 축소(삭제·modrdn)를 넘으므로 넣지 않았다. 완화는 운영 쪽이다: 소비자가 사용자를 `entryUUID` 같은 불변 식별자로 묶거나, `mail`·`uid` 변경을 감사에서 경보한다. 이것을 받아들일 수 없는 배포는 v2c를 켜지 않는다.
+**세 번째 남는 위험(수용, 검토 MAJOR-2; 2026-10-14 유지보수자 확인)**: (a)는 삭제·이름 변경만 막고 속성 쓰기는 막지 않는다. 유출된 `W_data`는 관리자가 만든(특권 포함) 사용자의 `mail`·`uid`를 다른 값으로 바꾼 뒤, 그 **옛 값**을 가진 대기 계정을 만들고 `password.write` client로 설정할 수 있다 — **로그인 이름이 `mail`·`uid`로 해석되는 소비자**(SSO·애플리케이션)에서는 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`가 관리자가 만든 사용자의 `mail`을 못 바꾸게 되어 Q16이 수용한 축소(삭제·modrdn)를 넘으므로 넣지 않았다. 완화는 운영 쪽이다: 소비자가 사용자를 `entryUUID` 같은 불변 식별자로 묶거나, `mail`·`uid` 변경을 감사에서 경보한다. 이것을 받아들일 수 없는 배포는 v2c를 켜지 않는다.
 이미 대기인 항목에 **두 번째** 표지 값은 Modify로 붙는다(filter가 참이므로): 앱 사전 읽기가 표지 값 정확히 하나를 요구한다(T-022).
 설정과 정리 사이(Q14 창)에는 대기 정책(`pwdSafeModify FALSE`)이 그 계정에 적용된다: 이미지의 `by self write`로 사용자 자신도 옛 비밀번호 없이 `userPassword`를 바꿀 수 있고, 인증된 누구나 19/50 오라클을 쓸 수 있다. 정리가 실패하면 그 상태가 남으므로 stuck 스윕(`pwdChangedTime` 있음, T-022)이 정리를 재시도하고 경보한다 — 정리 전 자기 변경은 창을 다시 여는 것이 아니라 같은 창 안에 있다.
 **다중 provider**(Codex P1): 같은 대기 계정에 두 provider가 동시에 "첫 비밀번호"를 받아들이면 복제가 `entryCSN` last-write-wins로 하나를 조용히 버린다(AGENTS.md). 그래서 `W_cred` 묶음(`write-cred.ldif`)은 앱이 비밀번호 쓰기를 고정한 **provider 하나에만** 넣고, 다른 모든 provider에는 같은 자리에 [`write-cred-deny.ldif`](../scripts/test/fixtures/machine-acl/write-cred-deny.ldif)(`to * by W_cred none`)를 넣는다(8.5). 규칙이 없으면 그 노드에서 `W_cred`는 평범한 사용자다.
@@ -330,7 +331,7 @@ v2c를 켜지 않는 배포는 이 절 전체를 건너뛴다: `W_cred` 계정�
 
 ### 8.0 순서 (설치와 롤백, Revision 8–9)
 
-설치(모든 노드에서, 이 순서대로): **8.2 스위치 → 8.3 대기 정책 항목 → 8.4 `W_data` v2c 규칙 → 8.5 `W_cred` 묶음(고정 provider) 또는 거부 규칙(그 밖의 provider) → 8.6 확인.** 그 뒤에만 앱 플래그를 켠다. 8.3(데이터, 한 노드에서 한 번)은 8.2와 순서가 바뀌어도 되지만 둘 다 8.4보다 먼저다.
+설치(모든 노드에서, 이 순서대로): **(8.1 계정과 무잠금 정책) → 8.2 스위치 → 8.3 대기 정책 항목 → 8.4 `W_data` v2c 규칙 → 8.5 `W_cred` 묶음(고정 provider) 또는 거부 규칙(그 밖의 provider) → 8.6 확인 → 8.8 설정 읽기 신원·카나리.** 그 뒤에만 앱 플래그를 켠다. 8.3(데이터, 한 노드에서 한 번)은 8.2와 순서가 바뀌어도 되지만 둘 다 8.4보다 먼저다.
 스위치가 먼저인 이유: 스위치 없이 8.4를 넣으면 Add 안의 표지·정책이 ACL 검사 없이 들어간다(D-1). `W_data` 규칙이 `W_cred`보다 먼저인 이유: `W_cred` 규칙은 표지·정책이 붙은 항목이 있어야 의미가 있고, 정리 권한은 부착 권한보다 오래 살아 있어야 한다.
 
 롤백(8.7, 이 순서대로): **앱 플래그·scope 끄기 + 진행 중 요청 drain → 모든 provider에서 `W_data` 부착 규칙 2개 제거 → 모든 provider에서 대기 정책이 붙은 항목 0건 확인(남으면 정리) → `W_cred` 묶음 제거 → M-3 규칙 제거 → 스위치 끄기.**
@@ -348,6 +349,33 @@ $EXEC sh -c 'umask 077; cat > /tmp/.pw-wcred' < wcred.pw
 ```
 
 `$WCRED_DN`은 `$SYSTEM_DN` 아래에 두고 `M`·`W_data`·`W_lock`·관리자·복제 신원과 달라야 한다. `$CRED_DN`은 `$WRITE_DN` 안이어야 한다(Q9).
+
+**무잠금 정책(필수, Q17 유지보수자 결정 2026-10-14).** 이미지 기본 정책(`pwdLockout TRUE`, `pwdMaxFailure 5`)에서는 LDAP에 닿는 누구나 틀린 비밀번호 5번으로 `W_cred`를 잠가 `setPassword`를 멈출 수 있다(잠긴 동안 올바른 Secret으로도 새 replica가 기동하지 않는다, [EVIDENCE §2l](changes/machine-write-scope-v2/EVIDENCE.md)). 그래서 `W_cred`에는 9.1의 무잠금 정책([`wcred-policy.ldif`](../scripts/test/fixtures/machine-acl/wcred-policy.ldif): `pwdLockout: FALSE`, `pwdMaxFailure` 없음)을 붙인다. 이미 같은 DN에 정책이 있으면 그 값이 무잠금인지 확인만 하고, 아니면 거부한다:
+
+```sh
+# v2c-wcred-policy
+WCRED_POLICY_CN=${WCRED_POLICY_DN#cn=}; WCRED_POLICY_CN=${WCRED_POLICY_CN%%,*}
+CUR=$($EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$WCRED_POLICY_DN" -s base '(objectClass=pwdPolicy)' pwdLockout pwdMaxFailure pwdMaxAge pwdMustChange 2>/dev/null)
+if printf '%s\n' "$CUR" | grep -q '^dn: '; then
+  if ! printf '%s\n' "$CUR" | grep -qx 'pwdLockout: FALSE' || printf '%s\n' "$CUR" | grep -Eq '^pwdMaxFailure: [^0]|^pwdMaxAge: [^0]|^pwdMustChange: TRUE'; then
+    echo "refusing: $WCRED_POLICY_DN exists and is not the no-lockout policy (pwdLockout FALSE; no pwdMaxFailure, pwdMaxAge or pwdMustChange TRUE)"; exit 1
+  fi
+else
+  sed -e "s|@WCRED_POLICY_DN@|$WCRED_POLICY_DN|g" -e "s|@WCRED_POLICY_CN@|$WCRED_POLICY_CN|g" wcred-policy.ldif \
+    | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin || exit 1
+fi
+printf 'dn: %s\nchangetype: modify\nreplace: pwdPolicySubentry\npwdPolicySubentry: %s\n' "$WCRED_DN" "$WCRED_POLICY_DN" \
+  | $EXEC ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin || exit 1
+echo "WCRED_POLICY=$WCRED_POLICY_DN"
+```
+
+`$WCRED_POLICY_DN`은 `cn=<이름>,…` 형태여야 하고(RDN이 `cn`), 기본 정책·대기 정책(`$PENDING_POLICY_DN`)과 달라야 한다. 정책 항목은 데이터라 복제된다(한 노드에서 한 번). **실행 시 전제 검사가 이 정책을 강제한다**(Q18 (b), 2026-10-14): 기동 시와 60초마다 `M`이 `W_cred`의 `pwdPolicySubentry`와 그 정책 항목을 읽어, 값이 정확히 하나이고 기본·대기 정책이 아니며 `pwdLockout: FALSE`이고 `pwdMaxFailure`·`pwdMaxAge`(0 외)·`pwdMustChange: TRUE`가 없어야 한다. 아니면 기동 거부, 실행 중에는 비밀번호 오퍼레이션 503(`wcred_policy_missing`/`_shared`/`_unreadable`/`_lockout`/`_max_failure`/`_max_age`/`_must_change`, 라이브 실측). 그래서 `M`의 읽기 base(machine-ldap-account.md 3절의 기본값, 루트)가 `$WCRED_DN`과 이 정책 항목을 덮어야 한다. `W_cred` 자신은 자기 항목을 읽지 못한다(8.5 묶음 `{0}`이 `$SYSTEM_DN`에서 `none`, 실측).
+
+**대가와 운영자 책임.** 잠금이 없으면 디렉터리가 `W_cred` 비밀번호 추측 횟수를 제한하지 않는다. 그 완화는 운영자가 진다:
+
+- **긴 무작위 비밀번호**: 위의 `openssl rand -base64 33`(264비트)보다 짧게 만들지 않고, 사람이 고르거나 다른 곳에 재사용하지 않는다. 회전도 같은 방법으로 만든다.
+- **네트워크 제한**: LDAP 포트(389/636)에 닿는 주체를 UI pod·관리 경로·복제 peer로 좁힌다(Kubernetes NetworkPolicy, 방화벽). LDAP를 외부에 그대로 열어 둔 배포는 v2c를 켜지 않는다.
+- **실패 bind 경보**: 9.1의 알림 2를 `$WCRED_DN`으로도 돌린다(accesslog에 `bind` 필요). `W_cred` 실패 bind가 회전 직후가 아닌데 늘면 즉시 회전한다(긴급 회전 절차: [machine-auth-operations.md](machine-auth-operations.md)).
 
 ### 8.2 스위치 `olcAddContentAcl TRUE` (Q15)
 
@@ -487,6 +515,13 @@ scripts/check-machine-write-acl.sh --container ldapium --root-dn "$ROOT_DN" --ma
 ```
 
 직접 확인(라이브 증명 [`test-machine-write-acl-live.py`](../scripts/test/test-machine-write-acl-live.py)가 전부 단언한다): `W_data` Add — 표지+정책 0, 정상 사용자 0, `userPassword`·정책만·표지만·다른 정책·`$CRED_DN` 밖 표지 50; `W_data` Modify로 표지·정책 붙이기·떼기 50; `W_data`가 관리자가 만든 사용자 삭제·modrdn 50, 자기가 만든 사용자 삭제 0, 특권 그룹 `member` 50; `W_cred` `ldappasswd` — 대기 계정 0(그 값으로 bind), 비밀번호 있는 계정·관리자가 만든 대기형 항목·표지 없는 계정·특권 직접 멤버 50, 짧은 값 19; 정리(표지 값+정책 값 한 Modify) 0, 속성 전체 삭제 50; 정리 후 그 계정은 기본 정책(`M`의 같은 값 재설정 50, 오라클 없음).
+
+`W_cred`의 무잠금 정책(8.1, Q17)은 데이터라 점검 스크립트가 보지 않는다. 관리자로 확인한다(값이 `$WCRED_POLICY_DN`이고, 그 항목에 `pwdLockout: FALSE`가 있고 `pwdMaxFailure`가 없어야 한다):
+
+```sh
+$EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -b "$WCRED_DN" -s base '(objectClass=*)' pwdPolicySubentry
+$EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -b "$WCRED_POLICY_DN" -s base '(objectClass=*)' pwdLockout pwdMaxFailure
+```
 
 ### 8.7 롤백 (8.0의 순서)
 
@@ -686,14 +721,14 @@ fi
 
 ### 8.0 앱 설정 값 (T-020)
 
-T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`이고 `MACHINE_WRITE_CRED_ENABLED=true`일 때만 읽으며, 꺼져 있으면 다른 `MACHINE_WRITE_CRED_*`는 읽지 않는다(REQ-001, 기본 `false`):
+T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`이고 `MACHINE_WRITE_CRED_ENABLED=true`일 때만 읽으며, 꺼져 있으면 다른 `MACHINE_WRITE_CRED_*`는 읽지 않는다(REQ-001, 기본 `false`). 차트는 `ui.machineAuth.write.cred.*`로 같은 값을 렌더한다(비밀번호는 Secret 참조만). client 상한의 `directory.users.password.write`는 T-026부터 받는다: 플래그가 꺼져 있어도 기동하고 그때 `setPassword`는 bind 없이 403이다(긴급 차단, T026-D1/F1):
 
 | 변수 | 규칙(어기면 기동 실패, 진단에 값 없음) |
 |---|---|
 | `MACHINE_WRITE_CRED_BIND_DN`/`_PASSWORD` | 둘 다 필수, 비밀번호는 다른 `W_*`와 같은 Secret 관례. DN은 D26 형식(`uid`/`cn`/`ou`/`dc`, 별칭·OID·이상한 공백 거부)이고 `M`·`W_data`·`W_lock`(켠 경우)·관리자·서비스 계정·rootdn·복제 신원과 `ParseDN` 동등이면 거부(REQ-009). 보호 집합에 들어가므로 이 DN을 담는 `MACHINE_WRITE_SUBTREES` 상한도 거부된다. |
 | `MACHINE_WRITE_CRED_SUBTREES` | `client=dn|dn;…`, 비어 있으면 거부(검사 8). 각 DN은 **같은 client의** `MACHINE_WRITE_SUBTREES` 상한과 같거나 그 안이어야 하고(Q9), 특권 그룹 자신이나 그 아래는 거부. |
 | `MACHINE_WRITE_PRIVILEGED_GROUPS` | v2c를 켜면 비어 있으면 거부(검사 8). |
-| `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. 머신 `setPassword`(T-022, 아직 미개방)는 본문 비밀번호를 이 값과 **바이트**(UTF-8) 수로 비교해 미만이면 400이다(T022-D3) — 문자 수가 아니므로 비 ASCII 비밀번호는 문자 수가 이 값보다 적어도 통과할 수 있고, 그 경우의 문자 수 하한은 slapd 정책(`pwdMinLength`)이 맡는다. |
+| `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. 머신 `setPassword`(T-022, T-026에서 개방)는 본문 비밀번호를 이 값과 **바이트**(UTF-8) 수로 비교해 미만이면 400이다(T022-D3) — 문자 수가 아니므로 비 ASCII 비밀번호는 문자 수가 이 값보다 적어도 통과할 수 있고, 그 경우의 문자 수 하한은 slapd 정책(`pwdMinLength`)이 맡는다. |
 | `MACHINE_WRITE_CRED_RATE_LIMIT_RPS` | 비밀번호 전역 예산(REQ-013, T-023), 기본 1. 1–10 정수, burst 1 고정(T023-D2). 모든 client가 함께 쓰는 replica당 토큰 버킷이며 client 쓰기 예산(`MACHINE_WRITE_RATE_LIMIT_*`)과 별개다. 비면 `setPassword`는 429 `machine_rate_limited`와 다음 토큰까지의 `Retry-After`(초, ≥1). 같은 대상(`entryUUID`, client 무관)에 진행 중인 `setPassword`가 있으면 대기열 없이 즉시 429와 `Retry-After: 1`(T023-D3). 둘 다 쓰기 전 거부라 멱등 키는 풀린다. |
 | `MACHINE_WRITE_CRED_PENDING_POLICY_DN` | 필수(D379-18). D26 형식, `LDAP_BASE_DN`의 엄격한 하위, 이미지 기본 정책(`cn=default,ou=policies,<base>`)과 다르고 보호 신원·특권 그룹·seed와 달라야 한다. |
 | `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). **현재 효과 없음**: `setPassword` 사전 읽기(T-022)는 대기 정책이 정확히 하나인 대상만 받으므로 허용 목록의 정책을 가진 대상은 어차피 403이다. T-028은 목록의 정책 항목 값도 하한과 비교한다(유지보수자 Q4, 2026-10-14: 그대로 둔다). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
@@ -747,7 +782,7 @@ pwdPolicySubentry: cn=machine-writers,ou=policies,dc=example,dc=org
 
 - **`pwdLockout: FALSE`만 쓰고 `pwdMaxFailure`는 넣지 않는다.** `pwdMaxFailure: 5`를 남기고 플래그만 끄면(실측) 25번 실패 뒤 `pwdAccountLockedTime`이 **찍히지만**
   쓰기는 계속 되므로, 잠금 속성을 감시하는 알림이 거짓 양성이 된다.
-- `W_cred`에 같은 정책을 붙이는 것도 라이브로 측정했다(T-025, [machine-auth-operations.md](machine-auth-operations.md)): 13번 거절 뒤에도 잠기지 않고 T-028 기동 검사가 통과한다. 단 잠금이 없으면 `W_cred`에 대한 비밀번호 추측이 제한되지 않으므로 **붙일지는 유지보수자 결정**(CHANGE.md Q17)이고 기본으로 붙이지 않는다.
+- **`W_cred`에는 이 정책을 붙인다**(8.1, CHANGE.md Q17 유지보수자 결정 2026-10-14: 무잠금). 라이브 실측(T-025, [machine-auth-operations.md](machine-auth-operations.md)): 13번 거절 뒤에도 잠기지 않고 T-028 기동 검사가 통과한다. 잠금이 없으면 `W_cred` 비밀번호 추측이 제한되지 않으므로 8.1의 운영자 책임(긴 무작위 비밀번호·네트워크 제한·실패 bind 경보)이 그 완화다. `W_data`·`W_lock`에는 여전히 선택이다.
 - 이 정책에서 25번 틀린 비밀번호 bind 뒤에도 잠기지 않고 쓰기가 계속 된다(실측). 비밀번호 회전 차단은 그대로 동작한다: 회전 뒤 거절된 쓰기 8건, 계정 잠금 없음,
   복구 직후 다음 쓰기가 성공한다.
 - **대가**: 이 정책에서는 운영자가 `pwdAccountLockedTime`을 직접 넣어도 **무시된다**(실측: 영구 잠금 값을 넣은 뒤에도 쓰기 201). 긴급 차단은 비밀번호 회전(또는 쓰기만 끄는 재배포)만 쓴다.
@@ -759,8 +794,9 @@ pwdPolicySubentry: cn=machine-writers,ou=policies,dc=example,dc=org
 ```sh
 # 1) 잠긴 쓰기 계정 (기본 정책을 쓰는 경우)
 ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -b "$SYSTEM_DN" '(&(objectClass=inetOrgPerson)(pwdAccountLockedTime=*))' dn
-# 2) 쓰기 계정에 대한 실패 bind (accesslog에 bind가 켜져 있어야 한다: LDAP_ACCESSLOG_OPS에 bind 포함)
+# 2) 쓰기 계정에 대한 실패 bind (accesslog에 bind가 켜져 있어야 한다: LDAP_ACCESSLOG_OPS에 bind 포함). W_cred(무잠금, 8.1)는 반드시 돌린다
 ldapsearch -x -H ldap://127.0.0.1 -D cn=admin,cn=accesslog -y /tmp/.pw-admin -b cn=accesslog "(&(reqType=bind)(reqDN=$WDATA_DN)(reqResult=49))" reqDN
+ldapsearch -x -H ldap://127.0.0.1 -D cn=admin,cn=accesslog -y /tmp/.pw-admin -b cn=accesslog "(&(reqType=bind)(reqDN=$WCRED_DN)(reqResult=49))" reqDN
 ```
 
 앱 쪽 신호: 쓰기 요청이 503이고 `machine_access` 감사 줄의 `reason`이 `bind_failed`(UI 로그에 `machine LDAP bind failed`). 쓰기 신원 회전이나 잠금이 원인이면 읽기는 200이다.

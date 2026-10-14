@@ -101,9 +101,13 @@ var MachineWriteScopes = []string{
 }
 
 // MachineWriteOpenScopes are the write scopes of the operations T-013 (Resolved
-// Q2, appendix A) and the v2b unit T-014 (machine-write-scope-v2) open. A test
-// in httpapi keeps this list equal to the scopes of machineWriteOps; a ceiling
-// naming any other write scope (unlock, password) is refused at startup.
+// Q2, appendix A), the v2b unit T-014 and the v2c unit T-026
+// (machine-write-scope-v2) open. A test in httpapi keeps this list equal to the
+// scopes of machineWriteOps; a ceiling naming any other write scope (unlock) is
+// refused at startup. T026-D1: unlike directory.users.lock, the password scope
+// does not require its compartment (MACHINE_WRITE_CRED_ENABLED) at start-up, so
+// the flag-only emergency block (AC-011 (a)) starts; setPassword then answers
+// 403 scope_denied with no W_cred bind (no cred ceiling is read, Q19).
 var MachineWriteOpenScopes = []string{
 	"directory.users.create",
 	"directory.users.update",
@@ -114,6 +118,7 @@ var MachineWriteOpenScopes = []string{
 	"directory.groups.delete",
 	"directory.groups.members.add",
 	"directory.groups.members.remove",
+	"directory.users.password.write",
 }
 
 // MachineScopes is the closed set of scopes the server understands: the read
@@ -352,7 +357,7 @@ func parseMachineClients(raw string) ([]MachineClient, error) {
 				continue
 			}
 			if writeScopes[s] && !openScopes[s] {
-				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope that no operation uses yet (machine-write-scope T-026/T-030)")
+				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS names a write scope that no operation uses yet (directory.users.unlock is human-only, D379-7)")
 			}
 			if !known[s] && !writeScopes[s] {
 				return nil, fmt.Errorf("MACHINE_ALLOWED_CLIENTS contains an unknown scope (known: %s)", strings.Join(MachineReadScopes, ", "))

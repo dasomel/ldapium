@@ -1,0 +1,18 @@
+# Machine WRITE v2c: the no-lockout password policy of W_cred (#379 T-026, CHANGE.md
+# Q17 decided 2026-10-14; docs/machine-write-account.md 8.1 installs it, 9.1 explains it).
+#
+# The image's default policy locks an account after pwdMaxFailure (5) wrong binds, so
+# anyone who can reach LDAP could stop setPassword by locking W_cred (EVIDENCE 2l).
+# This entry is the 9.1 W_* policy: pwdLockout FALSE and NO pwdMaxFailure (with it,
+# slapd still stamps pwdAccountLockedTime and lock alerts turn false-positive). It is
+# data, not an ACL: add it once (it replicates) and point W_cred's pwdPolicySubentry
+# at it. The price: guesses at W_cred's password are not limited by the directory;
+# the guide makes the operator responsible for a long random password, network
+# restriction and the failed-bind alert.
+dn: @WCRED_POLICY_DN@
+objectClass: top
+objectClass: device
+objectClass: pwdPolicy
+cn: @WCRED_POLICY_CN@
+pwdAttribute: userPassword
+pwdLockout: FALSE

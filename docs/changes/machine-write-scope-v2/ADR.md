@@ -40,6 +40,8 @@ D379-6(그룹 삭제 조건)은 되돌리기 쉬운 운영 결정이라 CHANGE.m
 - v2c를 켠 배포는 subtree마다 카나리 항목 3개와 설정 읽기 전용 신원을 유지해야 하며, 전제 검사가 실패하면 UI가 기동하지 않는다(D379-15/16). auditlog·`M` accesslog 읽기와는 함께 켤 수 없다(D379-14).
 - 머신은 어떤 잠금도 풀 수 없다(D379-7). 잠금 해제 자동화는 사람 경로 또는 별도 승인.
 - 그룹 권한이 그룹 멤버십으로 주어지는 사용자를 보호하려면 운영자가 `MACHINE_WRITE_PRIVILEGED_GROUPS`를 정확히 설정해야 한다.
+- Revision 15 (2026-10-14, T-026 검토 반영·유지보수자 결정): 기동·주기 검사가 `W_cred` 무잠금 정책을 강제한다(Q18 (b)); 플래그만 끈 재배포는 403(Q19); M-3 `mail`·`uid` 바꿔치기는 수용 위험(문서 경고).
+- Revision 14 (2026-10-14, T-026 개방): `setPassword`가 열렸다(D379-9/10). Q17 결정(무잠금): `W_cred`는 9.1 무잠금 정책을 갖고 무차별 대입 완화(긴 무작위 비밀번호·네트워크 제한·실패 bind 경보)는 운영자 책임이다. 플래그만 끈 재배포는 기동하고 `setPassword`는 bind 없이 거부된다(실제 Load 경로 403, 상태 코드는 Q19). T-028이 `W_cred` 정책을 강제할지는 Q18.
 - Revision 10 (2026-10-14, 유지보수자 Q16 수용): v2c를 켜면 머신 `deleteUser`·modrdn은 `W_data`가 만들지 않은 사용자에게 50(v2a 계약 축소, 의도된 결과). 잔여 위험(스스로 만든 계정, 중첩 특권 그룹) 수용.
 - Revision 9 (2026-10-13, Revision 8 재검토 반영, EVIDENCE.md §2h): M-3(유출된 `W_data` + `password.write` client로 삭제→대기 재생성→설정→특권 재가입) 완화 — 비-`W_data` 사용자 `entry` `=rsc`, 특권 그룹 `member` `=rsc`(둘 다 실측 50). 결과: v2c를 켜면 머신 `deleteUser`·modrdn이 `W_data`가 만든 사용자로 좁아진다; 잔여 위험(스스로 만든 계정, 중첩 특권 그룹)은 Q16. 롤백은 부착 차단 → 0건 확인 → 정리 권한 제거. R-3·AC-010c는 provider 하나 안에서만.
 - Revision 8 (2026-10-13, 독립 검토 security-reviewer BLOCKER 0·MAJOR 2, Codex P1 3·P2 2 반영; 유지보수자 Q14 수용+스윕 강화, Q15 `olcAddContentAcl TRUE` 채택, F-9 #399 선행 조건; EVIDENCE.md §2g): 표지 규칙이 Modify에도 적용되던 문제(M-1)를 Add 전용 filter로 닫음, R-3은 단일 slapd에서만(다중 provider는 last-write-wins), 롤백 시 남은 부착을 정리 권한보다 먼저 지움, 정리 실패 창의 상한은 LDAP·`W_cred`가 살아 있을 때만 "스윕 한 주기".

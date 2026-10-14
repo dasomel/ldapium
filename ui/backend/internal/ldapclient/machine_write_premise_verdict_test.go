@@ -223,3 +223,46 @@ func TestCanaryHashedProbeIsTheFixedPublicConstant(t *testing.T) {
 		}
 	}
 }
+
+// T026-D2 (Q18 (b)): the W_cred policy check, every result code.
+func TestWCredPolicyVerdict(t *testing.T) {
+	const (
+		def     = "cn=default,ou=policies,dc=example,dc=org"
+		pending = "cn=credential-pending,ou=policies,dc=example,dc=org"
+		own     = "cn=machine-writers,ou=policies,dc=example,dc=org"
+	)
+	entry := func(over map[string][]string) *ldap.Entry {
+		attrs := map[string][]string{"pwdLockout": {"FALSE"}}
+		for k, v := range over {
+			attrs[k] = v
+		}
+		return ldap.NewEntry(own, attrs)
+	}
+	for _, tc := range []struct {
+		name       string
+		subentries []string
+		policy     *ldap.Entry
+		want       string
+	}{
+		{"the guide's policy", []string{own}, entry(nil), ""},
+		{"spelling variant of the DN", []string{"CN=machine-writers, ou=policies,dc=example,dc=org"}, entry(nil), ""},
+		{"zero counters are off", []string{own}, entry(map[string][]string{"pwdMaxFailure": {"0"}, "pwdMaxAge": {"0"}, "pwdMustChange": {"FALSE"}}), ""},
+		{"no subentry (default policy, or unreadable)", nil, entry(nil), premiseWCredPolicyMissing},
+		{"two subentries", []string{own, own}, entry(nil), premiseWCredPolicyMissing},
+		{"garbage DN", []string{"not a dn"}, entry(nil), premiseWCredPolicyMissing},
+		{"the default policy named explicitly", []string{def}, entry(nil), premiseWCredPolicyShared},
+		{"the pending policy", []string{"cn=Credential-Pending,ou=policies,dc=example,dc=org"}, entry(nil), premiseWCredPolicyShared},
+		{"policy entry unreadable", []string{own}, nil, premiseWCredPolicyUnreadable},
+		{"pwdLockout TRUE", []string{own}, entry(map[string][]string{"pwdLockout": {"TRUE"}}), premiseWCredPolicyLockout},
+		{"pwdLockout absent", []string{own}, entry(map[string][]string{"pwdLockout": nil}), premiseWCredPolicyLockout},
+		{"pwdLockout lower-case", []string{own}, entry(map[string][]string{"pwdLockout": {"false"}}), premiseWCredPolicyLockout},
+		{"pwdMaxFailure 5 next to FALSE (9.1 false positives)", []string{own}, entry(map[string][]string{"pwdMaxFailure": {"5"}}), premiseWCredPolicyMaxFailure},
+		{"pwdMaxAge set (the password expires)", []string{own}, entry(map[string][]string{"pwdMaxAge": {"7776000"}}), premiseWCredPolicyMaxAge},
+		{"pwdMustChange TRUE", []string{own}, entry(map[string][]string{"pwdMustChange": {"TRUE"}}), premiseWCredPolicyMustChange},
+		{"two pwdMaxAge values", []string{own}, entry(map[string][]string{"pwdMaxAge": {"0", "0"}}), premiseWCredPolicyMaxAge},
+	} {
+		if got := wcredPolicyVerdict(tc.subentries, tc.policy, def, pending); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

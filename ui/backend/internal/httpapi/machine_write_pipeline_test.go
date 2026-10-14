@@ -320,14 +320,14 @@ func wantCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code str
 
 // ---- production stays closed ------------------------------------------------
 
-// T-013/T-014: the production table (no injected table) holds exactly the five
-// first-ship operations plus the four v2b ones. They reach the pipeline (not the
-// scope gate); every other write route (PUT, unlock, password) is still 403
-// scope_denied before any bind, whatever the token carries.
-func TestWritePipeline_ProductionTableHasExactlyTheNineOperations(t *testing.T) {
+// T-013/T-014/T-026: the production table (no injected table) holds exactly the
+// five first-ship operations, the four v2b ones and the v2c setPassword. They
+// reach the pipeline (not the scope gate); every other write route (PUT, unlock)
+// is still 403 scope_denied before any bind, whatever the token carries.
+func TestWritePipeline_ProductionTableHasExactlyTheTenOperations(t *testing.T) {
 	w := writeHarness(t, nil, nil) // no injected table: what production runs
-	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 9 || len(machineWriteOps) != 9 {
-		t.Fatalf("production table is not the nine operations: %+v", w.s.machine.write)
+	if w.s.machine.write == nil || len(w.s.machine.write.ops) != 10 || len(machineWriteOps) != 10 {
+		t.Fatalf("production table is not the ten operations: %+v", w.s.machine.write)
 	}
 	open := map[string]bool{}
 	for _, op := range machineWriteOps {
@@ -363,39 +363,48 @@ func TestWritePipeline_ProductionTableHasExactlyTheNineOperations(t *testing.T) 
 	}
 }
 
-// v2c T-020: W_cred configured and switched on opens nothing. No catalog
-// operation names the cred compartment and the password routes stay 403
-// scope_denied before any bind.
-func TestWritePipeline_CredEnabledOpensNoOperation(t *testing.T) {
+// v2c T-026 (T026-D1, T026-F1, AC-011 (a)): setPassword is the only operation of
+// the cred compartment. With the scope in the ceiling but MACHINE_WRITE_CRED_ENABLED
+// off the server starts (an emergency block by the flag alone never becomes a
+// start-up failure) and nothing binds. What the request answers depends on
+// MACHINE_WRITE_CRED_SUBTREES: config.Load never reads it with the flag off
+// (TestMachineWriteCredOffNeverReadsSettings), so a real redeploy has no cred
+// ceiling and the target guard answers 403 scope_denied; only a configuration
+// built in code that keeps the cred subtrees (the T-025 drill) reaches execute
+// and its 503 (no W_cred identity). Both release the idempotency key.
+func TestWritePipeline_CredCompartmentIsSetPasswordOnly(t *testing.T) {
 	specs, err := resolveMachineWriteOps(machineWriteOps)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var cred []string
 	for key, spec := range specs {
 		if spec.Compartment == "cred" {
-			t.Fatalf("%s binds as W_cred before T-026", key)
+			cred = append(cred, key)
 		}
 	}
-	w := writeHarness(t, func(c *config.Config) {
-		c.Machine.Write.CredEnabled = true
-		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: "cn=cred,ou=system,dc=example,dc=org", BindPassword: "private-cred"}
-	}, nil)
-	n := 0
-	for _, r := range protectedRoutes(t, w.s) {
-		if r.Method == "GET" || !strings.Contains(r.Route, "password") {
-			continue
-		}
-		n++
-		rec := w.do(r.Method, r.URL, bearer(w.fullToken()))
-		if rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied {
-			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
-		}
+	if len(cred) != 1 || specs[cred[0]].ID != "setPassword" {
+		t.Fatalf("cred compartment operations = %v, want setPassword only", cred)
 	}
-	if n == 0 {
-		t.Fatal("no password route found")
-	}
-	if w.dir.binds() != 0 || len(w.ident.callList()) != 0 || w.s.idem.Len() != 0 {
-		t.Fatalf("a closed password write reached binds=%d ident=%v idem=%d", w.dir.binds(), w.ident.callList(), w.s.idem.Len())
+	for name, tc := range map[string]struct {
+		subtrees []config.MachineWriteClientDNs
+		status   int
+		code     string
+	}{
+		"as config.Load leaves it (no cred subtrees)": {nil, 403, codeScopeDenied},
+		"cred subtrees kept (built in code)":          {[]config.MachineWriteClientDNs{{ID: "machine-a", DNs: []string{credStaff}}}, 503, codeUnavailable},
+	} {
+		w := writeHarness(t, func(c *config.Config) { c.Machine.Write.CredSubtrees = tc.subtrees }, nil)
+		if !w.s.machine.ceilings["machine-a"][scopePasswordWrite] || w.s.cfg.Machine.Write.CredEnabled {
+			t.Fatal("harness: want password.write in the ceiling and the compartment off")
+		}
+		rec := w.send(pwReq(credBob, "a-long-enough-pw", hdr(key())))
+		if rec.Code != tc.status || errBody(t, rec).Code != tc.code {
+			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, rec.Body, tc.status, tc.code)
+		}
+		if w.dir.binds() != 0 || len(w.dir.callList()) != 0 || w.s.idem.Len() != 0 {
+			t.Errorf("%s: flag-off setPassword reached binds=%d calls=%v idem=%d", name, w.dir.binds(), w.dir.callList(), w.s.idem.Len())
+		}
 	}
 }
 
@@ -459,7 +468,7 @@ func TestWritePipeline_TableValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// Nine opened rows plus setPassword (T-022, catalog only until T-026).
+	// The catalog is exactly the ten opened rows since T-026.
 	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 10 {
 		t.Fatalf("catalog: %v %d", err, len(m))
 	}

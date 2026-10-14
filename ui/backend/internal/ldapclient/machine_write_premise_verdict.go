@@ -86,6 +86,69 @@ func policyVerdict(e *ldap.Entry, kind policyKind, minLength int) string {
 	return ""
 }
 
+// wcredPolicyAttrs are the attributes the W_cred policy check reads as M.
+var wcredPolicyAttrs = []string{"pwdLockout", "pwdMaxFailure", "pwdMaxAge", "pwdMustChange"}
+
+// Result codes of the W_cred policy check (never a value or a DN).
+const (
+	premiseWCredPolicyMissing    = "wcred_policy_missing"
+	premiseWCredPolicyShared     = "wcred_policy_shared"
+	premiseWCredPolicyUnreadable = "wcred_policy_unreadable"
+	premiseWCredPolicyLockout    = "wcred_policy_lockout"
+	premiseWCredPolicyMaxFailure = "wcred_policy_max_failure"
+	premiseWCredPolicyMaxAge     = "wcred_policy_max_age"
+	premiseWCredPolicyMustChange = "wcred_policy_must_change"
+)
+
+// wcredPolicyVerdict is the T026-D2 check (CHANGE.md Q18 (b), maintainer
+// 2026-10-14): W_cred must carry its own no-lockout policy (guide 8.1, Q17),
+// so wrong binds cannot lock it and stop setPassword. subentries are W_cred's
+// pwdPolicySubentry values as M reads them (none: unset OR unreadable, both
+// fail closed); policy is that entry (nil: unreadable or missing). Required:
+// exactly one subentry, not the default or the pending policy, pwdLockout
+// stated exactly FALSE, and nothing else that stops W_cred binding: no
+// pwdMaxFailure (other than 0: with it slapd still stamps pwdAccountLockedTime,
+// 9.1), no pwdMaxAge (other than 0: the password would expire), no
+// pwdMustChange TRUE. Cost: a deployment that skipped 8.1 no longer starts.
+// Escape hatch: attach the guide's policy (8.1); the check has no switch.
+func wcredPolicyVerdict(subentries []string, policy *ldap.Entry, defaultDN, pendingDN string) string {
+	if len(subentries) != 1 {
+		return premiseWCredPolicyMissing
+	}
+	dn, err := ldap.ParseDN(strings.TrimSpace(subentries[0]))
+	if err != nil {
+		return premiseWCredPolicyMissing
+	}
+	for _, other := range []string{defaultDN, pendingDN} {
+		if o, err := ldap.ParseDN(other); err != nil || o.EqualFold(dn) {
+			return premiseWCredPolicyShared
+		}
+	}
+	if policy == nil {
+		return premiseWCredPolicyUnreadable
+	}
+	values := func(name string) []string {
+		var out []string
+		for _, v := range attrValues(policy, name) {
+			out = append(out, strings.TrimSpace(v))
+		}
+		return out
+	}
+	if v := values("pwdLockout"); len(v) != 1 || v[0] != "FALSE" {
+		return premiseWCredPolicyLockout
+	}
+	for _, c := range []struct{ attr, off, code string }{
+		{"pwdMaxFailure", "0", premiseWCredPolicyMaxFailure},
+		{"pwdMaxAge", "0", premiseWCredPolicyMaxAge},
+		{"pwdMustChange", "FALSE", premiseWCredPolicyMustChange},
+	} {
+		if v := values(c.attr); len(v) > 1 || len(v) == 1 && v[0] != c.off {
+			return c.code
+		}
+	}
+	return ""
+}
+
 // accesslogProbeFilter is check 6's filter (MINOR1): a reader may hold read on
 // reqMod/reqOld/reqDN without search on objectClass, and a filter on an attribute
 // it cannot search is undefined (AGENTS.md), so every one of them is asked.

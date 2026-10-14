@@ -9,9 +9,8 @@ import (
 )
 
 // machine-write-scope-v2 T-020: W_cred configuration and start-up validation.
-// Configuration only: directory.users.password.write stays an unopened scope
-// (a ceiling naming it is still refused) and no operation binds as W_cred
-// until T-026. T-028 adds what the run-time premise checks (D379-15/16) read:
+// setPassword (opened by T-026) binds as W_cred. T-028 adds what the run-time
+// premise checks (D379-15/16) read:
 // the ACL reader identity, the canaries and the pending TTL.
 
 const (

@@ -22,10 +22,8 @@ import (
 )
 
 // machine-write-scope-v2 T-022 (REQ-007, REQ-011, REQ-012, D379-9/10/18): the
-// machine setPassword through the real HTTP path with the TEST-ONLY table
-// (machineDeps.writeOps = the catalog). setPassword is not in the production
-// table and directory.users.password.write is not an open scope
-// (TestPasswordPipeline_ProductionStaysClosed): T-026 opens it.
+// machine setPassword through the real HTTP path with the production table
+// (T-026 opened it: TestPasswordPipeline_OpenedByT026).
 
 const (
 	credWriterDN = "cn=cred,ou=system," + rtBase
@@ -94,8 +92,8 @@ func (s *credState) sent() []string {
 	return append([]string(nil), s.passwords...)
 }
 
-// credHarness: v2c on, W_cred configured, password.write in the ceilings (it
-// cannot be configured yet: injected, as in pendingHarness), machine-a's cred
+// credHarness: v2c on, W_cred configured, the production table, password.write
+// in the ceilings (the harness ceilings are every scope), machine-a's cred
 // subtree is ou=staff below its ceiling ou=people.
 func credHarness(t *testing.T, mod func(*config.Config)) *wh {
 	t.Helper()
@@ -110,10 +108,7 @@ func credHarness(t *testing.T, mod func(*config.Config)) *wh {
 		if mod != nil {
 			mod(c)
 		}
-	}, catalogOps())
-	for _, id := range []string{"machine-a", "machine-w2"} {
-		w.s.machine.ceilings[id][scopePasswordWrite] = true
-	}
+	}, nil)
 	// T-023: the production budget is 1 rps, burst 1; the T-022 tables send
 	// many requests at one instant, so they get a deep bucket on the fixed
 	// clock. The T-023 tests rebuild it with the production shape.
@@ -156,32 +151,32 @@ func TestPasswordPipeline_CatalogRow(t *testing.T) {
 	}
 }
 
-// Until T-026 the production table and the open scopes do not name setPassword,
-// so a full token and a W_cred configuration still answer 403 before any bind.
-func TestPasswordPipeline_ProductionStaysClosed(t *testing.T) {
-	for _, op := range machineWriteOps {
-		if op.ID == "setPassword" || op.Route == "/api/users/password" {
-			t.Errorf("%s is in the production table before T-026", op.ID)
+// T-026 opens setPassword: it is in the production table with exactly the
+// catalog row, its scope is an open scope, and the opening cites D379-9 and
+// D379-10. The production table and the catalog are the same ten rows, so no
+// test needs an injected table any more (credHarness runs the production one).
+func TestPasswordPipeline_OpenedByT026(t *testing.T) {
+	var row *machineOp
+	for i := range machineWriteOps {
+		if machineWriteOps[i].ID == "setPassword" {
+			row = &machineWriteOps[i]
 		}
 	}
+	if row == nil || row.Method != "POST" || row.Route != "/api/users/password" || row.Scope != scopePasswordWrite {
+		t.Fatalf("setPassword in the production table = %+v", row)
+	}
+	open := false
 	for _, s := range config.MachineWriteOpenScopes {
-		if s == scopePasswordWrite {
-			t.Errorf("%s is an open scope before T-026", s)
-		}
+		open = open || s == scopePasswordWrite
 	}
-	if _, opened := machineWriteOpenedBy["setPassword"]; opened {
-		t.Error("setPassword has an opening D-id before T-026")
+	if !open {
+		t.Errorf("%s is not an open scope", scopePasswordWrite)
 	}
-	w := writeHarness(t, func(c *config.Config) {
-		c.Machine.Write.CredEnabled = true
-		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: credWriterDN, BindPassword: "private-cred"}
-		c.Machine.Write.CredPendingPolicyDN = credPending
-		c.Machine.Write.CredSubtrees = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: []string{credStaff}}}
-	}, nil)
-	w.s.machine.ceilings["machine-a"][scopePasswordWrite] = true
-	wantCode(t, w.send(pwReq(credBob, "a-long-enough-pw", hdr(key()))), 403, codeScopeDenied)
-	if w.dir.binds() != 0 || len(w.dir.callList()) != 0 || len(w.ident.callList()) != 0 || w.stages() != "" || w.s.idem.Len() != 0 {
-		t.Errorf("a closed setPassword reached binds=%d calls=%v ident=%v stages=%q", w.dir.binds(), w.dir.callList(), w.ident.callList(), w.stages())
+	if by := machineWriteOpenedBy["setPassword"]; !strings.Contains(by, "D379-9") || !strings.Contains(by, "D379-10") {
+		t.Errorf("setPassword opened by %q, want D379-9 and D379-10", by)
+	}
+	if len(machineWriteOps) != len(machineWriteCatalog) {
+		t.Errorf("production table %d rows, catalog %d", len(machineWriteOps), len(machineWriteCatalog))
 	}
 }
 
@@ -208,10 +203,11 @@ func TestPasswordPipeline_SetsAsW_credAfterThePreReadsThenCleansUp(t *testing.T)
 	if got := w.ident.callList(); len(got) != 1 || got[0] != credBob+"|inetOrgPerson" {
 		t.Fatalf("Check calls = %v", got)
 	}
-	if len(w.ident.privCalls) != 1 || w.ident.privCalls[0] != credBob {
+	// T026-D3: each pre-read runs twice, before the target lock and inside it.
+	if len(w.ident.privCalls) != 2 || w.ident.privCalls[0] != credBob || w.ident.privCalls[1] != credBob {
 		t.Fatalf("privileged pre-read = %v", w.ident.privCalls)
 	}
-	if len(w.ident.pendingCalls) != 1 || w.ident.pendingCalls[0] != credBob+"|"+tag {
+	if len(w.ident.pendingCalls) != 2 || w.ident.pendingCalls[0] != credBob+"|"+tag || w.ident.pendingCalls[1] != credBob+"|"+tag {
 		t.Fatalf("pending pre-read = %v", w.ident.pendingCalls)
 	}
 	// The exop bind and the separate cleanup bind are both W_cred, never W_data.
@@ -398,8 +394,56 @@ func TestPasswordPipeline_TagIsTheRequestingClients(t *testing.T) {
 	if rec := w.send(pwReq(credBob, pw, hdr(key()))); rec.Code != 200 {
 		t.Fatalf("owner: %d %s", rec.Code, rec.Body)
 	}
-	if got := w.ident.pendingCalls; len(got) != 2 || got[0] != credBob+"|"+w.tagOf("machine-w2") || got[1] != credBob+"|"+owner {
+	if got := w.ident.pendingCalls; len(got) != 3 || got[0] != credBob+"|"+w.tagOf("machine-w2") || got[1] != credBob+"|"+owner || got[2] != credBob+"|"+owner {
 		t.Fatalf("pending pre-read tags = %v", got)
+	}
+}
+
+// T026-D3 (review MINOR a): the pre-reads run again inside the per-target lock.
+// A target that changed between the first read and the lock (a password set,
+// a privileged membership added, the entry replaced) is refused with no
+// Password Modify sent.
+func TestPasswordPipeline_PreReadsRepeatInsideTheTargetLock(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mod    func(w *wh)
+		status int
+		code   string
+	}{
+		"password set in between": {func(w *wh) {
+			n := 0
+			w.ident.pending = func(_, _ string) error {
+				if n++; n > 1 {
+					return domain.ErrConflict
+				}
+				return nil
+			}
+		}, 409, codeConflict},
+		"made privileged in between": {func(w *wh) {
+			n := 0
+			w.ident.privileged = func(string) error {
+				if n++; n > 1 {
+					return domain.ErrPermissionDenied
+				}
+				return nil
+			}
+		}, 403, codeScopeDenied},
+		"entry replaced in between": {func(w *wh) {
+			n := 0
+			w.ident.uuid = func(target string) string {
+				n++
+				return fmt.Sprintf("uuid-%d", n)
+			}
+		}, 409, codeConflict},
+	} {
+		w := credHarness(t, nil)
+		tc.mod(w)
+		rec := w.send(pwReq(credBob, sentinel(t), hdr(key())))
+		if rec.Code != tc.status || errBody(t, rec).Code != tc.code {
+			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, rec.Body, tc.status, tc.code)
+		}
+		if len(credStateOf(w.dir).sent()) != 0 {
+			t.Errorf("%s: a Password Modify was sent", name)
+		}
 	}
 }
 

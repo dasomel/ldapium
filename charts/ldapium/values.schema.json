@@ -179,7 +179,7 @@
             "write": {
               "type": "object",
               "additionalProperties": false,
-              "description": "Machine write scope (#285). Unknown keys are refused; the credential compartment (cred, #379 v2c) has only `enabled` until T-026.",
+              "description": "Machine write scope (#285). Unknown keys are refused; the credential compartment (cred, #379 v2c) renders from T-026 on.",
               "properties": {
                 "enabled": {
                   "type": "boolean"
@@ -222,10 +222,120 @@
                 "cred": {
                   "type": "object",
                   "additionalProperties": false,
-                  "description": "v2c W_cred (#379). Only enabled exists until T-026; true refuses to render (and refuses with its own message next to audit.enabled or an accesslog ops list holding extended/all).",
+                  "description": "v2c W_cred (#379, T-026). Off renders nothing; on requires write.enabled and every value except policyDNs, and refuses next to audit.enabled or an accesslog ops list holding extended/all.",
                   "properties": {
                     "enabled": {
                       "type": "boolean"
+                    },
+                    "bindDN": {
+                      "type": "string",
+                      "pattern": "^[^;|]*$"
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "existingSecretKey": {
+                      "type": "string"
+                    },
+                    "subtrees": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "client",
+                          "dns"
+                        ],
+                        "properties": {
+                          "client": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^[^=;,|\\s]+$"
+                          },
+                          "dns": {
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": true,
+                            "maxItems": 16,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^[^;|]+$"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "pendingPolicyDN": {
+                      "type": "string",
+                      "pattern": "^[^;|]*$"
+                    },
+                    "minLength": {
+                      "type": "integer",
+                      "minimum": 12,
+                      "maximum": 1024
+                    },
+                    "policyDNs": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "maxItems": 16,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[^;|]+$"
+                      }
+                    },
+                    "rateLimitRPS": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10
+                    },
+                    "pendingTTL": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(h|m|s)$"
+                    },
+                    "aclReader": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "dn": {
+                          "type": "string",
+                          "pattern": "^[^;|]*$"
+                        },
+                        "existingSecret": {
+                          "type": "string"
+                        },
+                        "existingSecretKey": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "canaries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "withPassword",
+                          "unmarked",
+                          "pending"
+                        ],
+                        "properties": {
+                          "withPassword": {
+                            "type": "string",
+                            "pattern": "^[^;|]*$"
+                          },
+                          "unmarked": {
+                            "type": "string",
+                            "pattern": "^[^;|]*$"
+                          },
+                          "pending": {
+                            "type": "string",
+                            "pattern": "^[^;|]*$"
+                          }
+                        }
+                      },
+                      "maxItems": 16
                     }
                   }
                 },

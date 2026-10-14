@@ -381,8 +381,7 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 	}
 }
 
-// scopePasswordWrite is the v2c scope (still unopened: a ceiling naming it fails
-// start-up until T-026, so credentialPending is refused in every deployment).
+// scopePasswordWrite is the v2c scope, opened by T-026 (setPassword).
 const scopePasswordWrite = "directory.users.password.write"
 
 // parsePending reads credentialPending (REQ-018) from a body the closed set
@@ -575,6 +574,23 @@ func (r *wreq) execute(c echo.Context) error {
 			return r.credRateLimited(1, "another password change for this target is in progress")
 		}
 		defer release()
+		// T026-D3 (review MINOR a): the reads above ran before the target lock,
+		// so a setPassword on the same entry may have completed between them and
+		// the lock. Inside the lock they run once more: the privileged check and
+		// the pending pre-read (marker, tag, no pwdChangedTime: 409 once set), on
+		// the same entryUUID (a replaced entry is a 409 too). Cost: two more M
+		// reads per request. A change made outside this application stays R-4
+		// (the W_cred ACL filter is the fence there).
+		if err := r.w.ident.CheckNotPrivileged(ctx, r.dns[0].raw); err != nil {
+			return r.identityRefusal(err)
+		}
+		again, err := r.w.ident.CheckCredentialPending(ctx, r.dns[0].raw, credentialPendingTag(r.subject))
+		if err != nil {
+			return r.identityRefusal(err)
+		}
+		if again != uuid {
+			return r.identityRefusal(domain.ErrConflict)
+		}
 		// REQ-014 (T-028): the D379-15 premise, right before the write: the last
 		// periodic cycle passed and checks 1, 2 and 6 hold now. 503, no write.
 		if code := r.w.s.machineWrite.premise.beforeWrite(ctx); code != "" {
