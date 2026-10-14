@@ -51,7 +51,8 @@ One git tag publishes everything. `v0.1.0` produces:
    SHA (`gh workflow run machine-keycloak-e2e.yml --ref <branch-or-tag-at-that-SHA>`
    and wait for success; it must be a run for that exact commit) or tag a newer
    commit. A skipped or cancelled run, or a success on another SHA, never satisfies
-   the gate.
+   the gate. The `machine write (real Keycloak)` job also runs the v2b and v2c
+   (setPassword) drills and live proofs, so one name gates all of them.
 
 6. **Tag and push:**
 
