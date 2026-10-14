@@ -133,6 +133,11 @@ baseref=${BASE_REF:-origin/main}
 if git rev-parse --verify --quiet "$baseref^{commit}" >/dev/null; then
 	mkdir "$tmp/basechart"
 	git archive "$baseref" charts/ldapium | tar -x -C "$tmp/basechart"
+	# A release bump changes the chart label and default image tag in every render;
+	# compare the templates, not the version, by giving the base the current version.
+	cur_version=$(awk '/^version:/ { print $2; exit }' charts/ldapium/Chart.yaml)
+	sed "s/^version:.*/version: $cur_version/" "$tmp/basechart/charts/ldapium/Chart.yaml" >"$tmp/Chart.yaml.new"
+	mv "$tmp/Chart.yaml.new" "$tmp/basechart/charts/ldapium/Chart.yaml"
 	helm template t "$tmp/basechart/charts/ldapium" "${base[@]}" >"$tmp/base-default.out"
 	full >"$tmp/cur-default.out"
 	check "off render is byte-identical to $baseref (default)" cmp -s "$tmp/base-default.out" "$tmp/cur-default.out"
