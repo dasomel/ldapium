@@ -111,9 +111,15 @@ func (r *WriteIdentityReader) Check(ctx context.Context, target, requiredClass s
 	}
 	// Fixed image identities can be absent in standalone or external LDAP. They
 	// are lexically denied without making their existence an opening requirement.
-	for _, raw := range []string{"cn=admin," + r.cfg.BaseDN, "cn=replicator," + r.cfg.BaseDN} {
-		p, _ := reproducibleWriteDN(raw)
-		if p.EqualFold(dn) || p.AncestorOfFold(dn) {
+	// T020-D5: W_cred joins them, so enabling the cred compartment never makes
+	// non-cred writes depend on that account existing.
+	fixed := []string{"cn=admin," + r.cfg.BaseDN, "cn=replicator," + r.cfg.BaseDN}
+	if w := r.cfg.Machine.Write; w.CredEnabled && w.Cred.BindDN != "" {
+		fixed = append(fixed, w.Cred.BindDN)
+	}
+	for _, raw := range fixed {
+		p, ok := reproducibleWriteDN(raw)
+		if !ok || p.EqualFold(dn) || p.AncestorOfFold(dn) {
 			return domain.ErrPermissionDenied
 		}
 	}

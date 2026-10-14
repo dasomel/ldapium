@@ -67,6 +67,9 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 	if err != nil {
 		return fmt.Errorf("MACHINE_WRITE_SUBTREES needs a valid LDAP_BASE_DN")
 	}
+	if err := loadMachineWriteCredScope(getenv, cfg, m, w, base, known); err != nil {
+		return err
+	}
 	if w.GroupSeedDN, err = loadMachineWriteGroupSeed(getenv, cfg, m, *w, base); err != nil {
 		return err
 	}
@@ -83,6 +86,9 @@ func loadMachineWriteScope(getenv func(string) string, cfg Config, m MachineConf
 				return err
 			}
 		}
+	}
+	if err := checkCredSubtrees(*w); err != nil {
+		return err
 	}
 	if err := checkWriteGroups(*w); err != nil {
 		return err
@@ -298,7 +304,7 @@ func checkMachineWriteQuota(maxPerSubject, maxRecords, clients int) error {
 // MachineWriteProtectedDNs is the REQ-016 protected set derived from the
 // configuration: M, every enabled W_*, the service account, rootdns, the
 // replication and administrator identities, administrator DNs, the group seed
-// placeholder and the privileged groups. It applies whatever a client ceiling says.
+// placeholder, the v2c policy entries and the privileged groups. It applies whatever a client ceiling says.
 func (c Config) MachineWriteProtectedDNs() []string {
 	return machineWriteProtectedDNs(c, c.Machine, c.Machine.Write)
 }
@@ -312,6 +318,15 @@ func machineWriteIdentityDNs(cfg Config, m MachineConfig, w MachineWriteConfig) 
 	out := []string{m.BindDN, w.Data.BindDN}
 	if w.LockEnabled {
 		out = append(out, w.Lock.BindDN)
+	}
+	// REQ-009: W_cred joins the protected set. T020-D4: so do the pending and
+	// allowlisted policy entries, which a machine write must never edit.
+	if w.CredEnabled {
+		out = append(out, w.Cred.BindDN)
+		if w.CredPendingPolicyDN != "" {
+			out = append(out, w.CredPendingPolicyDN)
+		}
+		out = append(out, w.CredPolicyDNs...)
 	}
 	out = append(out, m.RootDNs...)
 	out = append(out, "cn=replicator,"+cfg.BaseDN, "cn=admin,"+cfg.BaseDN)

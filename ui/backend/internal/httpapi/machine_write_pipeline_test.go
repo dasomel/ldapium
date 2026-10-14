@@ -341,6 +341,77 @@ func TestWritePipeline_ProductionTableHasExactlyTheNineOperations(t *testing.T) 
 	}
 }
 
+// v2c T-020: W_cred configured and switched on opens nothing. No catalog
+// operation names the cred compartment and the password routes stay 403
+// scope_denied before any bind.
+func TestWritePipeline_CredEnabledOpensNoOperation(t *testing.T) {
+	specs, err := resolveMachineWriteOps(machineWriteOps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, spec := range specs {
+		if spec.Compartment == "cred" {
+			t.Fatalf("%s binds as W_cred before T-026", key)
+		}
+	}
+	w := writeHarness(t, func(c *config.Config) {
+		c.Machine.Write.CredEnabled = true
+		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: "cn=cred,ou=system,dc=example,dc=org", BindPassword: "private-cred"}
+	}, nil)
+	n := 0
+	for _, r := range protectedRoutes(t, w.s) {
+		if r.Method == "GET" || !strings.Contains(r.Route, "password") {
+			continue
+		}
+		n++
+		rec := w.do(r.Method, r.URL, bearer(w.fullToken()))
+		if rec.Code != 403 || errBody(t, rec).Code != codeScopeDenied {
+			t.Errorf("%s %s must stay closed: %d %s", r.Method, r.Route, rec.Code, rec.Body)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no password route found")
+	}
+	if w.dir.binds() != 0 || len(w.ident.callList()) != 0 || w.s.idem.Len() != 0 {
+		t.Fatalf("a closed password write reached binds=%d ident=%v idem=%d", w.dir.binds(), w.ident.callList(), w.s.idem.Len())
+	}
+}
+
+// v2c T-020 (T020-D5, Codex P1): turning the cred compartment on, with a
+// W_cred entry that does not exist in the directory, leaves the opened data
+// writes working: they bind as W_data and the M pre-read never asks about
+// W_cred (the real reader denies that DN lexically, see
+// ldapclient.TestWriteIdentityCredDeniedLexicallyNotResolved).
+func TestWritePipeline_CredEnabledLeavesDataWritesWorking(t *testing.T) {
+	const credDN = "cn=cred,ou=system,dc=example,dc=org"
+	w := writeHarness(t, func(c *config.Config) {
+		c.Machine.Write.CredEnabled = true
+		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: credDN, BindPassword: "private-cred"}
+	}, nil)
+	for _, spec := range []wreqSpec{
+		{method: "PATCH", path: "/api/users", body: `{"dn":"` + wBob + `","mail":"a@example.org"}`, headers: okHeaders()},
+		{method: "POST", path: "/api/groups/members", body: `{"groupDn":"` + wTeam + `","memberDn":"` + wBob + `"}`, headers: okHeaders()},
+		{method: "DELETE", path: "/api/users?dn=" + url.QueryEscape(wBob), headers: okHeaders()},
+	} {
+		if rec := w.send(spec); rec.Code != 204 {
+			t.Fatalf("%s %s with W_cred on: %d %s", spec.method, spec.path, rec.Code, rec.Body)
+		}
+	}
+	for _, dn := range w.dir.bindDNs {
+		if strings.EqualFold(dn, credDN) {
+			t.Fatal("a data write bound as W_cred")
+		}
+	}
+	if got := strings.ToLower(strings.Join(w.ident.callList(), ",")); strings.Contains(got, "cn=cred,") {
+		t.Fatalf("M pre-read asked about W_cred: %s", got)
+	}
+	// The production reader is built from these: W_cred is never resolved.
+	got := resolvedWriterDNs(w.s.cfg.Machine.Write)
+	if len(got) != 1 || got[0] != wWriterDN {
+		t.Fatalf("resolved writers = %v, want only W_data", got)
+	}
+}
+
 func TestWritePipeline_WritesOffIgnoresInjectedTable(t *testing.T) {
 	w := writeHarness(t, func(c *config.Config) { c.Machine.WriteEnabled = false; c.Machine.Write = config.MachineWriteConfig{} }, catalogOps())
 	if w.s.machine.write != nil {
@@ -434,6 +505,10 @@ func TestWritePipeline_BindIdentityByCompartment(t *testing.T) {
 		Data: config.MachineWriteIdentity{BindDN: "cn=d", BindPassword: "pd"},
 		Lock: config.MachineWriteIdentity{BindDN: "cn=l", BindPassword: "pl"}, LockEnabled: true,
 	}
+	withCred := w
+	withCred.Cred, withCred.CredEnabled = config.MachineWriteIdentity{BindDN: "cn=c", BindPassword: "pc"}, true
+	credOff := withCred
+	credOff.CredEnabled = false
 	for _, tc := range []struct {
 		compartment string
 		cfg         config.MachineWriteConfig
@@ -443,6 +518,8 @@ func TestWritePipeline_BindIdentityByCompartment(t *testing.T) {
 		{"data", w, "cn=d", true}, {"lock", w, "cn=l", true},
 		{"lock", config.MachineWriteConfig{Data: w.Data, Lock: w.Lock}, "", false}, // lock off: no fallback to data
 		{"cred", w, "", false}, {"", w, "", false}, {"admin", w, "", false}, {"read", w, "", false},
+		// v2c T-020: W_cred only when its own switch is on, never a fallback.
+		{"cred", withCred, "cn=c", true}, {"cred", credOff, "", false}, {"data", withCred, "cn=d", true},
 	} {
 		id, ok := writeBindIdentity(tc.cfg, tc.compartment)
 		if ok != tc.ok || id.BindDN != tc.dn {

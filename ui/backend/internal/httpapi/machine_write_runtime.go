@@ -99,10 +99,20 @@ func newMachineWriteRuntime(cfg config.Config, now func() time.Time) (*machineWr
 			return nil, err
 		}
 	}
-	writers := []string{m.Write.Data.BindDN}
-	if m.Write.LockEnabled {
-		writers = append(writers, m.Write.Lock.BindDN)
-	}
-	rt.identity = ldapclient.NewWriteIdentityReader(cfg, writers)
+	rt.identity = ldapclient.NewWriteIdentityReader(cfg, resolvedWriterDNs(m.Write))
 	return rt, nil
+}
+
+// resolvedWriterDNs are the W_* identities the M pre-read resolves by UUID on
+// every write, so each must exist. T020-D5: W_cred is not one of them: a W_cred
+// entry that does not exist yet (the guide creates it in T-021) would fail every
+// data and lock write. The reader denies the W_cred DN lexically instead, the
+// policy guard keeps it in the protected set, and its existence becomes a
+// cred-only premise in T-028.
+func resolvedWriterDNs(w config.MachineWriteConfig) []string {
+	writers := []string{w.Data.BindDN}
+	if w.LockEnabled {
+		writers = append(writers, w.Lock.BindDN)
+	}
+	return writers
 }

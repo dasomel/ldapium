@@ -20,6 +20,19 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### API
 
+- Machine write v2c (#379, T-020) configuration and start-up validation only; **no
+  operation is opened** (`directory.users.password.write` is still refused in a
+  ceiling and the password routes stay 403 `scope_denied` with no bind). New
+  `MACHINE_WRITE_CRED_ENABLED` (default `false`; when off no other
+  `MACHINE_WRITE_CRED_*` is read). When on, start-up requires
+  `MACHINE_WRITE_CRED_BIND_DN`/`_PASSWORD` (distinct from every other identity, in
+  the protected set), a non-empty `MACHINE_WRITE_PRIVILEGED_GROUPS`,
+  `MACHINE_WRITE_CRED_SUBTREES` inside the same client's `MACHINE_WRITE_SUBTREES`,
+  and `MACHINE_WRITE_CRED_PENDING_POLICY_DN` (not the default policy); optional
+  `MACHINE_WRITE_CRED_MIN_LENGTH` (12–1024, default 12) and
+  `MACHINE_WRITE_CRED_POLICY_DNS`. The policy entries join the protected set, so a
+  write ceiling holding one fails start-up. The chart is unchanged. See
+  [machine-write-account.md](docs/machine-write-account.md) section 8.
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and
