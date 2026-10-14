@@ -310,7 +310,13 @@ func (c Config) MachineWriteProtectedDNs() []string {
 }
 
 func machineWriteProtectedDNs(cfg Config, m MachineConfig, w MachineWriteConfig) []string {
-	return append(machineWriteIdentityDNs(cfg, m, w), w.PrivilegedGroups...)
+	out := append(machineWriteIdentityDNs(cfg, m, w), w.PrivilegedGroups...)
+	// T028-D1: the canaries are protected at request time only (they lie inside
+	// a ceiling, so they are not ceiling-overlap identities).
+	for _, c := range w.CredCanaries {
+		out = append(out, c.DNs()...)
+	}
+	return out
 }
 
 // machineWriteIdentityDNs is the protected set without the privileged groups.
@@ -323,6 +329,11 @@ func machineWriteIdentityDNs(cfg Config, m MachineConfig, w MachineWriteConfig) 
 	// allowlisted policy entries, which a machine write must never edit.
 	if w.CredEnabled {
 		out = append(out, w.Cred.BindDN)
+		// T-028: the cn=config reader (D379-16). Never an empty entry: an empty
+		// DN would protect the whole tree.
+		if w.CredACLReader.BindDN != "" {
+			out = append(out, w.CredACLReader.BindDN)
+		}
 		if w.CredPendingPolicyDN != "" {
 			out = append(out, w.CredPendingPolicyDN)
 		}

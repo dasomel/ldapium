@@ -575,8 +575,14 @@ func (r *wreq) execute(c echo.Context) error {
 			return r.credRateLimited(1, "another password change for this target is in progress")
 		}
 		defer release()
-		// Seam, not implemented here: T-028 runs the D379-15 premise checks
-		// right here (failure: 503, no write).
+		// REQ-014 (T-028): the D379-15 premise, right before the write: the last
+		// periodic cycle passed and checks 1, 2 and 6 hold now. 503, no write.
+		if code := r.w.s.machineWrite.premise.beforeWrite(ctx); code != "" {
+			log.Printf("machine_cred_premise phase=request request_id=%s result=%s", logQuote(requestIDOf(c)), code)
+			r.st.setReason(reasonUpstream)
+			r.setOutcome(outcomeRejected)
+			return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine password premise check failed")
+		}
 	}
 	// runAs derives its own timeout from the request context: handing it ours
 	// keeps the M pre-read and the write inside the deadline above, not two

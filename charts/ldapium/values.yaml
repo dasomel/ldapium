@@ -854,8 +854,8 @@ ui:
     #    process memory; persistent store is a separate change), otherwise the
     #    render fails. Bind passwords are Secret references only; each identity
     #    must differ from the read identity (ldapBindDN) and from each other.
-    #    There is no credential (W_cred) identity: unknown keys are refused.
-    #    Setting this opens no operation by itself.
+    #    The credential (W_cred) compartment has only cred.enabled until T-026;
+    #    other unknown keys are refused. Setting this opens no operation by itself.
     write:
       enabled: false
       # -- W_data: users/groups general attributes and membership.
@@ -869,6 +869,15 @@ ui:
         bindDN: ""
         existingSecret: ""
         existingSecretKey: machine-ldap-write-lock-password
+      # -- v2c W_cred, the machine setPassword (#379). Only `enabled` exists, and
+      #    true refuses to render until T-026 adds the identity, the configuration
+      #    reader and the canaries. The refusal says so; next to audit.enabled=true
+      #    it refuses with its own message first (the auditlog overlay writes the
+      #    hash of every password set to the slapd log, D379-14), as it does for an
+      #    audit.accessLog.ops list holding `extended` or `all` (one Password Modify
+      #    aborts slapd, F-7).
+      cred:
+        enabled: false
       # -- Per-client write subtree ceilings (strict descendants of ldap.rootDN),
       #    required non-empty when write is on. Each client must be in allowedClients.
       #      - client: svc-provisioning

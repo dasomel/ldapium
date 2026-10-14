@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 )
@@ -53,6 +54,15 @@ type MachineWriteConfig struct {
 	// CredRateLimitRPS is MACHINE_WRITE_CRED_RATE_LIMIT_RPS, the global password
 	// budget (REQ-013, default 1 rps, T023-D2).
 	CredRateLimitRPS int
+	// CredACLReader is MACHINE_WRITE_CRED_ACL_READER_DN/_PASSWORD (D379-16): the
+	// cn=config reader of the run-time premise checks (T-028), never a writer.
+	CredACLReader MachineWriteIdentity
+	// CredCanaries are MACHINE_WRITE_CRED_CANARIES (D379-15 check 5), at least
+	// one set inside every MACHINE_WRITE_CRED_SUBTREES DN.
+	CredCanaries []MachineWriteCredCanary
+	// CredPendingTTL is MACHINE_WRITE_CRED_PENDING_TTL, the age after which the
+	// TTL sweep cleans an abandoned pending account (Revision 8, T028-D9).
+	CredPendingTTL time.Duration
 	// Subtrees/Groups are per-client write ceilings and writable groups,
 	// PrivilegedGroups the deny set, Limits the write budget (T-012/T-016/T-019).
 	Subtrees         []MachineWriteClientDNs
@@ -144,17 +154,34 @@ func loadMachineWriteCredIdentity(getenv func(string) string, cfg Config, m Mach
 			return fmt.Errorf("MACHINE_WRITE_CRED_BIND_DN must be distinct from MACHINE_WRITE_DATA_BIND_DN and MACHINE_WRITE_LOCK_BIND_DN")
 		}
 	}
+	// D379-16 (T-028): the cn=config reader of the premise checks is a fourth
+	// identity, distinct from every W_* and from the read/admin set, and part
+	// of the protected set. The variables are _DN/_PASSWORD as the design
+	// names them (not _BIND_DN); the checks are those of every W_* identity.
+	if w.CredACLReader, err = machineIdentityFromVars(getenv, "MACHINE_WRITE_CRED_ACL_READER", "MACHINE_WRITE_CRED_ACL_READER_DN", "MACHINE_WRITE_CRED_ACL_READER_PASSWORD", cfg, m); err != nil {
+		return err
+	}
+	reader, _ := ldap.ParseDN(w.CredACLReader.BindDN)
+	for _, raw := range append(others, w.Cred.BindDN) {
+		if other, _ := ldap.ParseDN(raw); other.EqualFold(reader) {
+			return fmt.Errorf("MACHINE_WRITE_CRED_ACL_READER_DN must be distinct from the MACHINE_WRITE_DATA, MACHINE_WRITE_LOCK and MACHINE_WRITE_CRED bind DNs")
+		}
+	}
 	return nil
 }
 
 func machineWriteIdentity(getenv func(string) string, prefix string, cfg Config, m MachineConfig) (MachineWriteIdentity, error) {
-	identity := MachineWriteIdentity{BindDN: strings.TrimSpace(getenv(prefix + "_BIND_DN")), BindPassword: getenv(prefix + "_BIND_PASSWORD")}
+	return machineIdentityFromVars(getenv, prefix, prefix+"_BIND_DN", prefix+"_BIND_PASSWORD", cfg, m)
+}
+
+func machineIdentityFromVars(getenv func(string) string, prefix, dnVar, pwVar string, cfg Config, m MachineConfig) (MachineWriteIdentity, error) {
+	identity := MachineWriteIdentity{BindDN: strings.TrimSpace(getenv(dnVar)), BindPassword: getenv(pwVar)}
 	if identity.BindDN == "" || identity.BindPassword == "" {
-		return MachineWriteIdentity{}, fmt.Errorf("%s requires %s_BIND_DN and %s_BIND_PASSWORD", prefix, prefix, prefix)
+		return MachineWriteIdentity{}, fmt.Errorf("%s requires %s and %s", prefix, dnVar, pwVar)
 	}
 	dn, err := ldap.ParseDN(identity.BindDN)
 	if err != nil {
-		return MachineWriteIdentity{}, fmt.Errorf("%s_BIND_DN must be a valid DN", prefix)
+		return MachineWriteIdentity{}, fmt.Errorf("%s must be a valid DN", dnVar)
 	}
 	// D19: reuse v1's administrator/root/service-account comparisons, adding M
 	// and the fixed replication identity. Cost: explicit identity inventory;
@@ -162,7 +189,7 @@ func machineWriteIdentity(getenv func(string) string, prefix string, cfg Config,
 	protected := append([]string(nil), m.RootDNs...)
 	protected = append(protected, m.BindDN, "cn=replicator,"+cfg.BaseDN)
 	if err := checkMachineBindDN(identity.BindDN, cfg, protected); err != nil {
-		return MachineWriteIdentity{}, fmt.Errorf("%s_BIND_DN must be distinct from read, administrator, service-account, root and replication identities", prefix)
+		return MachineWriteIdentity{}, fmt.Errorf("%s must be distinct from read, administrator, service-account, root and replication identities", dnVar)
 	}
 	// D19: reject ambiguous spellings on either side of the comparison.
 	// Otherwise a named cn could appear distinct from a protected OID spelling.
@@ -172,7 +199,7 @@ func machineWriteIdentity(getenv func(string) string, prefix string, cfg Config,
 		protected = append(protected, cfg.SSO.LDAPServiceAccountDN)
 	}
 	if !writeIdentityDNUnambiguous(dn) {
-		return MachineWriteIdentity{}, fmt.Errorf("%s_BIND_DN requires named attribute types and unambiguous whitespace", prefix)
+		return MachineWriteIdentity{}, fmt.Errorf("%s requires named attribute types and unambiguous whitespace", dnVar)
 	}
 	for _, raw := range protected {
 		other, err := ldap.ParseDN(raw)

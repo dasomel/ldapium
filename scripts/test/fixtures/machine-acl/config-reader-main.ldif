@@ -1,0 +1,16 @@
+# The v2c configuration reader in the MAIN database (#379 T-028; D379-16, EVIDENCE
+# 2e E-21: without it the reader is an ordinary user there and reads every entry
+# the image's `by users read` opens). Operator guide docs/machine-write-account.md
+# section 8.8.
+#
+# Placed directly after the W_cred bundle (write-cred.ldif), before every image
+# rule; premise check 1 expects it exactly there. Names only the reader and ends
+# in "by * break".
+#
+#   {0} everything                                       none
+dn: @MAIN_DB_DN@
+changetype: modify
+add: olcAccess
+olcAccess: {0}to *
+  by dn.exact="@READER_DN@" none
+  by * break

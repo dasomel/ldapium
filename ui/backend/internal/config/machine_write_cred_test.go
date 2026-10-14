@@ -12,20 +12,47 @@ import (
 const (
 	wcDN      = "cn=cred,ou=system," + wsBase
 	wcPending = "cn=credential-pending,ou=policies," + wsBase
+	wcReader  = "cn=acl-reader,ou=system," + wsBase
 )
 
 func credEnv(over map[string]string) func(string) string {
 	values := map[string]string{
-		"MACHINE_WRITE_CRED_ENABLED":           "true",
-		"MACHINE_WRITE_CRED_BIND_DN":           wcDN,
-		"MACHINE_WRITE_CRED_BIND_PASSWORD":     "private-cred",
-		"MACHINE_WRITE_CRED_SUBTREES":          "machine-a=" + wsPeop,
-		"MACHINE_WRITE_CRED_PENDING_POLICY_DN": wcPending,
+		"MACHINE_WRITE_CRED_ENABLED":             "true",
+		"MACHINE_WRITE_CRED_BIND_DN":             wcDN,
+		"MACHINE_WRITE_CRED_BIND_PASSWORD":       "private-cred",
+		"MACHINE_WRITE_CRED_SUBTREES":            "machine-a=" + wsPeop,
+		"MACHINE_WRITE_CRED_PENDING_POLICY_DN":   wcPending,
+		"MACHINE_WRITE_CRED_ACL_READER_DN":       wcReader,
+		"MACHINE_WRITE_CRED_ACL_READER_PASSWORD": "private-reader",
 	}
 	for k, v := range over {
 		values[k] = v
 	}
+	// T-028: one canary set per cred subtree unless the case sets its own.
+	if _, own := over["MACHINE_WRITE_CRED_CANARIES"]; !own {
+		values["MACHINE_WRITE_CRED_CANARIES"] = canariesFor(values["MACHINE_WRITE_CRED_SUBTREES"])
+	}
 	return writeScopeEnv(values)
+}
+
+// canariesFor builds one set inside every DN of a MACHINE_WRITE_CRED_SUBTREES value.
+func canariesFor(subtrees string) string {
+	var sets []string
+	for _, entry := range strings.Split(subtrees, ";") {
+		_, list, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		for _, dn := range strings.Split(list, "|") {
+			dn = strings.TrimSpace(dn)
+			sets = append(sets, canarySet(dn))
+		}
+	}
+	return strings.Join(sets, ";")
+}
+
+func canarySet(dn string) string {
+	return "uid=canary-pw," + dn + "|uid=canary-unmarked," + dn + "|uid=canary-pending," + dn
 }
 
 func TestMachineWriteCredValid(t *testing.T) {

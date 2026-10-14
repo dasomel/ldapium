@@ -179,7 +179,7 @@
             "write": {
               "type": "object",
               "additionalProperties": false,
-              "description": "Machine write scope (#285). Unknown keys (for example a credential identity) are refused.",
+              "description": "Machine write scope (#285). Unknown keys are refused; the credential compartment (cred, #379 v2c) has only `enabled` until T-026.",
               "properties": {
                 "enabled": {
                   "type": "boolean"
@@ -216,6 +216,16 @@
                     },
                     "existingSecretKey": {
                       "type": "string"
+                    }
+                  }
+                },
+                "cred": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "v2c W_cred (#379). Only enabled exists until T-026; true refuses to render (and refuses with its own message next to audit.enabled or an accesslog ops list holding extended/all).",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
                     }
                   }
                 },

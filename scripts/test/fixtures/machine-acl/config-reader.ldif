@@ -1,0 +1,27 @@
+# The v2c configuration reader in the cn=config DATABASE (#379 T-028; docs/changes/
+# machine-write-scope-v2 D379-15, D379-16, EVIDENCE 2e E-21; operator guide
+# docs/machine-write-account.md section 8.8).
+#
+# The UI binds as MACHINE_WRITE_CRED_ACL_READER_DN only to read, for its run-time
+# premise check 1 and 2, the main database's olcAccess and olcAddContentAcl and the
+# ppolicy overlay's olcPPolicyDefault. Nothing else in cn=config: the image's
+# `{0}to * by * none` follows these two rules. `entry` must be in each rule
+# (without it the reader sees nothing, E-21), and the reader can only find an
+# entry through a filter on an attribute it was granted.
+#
+# Tokens:
+#   @READER_DN@   the reader account (under @SYSTEM_DN@, a password, no other use)
+#   @MAIN_DB_DN@  the config entry of the main database (olcDatabase={1}mdb,cn=config)
+#   @PPOLICY_DN@  the ppolicy overlay entry below it (the guide finds it)
+#
+#   {0} the main database entry: olcAccess, olcAddContentAcl   read
+#   {1} the ppolicy overlay entry: olcPPolicyDefault           read
+dn: olcDatabase={0}config,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.base="@MAIN_DB_DN@" attrs=entry,olcAccess,olcAddContentAcl
+  by dn.exact="@READER_DN@" read
+  by * break
+olcAccess: {1}to dn.base="@PPOLICY_DN@" attrs=entry,olcPPolicyDefault
+  by dn.exact="@READER_DN@" read
+  by * break

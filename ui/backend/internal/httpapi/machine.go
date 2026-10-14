@@ -45,6 +45,8 @@ type machineDeps struct {
 	writeOps []machineOp
 	// writeIdentity replaces the M pre-read of the write pipeline (tests only).
 	writeIdentity writeIdentityChecker
+	// credPremise replaces the T-028 premise checks and sweeps (tests only).
+	credPremise credPremiseChecker
 }
 
 type serverOption func(*Server)

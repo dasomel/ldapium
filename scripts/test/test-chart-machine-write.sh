@@ -2,7 +2,8 @@
 # Render-time assertions for ui.machineAuth.write.* (change package
 # docs/changes/machine-write-scope, T-024, #285): off by default and rendering
 # nothing, every gate refusing with its own message, bind passwords only ever
-# Secret references, no credential (W_cred) identity, no HPA.
+# Secret references, no credential (W_cred) identity (cred.enabled only refuses
+# until T-026, and never renders next to auditlog or accesslog extended/all), no HPA.
 #
 # BASE_REF (default origin/main) names the ref whose chart the off-render must be
 # byte-identical to; when the ref is not available (shallow clone) that one
@@ -51,6 +52,7 @@ base=(--set auth.adminPassword=ci-render-only-not-a-secret --set ui.enabled=true
 	--set ui.session.secret=ci-render-only-session-secret-not-a-secret-0123)
 render() { helm template t charts/ldapium "${base[@]}" --show-only templates/ui-deployment.yaml "$@"; }
 full() { helm template t charts/ldapium "${base[@]}" "$@"; }
+renders() { render "$@" >/dev/null 2>&1; }
 
 cat >"$tmp/read.yaml" <<'YAML'
 ui:
@@ -188,7 +190,24 @@ refuses "groups name a client without subtrees" 'write.groups client "svc-monito
 	--set-json 'ui.machineAuth.write.groups=[{"client":"svc-monitor","dns":["cn=g,ou=groups,dc=example,dc=org"]}]'
 
 # --- schema: types, ranges, unknown keys --------------------------------------------
-refuses "credential identity is not a key (W_cred)" 'ui.machineAuth.write' "${wr[@]}" --set ui.machineAuth.write.cred.enabled=true
+refuses "credential identity is not a key (W_cred)" 'ui.machineAuth.write.cred' "${wr[@]}" --set ui.machineAuth.write.cred.bindDN=x
+refuses "cred.enabled must be boolean" 'ui.machineAuth.write.cred.enabled' "${wr[@]}" --set-string ui.machineAuth.write.cred.enabled=yes
+# --- v2c (#379 T-028, D379-14, F-7): never next to auditlog or a crashing accesslog ops list
+refuses "cred next to audit.enabled (auditlog writes password hashes)" 'cannot be combined with audit.enabled=true' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.enabled=true
+refuses "cred next to audit.enabled, even with write off" 'cannot be combined with audit.enabled=true' "${read[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.enabled=true
+refuses "cred next to accessLog ops extended (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind extended'
+refuses "cred next to accessLog ops all (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set audit.accessLog.ops=all
+refuses "cred next to accessLog ops EXTENDED, any case (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes EXTENDED'
+refuses "cred next to accessLog ops All after a tab (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set-string "audit.accessLog.ops=writes$(printf '\t')All"
+refuses "cred alone refuses until T-026" 'is not available yet' "${wr[@]}" --set ui.machineAuth.write.cred.enabled=true \
+	--set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind'
+check "cred off with audit.enabled renders" renders "${wr[@]}" --set audit.enabled=true
 refuses "inline bind password is not a key" 'ui.machineAuth.write.data' "${wr[@]}" --set ui.machineAuth.write.data.bindPassword=x
 refuses "inline lock password is not a key" 'ui.machineAuth.write.lock' "${wr[@]}" --set ui.machineAuth.write.lock.bindPassword=x
 refuses "write.enabled must be boolean" 'ui.machineAuth.write.enabled' "${wr[@]}" --set-string ui.machineAuth.write.enabled=yes

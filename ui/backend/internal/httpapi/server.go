@@ -159,6 +159,18 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 			if s.machineWrite, err = newMachineWriteRuntime(cfg, time.Now); err != nil {
 				return nil, err
 			}
+			if g := s.machineWrite.premise; g != nil {
+				if s.machineTest != nil && s.machineTest.credPremise != nil {
+					g.checker = s.machineTest.credPremise
+				}
+				// REQ-014: a failed premise refuses start-up (main exits non-zero).
+				ctx, cancel := context.WithTimeout(context.Background(), credPremiseTimeout)
+				err = g.startup(ctx)
+				cancel()
+				if err != nil {
+					return nil, err
+				}
+			}
 			if s.machine.write, err = s.newMachineWritePipeline(dialer); err != nil {
 				return nil, err
 			}
