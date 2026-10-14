@@ -1121,7 +1121,8 @@ def cred_phase(node, raw_w):
   check(code('wcred', mod(unp, ('delete', 'employeeType', [MARKER]), ('delete', 'pwdPolicySubentry', [pending_pol]))) == 50,
         c('non-pinned provider: W_cred cannot clean up either (50)'))
   check(not dn_set(node.search('wcred', managed, '(objectClass=*)', ['dn']).stdout), c('non-pinned provider: W_cred reads nothing'))
-  require(node.rc('admin', f'dn: {unp}\nchangetype: delete\n') == 0, 'remove the non-pinned probe entry (the identity probes compare data too)')
+  if r_unp == 0:  # the identity probes compare data too; under a mutation the Add itself may have been refused
+    require(node.rc('admin', f'dn: {unp}\nchangetype: delete\n') == 0, 'remove the non-pinned probe entry')
   out = guide_v2c(node, 'WHAT=', {'WHAT': 'cred'})
   check('removed cred' in out, c('guide 8.7 removes the single deny rule (allowed in any order)'))
   out = guide_v2c(node, 'V2C_AT=', {'FRAG': 'write-cred.ldif'})
@@ -1412,7 +1413,16 @@ def run_config(node):
   wdata_proof(node)
   wlock_proof(node)
   machine_proof(node)
-  cred_phase(node, raw_w)
+  try:
+    cred_phase(node, raw_w)
+  except AssertionError as e:
+    # A broken fragment (the mutation self-test) can make a v2c precondition impossible: that is a FAILED
+    # check, not a crash. Put the v2b olcAccess back (as cn=config admin) so the rest of the proof still runs.
+    check(False, f'[{cfg}] v2c phase stopped early: {mask(e)}')
+    vals_w = re.findall(r'^olcAccess: (.*)$', raw_w, re.M)
+    node.cfgtool('ldapmodify', [], f'dn: {node.main_db}\nchangetype: modify\nreplace: olcAccess\n' + ''.join(f'olcAccess: {v}\n' for v in vals_w))
+    node.cfgtool('ldapmodify', [], f'dn: {node.main_db}\nchangetype: modify\ndelete: olcAddContentAcl\n')
+    node.put('/tmp/.pw-admin', passwords['admin'])
 
   # ---- rollback: refusal, offset-aware order, byte for byte
   print(f'--- {cfg}: rollback ---', flush=True)
