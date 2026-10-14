@@ -331,8 +331,8 @@ W_data (inserted as its {6}): to dn.subtree="dc=example,dc=org" attrs=employeeTy
   exop from a plain Modify, so the guard has to be the policy.
 - **F-7 (defect outside this spec; also the human `setPassword` path).** With `extended` (or `all`) in `LDAP_ACCESSLOG_OPS`, one Password Modify
   exop aborts slapd (`accesslog.c:1623: accesslog_response: Assertion '0' failed.`, exit 133). The shipped default (`reads bind`) and the
-  documented `writes reads bind` do not include `extended`. Not fixed here; needs its own issue (guard the value in `image/entrypoint.sh` or
-  document it).
+  documented `writes reads bind` do not include `extended`. Not fixed here; guarded in the entrypoint since #398 (`D398-1`: start-up refuses
+  `extended`/`all`).
 - **F-8 (refines P17/P21).** Under `writes reads bind` the exop (success or refusal) leaves **no** accesslog record, so the application path
   does not put the hash into accesslog; a plain Modify of `userPassword` does, including an ACL-refused one (the hash of the attempted value).
   `W_cred` used directly can therefore leak hashes of attempted values to every accesslog reader. auditlog carries the exop hash.

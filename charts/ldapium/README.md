@@ -857,6 +857,10 @@ write contained, `userPassword` hashes included. Binds are logged
 regardless of outcome (`olcAccessLogSuccess: FALSE`) — a rejected bind
 attempt against a privileged DN is exactly the evidence this exists to
 capture, and would be invisible if only successes were kept.
+`audit.accessLog.ops` (`LDAP_ACCESSLOG_OPS`) must not contain `extended` or
+`all`: OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password
+Modify, so the image entrypoint refuses to start (#398, F-7, `D398-1`). Use
+`writes reads bind`; there is no override until upstream fixes it.
 `.github/workflows/security-e2e.yml` asserts all of that: a search shows up
 with its binder attributed, a failed bind shows up with `reqResult: 49`
 (not silently dropped), and a write does **not** show up a second time.

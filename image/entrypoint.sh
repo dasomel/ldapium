@@ -512,6 +512,26 @@ LDAP_ACCESSLOG_ENABLED="${LDAP_ACCESSLOG_ENABLED:-false}"
 LDAP_ACCESSLOG_PURGE_DAYS="${LDAP_ACCESSLOG_PURGE_DAYS:-30}"
 LDAP_ACCESSLOG_OPS="${LDAP_ACCESSLOG_OPS:-reads bind}"
 ACCESSLOG_DIR="${DATA_DIR}/accesslog"
+# D398-1 (#398, F-7): refuse, never rewrite. With `extended` (or `all`, which
+# includes it) in olcAccessLogOps, the first Password Modify exop aborts slapd
+# (OpenLDAP 2.6.15 accesslog.c:1623 accesslog_response: Assertion '0' failed,
+# exit 133), on the human setPassword path as much as the machine one. Cost: an
+# operator who wanted extended-op auditing cannot have it; silently dropping the
+# token would hide that, so start-up fails instead. Escape hatch: none — the
+# only way back is an upstream OpenLDAP fix, then relax this check. Use
+# `writes reads bind` instead. Only checked when the overlay is switched on,
+# since the value is inert otherwise. Same token regex as the chart's check
+# in ui-deployment.yaml.
+case "$LDAP_ACCESSLOG_ENABLED" in
+  true|1)
+    for _al_op in $(printf '%s' "$LDAP_ACCESSLOG_OPS" | tr ',[:upper:]' ' [:lower:]'); do
+      case "$_al_op" in
+        extended|all)
+          die "LDAP_ACCESSLOG_OPS contains '${_al_op}' (got: ${LDAP_ACCESSLOG_OPS}): OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password Modify extended operation (accesslog.c:1623 assertion, F-7, #398). Use 'writes reads bind' instead; there is no override until upstream fixes it" ;;
+      esac
+    done
+    unset _al_op ;;
+esac
 
 # Password policy (see image/ldifs/03-base-structure.ldif and
 # image/README.md, "Password policy"). On by default: without a pwdPolicy

@@ -18,6 +18,14 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   `organization` and `organizationalUnit` is gone (accepted in `D215-7`). The list no
   longer shows a total count.
 
+### Image
+
+- The entrypoint now refuses to start when the accesslog overlay is enabled and
+  `LDAP_ACCESSLOG_OPS` contains `extended` or `all` (#398, F-7, `D398-1`). OpenLDAP
+  2.6.15's accesslog overlay aborts slapd (`accesslog.c:1623`, exit 133) on the first
+  Password Modify, including the human `setPassword` path. Use `writes reads bind`;
+  there is no override until upstream fixes it.
+
 ### API
 
 - **Machine write v2c opened (#379, T-026): machine `setPassword`.** With
