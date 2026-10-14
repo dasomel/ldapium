@@ -40,6 +40,11 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   entries `W_data` created, groups excepted (Q16). Guide `docs/machine-write-account.md` section 8; the read-only
   checker gains `--cred-dn`/`--pending-policy-dn`/`--privileged-group`/`--wcred-unpinned`; non-pinned
   providers get `write-cred-deny.ldif`. Image defaults unchanged.
+- Machine write v2c (#379, T-023) password limits and audit, still **not opened**:
+  new `MACHINE_WRITE_CRED_RATE_LIMIT_RPS` (global password budget, 1–10, default 1,
+  read only with `MACHINE_WRITE_CRED_ENABLED=true`) and a per-target serialization
+  (`entryUUID`, shared across clients); either refusal is `429 machine_rate_limited`
+  with `Retry-After`. Audit lines gain `compartment=cred` (no password field).
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and

@@ -208,7 +208,8 @@ var machineWriteScopes = func() map[string]bool {
 }()
 
 var (
-	machineWriteCompartments = map[string]bool{"data": true, "lock": true}
+	// "cred" is setPassword's W_cred compartment (v2c REQ-016, T-023).
+	machineWriteCompartments = map[string]bool{"data": true, "lock": true, "cred": true}
 	machineWriteTargetKinds  = map[string]bool{"user": true, "group": true}
 	// setPassword's pending cleanup (T-022): the password was applied either
 	// way; "failed" means the marker and pending policy are still on the entry.

@@ -50,6 +50,9 @@ type MachineWriteConfig struct {
 	CredMinLength       int
 	CredPolicyDNs       []string
 	CredPendingPolicyDN string
+	// CredRateLimitRPS is MACHINE_WRITE_CRED_RATE_LIMIT_RPS, the global password
+	// budget (REQ-013, default 1 rps, T023-D2).
+	CredRateLimitRPS int
 	// Subtrees/Groups are per-client write ceilings and writable groups,
 	// PrivilegedGroups the deny set, Limits the write budget (T-012/T-016/T-019).
 	Subtrees         []MachineWriteClientDNs

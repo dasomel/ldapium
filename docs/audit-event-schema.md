@@ -439,7 +439,7 @@ and no write field is emitted). `operation` carries the operation id.
 | Field | Meaning |
 | --- | --- |
 | `write_scope` | the write scope the operation required (closed set: the `directory.*` write scopes), else `unknown` |
-| `compartment` | `data` or `lock` (the `W_*` identity class; `lock` is `lockUser`, which binds `W_lock`), else `unknown` |
+| `compartment` | `data`, `lock` or `cred` (the `W_*` identity class; `lock` is `lockUser`, which binds `W_lock`; `cred` is `setPassword`, which binds `W_cred` — v2c, not opened yet: T-026), else `unknown` |
 | `target_kind` | `user` or `group`, else `unknown` |
 | `target_dn_fingerprint` | first 8 bytes of SHA-256 over the target DN, hex (the same fingerprint the human audit lines use). Always present when a target is named. |
 | `target_dn` | the target DN in plaintext, **only** when the operator sets `MACHINE_WRITE_AUDIT_TARGET_DN=true` (default false, Resolved Q4; read only when `MACHINE_WRITE_ENABLED=true`). With it on the log is as sensitive as the directory's DN space. |
@@ -450,6 +450,14 @@ and no write field is emitted). `operation` carries the operation id.
 | `cleanup` | `setPassword` only (v2c, not opened yet: T-026): `done` or `failed` for the `W_cred` removal of the pending marker and pending policy after the password was set; absent on every other operation. `failed` still answers the success (the password was applied); the entry keeps its pending state until the stuck sweep (T-028) or an operator clears it |
 
 `replayed` from D6 is carried by `outcome=replayed` instead of a separate field.
+A `compartment=cred` line carries no password field of any kind: not the value,
+its length, a hash or a fingerprint of it (REQ-016, D379-12); it is the same set
+of fields as every other write line, pinned by
+`TestMachineWriteAudit_CredLineGolden`. A `setPassword` refused by its own limits
+(v2c REQ-013, T-023) is `status=429`, `result=rate_limited`, `reason=rate`,
+`outcome=rejected`, with no `ldap_result`: either the global password budget
+(`MACHINE_WRITE_CRED_RATE_LIMIT_RPS`) was empty or another `setPassword` for the
+same target (by `entryUUID`, any client) was in flight.
 Never in the line: the token, passwords, request body values, the
 `Idempotency-Key` or `If-Match` value. The set is pinned by
 `TestMachineWriteAudit_FieldNamesGolden`, which fails when a field is added to the

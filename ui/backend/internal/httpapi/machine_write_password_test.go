@@ -114,6 +114,14 @@ func credHarness(t *testing.T, mod func(*config.Config)) *wh {
 	for _, id := range []string{"machine-a", "machine-w2"} {
 		w.s.machine.ceilings[id][scopePasswordWrite] = true
 	}
+	// T-023: the production budget is 1 rps, burst 1; the T-022 tables send
+	// many requests at one instant, so they get a deep bucket on the fixed
+	// clock. The T-023 tests rebuild it with the production shape.
+	cred, err := newCredLimiter(1, 1000, func() time.Time { return hNow })
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.s.machineWrite.cred = cred
 	return w
 }
 

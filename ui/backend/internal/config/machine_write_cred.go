@@ -20,6 +20,12 @@ const (
 	// Cost: an operator cannot accept a pending policy shorter than 12.
 	// Escape hatch: none at this unit; a lower floor needs a design revision.
 	credMinLengthMax = 1024
+	// T023-D2: MACHINE_WRITE_CRED_RATE_LIMIT_RPS, the global password budget
+	// (REQ-013 default 1), is an integer 1-10 with a fixed burst of 1. Cost: no
+	// burst knob, so a batch of initial passwords is paced at the rate. Escape
+	// hatch: raise the rate; a higher cap widens the R-4 window (rate x timeout).
+	credRateDefault = 1
+	credRateMax     = 10
 )
 
 // loadMachineWriteCredScope reads the remaining MACHINE_WRITE_CRED_* settings,
@@ -28,6 +34,7 @@ const (
 //     MACHINE_WRITE_CRED_SUBTREES ("client=dn|dn;..."; inclusion in the
 //     client's MACHINE_WRITE_SUBTREES is checked by checkCredSubtrees, Q9);
 //   - MACHINE_WRITE_CRED_MIN_LENGTH (default 12, T020-D1);
+//   - MACHINE_WRITE_CRED_RATE_LIMIT_RPS (default 1, 1-10, T023-D2);
 //   - MACHINE_WRITE_CRED_POLICY_DNS: optional ';'-separated allowlist, D26
 //     form, strictly inside the base, at most 16, no case-folded duplicates;
 //   - MACHINE_WRITE_CRED_PENDING_POLICY_DN (D379-18): required, D26 form,
@@ -51,6 +58,7 @@ func loadMachineWriteCredScope(getenv func(string) string, cfg Config, m Machine
 	}
 	n := machineInts{getenv: getenv}
 	minLength := n.get("MACHINE_WRITE_CRED_MIN_LENGTH", credMinLengthDefault, credMinLengthDefault, credMinLengthMax)
+	rate := n.get("MACHINE_WRITE_CRED_RATE_LIMIT_RPS", credRateDefault, 1, credRateMax)
 	if n.err != nil {
 		return n.err
 	}
@@ -111,6 +119,7 @@ func loadMachineWriteCredScope(getenv func(string) string, cfg Config, m Machine
 		}
 	}
 	w.CredSubtrees, w.CredMinLength, w.CredPolicyDNs, w.CredPendingPolicyDN = subtrees, minLength, policies, raw
+	w.CredRateLimitRPS = rate
 	return nil
 }
 

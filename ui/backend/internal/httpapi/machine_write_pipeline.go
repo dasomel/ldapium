@@ -64,8 +64,9 @@ type writeIdentityChecker interface {
 	Check(ctx context.Context, target, requiredClass string) error
 	// CheckNotPrivileged refuses a target that is a member of a privileged group.
 	CheckNotPrivileged(ctx context.Context, target string) error
-	// CheckCredentialPending is the setPassword pre-read (D379-18 Revision 8).
-	CheckCredentialPending(ctx context.Context, target, tag string) error
+	// CheckCredentialPending is the setPassword pre-read (D379-18 Revision 8);
+	// it returns the target's entryUUID, the per-target serialization key.
+	CheckCredentialPending(ctx context.Context, target, tag string) (string, error)
 }
 
 type machineWritePipeline struct {
@@ -536,6 +537,10 @@ func (r *wreq) execute(c echo.Context) error {
 	writeDeadline := r.deadline
 	if r.op.ID == "setPassword" {
 		writeDeadline = r.deadline.Add(-credCleanupReserve(r.w.exec.timeout))
+		// REQ-013: the global password budget, before any M read (D379-15 cost).
+		if retry, err := r.w.s.machineWrite.cred.spend(); err != nil {
+			return r.credRateLimited(retry, "machine password budget exhausted")
+		}
 	}
 	ctx, cancel := context.WithDeadline(c.Request().Context(), writeDeadline)
 	defer cancel()
@@ -557,13 +562,21 @@ func (r *wreq) execute(c echo.Context) error {
 	if r.op.ID == "setPassword" {
 		// REQ-018, D379-18 Revision 8: W_data-made, exactly one marker with THIS
 		// client's tag, the pending policy, no pwdChangedTime (409).
-		if err := r.w.ident.CheckCredentialPending(ctx, r.dns[0].raw, credentialPendingTag(r.subject)); err != nil {
+		uuid, err := r.w.ident.CheckCredentialPending(ctx, r.dns[0].raw, credentialPendingTag(r.subject))
+		if err != nil {
 			return r.identityRefusal(err)
 		}
-		// Seams, not implemented here: T-028 runs the D379-15 premise checks
-		// right here (failure: 503, no write); T-023 takes the per-target
-		// serialization (key: entryUUID, shared across clients) and the global
-		// password budget here, released by defer like the write limiter.
+		// REQ-013: one setPassword per target (entryUUID, every client), held
+		// through the Password Modify AND the cleanup; the defer frees it on
+		// return, panic, cancellation and timeout. T023-D3: a busy target is a
+		// 429 at once, never a queue.
+		release, err := r.w.s.machineWrite.cred.lock(uuid)
+		if err != nil {
+			return r.credRateLimited(1, "another password change for this target is in progress")
+		}
+		defer release()
+		// Seam, not implemented here: T-028 runs the D379-15 premise checks
+		// right here (failure: 503, no write).
 	}
 	// runAs derives its own timeout from the request context: handing it ours
 	// keeps the M pre-read and the write inside the deadline above, not two
@@ -599,6 +612,14 @@ func (r *wreq) setPassword(c echo.Context, id config.MachineWriteIdentity) error
 	}
 	r.cleanupPending(c, id)
 	return c.JSON(http.StatusOK, setPasswordResponse{})
+}
+
+// credRateLimited is a T-023 refusal: 429 machine_rate_limited with
+// Retry-After, reason rate, before any write (the key is released: definitive).
+func (r *wreq) credRateLimited(retry int, msg string) error {
+	r.st.forceReason(reasonRate)
+	r.setOutcome(outcomeRejected)
+	return rateLimited(r.c, retry, msg)
 }
 
 // credCleanupReserve is the slice of the request budget kept for the cleanup

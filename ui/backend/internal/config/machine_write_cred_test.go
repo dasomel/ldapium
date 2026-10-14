@@ -55,7 +55,7 @@ func TestMachineWriteCredValid(t *testing.T) {
 // REQ-001: off by default, and while off no other MACHINE_WRITE_CRED_* is read.
 func TestMachineWriteCredOffNeverReadsSettings(t *testing.T) {
 	for _, flag := range []string{"", "false"} {
-		env := credEnv(map[string]string{"MACHINE_WRITE_CRED_ENABLED": flag, "MACHINE_WRITE_CRED_MIN_LENGTH": "garbage"})
+		env := credEnv(map[string]string{"MACHINE_WRITE_CRED_ENABLED": flag, "MACHINE_WRITE_CRED_MIN_LENGTH": "garbage", "MACHINE_WRITE_CRED_RATE_LIMIT_RPS": "garbage"})
 		cfg, err := Load(func(k string) string {
 			if strings.HasPrefix(k, "MACHINE_WRITE_CRED_") && k != "MACHINE_WRITE_CRED_ENABLED" {
 				t.Fatalf("flag %q: read disabled setting %s", flag, k)
@@ -66,7 +66,7 @@ func TestMachineWriteCredOffNeverReadsSettings(t *testing.T) {
 			t.Fatalf("flag %q: %v", flag, err)
 		}
 		w := cfg.Machine.Write
-		if w.CredEnabled || w.Cred != (MachineWriteIdentity{}) || w.CredSubtrees != nil || w.CredMinLength != 0 || w.CredPolicyDNs != nil || w.CredPendingPolicyDN != "" {
+		if w.CredEnabled || w.Cred != (MachineWriteIdentity{}) || w.CredSubtrees != nil || w.CredMinLength != 0 || w.CredPolicyDNs != nil || w.CredPendingPolicyDN != "" || w.CredRateLimitRPS != 0 {
 			t.Fatalf("flag %q: cred fields set: %+v", flag, w)
 		}
 		if strings.Contains(strings.ToLower(strings.Join(cfg.MachineWriteProtectedDNs(), "|")), "cn=cred,") {
@@ -134,6 +134,9 @@ func TestMachineWriteCredFailClosed(t *testing.T) {
 		cases["min length "+strconv.Quote(v)] = map[string]string{"MACHINE_WRITE_CRED_MIN_LENGTH": v}
 	}
 	delete(cases, `min length ""`) // empty means the default
+	for _, v := range []string{"0", "11", "-1", "1.5", "abc", "0x2"} {
+		cases["rate "+strconv.Quote(v)] = map[string]string{"MACHINE_WRITE_CRED_RATE_LIMIT_RPS": v}
+	}
 	for name, over := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(credEnv(over))
@@ -197,6 +200,16 @@ func TestMachineWriteCredBoundaries(t *testing.T) {
 		cfg, err := Load(credEnv(map[string]string{"MACHINE_WRITE_CRED_MIN_LENGTH": tc.raw}))
 		if err != nil || cfg.Machine.Write.CredMinLength != tc.want {
 			t.Errorf("min length %q: %d, %v (want %d)", tc.raw, cfg.Machine.Write.CredMinLength, err, tc.want)
+		}
+	}
+	// T023-D2: the global password budget, default 1, 1-10.
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{{"", 1}, {"1", 1}, {" 2 ", 2}, {"10", 10}} {
+		cfg, err := Load(credEnv(map[string]string{"MACHINE_WRITE_CRED_RATE_LIMIT_RPS": tc.raw}))
+		if err != nil || cfg.Machine.Write.CredRateLimitRPS != tc.want {
+			t.Errorf("rate %q: %d, %v (want %d)", tc.raw, cfg.Machine.Write.CredRateLimitRPS, err, tc.want)
 		}
 	}
 	// Q9: equal to a ceiling, strictly inside one, the second ceiling, and a

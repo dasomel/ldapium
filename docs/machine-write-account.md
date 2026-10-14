@@ -547,6 +547,7 @@ T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`�
 | `MACHINE_WRITE_CRED_SUBTREES` | `client=dn|dn;…`, 비어 있으면 거부(검사 8). 각 DN은 **같은 client의** `MACHINE_WRITE_SUBTREES` 상한과 같거나 그 안이어야 하고(Q9), 특권 그룹 자신이나 그 아래는 거부. |
 | `MACHINE_WRITE_PRIVILEGED_GROUPS` | v2c를 켜면 비어 있으면 거부(검사 8). |
 | `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. 머신 `setPassword`(T-022, 아직 미개방)는 본문 비밀번호를 이 값과 **바이트**(UTF-8) 수로 비교해 미만이면 400이다(T022-D3) — 문자 수가 아니므로 비 ASCII 비밀번호는 문자 수가 이 값보다 적어도 통과할 수 있고, 그 경우의 문자 수 하한은 slapd 정책(`pwdMinLength`)이 맡는다. |
+| `MACHINE_WRITE_CRED_RATE_LIMIT_RPS` | 비밀번호 전역 예산(REQ-013, T-023), 기본 1. 1–10 정수, burst 1 고정(T023-D2). 모든 client가 함께 쓰는 replica당 토큰 버킷이며 client 쓰기 예산(`MACHINE_WRITE_RATE_LIMIT_*`)과 별개다. 비면 `setPassword`는 429 `machine_rate_limited`와 다음 토큰까지의 `Retry-After`(초, ≥1). 같은 대상(`entryUUID`, client 무관)에 진행 중인 `setPassword`가 있으면 대기열 없이 즉시 429와 `Retry-After: 1`(T023-D3). 둘 다 쓰기 전 거부라 멱등 키는 풀린다. |
 | `MACHINE_WRITE_CRED_PENDING_POLICY_DN` | 필수(D379-18). D26 형식, `LDAP_BASE_DN`의 엄격한 하위, 이미지 기본 정책(`cn=default,ou=policies,<base>`)과 다르고 보호 신원·특권 그룹·seed와 달라야 한다. |
 | `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
 
