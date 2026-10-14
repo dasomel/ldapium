@@ -45,6 +45,15 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   read only with `MACHINE_WRITE_CRED_ENABLED=true`) and a per-target serialization
   (`entryUUID`, shared across clients); either refusal is `429 machine_rate_limited`
   with `Retry-After`. Audit lines gain `compartment=cred` (no password field).
+- Machine write v2c (#379, T-025) per-compartment emergency-block drill for the password
+  compartment, tests and docs only, `setPassword` still closed (T-026 opens it). New
+  `scripts/test/test-machine-write-cred-drill.py` and a `live`-tagged Go test measure the
+  `MACHINE_WRITE_CRED_ENABLED=false` redeploy, the `W_cred` rotation (old credential refused,
+  `W_data`/`W_lock`/read unaffected), the `MACHINE_REQUEST_TIMEOUT` bound of an in-flight request
+  (8.0 s at 10 s, 2.0 s at 4 s) and the Revision 8 manual cleanup of a stuck entry, run live.
+  `docs/machine-auth-operations.md` gains "Password compartment emergency block" with the
+  measured values and the manual procedure. A flag-only redeploy answers 503, not the 403 of
+  AC-011 (a); recorded in EVIDENCE 2k for T-026.
 - Machine write v2c (#379, T-028) run-time premise checks and sweeps, still **not
   opened** (`setPassword` stays unreachable until T-026). With
   `MACHINE_WRITE_CRED_ENABLED=true` start-up now also requires

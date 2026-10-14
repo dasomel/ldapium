@@ -303,3 +303,45 @@ With the image's default policy (`pwdLockout TRUE`, `pwdMaxFailure 5`, `pwdLocko
 
 Not measured: a Kubernetes rolling update, multi-node LDAP, a request stalled in the `M` identity pre-read before the `W_data` bind, `W_lock` operations (none are opened in the first ship), and the natural expiry of the default
 900 s lock (the 8 s policy was used to measure self-recovery).
+
+## Password compartment emergency block (machine-write-scope-v2 T-025, REQ-017, AC-011)
+
+`setPassword` (v2c) binds its own identity, `W_cred`, so it has its own levers; `W_data`, `W_lock` and the read identity `M` are separate accounts and stay as they are. **`setPassword` is still closed in production (T-026 opens it)**: this section is the drill's result, measured with a test-only server that opens it the way the T-024 proof does, so the numbers describe the code that T-026 will switch on, not a running deployment. Measured by `scripts/test/test-machine-write-cred-drill.py` (58 checks, real slapd with the documented v2c layout, in-process replicas, a TCP proxy that holds one LDAP message; **no Kubernetes rollout**). Numbers in this section are from that docker run.
+
+| Lever | Effect on `setPassword` | Other compartments | Measured |
+|---|---|---|---|
+| **1. Rotate the `W_cred` LDAP password** (administrator `replace: userPassword`; the Secret still holds the old value) | the **next** request on **every** replica is 503 `unavailable`, audit `reason=bind_failed`, no directory change; slapd refuses the old credential | `W_data` createUser 201, `W_lock` lockUser 204, `M` read 200 on the same replicas | first request after the Modify: 503 on replica 1 at +0.1 s and replica 2 at +0.2 s |
+| **2. Redeploy with `MACHINE_WRITE_CRED_ENABLED=false`** | **503 `unavailable`** (`reason=bind_failed`, "write identity not configured"), **zero** `W_cred` binds. With `directory.users.password.write` also gone from the client's ceiling: 403 `scope_denied` | same as above; `createUser` with `credentialPending` is 400 | the redeployed server refused with 0 `W_cred` binds attempted; the replica that was not redeployed still set the password |
+
+Procedure for lever 1: `printf 'dn: %s\nchangetype: modify\nreplace: userPassword\nuserPassword: %s\n' "$WCRED_DN" "$NEW" | docker exec -i <ldap> ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin` (value from a file or stdin, never argv). Do not put the new value in the Secret yet. Restore: roll out the Secret with the new value; a replica built with it starts and sets passwords (200); replicas still on the old Secret stay 503. While `W_cred` is rotated the periodic premise cycle on a stale replica also fails (`wcred_bind_failed`, the canary probe binds as `W_cred`) and the password operation stays closed on its own.
+
+**Flag-only redeploy is 503, not 403.** AC-011 (a) says 403; the code answers 403 only when the scope is also absent from the client's ceiling, and 503 (identity not configured, no bind) when only the flag is flipped and the scope stays in the ceiling. Either way nothing is written and `W_cred` is never bound. Which one T-026's configuration should produce is open (see EVIDENCE.md 2k).
+
+### The `W_cred` lockout trap
+
+Every refused request after a rotation is one failed `W_cred` bind. With the image's default policy (`pwdLockout TRUE`, `pwdMaxFailure 5`) `W_cred` was locked (`pwdAccountLockedTime`) by the 6th refused request on one replica (7 failed binds in total with the other replica's). While locked, even the correct Secret does not start a replica (`wcred_bind_failed` on the canary probe). Unlock: administrator `delete: pwdAccountLockedTime` on `W_cred`, then roll out. The dedicated `W_*` policy without lockout of machine-write-account.md 9.1 was measured for `W_data` (v2a drill), not for `W_cred`.
+
+### How long an in-flight `setPassword` can run
+
+The request has one budget, `MACHINE_REQUEST_TIMEOUT`; the Password Modify gets the budget minus a 2 s reserve (at most half of it) kept for the pending cleanup. Measured with the Password Modify held at the `W_cred` connection:
+
+| `MACHINE_REQUEST_TIMEOUT` | held, no other event | held, `W_cred` rotated 1.1 s in |
+|---|---|---|
+| 10 s (default) | ended after **8.0 s**; the UI closed the LDAP connection itself at 8.0 s; the held message never reached slapd | not measured |
+| 4 s | not measured | ended after **2.0 s**, 0.9 s after the rotation |
+
+Both ended 409 `idempotency_outcome_unknown` (a retry with the same key and body is 409 as well: read the resource before retrying) and the target stayed pending without a password. Bound: **a stalled in-flight request ends within `MACHINE_REQUEST_TIMEOUT`**; measured at 10 s and 4 s only.
+
+**An already-bound write can complete after the rotation, and then its cleanup cannot run.** A Password Modify held for 1.3 s while `W_cred` was rotated completed 200 when released (slapd checks the bound DN, not the password), but the cleanup binds `W_cred` afresh with the old Secret, is refused twice, and the audit line says `cleanup=failed`. The account now has a password plus the marker and the pending policy: a stuck entry, open to the F-5 match oracle until it is cleaned.
+
+### Manual cleanup while `W_cred` is rotated or blocked (Revision 8)
+
+The sweeps clean as `W_cred`, so they cannot during a rotation: the stuck sweep found the entry and cleaned 0 (`wcred_bind_failed`), and a new replica refuses to start while any stuck entry exists (`sweep_stuck_at_startup`; with the old Secret it already refuses on the canary probe). Clean by hand (the exact steps were run live by the drill):
+
+1. As `M` (read-only) list the candidates: `ldapsearch -x -H ldap://… -D "$M_DN" -y <file> -LLL -b "$LDAP_BASE_DN" "(pwdPolicySubentry=$PENDING_POLICY_DN)" employeeType pwdChangedTime creatorsName`. That filter also returns the legitimate pending accounts (no password yet) and the canaries (6 in the drill). A **stuck** entry is one that has `pwdChangedTime`: narrow with `(&(pwdPolicySubentry=$PENDING_POLICY_DN)(pwdChangedTime=*))` and leave the canaries (`MACHINE_WRITE_CRED_CANARIES`) alone. In the drill that left exactly the one stuck account.
+2. As the administrator delete the **exact** marker value read in step 1 and the policy value, nothing else (`delete: employeeType` without a value would remove every `employeeType`):
+   `dn: <entry>` / `changetype: modify` / `delete: employeeType` / `employeeType: ldapium-credential-pending:<tag>` / `-` / `delete: pwdPolicySubentry` / `pwdPolicySubentry: $PENDING_POLICY_DN`, piped to `docker exec -i <ldap> ldapmodify …`.
+3. Check: the entry has neither attribute, the set password still binds, a read-only sweep finds `stuck=0`.
+4. Roll out the rotated Secret; the new replica starts and sets passwords.
+
+Not measured: a Kubernetes rolling update, multi-provider, `MACHINE_REQUEST_TIMEOUT` values other than 10 s and 4 s, the stall without a rotation at 4 s and with one at 10 s, and the natural expiry of the default 900 s `W_cred` lock.

@@ -681,7 +681,7 @@ fi
 경보를 받으면(관리자, 고정 provider):
 
 1. `foreign`·`orphan`: 그 항목이 왜 대기 정책을 가졌는지 먼저 본다(관리자 수동 부착, #399 수정 전 이미지의 자기 부착, Add 전용 규칙을 우회한 쓰기). 그다음 8.7의 `# v2c-cleanup` 블록처럼 관리자로 대기 정책 값(과 있으면 표지 값)만 지운다. 카나리는 지우지 않는다.
-2. `sweep_failed`(`sweep_stuck_cleanup_failed` 등): `W_cred` bind(회전·잠금, 9.1), 8.5 묶음의 `{3}`·`{4}` 정리 규칙, LDAP 상태를 확인한다. 정리 규칙이 고장이면 1과 같은 관리자 정리 후 묶음을 다시 넣는다. stuck 항목이 남아 있는 동안 그 계정에는 F-5 오라클이 열려 있다(Q14).
+2. `sweep_failed`(`sweep_stuck_cleanup_failed` 등): `W_cred` bind(회전·잠금, 9.1), 8.5 묶음의 `{3}`·`{4}` 정리 규칙, LDAP 상태를 확인한다. 정리 규칙이 고장이면 1과 같은 관리자 정리 후 묶음을 다시 넣는다. stuck 항목이 남아 있는 동안 그 계정에는 F-5 오라클이 열려 있다(Q14). `W_cred`가 회전·잠금 중이면 스윕이 정리할 수 없으므로 같은 관리자 정리를 손으로 한다: [machine-auth-operations.md "Manual cleanup while `W_cred` is rotated or blocked"](machine-auth-operations.md#manual-cleanup-while-w_cred-is-rotated-or-blocked-revision-8)(T-025, 라이브로 실행·검증).
 3. `machine_cred_premise … result=<코드>`로 비밀번호 오퍼레이션이 닫혔으면 위 8.8 표의 코드로 원인을 찾는다. 고친 뒤 다음 주기(60초 안)에 `result=ok`가 나오면 다시 열린다. 기동이 막힌 경우는 고친 뒤 다시 시작한다.
 
 ### 8.0 앱 설정 값 (T-020)

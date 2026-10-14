@@ -1,0 +1,822 @@
+//go:build live
+
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/go-ldap/ldap/v3"
+
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
+)
+
+// machine-write-scope-v2 T-025 (AC-011, REQ-017; EVIDENCE 2k): the per-compartment
+// emergency block of the password compartment, measured against the real slapd
+// of scripts/test/test-machine-write-cred-drill.py (inside its container,
+// ldap://127.0.0.1, reached through a TCP proxy so one message can be held).
+// setPassword is still closed in production (T-026); this TEST-ONLY server opens
+// it the way the T-024 proof does (machineDeps.writeOps = the production table
+// plus the setPassword catalog row, the password.write ceiling injected after
+// construction). Each "server" is one in-process replica (own IdP, own issuer);
+// a redeploy is a new server built from a changed config. Nothing here is a
+// Kubernetes rollout. It prints "T025 PASS|FAIL <name>" and "T025 OBS <measured>"
+// lines; the driver asserts and quotes them.
+//
+// LDAPIUM_T025_MUTATE (read here) turns off one drill action so the assertion
+// that depends on it must fail: rotate-noop, runbook-noop.
+
+// drillProxy forwards to slapd. In hold mode, a connection whose FIRST client
+// message contains holdDN (the bind of the identity under test) is forwarded up
+// to and including that bind; its NEXT client message (the write) is held until
+// release(). If the client sends anything or closes while it is held, the held
+// message is dropped (a partition: the operation never reached slapd) and the
+// time is recorded.
+type drillProxy struct {
+	target   string
+	ln       net.Listener
+	mu       sync.Mutex
+	holdDN   []byte
+	releaseC chan struct{}
+	heldAt   atomic.Int64 // unix nano
+	closedAt atomic.Int64 // unix nano
+	heldC    chan struct{}
+}
+
+func newDrillProxy(t *testing.T, target string) *drillProxy {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &drillProxy{target: target, ln: ln}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go p.serve(c)
+		}
+	}()
+	return p
+}
+
+func (p *drillProxy) url() string { return "ldap://" + p.ln.Addr().String() }
+
+func (p *drillProxy) hold(dn string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.holdDN = []byte(dn)
+	p.releaseC = make(chan struct{})
+	p.heldC = make(chan struct{}, 1)
+	p.heldAt.Store(0)
+	p.closedAt.Store(0)
+}
+
+// release forwards the held message (if any) and stops holding.
+func (p *drillProxy) release() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.holdDN = nil
+	if p.releaseC != nil {
+		close(p.releaseC)
+		p.releaseC = nil
+	}
+}
+
+func (p *drillProxy) waitHeld(d time.Duration) bool {
+	p.mu.Lock()
+	c := p.heldC
+	p.mu.Unlock()
+	if c == nil {
+		return false
+	}
+	select {
+	case <-c:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+func (p *drillProxy) serve(client net.Conn) {
+	server, err := net.DialTimeout("tcp", p.target, 10*time.Second)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	var once sync.Once
+	shut := func() { once.Do(func() { _ = client.Close(); _ = server.Close() }) }
+	type chunk struct {
+		data []byte
+		err  error
+	}
+	chunks := make(chan chunk, 16)
+	go func() {
+		for {
+			buf := make([]byte, 65536)
+			n, err := client.Read(buf)
+			chunks <- chunk{buf[:n], err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer shut()
+		buf := make([]byte, 65536)
+		for {
+			n, err := server.Read(buf)
+			if n > 0 {
+				if _, werr := client.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer shut()
+		n, target := 0, false
+		for c := range chunks {
+			if len(c.data) > 0 {
+				p.mu.Lock()
+				dn, rel, heldC := p.holdDN, p.releaseC, p.heldC
+				p.mu.Unlock()
+				switch {
+				case n == 0:
+					target = len(dn) > 0 && bytes.Contains(c.data, dn)
+				case target && rel != nil:
+					p.heldAt.Store(time.Now().UnixNano())
+					if heldC != nil {
+						select {
+						case heldC <- struct{}{}:
+						default:
+						}
+					}
+					select {
+					case <-rel:
+					case c2 := <-chunks:
+						// the client gave up (closed or unbound) before the release
+						_ = c2
+						p.closedAt.Store(time.Now().UnixNano())
+						return
+					}
+				}
+				n++
+				if _, err := server.Write(c.data); err != nil {
+					return
+				}
+			}
+			if c.err != nil {
+				return
+			}
+		}
+	}()
+}
+
+// drillDialer counts the binds per DN (ok / failed) of one server.
+type drillDialer struct {
+	ldapclient.Dialer
+	mu     sync.Mutex
+	ok     map[string]int
+	failed map[string]int
+}
+
+func (d *drillDialer) Bind(ctx context.Context, dn, password string) (ldapclient.Client, error) {
+	c, err := d.Dialer.Bind(ctx, dn, password)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		d.failed[strings.ToLower(dn)]++
+	} else {
+		d.ok[strings.ToLower(dn)]++
+	}
+	return c, err
+}
+
+func (d *drillDialer) counts(dn string) (ok, failed int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.ok[strings.ToLower(dn)], d.failed[strings.ToLower(dn)]
+}
+
+type drillCapture struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (c *drillCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *drillCapture) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Len()
+}
+
+func (c *drillCapture) since(off int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()[off:]
+}
+
+type drillRig struct {
+	t       *testing.T
+	env     func(string) string
+	pw      func(string) string
+	proxy   *drillProxy
+	cap     *drillCapture
+	base    string
+	mutate  string
+	keySeq  atomic.Int64
+	secret  string // the W_cred password the NEXT built server carries (the Secret)
+	current string // the W_cred password slapd holds now
+}
+
+type drillOpt struct {
+	timeout     time.Duration
+	credEnabled bool
+	ceiling     bool // password.write in machine-a's ceiling (injected after construction)
+	startErr    bool
+	realPremise bool // the production T-028 checker; false = no gate (flag-off servers build none)
+}
+
+type drillSrv struct {
+	rig    *drillRig
+	h      *harness
+	dialer *drillDialer
+	cfg    config.Config
+	name   string
+}
+
+func (r *drillRig) check(ok bool, name string) {
+	verdict := "PASS"
+	if !ok {
+		verdict = "FAIL"
+		r.t.Fail()
+	}
+	fmt.Printf("T025 %s %s\n", verdict, name)
+}
+
+func (r *drillRig) obs(format string, a ...any) { fmt.Printf("T025 OBS "+format+"\n", a...) }
+
+func (r *drillRig) key() string { return fmt.Sprintf("t025-idempotency-%010d", r.keySeq.Add(1)) }
+
+func drillList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ";") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (r *drillRig) build(name string, opt drillOpt) *drillSrv {
+	env, pw := r.env, r.pw
+	var canaries []config.MachineWriteCredCanary
+	for _, set := range drillList(env("T_CANARIES")) {
+		dns := strings.Split(set, "|")
+		canaries = append(canaries, config.MachineWriteCredCanary{WithPassword: dns[0], Unmarked: dns[1], Pending: dns[2]})
+	}
+	cfgFn := func(c *config.Config) {
+		c.LDAPURL = r.proxy.url()
+		c.BaseDN = r.base
+		c.IdempotencyEnabled = true
+		c.UserCreateBase = env("T_CREATE_BASE")
+		c.Machine.BindDN, c.Machine.BindPassword = env("T_M_DN"), pw("machine")
+		c.Machine.RootDNs = []string{"cn=admin," + r.base}
+		c.Machine.WriteEnabled = true
+		c.Machine.RequestTimeout = opt.timeout
+		subtrees := []config.MachineWriteClientDNs{{ID: "machine-a", DNs: drillList(env("T_CEIL"))}}
+		c.Machine.Write = config.MachineWriteConfig{
+			Data:     config.MachineWriteIdentity{BindDN: env("T_WDATA_DN"), BindPassword: pw("wdata")},
+			Subtrees: subtrees, PrivilegedGroups: drillList(env("T_PRIV")),
+			Limits:      config.MachineWriteLimits{RPS: 100, Burst: 100, GlobalSlots: 8},
+			LockEnabled: true, Lock: config.MachineWriteIdentity{BindDN: env("T_WLOCK_DN"), BindPassword: pw("wlock")},
+		}
+		// A redeploy with the flag off keeps every other cred value here: the
+		// gate under test is the flag itself (config.Load would not even read them).
+		c.Machine.Write.CredEnabled = opt.credEnabled
+		c.Machine.Write.Cred = config.MachineWriteIdentity{BindDN: env("T_WCRED_DN"), BindPassword: r.secret}
+		c.Machine.Write.CredSubtrees = []config.MachineWriteClientDNs{{ID: "machine-a", DNs: drillList(env("T_CRED"))}}
+		c.Machine.Write.CredMinLength = 12
+		c.Machine.Write.CredPendingPolicyDN = env("T_PENDING")
+		c.Machine.Write.CredRateLimitRPS = 1
+		c.Machine.Write.CredACLReader = config.MachineWriteIdentity{BindDN: env("T_READER_DN"), BindPassword: pw("reader")}
+		c.Machine.Write.CredCanaries = canaries
+		c.Machine.Write.CredPendingTTL = 24 * time.Hour
+	}
+	var cfg config.Config
+	cfgFn(&cfg)
+	cfg.Machine.Enabled = true
+	ops := append([]machineOp(nil), machineWriteOps...)
+	for _, o := range machineWriteCatalog {
+		if o.ID == "setPassword" {
+			ops = append(ops, o.machineOp)
+		}
+	}
+	d := &drillDialer{Dialer: ldapclient.NewDialer(cfg), ok: map[string]int{}, failed: map[string]int{}}
+	var premise credPremiseChecker
+	if opt.credEnabled {
+		premise = ldapclient.NewCredPremise(cfg)
+	}
+	h := newHarness(r.t, harnessOpt{defaultEx: true, dialer: d, writeOps: ops, cfg: cfgFn, credPremise: premise, startErr: opt.startErr})
+	s := &drillSrv{rig: r, h: h, dialer: d, cfg: cfg, name: name}
+	if opt.startErr {
+		return s
+	}
+	if opt.ceiling {
+		h.s.machine.ceilings["machine-a"][scopePasswordWrite] = true
+	} else {
+		delete(h.s.machine.ceilings["machine-a"], scopePasswordWrite)
+	}
+	if h.s.machineWrite.cred != nil {
+		// Deep budget: the 1 rps production budget would answer 429 before the bind
+		// this drill measures (T-024 proves the 429 itself).
+		deep, err := newCredLimiter(100, 100, time.Now)
+		if err != nil {
+			r.t.Fatal(err)
+		}
+		h.s.machineWrite.cred = deep
+	}
+	return s
+}
+
+type drillResp struct {
+	status  int
+	code    string
+	msg     string
+	body    string
+	elapsed time.Duration
+	audit   string // the machine_access line of this request
+}
+
+func (s *drillSrv) send(step, method, path, body string, key string) drillResp {
+	return s.sendWith(step, method, path, body, key, "")
+}
+
+func (s *drillSrv) sendWith(step, method, path, body, key, ifMatch string) drillResp {
+	r := s.rig
+	off := r.cap.len()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+s.h.token("machine-a", "profile email "+strings.Join(config.MachineScopes, " ")))
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	rec := httptest.NewRecorder()
+	t0 := time.Now()
+	s.h.s.Handler().ServeHTTP(rec, req)
+	out := drillResp{status: rec.Code, body: strings.TrimSpace(rec.Body.String()), elapsed: time.Since(t0)}
+	fmt.Fprintf(r.cap, "### %s %s %s -> %d\n%s\n", step, method, path, rec.Code, out.body)
+	var env struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &env) == nil {
+		out.code, out.msg = env.Code, env.Message
+	}
+	for _, line := range strings.Split(r.cap.since(off), "\n") {
+		if strings.Contains(line, `"event":"machine_access"`) {
+			out.audit = line
+		}
+	}
+	return out
+}
+
+func (s *drillSrv) setPassword(step, dn, password string) drillResp {
+	return s.send(step, http.MethodPost, "/api/users/password",
+		`{"dn":`+jsonStr(dn)+`,"password":`+jsonStr(password)+`}`, s.rig.key())
+}
+
+func (s *drillSrv) createUser(uid string, pending bool) (string, drillResp) {
+	body := `{"uid":` + jsonStr(uid) + `,"cn":"T025","sn":"T025"`
+	if pending {
+		body += `,"credentialPending":true`
+	}
+	resp := s.send("create "+uid, http.MethodPost, "/api/users", body+"}", s.rig.key())
+	return "uid=" + uid + "," + s.rig.env("T_CREATE_BASE"), resp
+}
+
+// pending creates a pending account through this server (its tag is this
+// server's issuer + client: another server cannot set it).
+func (s *drillSrv) pending(uid string) string {
+	dn, r := s.createUser(uid, true)
+	s.rig.check(r.status == 201, fmt.Sprintf("[%s] createUser credentialPending %s -> 201 (got %d %s)", s.name, uid, r.status, r.body))
+	return dn
+}
+
+// the three other compartments, as the emergency block must leave them.
+func (s *drillSrv) otherCompartments(label, uid string) {
+	r := s.rig
+	dn, c := s.createUser(uid, false)
+	r.check(c.status == 201, fmt.Sprintf("[%s] %s: W_data createUser -> 201 (got %d %s)", s.name, label, c.status, c.body))
+	csn := r.attrs(dn, "entryCSN")["entrycsn"]
+	l := drillResp{status: -1}
+	if len(csn) == 1 {
+		l = s.sendWith("lock "+uid, http.MethodPost, "/api/users/lock", `{"dn":`+jsonStr(dn)+`}`, r.key(), `"`+csn[0]+`"`)
+	}
+	r.check(l.status == 204 && len(r.attrs(dn, "pwdAccountLockedTime")["pwdaccountlockedtime"]) == 1,
+		fmt.Sprintf("[%s] %s: W_lock lockUser -> 204 and the account is locked at slapd (got %d %s)", s.name, label, l.status, l.body))
+	g := s.send("list", http.MethodGet, "/api/users?limit=1", "", "")
+	r.check(g.status == 200, fmt.Sprintf("[%s] %s: M read listUsers -> 200 (got %d %s)", s.name, label, g.status, g.body))
+}
+
+func (r *drillRig) conn(dn, password string) (*ldap.Conn, error) {
+	c, err := ldap.DialURL("ldap://127.0.0.1")
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Bind(dn, password); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func (r *drillRig) binds(dn, password string) bool {
+	c, err := r.conn(dn, password)
+	if err == nil {
+		c.Close()
+	}
+	return err == nil
+}
+
+func (r *drillRig) admin() *ldap.Conn {
+	c, err := r.conn("cn=admin,"+r.base, r.pw("admin"))
+	if err != nil {
+		r.t.Fatalf("admin bind: %v", err)
+	}
+	return c
+}
+
+func (r *drillRig) attrs(dn string, names ...string) map[string][]string {
+	c := r.admin()
+	defer c.Close()
+	res, err := c.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 0, false,
+		"(objectClass=*)", names, nil))
+	if err != nil || len(res.Entries) != 1 {
+		r.t.Fatalf("admin read of %s: %v", dn, err)
+	}
+	out := map[string][]string{}
+	for _, a := range res.Entries[0].Attributes {
+		out[strings.ToLower(a.Name)] = a.Values
+	}
+	return out
+}
+
+func (r *drillRig) adminModify(m *ldap.ModifyRequest) error {
+	c := r.admin()
+	defer c.Close()
+	return c.Modify(m)
+}
+
+func (r *drillRig) pendingGone(dn string) bool {
+	a := r.attrs(dn, "employeeType", "pwdPolicySubentry")
+	return len(a["employeetype"]) == 0 && len(a["pwdpolicysubentry"]) == 0
+}
+
+func (r *drillRig) hasPassword(dn string) bool {
+	return len(r.attrs(dn, "pwdChangedTime")["pwdchangedtime"]) > 0
+}
+
+// rotate replaces W_cred's password at slapd (the admin, as the runbook's step 1);
+// the Secret (r.secret) still holds the old value.
+func (r *drillRig) rotate(to string) {
+	if r.mutate == "rotate-noop" {
+		return
+	}
+	m := ldap.NewModifyRequest(r.env("T_WCRED_DN"), nil)
+	m.Replace("userPassword", []string{to})
+	if err := r.adminModify(m); err != nil {
+		r.t.Fatalf("rotate W_cred: %v", err)
+	}
+	r.current = to
+}
+
+func (r *drillRig) unlockWCred() bool {
+	m := ldap.NewModifyRequest(r.env("T_WCRED_DN"), nil)
+	m.Delete("pwdAccountLockedTime", nil)
+	return r.adminModify(m) == nil
+}
+
+func (r *drillRig) wcredLocked() bool {
+	return len(r.attrs(r.env("T_WCRED_DN"), "pwdAccountLockedTime")["pwdaccountlockedtime"]) > 0
+}
+
+func drillRandom(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return "Aa1-" + hex.EncodeToString(b)
+}
+
+func sec(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
+
+func TestCredDrillLive(t *testing.T) {
+	if os.Getenv("LDAPIUM_CRED_DRILL_LIVE") != "1" {
+		t.Skip("requires the disposable fixture of test-machine-write-cred-drill.py")
+	}
+	pw := func(name string) string {
+		b, err := os.ReadFile("/tmp/.pw-" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	r := &drillRig{t: t, env: os.Getenv, pw: pw, base: os.Getenv("T_BASE"), cap: &drillCapture{},
+		mutate: os.Getenv("LDAPIUM_T025_MUTATE")}
+	r.secret = pw("wcred")
+	r.current = r.secret
+	r.proxy = newDrillProxy(t, "127.0.0.1:389")
+	logOut := r.cap
+	log.SetOutput(logOut)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		if err := os.WriteFile(os.Getenv("T_CAPTURE"), []byte(r.cap.since(0)), 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	wc := r.env("T_WCRED_DN")
+	orig := r.secret
+
+	// ---- baseline: the path works through the proxy, and what "works" looks like ----
+	a := r.build("A", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	p0 := a.pending("t025-base")
+	v0 := drillRandom(14)
+	resp := a.setPassword("baseline", p0, v0)
+	r.check(resp.status == 200 && r.binds(p0, v0) && r.pendingGone(p0),
+		fmt.Sprintf("baseline: setPassword on a pending account -> 200, the value binds, marker and policy cleaned (got %d)", resp.status))
+
+	// ---- AC-011 (c) measured: how long an in-flight setPassword can run ----
+	// (c1) the Password Modify held at the LDAP connection, MACHINE_REQUEST_TIMEOUT 10 s (the default), nothing else happens
+	t10 := r.build("T10", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	pa := t10.pending("t025-hold10")
+	r.proxy.hold(wc)
+	start := time.Now()
+	done := make(chan drillResp, 1)
+	key, vHold := r.key(), drillRandom(14)
+	go func() {
+		done <- t10.send("hold10", http.MethodPost, "/api/users/password",
+			`{"dn":`+jsonStr(pa)+`,"password":`+jsonStr(vHold)+`}`, key)
+	}()
+	held := r.proxy.waitHeld(5 * time.Second)
+	r.check(held, "(c1) the Password Modify reached the W_cred connection and is held by the proxy")
+	got := <-done
+	closed := time.Duration(r.proxy.closedAt.Load() - start.UnixNano())
+	r.proxy.release()
+	r.obs("MACHINE_REQUEST_TIMEOUT=10s: a setPassword stalled at the LDAP connection ended after %s (UI closed the connection %s after the request started), status %d %s", sec(got.elapsed), sec(closed), got.status, got.code)
+	r.check(got.elapsed <= 10*time.Second+500*time.Millisecond && got.elapsed >= 7*time.Second,
+		fmt.Sprintf("(c1) the stalled request ended within MACHINE_REQUEST_TIMEOUT (10 s): measured %s", sec(got.elapsed)))
+	r.check(closed > 0 && closed <= got.elapsed+200*time.Millisecond,
+		fmt.Sprintf("(c1) the UI closed the LDAP connection itself (%s), the held message never reached slapd", sec(closed)))
+	r.check(got.status >= 400 && !r.hasPassword(pa) && !r.pendingGone(pa),
+		fmt.Sprintf("(c1) refused (%d), the account is unchanged: still pending, no password", got.status))
+	again := t10.send("hold10-retry", http.MethodPost, "/api/users/password",
+		`{"dn":`+jsonStr(pa)+`,"password":`+jsonStr(vHold)+`}`, key)
+	r.obs("same Idempotency-Key and body retried after the timeout (proxy released): status %d %s", again.status, again.code)
+
+	// (c2) the same, MACHINE_REQUEST_TIMEOUT 4 s, W_cred rotated 1 s into the stall
+	t4 := r.build("T4", drillOpt{timeout: 4 * time.Second, credEnabled: true, ceiling: true})
+	pb := t4.pending("t025-hold4")
+	r.proxy.hold(wc)
+	start = time.Now()
+	go func() {
+		done <- t4.send("hold4", http.MethodPost, "/api/users/password",
+			`{"dn":`+jsonStr(pb)+`,"password":`+jsonStr(drillRandom(14))+`}`, r.key())
+	}()
+	r.check(r.proxy.waitHeld(5*time.Second), "(c2) the Password Modify is held at the W_cred connection")
+	time.Sleep(time.Second)
+	next := drillRandom(14)
+	rotatedAt := time.Now()
+	r.rotate(next)
+	got = <-done
+	r.proxy.release()
+	r.obs("MACHINE_REQUEST_TIMEOUT=4s, W_cred rotated %s into the request: ended after %s, %s after the rotation, status %d %s", sec(rotatedAt.Sub(start)), sec(got.elapsed), sec(time.Since(rotatedAt)), got.status, got.code)
+	r.check(got.elapsed <= 4*time.Second+500*time.Millisecond && got.elapsed >= 1500*time.Millisecond,
+		fmt.Sprintf("(c2) the stalled request ended within MACHINE_REQUEST_TIMEOUT (4 s): measured %s", sec(got.elapsed)))
+	r.check(!r.hasPassword(pb) && !r.pendingGone(pb), "(c2) the account is unchanged")
+	if r.mutate != "rotate-noop" {
+		r.rotate(orig)
+	}
+
+	// (c3) an in-flight write that was already bound completes after the rotation; the cleanup cannot
+	t10c := r.build("T10c", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	pc := t10c.pending("t025-inflight")
+	vc := drillRandom(14)
+	r.proxy.hold(wc)
+	go func() {
+		done <- t10c.send("inflight", http.MethodPost, "/api/users/password",
+			`{"dn":`+jsonStr(pc)+`,"password":`+jsonStr(vc)+`}`, r.key())
+	}()
+	r.check(r.proxy.waitHeld(5*time.Second), "(c3) the Password Modify is held at the W_cred connection")
+	rotated := drillRandom(14)
+	r.rotate(rotated)
+	time.Sleep(1300 * time.Millisecond)
+	releasedAt := time.Now()
+	r.proxy.release()
+	got = <-done
+	r.obs("in-flight setPassword, W_cred rotated while it was held 1.3 s: completed %s after the release, status %d, audit cleanup=%s", sec(time.Since(releasedAt)), got.status, auditField(got.audit, "cleanup"))
+	r.check(got.status == 200 && r.binds(pc, vc),
+		fmt.Sprintf("(c3) the write that was already bound completed after the rotation: 200, the value binds (got %d)", got.status))
+	r.check(auditField(got.audit, "cleanup") == "failed" && !r.pendingGone(pc),
+		"(c3) its pending cleanup could not run (W_cred's old password is refused): audit cleanup=failed, marker and policy stay (a stuck entry)")
+
+	// ---- Revision 8: while W_cred is rotated, the sweep cannot clean; the manual procedure does ----
+	ctx := context.Background()
+	stale := ldapclient.NewCredPremise(t10c.cfg)
+	sw := stale.Sweep(ctx, true)
+	r.obs("sweep with the stale W_cred Secret: found stuck=%d cleaned=%d failed=%t code=%s", sw.Found["stuck"], sw.Cleaned, sw.Failed, sw.Code)
+	r.check(sw.Found["stuck"] >= 1 && sw.Cleaned == 0 && sw.Failed,
+		"Rev. 8: during the rotation the stuck sweep finds the entry but cannot clean it (W_cred bind refused)")
+	staleStart := r.build("B0a", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
+	r.check(staleStart.h.startErr != nil && strings.Contains(staleStart.h.startErr.Error(), "wcred_bind_failed"),
+		fmt.Sprintf("Rev. 8: a replica started with the OLD Secret refuses to start on the canary probe (%v)", staleStart.h.startErr))
+	r.secret = rotated
+	refused := r.build("B0b", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
+	r.check(refused.h.startErr != nil && strings.Contains(refused.h.startErr.Error(), "sweep_stuck_at_startup"),
+		fmt.Sprintf("Rev. 8: a replica started with the ROTATED Secret refuses to start while the stuck entry is present (%v)", refused.h.startErr))
+	// the procedure of docs/machine-auth-operations.md: M searches, the administrator modifies
+	pol := r.env("T_PENDING")
+	m, err := r.conn(r.env("T_M_DN"), pw("machine"))
+	if err != nil {
+		t.Fatalf("M bind: %v", err)
+	}
+	found, err := m.Search(ldap.NewSearchRequest(r.base, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 100, 10, false,
+		"(pwdPolicySubentry="+pol+")", []string{"employeeType", "pwdChangedTime", "creatorsName"}, nil))
+	if err == nil {
+		narrowed := 0
+		for _, e := range found.Entries {
+			if len(e.GetAttributeValues("pwdChangedTime")) > 0 && !strings.Contains(strings.ToLower(e.DN), "canary") {
+				narrowed++
+			}
+		}
+		r.obs("of those, the ones that have a password (pwdChangedTime) and are not canaries: %d", narrowed)
+		r.check(narrowed == 1, "the narrowed form (password present, canaries excluded) names exactly the stuck account")
+	}
+	m.Close()
+	if err != nil {
+		t.Fatalf("M search: %v", err)
+	}
+	var stuck, canaries int
+	var target *ldap.Entry
+	for _, e := range found.Entries {
+		switch {
+		case strings.EqualFold(e.DN, pc):
+			target = e
+			stuck++
+		case strings.Contains(strings.ToLower(e.DN), "canary"):
+			canaries++
+		}
+	}
+	r.obs("M search (pwdPolicySubentry=<pending policy>) found %d entries: the stuck account, %d canaries, %d others", len(found.Entries), canaries, len(found.Entries)-stuck-canaries)
+	r.check(target != nil && len(target.GetAttributeValues("pwdChangedTime")) == 1 && len(target.GetAttributeValues("employeeType")) == 1,
+		"the M search finds the stuck account with its marker value and pwdChangedTime (the values the Modify needs)")
+	if r.mutate != "runbook-noop" && target != nil {
+		fix := ldap.NewModifyRequest(target.DN, nil)
+		fix.Delete("employeeType", target.GetAttributeValues("employeeType"))
+		fix.Delete("pwdPolicySubentry", []string{pol})
+		if err := r.adminModify(fix); err != nil {
+			t.Fatalf("the manual Modify: %v", err)
+		}
+	}
+	r.check(r.pendingGone(pc) && r.binds(pc, vc), "the administrator's Modify removed marker and policy value; the set password still binds")
+	sw = stale.Sweep(ctx, false)
+	r.check(sw.Found["stuck"] == 0 && !sw.Failed, fmt.Sprintf("a sweep (read-only, stale Secret) now finds no stuck entry (stuck=%d)", sw.Found["stuck"]))
+	// the rotated Secret is rolled out: a new replica starts and sets a password
+	b := r.build("B", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	pd := b.pending("t025-after-rollout")
+	vd := drillRandom(14)
+	resp = b.setPassword("after-rollout", pd, vd)
+	r.check(resp.status == 200 && r.binds(pd, vd) && r.pendingGone(pd),
+		fmt.Sprintf("the replica built with the rotated Secret starts and sets a password: 200 (got %d)", resp.status))
+	r.check(r.binds(wc, rotated) && !r.binds(wc, orig), "the original W_cred password is refused by slapd, the rotated one binds")
+
+	// ---- AC-011 (b): rotation of W_cred, replicas still on the old Secret ----
+	r1 := r.build("R1", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	r2 := r.build("R2", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	q1, q2 := r1.pending("t025-rot1"), r2.pending("t025-rot2")
+	rot := drillRandom(14)
+	t0 := time.Now()
+	r.rotate(rot)
+	rotationDone := time.Since(t0)
+	x1 := r1.setPassword("rotated-1", q1, drillRandom(14))
+	first1 := time.Since(t0)
+	x2 := r2.setPassword("rotated-2", q2, drillRandom(14))
+	first2 := time.Since(t0)
+	r.obs("W_cred rotation (admin Modify %s); the first setPassword after it: replica 1 answered %d %s at +%s, replica 2 %d %s at +%s",
+		sec(rotationDone), x1.status, x1.code, sec(first1), x2.status, x2.code, sec(first2))
+	r.check(x1.status == 503 && x1.code == codeUnavailable && x2.status == 503 && x2.code == codeUnavailable,
+		fmt.Sprintf("(b) the next setPassword on EVERY replica is 503 unavailable (got %d / %d)", x1.status, x2.status))
+	r.check(auditField(x1.audit, "reason") == "bind_failed" && auditField(x2.audit, "reason") == "bind_failed",
+		"(b) both audit lines say reason=bind_failed")
+	r.check(!r.hasPassword(q1) && !r.hasPassword(q2) && !r.pendingGone(q1) && !r.pendingGone(q2), "(b) no directory change: both accounts stay pending")
+	r.check(!r.binds(wc, rotated) && r.binds(wc, rot), "(b) the previous W_cred credential is refused by slapd after the rotation")
+	_, f1 := r1.dialer.counts(wc)
+	r.obs("failed W_cred binds on replica 1 so far: %d (one per refused request)", f1)
+	r1.otherCompartments("rotation", "t025-rot-other1")
+	r2.otherCompartments("rotation", "t025-rot-other2")
+
+	// the lockout trap (D24) for W_cred: every refused request is one more failed bind
+	locked := r.wcredLocked()
+	n := 0
+	for !locked && n < 8 {
+		r1.setPassword("lockout-probe", q1, drillRandom(14))
+		n++
+		locked = r.wcredLocked()
+	}
+	_, failedAll := r1.dialer.counts(wc)
+	r.obs("W_cred lockout trap (default policy): locked=%t after %d more refused requests (%d failed W_cred binds on replica 1, 1 on replica 2)", locked, n, failedAll)
+
+	// the periodic premise cycle on a replica with the stale Secret closes the password operation by itself
+	ccx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	r1.h.s.machineWrite.premise.runCycle(ccx)
+	cancel()
+	r1.h.s.machineWrite.premise.mu.Lock()
+	cycleCode := r1.h.s.machineWrite.premise.cycle
+	r1.h.s.machineWrite.premise.mu.Unlock()
+	xc := r1.setPassword("rotated-after-cycle", q1, drillRandom(14))
+	r.obs("premise cycle on the stale replica: result=%q; the next setPassword: %d %s, reason=%s", cycleCode, xc.status, xc.code, auditField(xc.audit, "reason"))
+	r.check(cycleCode != "" && xc.status == 503, "(b) the periodic premise cycle fails on the stale replica (canary probe as W_cred) and the password operation stays 503")
+
+	// restore by rollout of the rotated Secret
+	r.secret = rot
+	if locked {
+		bl := r.build("BL", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
+		r.obs("a replica built with the right Secret while W_cred is locked: start-up error %v", bl.h.startErr)
+		r.check(bl.h.startErr != nil, "locked W_cred: even the correct Secret does not start a replica (the canary probe cannot bind)")
+		r.check(r.unlockWCred() && !r.wcredLocked(), "the administrator's delete of pwdAccountLockedTime unlocks W_cred")
+	}
+	rb := r.build("RB", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	qb := rb.pending("t025-rot-rollout")
+	vb := drillRandom(14)
+	resp = rb.setPassword("rollout", qb, vb)
+	r.check(resp.status == 200 && r.binds(qb, vb), fmt.Sprintf("(b) restore: a replica rolled out with the rotated Secret sets a password: 200 (got %d)", resp.status))
+	still := r1.setPassword("stale-still", q1, drillRandom(14))
+	r.check(still.status == 503, fmt.Sprintf("(b) the replica that was not rolled out stays 503 (got %d)", still.status))
+
+	// ---- AC-011 (a): MACHINE_WRITE_CRED_ENABLED=false redeploy ----
+	g := r.build("G", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	pa1 := g.pending("t025-flag-off")
+	fo := r.build("F", drillOpt{timeout: 10 * time.Second, credEnabled: false, ceiling: true})
+	_, wcFailedBefore := fo.dialer.counts(wc)
+	wcOkBefore, _ := fo.dialer.counts(wc)
+	ff := fo.setPassword("flag-off", pa1, drillRandom(14))
+	wcOk, wcFailed := fo.dialer.counts(wc)
+	r.obs("MACHINE_WRITE_CRED_ENABLED=false redeploy (identity values and password.write ceiling left in place): setPassword -> %d %s (%s), reason=%s, W_cred binds %d ok / %d failed", ff.status, ff.code, ff.msg, auditField(ff.audit, "reason"), wcOk-wcOkBefore, wcFailed-wcFailedBefore)
+	r.check(ff.status == 503 && ff.code == codeUnavailable && wcOk == wcOkBefore && wcFailed == wcFailedBefore,
+		fmt.Sprintf("(a) flag off: setPassword is refused (503, no W_cred identity) without a single W_cred bind (got %d)", ff.status))
+	r.check(!r.hasPassword(pa1) && !r.pendingGone(pa1), "(a) the pending account is unchanged")
+	fn := r.build("F2", drillOpt{timeout: 10 * time.Second, credEnabled: false, ceiling: false})
+	f2 := fn.setPassword("flag-off-no-scope", pa1, drillRandom(14))
+	r.obs("flag off and password.write not in the client's ceiling: setPassword -> %d %s", f2.status, f2.code)
+	r.check(f2.status == 403 && f2.code == codeScopeDenied, fmt.Sprintf("(a) flag off and the scope not in the ceiling: 403 scope_denied (got %d %s)", f2.status, f2.code))
+	_, pr := fo.createUser("t025-flag-off-pending", true)
+	r.check(pr.status == 400, fmt.Sprintf("(a) flag off: createUser credentialPending is refused too: 400 (got %d)", pr.status))
+	fo.otherCompartments("flag off", "t025-flag-other")
+	vf := drillRandom(14)
+	back := g.setPassword("flag-back", pa1, vf)
+	r.check(back.status == 200 && r.binds(pa1, vf), fmt.Sprintf("(a) the replica with the flag on (not redeployed), the same account, sets the password: 200 (got %d)", back.status))
+}
+
+func auditField(line, field string) string {
+	i := strings.Index(line, `"`+field+`":"`)
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+len(field)+4:]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
+}

@@ -690,9 +690,52 @@ UI as a container (`docker logs` of a UI image: the server ran in-process, its l
 (R-3 stays one provider), E-22 and E-14, `pwdInHistory` (not provable through an initial set, R-7), the 60 s cycle
 firing during the run (the run is shorter), and GitHub Actions.
 
+### 2l. T-025: per-compartment emergency block of the password compartment (2026-10-14, branch `feat/379-t025-drill`)
+
+`scripts/test/test-machine-write-cred-drill.py` + the `live`-tagged Go test `TestCredDrillLive`
+(`httpapi/machine_write_cred_drill_live_test.go`): the real HTTP pipeline, real dialer, real `M` pre-reads and real T-028
+premise checker against one fresh slapd (image `ldapium:t025` built from this tree, the T-028 proof's setup: guide
+4.2/4.3, 8.2-8.5, 8.8, accesslog `writes reads bind`), with a TCP proxy in front of slapd that holds one LDAP message.
+`setPassword` is still closed in production (T-026): the server is test-only (the production table plus the `setPassword`
+catalog row, the `password.write` ceiling injected, as the T-024 proof does). A "replica" is one in-process server with
+its own IdP; a "redeploy" is a new server from a changed config; **not a Kubernetes rollout**. The 1 rps password budget is
+replaced by a deep one (the T-024 proof covers the 429).
+
+```
+LDAPIUM_IMAGE=ldapium:t025 python3 scripts/test/test-machine-write-cred-drill.py
+RESULT: 58 checks passed, 0 failed, mutation=none, 24s                                  (exit 0)
+LDAPIUM_T025_MUTATE=timeout-ignored   ... RESULT: 55 passed, 3 failed (c1 measured 28.0 s, c2 10.0 s)       (exit 1)
+LDAPIUM_T025_MUTATE=cred-flag-ignored ... RESULT: 56 passed, 2 failed (flag off: 429, not 503)             (exit 1)
+LDAPIUM_T025_MUTATE=rotate-noop       ... RESULT: 19 passed, 9 failed                                       (exit 1)
+LDAPIUM_T025_MUTATE=runbook-noop      ... RESULT: 23 passed, 5 failed (stuck entry remains)                 (exit 1)
+```
+
+Measured values (OBS lines of the run; the table is also in docs/machine-auth-operations.md):
+
+| AC-011 | Measurement |
+|---|---|
+| (c) in-flight bound | Password Modify held at the `W_cred` connection: `MACHINE_REQUEST_TIMEOUT=10s` ended after **8.0 s** (the UI closed the connection at 8.0 s; the held message never reached slapd), `4s` with a rotation 1.1 s in ended after **2.0 s** (0.9 s after the rotation); both 409 `idempotency_outcome_unknown`, account unchanged, same key + body again 409. The Password Modify gets timeout minus the 2 s cleanup reserve (`credCleanupReserve`), so a stalled request ends **within** `MACHINE_REQUEST_TIMEOUT`; the v2a `W_data` drill measured the full timeout (10.0 s) |
+| (c) already bound | held 1.3 s while `W_cred` was rotated, then released: **200**, the value binds; the cleanup (fresh `W_cred` bind with the old Secret) was refused: audit `cleanup=failed`, marker and pending policy stay (a stuck entry) |
+| (b) rotation | first `setPassword` after the Modify: 503 `unavailable` on replica 1 at +0.1 s, replica 2 at +0.2 s, audit `reason=bind_failed`, no change; slapd refuses the old credential, accepts the new; `W_data` createUser 201, `W_lock` lockUser 204 and the account locked at slapd, `M` listUsers 200 on both replicas; the T-028 cycle on a stale replica: `wcred_bind_failed`, the next request 503 |
+| (b) lockout trap | default policy: `W_cred` locked after the 6th refused request on one replica (7 failed binds in total); with it locked a replica built with the right Secret does not start; administrator `delete: pwdAccountLockedTime` unlocks; rollout then 200; the replica left on the old Secret stays 503. slapd accesslog: 15 failed `W_cred` binds (reqResult 49) over the drill, >= the application's count |
+| (a) flag off | `MACHINE_WRITE_CRED_ENABLED=false` (identity values and ceiling left in place): `setPassword` **503** `unavailable`, `reason=bind_failed`, **0** `W_cred` binds ok or failed, account unchanged; `createUser` `credentialPending` 400; `W_data`/`W_lock`/`M` unaffected; with the scope also absent from the ceiling: **403** `scope_denied`; the replica with the flag on sets the same account (200) |
+| Rev. 8 manual procedure | during the rotation the sweep (stale Secret) found `stuck=1`, `cleaned=0`, `wcred_bind_failed`; a replica started with the old Secret is refused on the canary probe, with the rotated Secret `sweep_stuck_at_startup`; `M` search `(pwdPolicySubentry=<pending>)` returned 9 entries (the stuck account, 6 canaries, 2 legitimate pending accounts), the narrowed `(&(pwdPolicySubentry=<pending>)(pwdChangedTime=*))` minus canaries exactly the stuck one; the administrator's Modify (exact marker value + policy value) removed both, the set password still binds, a read-only sweep found `stuck=0`, the rotated Secret then rolled out and set a password (200) |
+
+- **T025-F1 (escalated, not decided):** AC-011 (a) says 403. The code answers 403 only when the scope is also missing from the client's ceiling;
+  with only the flag flipped it answers 503 (`writeBindIdentity` finds no cred identity). Either closes the operation with no write and no `W_cred`
+  bind, but T-026 must decide what a ceiling with `password.write` and the flag off means (config refusal, 403, or this 503) and the AC text should match.
+- **T025-F2:** while `W_cred` is rotated or locked a stuck entry cannot be swept and blocks every new replica's start-up (`sweep_stuck_at_startup`);
+  the manual procedure is the only way out, and in-flight completion during a rotation (above) is a way to create one.
+
+Not covered here: a Kubernetes rolling update and the real Secret rollout, multi-provider, `MACHINE_REQUEST_TIMEOUT` values other than 10 s and 4 s (and the
+10 s stall with a rotation, the 4 s stall without one), the natural expiry of the 900 s `W_cred` lock, the lockout trap under a policy without lockout for
+`W_cred`, the 60 s timer itself (the cycle was called directly), a real `Idempotency-Key` retry after the stuck entry is cleaned, and CI (T-027 wires it).
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) (2026-10-14 T-024, §2k: E-13을 `live` 시험 서버(프로세스 안 UI)·slapd 로그·accesslog(rootdn·`M`) 범위에서, E-17 앱 경로 절반(한 provider), E-10 앱 경로를 실측 — E-13의 Keycloak·UI 컨테이너 부분은 아님. 여전히 미실측: Keycloak 컨테이너 로그(토큰은 하니스 내장 IdP), UI 컨테이너 `docker logs`(서버는 프로세스 안에서 실행, 로그 전체를 수집), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions. T024-F1은 2026-10-14 결정(프로브 유지, 공개 상수로 고정·허용 목록).) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
+
+T-025 드릴(§2k)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, `W_cred`에 잠금 없는 정책을 쓴 경우, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
