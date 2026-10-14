@@ -45,6 +45,27 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   read only with `MACHINE_WRITE_CRED_ENABLED=true`) and a per-target serialization
   (`entryUUID`, shared across clients); either refusal is `429 machine_rate_limited`
   with `Retry-After`. Audit lines gain `compartment=cred` (no password field).
+- Machine write v2c (#379, T-028) run-time premise checks and sweeps, still **not
+  opened** (`setPassword` stays unreachable until T-026). With
+  `MACHINE_WRITE_CRED_ENABLED=true` start-up now also requires
+  `MACHINE_WRITE_CRED_ACL_READER_DN`/`_PASSWORD` (a `cn=config` reader, distinct from
+  every other identity, in the protected set) and `MACHINE_WRITE_CRED_CANARIES` (one
+  set of three locked canary entries inside every `MACHINE_WRITE_CRED_SUBTREES` DN), and
+  reads `MACHINE_WRITE_CRED_PENDING_TTL` (default `24h`, 1h–720h). The UI then checks,
+  at start-up (failure: non-zero exit), before every password write (failure: that
+  request 503, no write) and every 60 s (failure: password operations 503 until a
+  passing cycle): the main database `olcAccess` against the guide's layout as text,
+  `olcAddContentAcl TRUE`, the default and pending policy values against the floor
+  (the image's default `pwdMinLength` 8 is below the floor 12: v2c deployments raise
+  `LDAP_PASSWORD_MIN_LENGTH`), no `cn=accesslog` child readable by `M`, and the canary
+  probes. The 60 s cycle also runs the stuck / TTL / orphan / foreign sweeps of the
+  pending policy (W_cred cleans the first three; a cleanup that fails twice closes the
+  password operations and alerts). Only result codes and counts are logged. New
+  fixtures `config-reader.ldif`, `config-reader-main.ldif` and guide sections 8.8–8.9
+  ([docs/machine-write-account.md](docs/machine-write-account.md)). Chart:
+  `ui.machineAuth.write.cred.enabled` (default `false`) exists only to refuse: next to
+  `audit.enabled=true` (D379-14), next to an `audit.accessLog.ops` holding `extended`
+  or `all` (F-7), and on its own until T-026.
 - Machine write scope (#285) maintainer decisions, 2026-10-13, docs and one regression
   test only: the closed request-body guard is the sole defence against an objectClass
   value ADD on Modify (#386, option A; the `val.regex` allowlist B is not adopted) and

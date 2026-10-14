@@ -523,9 +523,62 @@ victim is exactly 68. The checker refuses `( ) * \ | & "` in DNs (usage, 2).
 Not covered here: the application parts (T-020 config, T-022 pre-checks and sweeps), multi-provider (`W_cred` on another provider),
 the `cn=config` reader identity (D379-16), and a security review of the shipped fragments.
 
+### 2j. T-028: the run-time premise checks and sweeps (2026-10-14, branch `feat/379-t028-preconditions`)
+
+Application code: `ldapclient.CredPremise` (checks 1, 2, 5, 6 and the four sweeps; pure verdicts in
+`machine_write_premise_acl.go` / `_verdict.go`, unit-tested) and the `httpapi` gate (start-up refusal, request 503,
+60 s cycle; unit-tested with a fake checker). `setPassword` stays unreachable (T-026). Live: the exact checker,
+compiled as the `live`-tagged test binary, run inside one fresh slapd (image `ldapium:t028` built from this tree,
+accesslog `writes reads bind`) after the guide's 4.2/4.3, 8.2–8.5 and the new 8.8 blocks (reader account and ACL,
+canaries in two cred subtrees `ou=a`/`ou=b` below the CRED_DN `ou=people`).
+
+```
+LDAPIUM_IMAGE=ldapium:t028 python3 scripts/test/test-machine-write-cred-premise-live.py
+RESULT: 67 checks passed, 0 failed, mutation=none, 14s                                  (exit 0)
+LDAPIUM_IMAGE=ldapium:t028 LDAPIUM_PREMISE_MUTATE=drop-acl-check python3 scripts/test/test-machine-write-cred-premise-live.py
+RESULT: 63 checks passed, 4 failed, mutation=drop-acl-check, 16s                        (exit 1)
+LDAPIUM_IMAGE=ldapium:t028 LDAPIUM_PREMISE_MUTATE=accesslog-base-search python3 scripts/test/test-machine-write-cred-premise-live.py
+RESULT: 66 checks passed, 1 failed, mutation=accesslog-base-search, 15s                 (exit 1)
+```
+
+| Scenario (AC-010b unless noted) | start-up/periodic | request |
+|---|---|---|
+| baseline (guide layout, two cred subtrees, canaries in both) | ok | ok |
+| looser `attrs=userPassword by users write` for the SECOND subtree only, in front of the W_cred bundle (real effect: W_cred resets an existing password there, 0) | `acl_cred_bundle_mismatch` | same |
+| a rule at `{0}` | `acl_prefix_mismatch` | same |
+| W_cred filter loses `(!(userPassword=*))` | `acl_cred_bundle_mismatch` | same |
+| `olcAddContentAcl` removed | `acl_add_content_acl_off` | same |
+| reader main-DB deny removed (real effect: the reader reads `ou=people`) / its `cn=config` grant removed | `acl_reader_rule_missing` / `reader_unreadable` | same |
+| default `pwdMinLength 8` (the shipped value) / default `pwdSafeModify FALSE` | `policy_default_min_length` / `policy_default_safe_modify` | same |
+| pending `pwdCheckQuality 1` / `pwdSafeModify TRUE` / `pwdMinLength 8` | `policy_pending_check_quality` / `_safe_modify` / `_min_length` | same |
+| no `olcPPolicyDefault` (stands in for a policy-less node) | `policy_default_unknown` | same |
+| `M`: accesslog base `search` + children `read` (control: base 0 entries, children readable) / the full opt-in | `accesslog_children_readable` | same |
+| second subtree's pending canary loses the pending policy | `canary_pending_short_unexpected` | ok (no canaries) |
+| second subtree's with-password canary loses its password | `canary_with_password_accepted` | ok |
+| second subtree's pending canary loses its marker | **ok** (T028-F1) | ok |
+| reader (E-21, D379-16): sees exactly the main DB entry and the ppolicy overlay with the granted attributes; nothing from `cn=config` with `(objectClass=*)`; nothing in the main DB; cannot write `olcAccess` (50) | — | — |
+| sweeps: canaries only → 0/0/0/0; one stuck, one TTL (`P_TTL=2s`), one orphan, one foreign → found 1/1/1/1, cleaned 3, afterwards only the foreign entry and the 6 canaries carry the pending policy; second round foreign 1 only; W_cred policy `=z` rule removed → `sweep_stuck_cleanup_failed`, restored → cleaned | — | — |
+
+Mutations: `drop-acl-check` (check 1 skipped) fails the `{0}`, filter-term and reader-rule scenarios in both modes, and
+the second-subtree scenario in the request mode; in the start-up/periodic mode the second subtree's with-password
+canary still catches that one (`canary_with_password_accepted`), which is the canaries' design role. `accesslog-base-search`
+fails exactly the hidden-base scenario (the opt-in returns the base entry itself and stays detected).
+
+- **T028-F1 (refines check 5, escalated):** the pending canary that LOST its marker still answers 19 to the 1-character
+  exop: ppolicy judges the value before the backend ACL (like F-5). The two 19 probes therefore prove that the pending
+  policy (length, quality 2) applies to W_cred, not that the W_cred ACL admits a pending account; only check 1 proves the
+  ACL. The 50 probes (with-password, unmarked carrying the pending policy so safeModify does not decide) do prove ACL
+  refusals.
+- The checker output carried no password value in any run (asserted per call).
+
+Not covered here: E-22 (the check -> write window, R-4: setPassword is not reachable), the 60 s timing against a
+running UI (unit-tested with a 5 ms period), the UI process's own non-zero exit (unit-tested through `newServer`),
+multi-provider, and a policy-disabled container (`LDAP_PASSWORD_POLICY_ENABLED=false`; approximated by removing
+`olcPPolicyDefault`).
+
 ## 3. Not verified
 
-§2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
+§2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
 이 패키지 작성 시점의 원문: §2 전부(E-01–E-23). 이 패키지 작성 시점에는 컨테이너를 실행하지 않았다. Revision 1에서 E-08·E-11·E-12·E-13·E-15를 넓히고 E-16–E-19를 추가했고, Revision 2에서 E-15·E-19의 목적을 해제 미개방 확인으로 바꾸고 E-20–E-23을 추가했다. 이 실험들이 닫는 출하 차단 위험은 CHANGE.md "Ship-gating open risks"(R-1–R-8).
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).

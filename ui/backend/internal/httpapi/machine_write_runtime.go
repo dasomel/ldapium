@@ -18,6 +18,9 @@ type machineWriteRuntime struct {
 	// cred is the setPassword budget and per-target serialization (T-023),
 	// built only when MACHINE_WRITE_CRED_ENABLED is on.
 	cred *credLimiter
+	// premise is the D379-15 gate (T-028), built only when
+	// MACHINE_WRITE_CRED_ENABLED is on.
+	premise *credGate
 }
 
 // checkMachineWritePrerequisites is the T-013 self-refusal: the switch that opens
@@ -113,6 +116,7 @@ func newMachineWriteRuntime(cfg config.Config, now func() time.Time) (*machineWr
 		if rt.cred, err = newCredLimiter(max(m.Write.CredRateLimitRPS, 1), 1, now); err != nil {
 			return nil, err
 		}
+		rt.premise = &credGate{checker: ldapclient.NewCredPremise(cfg)}
 	}
 	rt.identity = ldapclient.NewWriteIdentityReader(cfg, resolvedWriterDNs(m.Write))
 	return rt, nil

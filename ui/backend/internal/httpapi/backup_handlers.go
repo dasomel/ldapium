@@ -21,6 +21,9 @@ func (s *Server) StartBackground(ctx context.Context) {
 		s.backups.Start(ctx)
 	}
 	s.sweepIdempotency(ctx)
+	if s.machineWrite != nil && s.machineWrite.premise != nil {
+		go s.machineWrite.premise.run(ctx, credPremisePeriod)
+	}
 }
 func (s *Server) backupRoutes(api *echo.Group) {
 	g := api.Group("/v1/backups", s.requireBackupAdmin)

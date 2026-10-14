@@ -26,6 +26,18 @@
 {{- if and .Values.ui.keycloakAdmin.delegateClients (not .Values.ui.keycloakAdmin.isolatedRealm) }}{{ fail "delegated writes require an isolated realm" }}{{ end }}
 {{- end }}
 {{- if and .Values.ui.machineAuth.write.enabled (not .Values.ui.machineAuth.enabled) }}{{ fail "ui.machineAuth.write.enabled=true requires ui.machineAuth.enabled=true" }}{{ end }}
+{{- /*
+  v2c (#379 T-028, D379-14): the credential compartment never renders next to the
+  auditlog overlay (it writes the hash of every password set to the slapd log, which
+  the UI cannot see) or an accesslog ops list holding extended/all (F-7: one Password
+  Modify aborts slapd). T028-D11: until T-026 renders the W_cred identity, the reader
+  and the canaries, cred.enabled=true refuses on its own, after these two messages.
+*/ -}}
+{{- if .Values.ui.machineAuth.write.cred.enabled }}
+{{- if .Values.audit.enabled }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.enabled=true (the auditlog overlay writes every password hash to the slapd log, D379-14)" }}{{ end }}
+{{- if regexMatch "(^|[ ,])(extended|all)([ ,]|$)" (.Values.audit.accessLog.ops | default "") }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.accessLog.ops containing extended or all (a Password Modify aborts slapd, F-7)" }}{{ end }}
+{{- fail "ui.machineAuth.write.cred.enabled=true is not available yet: the chart renders the W_cred compartment from T-026 on" }}
+{{- end }}
 {{- if .Values.ui.machineAuth.enabled }}
 {{- /*
   Machine bearer auth (#214): every value it cannot run without, checked in one

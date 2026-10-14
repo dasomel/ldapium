@@ -86,6 +86,9 @@ type harnessOpt struct {
 	// writeOps / writeIdentity are the test-only write table and M pre-read.
 	writeOps      []machineOp
 	writeIdentity writeIdentityChecker
+	// credPremise replaces the T-028 premise checks; nil is a passing fake
+	// (the production checker dials a directory).
+	credPremise credPremiseChecker
 }
 
 func allScopes() []string { return append([]string(nil), config.MachineScopes...) }
@@ -156,6 +159,10 @@ func newHarness(t *testing.T, opt harnessOpt) *harness {
 
 		writeOps:      opt.writeOps,
 		writeIdentity: opt.writeIdentity,
+		credPremise:   opt.credPremise,
+	}
+	if deps.credPremise == nil {
+		deps.credPremise = &fakePremise{}
 	}
 	if opt.now != nil {
 		deps.now = opt.now
