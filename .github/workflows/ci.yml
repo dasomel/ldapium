@@ -47,7 +47,7 @@ jobs:
       # fix. If a future run needs an endpoint this list does not cover, the
       # block happens here and names exactly what was denied.
       - name: Harden Runner (block egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: block
           disable-sudo: true
@@ -75,7 +75,7 @@ jobs:
           cache-dependency-path: ui/backend/go.sum
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
           cache: npm
@@ -195,7 +195,7 @@ jobs:
       # fix. If a future run needs an endpoint this list does not cover, the
       # block happens here and names exactly what was denied.
       - name: Harden Runner (block egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: block
           disable-sudo: true
@@ -217,7 +217,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
           cache: npm
@@ -457,7 +457,7 @@ jobs:
       # fix. If a future run needs an endpoint this list does not cover, the
       # block happens here and names exactly what was denied.
       - name: Harden Runner (block egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: block
           disable-sudo: true
@@ -486,7 +486,7 @@ jobs:
           cache-dependency-path: ui/backend/go.sum
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
           cache: npm
@@ -514,7 +514,7 @@ jobs:
       # a host that is NOT on the allow-list, and fail the job if that
       # connection unexpectedly succeeds.
       - name: Harden Runner (block egress, deliberately minimal allow-list)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: block
           disable-sudo: true
