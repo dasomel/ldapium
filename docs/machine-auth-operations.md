@@ -317,7 +317,7 @@ Not measured: a Kubernetes rolling update, multi-node LDAP, a request stalled in
 
 Rotation procedure (the value from a 0600 file, never argv): `{ printf 'dn: %s\nchangetype: modify\nreplace: userPassword\nuserPassword:: ' "$WCRED_DN"; base64 < "$NEWPW_FILE" | tr -d '\n'; echo; } | docker exec -i <ldap> ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin`. Restore: a replica built with the new Secret starts and sets passwords (200); replicas still on the old Secret stay 503. While `W_cred` is rotated the periodic premise cycle on a stale replica also fails (`wcred_bind_failed`, the canary probe binds as `W_cred`) and the password operation stays closed on its own.
 
-**Flag-only redeploy is 503, not 403.** AC-011 (a) is corrected to say so: the code answers 403 only when the scope is also absent from the client's ceiling, and 503 (identity not configured, no `W_cred` bind) when only the flag is flipped. The 503 is kept on purpose: an emergency block must not turn into a start-up failure. T-026 confirms it (EVIDENCE.md 2k, T025-F1).
+**Flag-only redeploy is 503, not 403.** AC-011 (a) is corrected to say so: the code answers 403 only when the scope is also absent from the client's ceiling, and 503 (identity not configured, no `W_cred` bind) when only the flag is flipped. The 503 is kept on purpose: an emergency block must not turn into a start-up failure. T-026 confirms it (EVIDENCE.md 2l, T025-F1).
 
 ### The `W_cred` lockout trap
 
