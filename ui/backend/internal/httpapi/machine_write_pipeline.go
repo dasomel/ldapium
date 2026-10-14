@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -126,6 +128,10 @@ type wreq struct {
 	dns     []writeDN
 	csn     string
 	release func()
+	// pending is a createUser with credentialPending: true (REQ-018); subject is
+	// the D9 idempotency subject, set at step 7, from which its tag derives.
+	pending bool
+	subject string
 }
 
 func (w *machineWritePipeline) serve(c echo.Context, p *machineauth.Principal, op machineWriteOp, next echo.HandlerFunc) error {
@@ -303,6 +309,9 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 		if err := validate.UID(uid); err != nil {
 			return nil, err
 		}
+		if err := r.parsePending(raw); err != nil {
+			return nil, err
+		}
 		base := r.w.s.cfg.UserCreateBase
 		return []writeDN{{raw: "uid=" + uid + "," + base}, {raw: base, parent: true}}, nil
 	case shapeTarget:
@@ -322,6 +331,39 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 		}
 		return []writeDN{{raw: group, class: r.op.Class}, {raw: member, class: r.op.MemberClass}}, nil
 	}
+}
+
+// scopePasswordWrite is the v2c scope (still unopened: a ceiling naming it fails
+// start-up until T-026, so credentialPending is refused in every deployment).
+const scopePasswordWrite = "directory.users.password.write"
+
+// parsePending reads credentialPending (REQ-018) from a body the closed set
+// already admitted. Present at all, true or false, it needs v2c on and
+// directory.users.password.write in THIS client's ceiling (T029-D1: the ceiling,
+// not the token, because setPassword re-checks the token scope itself);
+// otherwise the body is a 400 exactly as before the field existed.
+func (r *wreq) parsePending(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return errors.New("invalid request body")
+	}
+	v, ok := fields["credentialPending"]
+	if !ok {
+		return nil
+	}
+	if !r.w.s.cfg.Machine.Write.CredEnabled || !r.w.m.ceilings[r.p.ClientID][scopePasswordWrite] {
+		return errors.New("credentialPending is not permitted for this machine client")
+	}
+	r.pending = string(v) == "true"
+	return nil
+}
+
+// credentialPendingTag is the client tag of the pending marker: the first 16 hex
+// of SHA-256 over the D9 subject ("machine:"+len(iss)+":"+iss+client id), so
+// two clients never share a tag and the issuer cannot slide into the client id.
+func credentialPendingTag(subject string) string {
+	sum := sha256.Sum256([]byte(subject))
+	return hex.EncodeToString(sum[:8])
 }
 
 // groupCreateDNs is the create shape of a group: cn under GroupCreateBase (the
@@ -408,6 +450,7 @@ func (r *wreq) step7Idempotency() error {
 	if r.st.write != nil {
 		r.st.write.Subject = subject
 	}
+	r.subject = subject
 	return r.w.s.idempotent(r.execute, false)(r.c)
 }
 
@@ -457,6 +500,10 @@ func (r *wreq) execute(c echo.Context) error {
 		ctx := ldapclient.WithMachineWriteConstraints(c.Request().Context())
 		if r.op.ID == "createGroup" {
 			ctx = ldapclient.WithMachineGroupSeed(ctx, seed)
+		}
+		if r.pending {
+			// D379-18 Revision 8: marker and pending policy ride the same Add.
+			ctx = ldapclient.WithMachineCredentialPending(ctx, credentialPendingTag(r.subject), r.w.s.cfg.Machine.Write.CredPendingPolicyDN)
 		}
 		c.SetRequest(c.Request().WithContext(ctx))
 		return r.next(c)

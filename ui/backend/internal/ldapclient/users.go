@@ -102,27 +102,12 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 		return "", err
 	}
 
+	add, err := userAddRequest(ctx, dn, in)
+	if err != nil {
+		return "", err
+	}
+
 	c.mu.Lock()
-	add := ldap.NewAddRequest(dn, nil)
-	add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
-	add.Attribute("uid", []string{in.UID})
-	add.Attribute("cn", []string{in.CN})
-	add.Attribute("sn", []string{in.SN})
-	if in.GivenName != "" {
-		add.Attribute("givenName", []string{in.GivenName})
-	}
-	if in.Mail != "" {
-		add.Attribute("mail", []string{in.Mail})
-	}
-	if in.Department != "" {
-		add.Attribute("departmentNumber", []string{in.Department})
-	}
-	if in.Organization != "" {
-		add.Attribute("o", []string{in.Organization})
-	}
-	if in.OrganizationalUnit != "" {
-		add.Attribute("ou", []string{in.OrganizationalUnit})
-	}
 	err = c.conn.Add(add)
 	var id entryIdentity
 	var readErr error
@@ -152,6 +137,41 @@ func (c *client) CreateUser(ctx context.Context, base string, in domain.UserInpu
 		}
 	}
 	return dn, nil
+}
+
+// userAddRequest is the Add of CreateUser. A machine pending create (REQ-018)
+// appends employeeType and pwdPolicySubentry last; every other create is the
+// attribute list it always was.
+func userAddRequest(ctx context.Context, dn string, in domain.UserInput) (*ldap.AddRequest, error) {
+	marker, policyDN, err := credentialPendingAttrs(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	add := ldap.NewAddRequest(dn, nil)
+	add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
+	add.Attribute("uid", []string{in.UID})
+	add.Attribute("cn", []string{in.CN})
+	add.Attribute("sn", []string{in.SN})
+	if in.GivenName != "" {
+		add.Attribute("givenName", []string{in.GivenName})
+	}
+	if in.Mail != "" {
+		add.Attribute("mail", []string{in.Mail})
+	}
+	if in.Department != "" {
+		add.Attribute("departmentNumber", []string{in.Department})
+	}
+	if in.Organization != "" {
+		add.Attribute("o", []string{in.Organization})
+	}
+	if in.OrganizationalUnit != "" {
+		add.Attribute("ou", []string{in.OrganizationalUnit})
+	}
+	if marker != "" {
+		add.Attribute("employeeType", []string{marker})
+		add.Attribute("pwdPolicySubentry", []string{policyDN})
+	}
+	return add, nil
 }
 
 // UpdateUser replaces cn/sn/givenName/mail on the user at dn. A field left

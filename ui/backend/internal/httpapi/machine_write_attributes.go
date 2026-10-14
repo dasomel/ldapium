@@ -20,7 +20,7 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 	var allowed []string
 	switch operation {
 	case "createUser":
-		allowed = []string{"uid", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit"}
+		allowed = []string{"uid", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit", "credentialPending"}
 	case "patchUser":
 		allowed = []string{"dn", "cn", "sn", "givenName", "mail", "department", "organization", "organizationalUnit"}
 	case "addGroupMember":
@@ -56,6 +56,14 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 			clearable := operation == "patchUser" && name != "dn" && name != "cn" && name != "sn" ||
 				operation == "patchGroup" && name == "description"
 			if !clearable {
+				return false
+			}
+			continue
+		}
+		// REQ-018: the one non-string field. Whether this client may use it is
+		// decided by the pipeline (step 4), not by the shape check.
+		if operation == "createUser" && name == "credentialPending" {
+			if string(value) != "true" && string(value) != "false" {
 				return false
 			}
 			continue
