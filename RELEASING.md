@@ -45,13 +45,15 @@ One git tag publishes everything. `v0.1.0` produces:
 
    The release gate requires the jobs **`machine bearer auth (real Keycloak)`**
    (`machine-keycloak-e2e.yml`) and **`machine write (real Keycloak)`**
-   (`machine-write-e2e.yml`) to have succeeded **on the tagged SHA**, like the
+   (`machine-write-e2e.yml`) and **`generated credentials + API edge codes (live)`**
+   (`api-credentials-e2e.yml`, the v2c ACL live proof) to have succeeded **on the tagged SHA**, like the
    other release-critical checks. A main commit that predates a workflow has no
    such run, so tagging it **fails the gate**. Either re-run the workflow on that
    SHA (`gh workflow run machine-keycloak-e2e.yml --ref <branch-or-tag-at-that-SHA>`
    and wait for success; it must be a run for that exact commit) or tag a newer
    commit. A skipped or cancelled run, or a success on another SHA, never satisfies
-   the gate.
+   the gate. The `machine write (real Keycloak)` job also runs the v2b and v2c
+   (setPassword) drills and live proofs, so one name gates all of them.
 
 6. **Tag and push:**
 

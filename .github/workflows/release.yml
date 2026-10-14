@@ -172,6 +172,7 @@ jobs:
             "3-node backup → bad delete → restore → resync"
             "machine bearer auth (real Keycloak)"
             "machine write (real Keycloak)"
+            "generated credentials + API edge codes (live)"
           )
           missing=0
           for context in "${release_critical[@]}"; do
@@ -182,7 +183,7 @@ jobs:
           done
 
           [ "$missing" -eq 0 ] || exit 1
-          echo "all release-critical checks (vulnerability scan, upgrade/backup e2e, machine bearer auth (real Keycloak), machine write (real Keycloak)) succeeded on $SHA"
+          echo "all release-critical checks (vulnerability scan, upgrade/backup e2e, machine bearer auth (real Keycloak), machine write (real Keycloak), generated credentials + API edge codes (live)) succeeded on $SHA"
 
   build-server:
     name: Build server image

@@ -11,6 +11,12 @@ name: Machine write E2E (real Keycloak)
 #   - test-machine-write-v2b-live.py (machine-write-scope-v2 T-015): the four v2b operations (createGroup with the
 #     placeholder seed, patchGroup, deleteGroup, lockUser) and the refusal of unlock, against real Keycloak tokens
 #     and slapd, including a real UI + slapd restart. It needs the tree that contains the T-014 opening.
+#   - machine-write-scope-v2 v2c (#379, T-027): the password compartment proofs, each against a fresh real slapd built
+#     with the documented procedure: test-machine-write-cred-premise-live.py (T-028 premise checks and sweeps),
+#     test-machine-write-cred-secret-live.py (T-024 setPassword, secret scans, E-17; accepted + auditlog configs) and
+#     test-machine-write-cred-drill.py (T-025 per-compartment emergency block). Their Go side is a `live`-tagged test
+#     binary cross-compiled by the script, so this job sets up Go. The v2c ACL proof (T-021) stays in
+#     api-credentials-e2e.yml with the other ACL proofs; it is not repeated here.
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
 
 on:
@@ -54,6 +60,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
       - name: Build server image
         run: docker build -t "$LDAPIUM_IMAGE" image
 
@@ -74,6 +86,15 @@ jobs:
       - name: Machine write v2b drill (group seed / allow-list / privileged refusal, lock, unlock bypass attempts, restart)
         run: python3 scripts/test/test-machine-write-v2b-live.py
 
+      - name: Machine write v2c premise checks and sweeps (canaries, ACL drift, accesslog read, stuck/TTL/orphan sweeps)
+        run: python3 scripts/test/test-machine-write-cred-premise-live.py
+
+      - name: Machine write v2c setPassword (HTTP pipeline, secret scans of responses/logs/accesslog, concurrency, E-10)
+        run: python3 scripts/test/test-machine-write-cred-secret-live.py
+
+      - name: Machine write v2c emergency-block drill (W_cred rotation, flag off, in-flight window, manual procedure)
+        run: python3 scripts/test/test-machine-write-cred-drill.py
+
       # The scripts remove their own containers, volumes and networks even on failure. The runner is
       # fresh per job, so anything left under these prefixes belongs to this run: list it and fail.
       - name: Fail on leftover docker objects
@@ -87,7 +108,7 @@ jobs:
               *) fmt='{{.Name}}' ;;
             esac
             # shellcheck disable=SC2086
-            out=$(docker $kind --filter name=ldapium-mwk- --filter name=ldapium-mwd- --format "$fmt")
+            out=$(docker $kind --filter name=ldapium-mwk- --filter name=ldapium-mwd- --filter name=ldapium-cpre- --filter name=ldapium-t024- --filter name=ldapium-t025- --format "$fmt")
             if [ -n "$out" ]; then
               echo "::error::leftover docker objects ($kind):"
               echo "$out"
