@@ -30,7 +30,9 @@
   v2c (#379 T-028, D379-14): the credential compartment never renders next to the
   auditlog overlay (it writes the hash of every password set to the slapd log, which
   the UI cannot see) or an accesslog ops list holding extended/all (F-7: one Password
-  Modify aborts slapd). T-026 renders the W_cred identity, the configuration reader
+  Modify aborts slapd). The image entrypoint now refuses extended/all for every
+  deployment (D398-1, #398); this check stays as the render-time signal for this
+  value. T-026 renders the W_cred identity, the configuration reader
   and the canaries: every value the application cannot start without is checked in
   one pass, passwords are Secret references only, and each identity differs from the
   others (the application re-validates all of it at start-up).

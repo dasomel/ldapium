@@ -267,19 +267,26 @@ jobs:
                 printf "dn: %s\nchangetype: modify\n%b\n" "$bob" "$1" |
                   ldapmodify -x -H "$url" -D "$admin" -w security-e2e-password
               }
-              for pair in pwdReset:TRUE:FALSE pwdStartTime:20200101000000Z:20300101000000Z pwdEndTime:20990101000000Z:20300101000000Z pwdAccountLockedTime:20990101000000Z:20300101000000Z; do
-                attr=${pair%%:*}
-                rest=${pair#*:}
-                val=${rest%%:*}
-                newval=${rest#*:}
+              # The replace attempt reuses the value: the ACL refuses it before any
+              # value comparison, so a different new value would prove nothing more.
+              set -- "pwdReset TRUE" "pwdStartTime 20200101000000Z" "pwdEndTime 20990101000000Z" "pwdAccountLockedTime 20990101000000Z"
+              add_all="" del_all="" attrs=""
+              for spec; do
+                attr=${spec% *}
+                val=${spec#* }
                 self_refused "add: $attr\n$attr: $val" "add $attr"
-                admin_mod "add: $attr\n$attr: $val"
-                ldapsearch -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base "$attr" |
-                  grep -q "^$attr: $val$"
-                self_refused "replace: $attr\n$attr: $newval" "replace $attr"
-                self_refused "delete: $attr" "delete $attr"
-                admin_mod "delete: $attr"
+                add_all="${add_all:+$add_all\n-\n}add: $attr\n$attr: $val"
+                del_all="${del_all:+$del_all\n-\n}delete: $attr"
+                attrs="$attrs $attr"
               done
+              admin_mod "$add_all"
+              state=$(ldapsearch -LLL -x -H "$url" -D "$bob" -w BobPassword1! -b "$bob" -s base $attrs)
+              for spec; do
+                echo "$state" | grep -q "^${spec% *}: ${spec#* }$"
+                self_refused "replace: ${spec% *}\n${spec% *}: ${spec#* }" "replace ${spec% *}"
+                self_refused "delete: ${spec% *}" "delete ${spec% *}"
+              done
+              admin_mod "$del_all"
               echo "PASS: a user can read but not choose its own password policy or ppolicy state"
             '
 
@@ -324,12 +331,11 @@ jobs:
           userPassword: BobPassword1!
           EOF
           self_mod() { # ldif op line -> output of a modify bound as bob
-            printf 'dn: %s\nchangetype: modify\n%s\n' "$bob" "$1" |
+            printf 'dn: %s\nchangetype: modify\n%b\n' "$bob" "$1" |
               docker exec -i "$c" ldapmodify -x -H "$url" -D "$bob" -w 'BobPassword1!' 2>&1 && return 1
             return 0
           }
-          if ! out=$(self_mod "add: pwdPolicySubentry
-          pwdPolicySubentry: $policy"); then
+          if ! out=$(self_mod "add: pwdPolicySubentry\npwdPolicySubentry: $policy"); then
             echo "::error::a bound user set pwdPolicySubentry on its own entry (default ACL branch)"
             exit 1
           fi
@@ -350,37 +356,42 @@ jobs:
 
           # #400: pwdReset/pwdStartTime/pwdEndTime/pwdAccountLockedTime are read-only for
           # self too (same rule). add/replace/delete must each be refused with 50.
+          self_refused() { # ldif op lines, description
+            local out
+            if ! out=$(self_mod "$1"); then
+              echo "::error::a bound user changed its own ppolicy state ($2, default ACL branch)"
+              exit 1
+            fi
+            echo "$out"
+            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self ppolicy state change not refused with 50 ($2)"; exit 1 ;; esac
+          }
           admin_mod() {
             printf 'dn: %s\nchangetype: modify\n%b\n' "$bob" "$1" |
               docker exec -i "$c" ldapmodify -x -H "$url" -D "$admin" -w "$pw"
           }
-          for pair in pwdReset:TRUE:FALSE pwdStartTime:20200101000000Z:20300101000000Z pwdEndTime:20990101000000Z:20300101000000Z pwdAccountLockedTime:20990101000000Z:20300101000000Z; do
-            attr=${pair%%:*}
-            rest=${pair#*:}
-            val=${rest%%:*}
-            newval=${rest#*:}
-            if ! out=$(self_mod "add: $attr
-          $attr: $val"); then
-              echo "::error::a bound user set $attr on its own entry (default ACL branch)"
-              exit 1
-            fi
-            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self add $attr not refused with 50"; exit 1 ;; esac
-            admin_mod "add: $attr\n$attr: $val"
-            read_back=$(docker exec "$c" ldapsearch -LLL -x -H "$url" -D "$bob" -w 'BobPassword1!' -b "$bob" -s base "$attr")
-            case "$read_back" in *"$attr: $val"*) ;; *) echo "::error::bob cannot read its own $attr"; exit 1 ;; esac
-            if ! out=$(self_mod "replace: $attr
-          $attr: $newval"); then
-              echo "::error::a bound user replaced its own $attr (default ACL branch)"
-              exit 1
-            fi
-            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self replace $attr not refused with 50"; exit 1 ;; esac
-            if ! out=$(self_mod "delete: $attr"); then
-              echo "::error::a bound user deleted its own $attr (default ACL branch)"
-              exit 1
-            fi
-            case "$out" in *"Insufficient access (50)"*) ;; *) echo "::error::self delete $attr not refused with 50"; exit 1 ;; esac
-            admin_mod "delete: $attr"
+          # The replace attempt reuses the value: the ACL refuses it before any
+          # value comparison, so a different new value would prove nothing more.
+          set -- "pwdReset TRUE" "pwdStartTime 20200101000000Z" "pwdEndTime 20990101000000Z" "pwdAccountLockedTime 20990101000000Z"
+          add_all="" del_all="" attrs=""
+          for spec; do
+            attr=${spec% *}
+            val=${spec#* }
+            self_refused "add: $attr\n$attr: $val" "add $attr"
+            add_all="${add_all:+$add_all\n-\n}add: $attr\n$attr: $val"
+            del_all="${del_all:+$del_all\n-\n}delete: $attr"
+            attrs="$attrs $attr"
           done
+          admin_mod "$add_all"
+          # shellcheck disable=SC2086 # $attrs is a deliberate word list.
+          read_back=$(docker exec "$c" ldapsearch -LLL -x -H "$url" -D "$bob" -w 'BobPassword1!' -b "$bob" -s base $attrs)
+          for spec; do
+            attr=${spec% *}
+            val=${spec#* }
+            case "$read_back" in *"$attr: $val"*) ;; *) echo "::error::bob cannot read its own $attr"; exit 1 ;; esac
+            self_refused "replace: $attr\n$attr: $val" "replace $attr"
+            self_refused "delete: $attr" "delete $attr"
+          done
+          admin_mod "$del_all"
           echo "PASS: default ACL branch - a user can read but not choose its own password policy or ppolicy state"
 
       - name: Verify an authenticated user cannot change group membership
