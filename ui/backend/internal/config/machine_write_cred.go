@@ -41,8 +41,9 @@ const (
 // MachineWriteCredCanary is one canary set of D379-15 check 5, three entries
 // inside one MACHINE_WRITE_CRED_SUBTREES DN, all administratively locked:
 // WithPassword carries the pending marker and policy and a password (W_cred
-// expects 50), Unmarked carries the pending policy but no marker and no
-// password (50), Pending is a W_data-made pending account without a password
+// expects 50), Unmarked is W_data-made with the pending policy (added by the
+// admin) but no marker and no password, so only the marker term fails (50),
+// Pending is a W_data-made pending account without a password
 // (a 1-character value and a pre-hashed value both expect 19).
 type MachineWriteCredCanary struct {
 	WithPassword, Unmarked, Pending string

@@ -33,10 +33,10 @@ func (f *fakePremise) Check(_ context.Context, canaries bool) string {
 	return check(canaries)
 }
 
-func (f *fakePremise) Sweep(context.Context) ldapclient.CredSweepResult {
+func (f *fakePremise) Sweep(_ context.Context, clean bool) ldapclient.CredSweepResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, "sweep")
+	f.calls = append(f.calls, map[bool]string{true: "sweep", false: "sweep-readonly"}[clean])
 	return f.sweep
 }
 
@@ -81,7 +81,7 @@ func TestCredPremise_StartUpRunsTheFullCheckAndRefusesOnFailure(t *testing.T) {
 		t.Fatalf("start-up error = %v", h.startErr)
 	}
 	if got := bad.callList(); strings.Join(got, ",") != "check+canaries" {
-		t.Fatalf("start-up ran %v, want the full check once (no sweep)", got)
+		t.Fatalf("start-up ran %v, want the full check once (no sweep after a failed check)", got)
 	}
 	if !strings.Contains(lc.String(), "machine_cred_premise phase=startup result=acl_cred_bundle_mismatch") {
 		t.Fatalf("log: %s", lc.String())
@@ -91,8 +91,25 @@ func TestCredPremise_StartUpRunsTheFullCheckAndRefusesOnFailure(t *testing.T) {
 	}
 	good := &fakePremise{}
 	h = newHarness(t, harnessOpt{defaultEx: true, credPremise: good, cfg: cfg})
-	if h.s == nil || strings.Join(good.callList(), ",") != "check+canaries" {
+	if h.s == nil || strings.Join(good.callList(), ",") != "check+canaries,sweep-readonly" {
 		t.Fatalf("a passing start-up: server=%v calls=%v", h.s != nil, good.callList())
+	}
+	// MINOR3: a stuck entry (or a sweep that cannot run) found by the read-only
+	// start-up sweep refuses start-up; start-up never cleans.
+	for want, sw := range map[string]ldapclient.CredSweepResult{
+		"sweep_stuck_at_startup": {Found: map[string]int{"stuck": 1}},
+		"sweep_stuck_unreadable": {Found: map[string]int{}, Failed: true, Code: "sweep_stuck_unreadable"},
+	} {
+		f := &fakePremise{sweep: sw}
+		h = newHarness(t, harnessOpt{defaultEx: true, startErr: true, credPremise: f, cfg: cfg})
+		if h.startErr == nil || !strings.Contains(h.startErr.Error(), want) || strings.Join(f.callList(), ",") != "check+canaries,sweep-readonly" {
+			t.Fatalf("%s: start-up error %v, calls %v", want, h.startErr, f.callList())
+		}
+	}
+	// Foreign or TTL hits alone do not refuse start-up (the first cycle handles them).
+	f := &fakePremise{sweep: ldapclient.CredSweepResult{Found: map[string]int{"ttl": 2, "foreign": 1}}}
+	if h = newHarness(t, harnessOpt{defaultEx: true, credPremise: f, cfg: cfg}); h.s == nil {
+		t.Fatal("TTL/foreign hits refused start-up")
 	}
 	// v2c off: no gate, nothing is checked.
 	off := &fakePremise{}
@@ -177,8 +194,9 @@ func TestCredPremise_PeriodicFailureClosesUntilTheNextPassingCycle(t *testing.T)
 		!strings.Contains(lc.String(), "machine_cred_premise phase=periodic result=ok") {
 		t.Fatalf("log: %s", lc.String())
 	}
-	if got := f.callList(); !strings.Contains(strings.Join(got, ","), "check+canaries,sweep") {
-		t.Fatalf("a cycle is the full check then the sweep: %v", got)
+	// MINOR2: the failing cycle swept read-only, the passing one cleaned.
+	if got := strings.Join(f.callList(), ","); !strings.Contains(got, "check+canaries,sweep-readonly") || !strings.HasSuffix(got, "check+canaries,sweep,check") {
+		t.Fatalf("cycle calls: %v", got)
 	}
 }
 
@@ -211,10 +229,10 @@ func TestCredPremise_SweepResults(t *testing.T) {
 
 func TestCredPremise_LoopRunsEveryPeriodAndStopsWithItsContext(t *testing.T) {
 	f := &fakePremise{}
-	g := &credGate{checker: f}
+	g := &credGate{checker: f, period: 5 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { g.run(ctx, 5*time.Millisecond); close(done) }()
+	go func() { g.run(ctx); close(done) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for len(f.callList()) < 4 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -228,5 +246,32 @@ func TestCredPremise_LoopRunsEveryPeriodAndStopsWithItsContext(t *testing.T) {
 	got := f.callList()
 	if len(got) < 4 || got[0] != "check+canaries" || got[1] != "sweep" {
 		t.Fatalf("loop calls = %v", got)
+	}
+}
+
+// MINOR4: a cycle older than two periods (a stalled loop) closes the operation
+// even though its verdict was a pass; the next completed cycle reopens it.
+func TestCredPremise_StaleCycleCloses(t *testing.T) {
+	w, f := premiseHarness(t)
+	g := w.s.machineWrite.premise
+	clock := time.Now()
+	g.now = func() time.Time { return clock }
+	g.runCycle(context.Background())
+	clock = clock.Add(2 * credPremisePeriod)
+	if rec := w.send(pwReq(credBob, sentinel(t), hdr(key()))); rec.Code != 200 {
+		t.Fatalf("at exactly two periods: %d %s", rec.Code, rec.Body)
+	}
+	clock = clock.Add(time.Second)
+	before := len(f.callList())
+	wantCode(t, w.send(pwReq(credBob, sentinel(t), hdr(key()))), 503, codeUnavailable)
+	if len(f.callList()) != before {
+		t.Fatal("a stale gate still ran the request check")
+	}
+	if got := g.beforeWrite(context.Background()); got != premiseCycleStale {
+		t.Fatalf("beforeWrite = %q", got)
+	}
+	g.runCycle(context.Background())
+	if rec := w.send(pwReq(credBob, sentinel(t), hdr(key()))); rec.Code != 200 {
+		t.Fatalf("after a fresh cycle: %d %s", rec.Code, rec.Body)
 	}
 }

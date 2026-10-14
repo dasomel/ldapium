@@ -86,6 +86,11 @@ func policyVerdict(e *ldap.Entry, kind policyKind, minLength int) string {
 	return ""
 }
 
+// accesslogProbeFilter is check 6's filter (MINOR1): a reader may hold read on
+// reqMod/reqOld/reqDN without search on objectClass, and a filter on an attribute
+// it cannot search is undefined (AGENTS.md), so every one of them is asked.
+const accesslogProbeFilter = "(|(objectClass=*)(reqMod=*)(reqOld=*)(reqDN=*))"
+
 // Result codes of check 6 and check 5.
 const (
 	premiseAccesslogReadable   = "accesslog_children_readable"
@@ -211,6 +216,30 @@ func sweepCleanupModify(dn string, employeeType []string, policyDN string) *ldap
 	}
 	mod.Delete("pwdPolicySubentry", []string{policyDN})
 	return mod
+}
+
+// sweepRetryModify is the retry of a failed sweep cleanup (T028-D7), built from
+// what M reads NOW: done when the entry no longer carries the pending policy
+// (a leftover marker without the policy is no W_cred target), else the Modify
+// that deletes the marker values and the policy value still present.
+func sweepRetryModify(dn string, employeeType, policies []string, policyDN string) (*ldap.ModifyRequest, bool) {
+	if !containsDN(policies, policyDN) {
+		return nil, true
+	}
+	return sweepCleanupModify(dn, employeeType, policyDN), false
+}
+
+func containsDN(values []string, want string) bool {
+	w, err := ldap.ParseDN(want)
+	if err != nil {
+		return false
+	}
+	for _, v := range values {
+		if got, err := ldap.ParseDN(v); err == nil && got.EqualFold(w) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCanary reports whether dn is one of the configured canaries, which the

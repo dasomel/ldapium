@@ -201,6 +201,10 @@ refuses "cred next to accessLog ops extended (F-7)" 'audit.accessLog.ops contain
 	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind extended'
 refuses "cred next to accessLog ops all (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
 	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set audit.accessLog.ops=all
+refuses "cred next to accessLog ops EXTENDED, any case (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes EXTENDED'
+refuses "cred next to accessLog ops All after a tab (F-7)" 'audit.accessLog.ops containing extended or all' "${wr[@]}" \
+	--set ui.machineAuth.write.cred.enabled=true --set audit.accessLog.enabled=true --set-string "audit.accessLog.ops=writes$(printf '\t')All"
 refuses "cred alone refuses until T-026" 'is not available yet' "${wr[@]}" --set ui.machineAuth.write.cred.enabled=true \
 	--set audit.accessLog.enabled=true --set 'audit.accessLog.ops=writes reads bind'
 check "cred off with audit.enabled renders" renders "${wr[@]}" --set audit.enabled=true

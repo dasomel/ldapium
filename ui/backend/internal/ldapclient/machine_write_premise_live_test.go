@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
+
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
 )
 
@@ -74,8 +76,25 @@ func TestCredPremiseLive(t *testing.T) {
 	case "check":
 		full := p.Check(ctx, true)
 		fmt.Printf("PREMISE full=%s request=%s\n", ok(full), ok(p.Check(ctx, false)))
-	case "sweep":
-		r := p.Sweep(ctx)
+	case "sweep", "sweep-readonly", "sweep-race":
+		if os.Getenv("P_MODE") == "sweep-race" {
+			// Between the search and the cleanup the marker value disappears (as when
+			// the request's own cleanup or an operator wins): the admin deletes it.
+			p.beforeCleanup = func(dn string) {
+				conn, done, ok := p.bind(ctx, "cn=admin,"+os.Getenv("P_BASE"), pw("admin"))
+				if !ok {
+					t.Fatal("admin bind")
+				}
+				defer done()
+				mod := ldap.NewModifyRequest(dn, nil)
+				mod.Delete("employeeType", nil)
+				// An entry with no marker left (a later sweep of the same round) is fine.
+				if err := conn.Modify(mod); err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute) {
+					t.Fatalf("race: %v", err)
+				}
+			}
+		}
+		r := p.Sweep(ctx, os.Getenv("P_MODE") != "sweep-readonly")
 		fmt.Printf("SWEEP stuck=%d ttl=%d orphan=%d foreign=%d cleaned=%d failed=%t code=%s\n",
 			r.Found["stuck"], r.Found["ttl"], r.Found["orphan"], r.Found["foreign"], r.Cleaned, r.Failed, ok(r.Code))
 	default:

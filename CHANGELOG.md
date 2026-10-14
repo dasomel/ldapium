@@ -56,11 +56,15 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   request 503, no write) and every 60 s (failure: password operations 503 until a
   passing cycle): the main database `olcAccess` against the guide's layout as text,
   `olcAddContentAcl TRUE`, the default and pending policy values against the floor
-  (the image's default `pwdMinLength` 8 is below the floor 12: v2c deployments raise
-  `LDAP_PASSWORD_MIN_LENGTH`), no `cn=accesslog` child readable by `M`, and the canary
-  probes. The 60 s cycle also runs the stuck / TTL / orphan / foreign sweeps of the
-  pending policy (W_cred cleans the first three; a cleanup that fails twice closes the
-  password operations and alerts). Only result codes and counts are logged. New
+  (the image's default `pwdMinLength` 8 is below the floor 12: **v2c deployments need
+  `LDAP_PASSWORD_MIN_LENGTH>=12`**, an intended operating cost), no `cn=accesslog` child
+  readable by `M`, and the canary probes. The 60 s cycle also runs the stuck / TTL /
+  orphan / foreign sweeps of the pending policy (W_cred cleans the first three, with a
+  re-read retry; a cleanup that still fails closes the password operations and alerts;
+  after a failed check the sweep only counts). Start-up sweeps read-only and refuses to
+  start on a stuck entry; a cycle older than two periods closes the password operations.
+  `MACHINE_WRITE_CRED_POLICY_DNS` has no effect yet (the pre-read admits only the pending
+  policy). Only result codes and counts are logged. New
   fixtures `config-reader.ldif`, `config-reader-main.ldif` and guide sections 8.8–8.9
   ([docs/machine-write-account.md](docs/machine-write-account.md)). Chart:
   `ui.machineAuth.write.cred.enabled` (default `false`) exists only to refuse: next to

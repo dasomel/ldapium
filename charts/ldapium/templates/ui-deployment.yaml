@@ -35,7 +35,7 @@
 */ -}}
 {{- if .Values.ui.machineAuth.write.cred.enabled }}
 {{- if .Values.audit.enabled }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.enabled=true (the auditlog overlay writes every password hash to the slapd log, D379-14)" }}{{ end }}
-{{- if regexMatch "(^|[ ,])(extended|all)([ ,]|$)" (.Values.audit.accessLog.ops | default "") }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.accessLog.ops containing extended or all (a Password Modify aborts slapd, F-7)" }}{{ end }}
+{{- if regexMatch `(?i)(^|[\s,])(extended|all)([\s,]|$)` (.Values.audit.accessLog.ops | default "") }}{{ fail "ui.machineAuth.write.cred.enabled=true cannot be combined with audit.accessLog.ops containing extended or all (a Password Modify aborts slapd, F-7)" }}{{ end }}
 {{- fail "ui.machineAuth.write.cred.enabled=true is not available yet: the chart renders the W_cred compartment from T-026 on" }}
 {{- end }}
 {{- if .Values.ui.machineAuth.enabled }}

@@ -552,13 +552,13 @@ printf 'dn: %s\nchangetype: modify\ndelete: olcAddContentAcl\n' "$MAIN_DB_DN" | 
 | 1 | 설정 읽기 신원으로 메인 DB `olcAccess`를 읽어 2절 배치(`[복제] · M 3 · W_data(+v2c) · [W_lock] · W_cred 7 · 읽기 신원 거부 1`)와 **원문으로** 대조한다. 공백 연속은 하나로 보고, 리터럴은 대소문자까지 같아야 하며, DN 자리만 DN으로 비교한다. `@WRITE_DN@`은 모든 `MACHINE_WRITE_SUBTREES`의 공통 조상(가장 좁은 항목), `@CRED_DN@`은 모든 `MACHINE_WRITE_CRED_SUBTREES`의 공통 조상, `@SYSTEM_DN@`은 `W_data` DN의 부모, 특권 filter는 `MACHINE_WRITE_PRIVILEGED_GROUPS` 순서다. 같은 신원으로 `olcAddContentAcl: TRUE`도 본다 | `acl_prefix_mismatch`, `acl_cred_bundle_mismatch`, `acl_reader_rule_missing`, `acl_add_content_acl_off`, `reader_bind_failed` |
 | 2 | `olcPPolicyDefault`가 가리키는 기본 정책: `pwdAttribute userPassword`, `pwdMinLength ≥ MACHINE_WRITE_CRED_MIN_LENGTH`, `pwdCheckQuality ≥ 1`, `pwdInHistory ≥ 1`, `pwdSafeModify TRUE`. 대기 정책: `pwdAttribute`, `pwdMinLength ≥` 하한, `pwdCheckQuality ≥ 2`, `pwdSafeModify FALSE`. `MACHINE_WRITE_CRED_POLICY_DNS`의 항목도 기본 정책의 하한(`pwdSafeModify` 제외). 값은 `M`으로 읽는다 | `policy_default_min_length`, `policy_pending_safe_modify`, … |
 | 3·4 | 대상별(요청 직전): `M` 사전 읽기(T-022)가 대기 정책 정확히 하나·표지 정확히 하나·태그·`creatorsName`·`pwdChangedTime`·특권 멤버를 본다 | 그 요청 403/409 |
-| 5 | 카나리(기동·주기만): subtree마다 세 항목에 `W_cred`로 Password Modify — 비밀번호 있는 표지 50, 표지 없는 무비밀번호 50, 대기 무비밀번호에 1자 값 19와 사전 해시(`{SSHA}`) plain Modify 19 | `canary_<항목>_unexpected`; `_accepted`이면 그 카나리를 다시 만든다 |
+| 5 | 카나리(기동·주기만): subtree마다 세 항목에 `W_cred`로 Password Modify — 비밀번호 있는 표지 50(비밀번호 항), 표지 없는 무비밀번호 50(표지 항: `W_data`가 만들고 대기 정책만 있어 빠지는 항이 표지뿐), 대기 무비밀번호에 1자 값 19와 사전 해시(`{SSHA}`) plain Modify 19(대기 정책의 길이·quality 2가 `W_cred`에 적용됨). **역할은 좁다**(T028-F1, CHANGE Revision 12): ppolicy가 ACL보다 먼저 값을 판정하므로 19는 ACL이 그 계정을 허용한다는 증거가 아니고, 특권 filter·`CRED_DN` 경계 항은 카나리로 보지 않는다 — 그 항들의 유일한 통제는 검사 1이다 | `canary_<항목>_unexpected`; `_accepted`이면 그 카나리를 다시 만든다 |
 | 6 | `M`으로 `cn=accesslog` **subtree** 검색(크기 1, `reqMod`·`reqOld`): 항목 0건이어야 한다(base 검색은 증거가 아니다, D379-14) | `accesslog_children_readable` |
 | 8 | 설정(`config.Load`): 특권 그룹·`MACHINE_WRITE_CRED_SUBTREES`가 비어 있지 않고 subtree마다 카나리 세트가 있다 | 기동 실패 |
 
 검사가 증명하지 못하는 것은 설계 그대로다: auditlog(차트가 `audit.enabled`와 v2c를 함께 렌더하지 않는다, 차트 밖은 이 문서로만), `M` 외의 accesslog 독자(R-5), 검사 읽기와 쓰기 사이의 창(R-4).
 
-**기본 정책의 길이.** 이미지의 기본 `pwdMinLength`는 8(`LDAP_PASSWORD_MIN_LENGTH`)이고 하한은 12 이상이라, 그대로면 검사 2가 `policy_default_min_length`로 기동을 막는다. v2c를 켜는 배포는 `LDAP_PASSWORD_MIN_LENGTH`를 하한 이상으로 두거나(새 노드) 기본 정책 항목의 `pwdMinLength`를 고친 뒤 **8.3의 대기 정책 사본을 다시 만든다**(사본은 그 값을 복사한다).
+**기본 정책의 길이(의도된 운영 부담, 유지보수자 2026-10-14).** 이미지의 기본 `pwdMinLength`는 8(`LDAP_PASSWORD_MIN_LENGTH`)이고 하한은 12 이상이라, v2c 배포는 `LDAP_PASSWORD_MIN_LENGTH>=12`(또는 하한 이상)가 필요하다. 그대로면 검사 2가 `policy_default_min_length`로 기동을 막는다. v2c를 켜는 배포는 `LDAP_PASSWORD_MIN_LENGTH`를 하한 이상으로 두거나(새 노드) 기본 정책 항목의 `pwdMinLength`를 고친 뒤 **8.3의 대기 정책 사본을 다시 만든다**(사본은 그 값을 복사한다).
 
 **accesslog.** `M`의 accesslog 읽기 옵트인([`accesslog-optin.ldif`](../scripts/test/fixtures/machine-acl/accesslog-optin.ldif))과 v2c는 함께 쓸 수 없다(Q12 잠정: 상호 배제). base는 숨기고 자식에 read를 준 구성도 검사 6이 거부한다. `LDAP_ACCESSLOG_OPS`에 `extended`나 `all`을 넣지 않는다(F-7: Password Modify 한 번에 slapd가 중단된다).
 
@@ -632,9 +632,10 @@ pwdPolicySubentry: $PENDING_POLICY_DN
 canary pending "employeeType: $CMARK
 pwdPolicySubentry: $PENDING_POLICY_DN
 " | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "$WDATA_DN" -y /tmp/.pw-wdata
-# 표지 없는 무비밀번호: 관리자가 Add (대기 정책만: safeModify가 아니라 ACL이 거부해야 의미가 있다)
-canary unmarked "pwdPolicySubentry: $PENDING_POLICY_DN
-" | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
+# 표지 없는 무비밀번호: W_data가 표지·정책 없이 Add(정상 createUser와 같은 모양), 관리자가 대기 정책만 붙인다.
+# 그러면 W_cred filter에서 빠지는 항은 표지 하나뿐이라 그 50이 표지 항을 격리해 확인한다(safeModify가 아니라 ACL이 거부)
+canary unmarked "" | $EXEC ldapadd -x -H ldap://127.0.0.1 -D "$WDATA_DN" -y /tmp/.pw-wdata
+printf 'dn: uid=%s-unmarked,%s\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: %s\n' "$CANARY_UID" "$CANARY_BASE" "$PENDING_POLICY_DN" | $EXEC ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
 # 첫째에 버리는 비밀번호, 셋 모두 관리 잠금
 printf 'dn: uid=%s-pw,%s\nchangetype: modify\nreplace: userPassword\nuserPassword: %s\n' "$CANARY_UID" "$CANARY_BASE" "$(openssl rand -hex 24)" | $EXEC ldapmodify -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin
 for u in pw unmarked pending; do
@@ -664,6 +665,8 @@ fi
 
 ### 8.9 스윕과 경보 런북 (T-028)
 
+기동 시에는 같은 네 검색을 **읽기만** 하고(정리 쓰기 없음), stuck 항목이 하나라도 있거나 검색이 실패하면 기동하지 않는다(`sweep_stuck_at_startup`; 아래 1–2의 관리자 정리 후 다시 시작). 주기 검사가 실패한 주기에도 스윕은 검색·계수만 하고 `W_cred`로 쓰지 않는다. 주기가 두 번(120초) 넘게 끝나지 않으면 요청 직전 검사가 `premise_cycle_stale`로 503이다.
+
 60초 주기마다 UI는 `M`으로 `LDAP_BASE_DN` 아래를 네 번 검색하고(카나리 제외, 검색마다 최대 64건) 결과 개수만 로그한다(`machine_cred_sweep stuck=… ttl=… orphan=… foreign=… cleaned=… result=…`):
 
 | 스윕 | filter | 동작 |
@@ -673,7 +676,7 @@ fi
 | orphan | `(&(pwdPolicySubentry=<대기 정책>)(creatorsName=<W_data>)(!(employeeType=ldapium-credential-pending:*)))` | `W_cred`가 정책 값 정리 + 경보 `machine_cred_alert kind=orphan` |
 | foreign | `(&(pwdPolicySubentry=<대기 정책>)(!(creatorsName=<W_data>)))` | 경보 `machine_cred_alert kind=foreign`(`W_cred`는 지울 수 없다, 50) |
 
-정리는 한 번 재시도한다. 두 번 다 실패하거나(값이 이미 없으면 성공으로 본다), 검색이 실패하거나, 64건을 넘으면(backlog) `machine_cred_alert kind=sweep_failed result=<코드>`를 남기고 **다음 성공 주기까지 비밀번호 오퍼레이션이 503**이다. 다른 구획(`W_data`·`W_lock`·읽기)은 계속 동작한다.
+정리 Modify가 실패하면(검색 뒤 값이 바뀌어 `noSuchAttribute`인 경우 포함) `M`으로 그 항목을 다시 읽어 **남은 값만** 지우는 재시도를 한 번 하고, 다시 읽어 대기 정책 값이 없을 때만 정리된 것으로 센다. 재시도도 실패하거나, 검색이 실패하거나, 64건을 넘으면(backlog) `machine_cred_alert kind=sweep_failed result=<코드>`를 남기고 **다음 성공 주기까지 비밀번호 오퍼레이션이 503**이다. 다른 구획(`W_data`·`W_lock`·읽기)은 계속 동작한다.
 
 경보를 받으면(관리자, 고정 provider):
 
@@ -693,7 +696,7 @@ T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`�
 | `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. 머신 `setPassword`(T-022, 아직 미개방)는 본문 비밀번호를 이 값과 **바이트**(UTF-8) 수로 비교해 미만이면 400이다(T022-D3) — 문자 수가 아니므로 비 ASCII 비밀번호는 문자 수가 이 값보다 적어도 통과할 수 있고, 그 경우의 문자 수 하한은 slapd 정책(`pwdMinLength`)이 맡는다. |
 | `MACHINE_WRITE_CRED_RATE_LIMIT_RPS` | 비밀번호 전역 예산(REQ-013, T-023), 기본 1. 1–10 정수, burst 1 고정(T023-D2). 모든 client가 함께 쓰는 replica당 토큰 버킷이며 client 쓰기 예산(`MACHINE_WRITE_RATE_LIMIT_*`)과 별개다. 비면 `setPassword`는 429 `machine_rate_limited`와 다음 토큰까지의 `Retry-After`(초, ≥1). 같은 대상(`entryUUID`, client 무관)에 진행 중인 `setPassword`가 있으면 대기열 없이 즉시 429와 `Retry-After: 1`(T023-D3). 둘 다 쓰기 전 거부라 멱등 키는 풀린다. |
 | `MACHINE_WRITE_CRED_PENDING_POLICY_DN` | 필수(D379-18). D26 형식, `LDAP_BASE_DN`의 엄격한 하위, 이미지 기본 정책(`cn=default,ou=policies,<base>`)과 다르고 보호 신원·특권 그룹·seed와 달라야 한다. |
-| `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
+| `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). **현재 효과 없음**: `setPassword` 사전 읽기(T-022)는 대기 정책이 정확히 하나인 대상만 받으므로 허용 목록의 정책을 가진 대상은 어차피 403이다. T-028은 목록의 정책 항목 값도 하한과 비교한다(유지보수자 Q4, 2026-10-14: 그대로 둔다). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
 
 대기 정책과 허용 목록의 정책 항목도 보호 집합에 들어간다: 머신 쓰기는 정책 항목을 고칠 수 없고, 그 항목을 담는 쓰기 상한은 기동 실패다.
 T-028(실행 시 전제 검사, 8.8)이 더 읽는 값:

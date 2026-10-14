@@ -31,6 +31,8 @@ Mutation self-test (LDAPIUM_PREMISE_MUTATE builds the checker from a patched cop
 source; the proof must then FAIL with named checks):
   drop-acl-check          check 1 (the olcAccess comparison) removed
   accesslog-base-search   check 6 searches the cn=accesslog BASE instead of its children
+  accesslog-objectclass   check 6 back to the (objectClass=*) filter (MINOR1)
+  sweep-nosuchattr-ok     a cleanup failing with noSuchAttribute counts as cleaned (Codex P1)
 
 Run (docker and go): python3 scripts/test/test-machine-write-cred-premise-live.py
 Override LDAPIUM_IMAGE / LDAPIUM_TEST_PREFIX; LDAPIUM_PREMISE_TEST_BINARY skips the build.
@@ -48,8 +50,9 @@ import time
 
 repo_root = pathlib.Path(__file__).resolve().parents[2]
 mutation = os.environ.get('LDAPIUM_PREMISE_MUTATE', '')
-if mutation not in ('', 'drop-acl-check', 'accesslog-base-search'):
-  raise SystemExit('LDAPIUM_PREMISE_MUTATE must be drop-acl-check or accesslog-base-search')
+MUTATIONS = ('drop-acl-check', 'accesslog-base-search', 'accesslog-objectclass', 'sweep-nosuchattr-ok')
+if mutation not in ('',) + MUTATIONS:
+  raise SystemExit('LDAPIUM_PREMISE_MUTATE must be one of ' + ', '.join(MUTATIONS))
 os.environ.setdefault('LDAPIUM_TEST_PREFIX', 'ldapium-cpre-')
 os.environ['LDAPIUM_WACL_MUTATE'] = ''  # the base proof's own fragment mutations stay off
 os.environ['LDAPIUM_WACL_CONFIGS'] = 'n0'
@@ -94,11 +97,18 @@ def build_binary():
     shutil.copytree(src, work + '/backend', ignore=shutil.ignore_patterns('dist', 'node_modules'))
     src = pathlib.Path(work + '/backend')
     f = src / 'internal/ldapclient/machine_write_premise_ldap.go'
+    if mutation == 'accesslog-objectclass':
+      f = src / 'internal/ldapclient/machine_write_premise_verdict.go'
     text = f.read_text()
     if mutation == 'drop-acl-check':
       text, n = re.subn(r'if code := compareCredACL\(values, params\); code != "" \{', 'if code := compareCredACL(values, params); false && code != "" {', text)
-    else:
+    elif mutation == 'accesslog-base-search':
       text, n = re.subn(r'credPremiseAccesslogBase, ldap\.ScopeWholeSubtree', 'credPremiseAccesslogBase, ldap.ScopeBaseObject', text)
+    elif mutation == 'accesslog-objectclass':
+      text, n = re.subn(r'const accesslogProbeFilter = "[^"]*"', 'const accesslogProbeFilter = "(objectClass=*)"', text)
+    else:
+      text, n = re.subn(r'if cred\.Modify\(sweepCleanupModify\(e\.DN, attrValues\(e, "employeeType"\), policy\)\) == nil \{',
+                        'if err := cred.Modify(sweepCleanupModify(e.DN, attrValues(e, "employeeType"), policy)); err == nil || ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute) {', text)
     require(n == 1, f'mutation {mutation} did not apply')
     f.write_text(text)
   out = work + '/premise-test'
@@ -123,7 +133,7 @@ class Premise:
     for k, v in dict(self.env, P_MODE=mode).items():
       cmd += ['-e', f'{k}={v}']
     res = run(cmd + [self.node.container, '/tmp/.premise-test', '-test.run', '^TestCredPremiseLive$', '-test.v'], timeout=120)
-    text = res.stdout + res.stderr
+    text = res.stdout + res.stderr + f'\n(exit {res.returncode})\n'
     check(mask(text) == text and not any(v in text for v in acl.passwords.values() if len(v) >= 8),
           f'checker output ({mode}) carries no password value')
     return text
@@ -133,9 +143,10 @@ class Premise:
     require(m is not None, 'no PREMISE line')
     return m.group(1), m.group(2)
 
-  def sweep(self):
-    m = re.search(r'^SWEEP stuck=(\d+) ttl=(\d+) orphan=(\d+) foreign=(\d+) cleaned=(\d+) failed=(\w+) code=(\S+)$', self._go('sweep'), re.M)
-    require(m is not None, 'no SWEEP line')
+  def sweep(self, mode='sweep'):
+    text = self._go(mode)
+    m = re.search(r'^SWEEP stuck=(\d+) ttl=(\d+) orphan=(\d+) foreign=(\d+) cleaned=(\d+) failed=(\w+) code=(\S+)$', text, re.M)
+    require(m is not None, 'no SWEEP line: ' + mask(text)[-400:])
     return dict(stuck=int(m.group(1)), ttl=int(m.group(2)), orphan=int(m.group(3)), foreign=int(m.group(4)),
                 cleaned=int(m.group(5)), failed=m.group(6) == 'true', code=m.group(7))
 
@@ -350,6 +361,16 @@ def main():
           'E-23a control: base hidden from M (0 entries) while M reads accesslog children')
   scenario(p, 'M reads accesslog CHILDREN with the base hidden', 'accesslog_children_readable',
            setup_fn=hidden_base, undo=lambda: [delete_rule(node, 0, alog) for _ in m_rules])
+  attr_rule = f'to dn.subtree="cn=accesslog" attrs=entry,reqMod,reqOld,reqDN by dn.exact="{machine_dn}" read by * break'
+
+  def attrs_only():
+    insert_rule(node, 0, attr_rule, alog)
+    oc = node.tool('machine', 'ldapsearch', ['-LLL', '-b', 'cn=accesslog', '-s', 'sub', '-z', '3', '(objectClass=*)', 'dn'])
+    dnf = node.tool('machine', 'ldapsearch', ['-LLL', '-b', 'cn=accesslog', '-s', 'sub', '-z', '3', '(reqDN=*)', 'reqMod'])
+    check(not acl.dn_set(oc.stdout) and len(acl.dn_set(dnf.stdout)) > 0,
+          'MINOR1 control: M reads reqMod/reqDN children while (objectClass=*) matches nothing (no search on objectClass)')
+  scenario(p, 'M reads accesslog reqMod/reqOld/reqDN without objectClass (MINOR1)', 'accesslog_children_readable',
+           setup_fn=attrs_only, undo=lambda: delete_rule(node, 0, alog))
   scenario(p, 'the M accesslog opt-in (accesslog-optin.ldif)', 'accesslog_children_readable',
            setup_fn=lambda: insert_rule(node, 0, f'to * by dn.exact="{machine_dn}" read by * break', alog), undo=lambda: delete_rule(node, 0, alog))
 
@@ -364,6 +385,19 @@ def main():
   scenario(p, 'the second subtree\'s pending canary loses the pending policy (default policy: pwdSafeModify refuses, 50)', 'canary_pending_short_unexpected', 'ok',
            setup_fn=lambda: admin(node, f'dn: {c_pending}\nchangetype: modify\ndelete: pwdPolicySubentry\n'),
            undo=lambda: admin(node, f'dn: {c_pending}\nchangetype: modify\nadd: pwdPolicySubentry\npwdPolicySubentry: {pending_pol}\n'))
+  # Review MAJOR (T028-F1): the unmarked canary is W_data-made with the pending policy, so the marker term
+  # is the only one that keeps W_cred out; giving it a marker must turn its 50 into an accepted write.
+  def unmarked_gets_marker_undo():
+    admin(node, f'dn: {c_unmarked}\nchangetype: modify\ndelete: employeeType\n')
+    pwv = node.search('admin', c_unmarked, '(objectClass=*)', ['userPassword'], 'base').stdout
+    if 'userPassword' in pwv:
+      admin(node, f'dn: {c_unmarked}\nchangetype: modify\ndelete: userPassword\n')
+  cre = node.search('admin', c_unmarked, '(objectClass=*)', ['creatorsName', 'pwdPolicySubentry', 'employeeType'], 'base').stdout
+  check(f'creatorsName: {wd_dn}' in cre and f'pwdPolicySubentry: {pending_pol}' in cre and 'employeeType' not in cre,
+        'guide 8.8: the unmarked canary is W_data-made, carries the pending policy and no marker (only the marker term differs)')
+  scenario(p, 'the unmarked canary gains a marker (the marker term isolated: W_cred can now set it)', 'canary_unmarked_accepted', 'ok',
+           setup_fn=lambda: admin(node, f'dn: {c_unmarked}\nchangetype: modify\nadd: employeeType\nemployeeType: {CMARK}\n'),
+           undo=unmarked_gets_marker_undo)
   scenario(p, 'the with-password canary loses its password (W_cred can now set it: accepted, reset needed)', 'canary_with_password_accepted', 'ok',
            setup_fn=lambda: admin(node, f'dn: {c_pw}\nchangetype: modify\ndelete: userPassword\n'),
            undo=lambda: attr_set(node, c_pw, 'userPassword', secrets.token_hex(24)))
@@ -414,6 +448,20 @@ def main():
   insert_rule(node, at + 4, grant)
   s = p.sweep()
   check(not s['failed'] and s['cleaned'] == 1, f'with the grant back the next round cleans it {s}')
+  # MINOR2/3: a read-only sweep counts and never writes
+  stuck3 = pending('sw-stuck3')
+  node.put(path, 'Stuck3-' + secrets.token_urlsafe(18))
+  require(lcode(node.tool('wcred', 'ldappasswd', ['-T', path, stuck3])) == 0, 'set the third stuck entry')
+  s = p.sweep('sweep-readonly')
+  pol3 = node.search('admin', stuck3, '(objectClass=*)', ['pwdPolicySubentry'], 'base').stdout
+  check(s['stuck'] == 1 and s['cleaned'] == 0 and not s['failed'] and 'pwdPolicySubentry' in pol3,
+        f'read-only sweep: finds the stuck entry, writes nothing (the policy is still on it) {s}')
+  # Codex P1: the marker disappears between the search and the cleanup; the cleanup must still remove
+  # the policy (re-read, delete what is left), never count a noSuchAttribute as cleaned
+  s = p.sweep('sweep-race')
+  pol3 = node.search('admin', stuck3, '(objectClass=*)', ['pwdPolicySubentry', 'employeeType'], 'base').stdout
+  check(s['stuck'] == 1 and s['orphan'] == 0 and s['cleaned'] == 1 and not s['failed'] and 'pwdPolicySubentry' not in pol3,
+        f'race: marker removed after the search, the cleanup re-reads and removes the policy (cleaned only when gone) {s}')
   scenario(p, 'after the sweeps', 'ok')
 
 

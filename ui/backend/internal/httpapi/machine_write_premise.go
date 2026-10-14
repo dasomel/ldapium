@@ -32,21 +32,41 @@ const (
 // fake (the real one dials).
 type credPremiseChecker interface {
 	Check(ctx context.Context, canaries bool) string
-	Sweep(ctx context.Context) ldapclient.CredSweepResult
+	Sweep(ctx context.Context, clean bool) ldapclient.CredSweepResult
 }
 
-// credGate holds the verdict of the last start-up or periodic cycle.
+// premiseCycleStale is the beforeWrite code when no cycle completed within
+// two periods (T028-D13): a stalled loop must not leave the last verdict open.
+const premiseCycleStale = "premise_cycle_stale"
+
+// credGate holds the verdict and completion time of the last start-up or
+// periodic cycle. now and period are the clock and the cycle length (tests set
+// them; zero means time.Now and credPremisePeriod).
 type credGate struct {
 	checker credPremiseChecker
+	now     func() time.Time
+	period  time.Duration
 	mu      sync.Mutex
-	cycle   string // "" = the last cycle passed
+	cycle   string    // "" = the last cycle passed
+	done    time.Time // when the last cycle completed
 }
 
-// startup is the start-up run. T028-D6: it runs the checks only; the first
-// sweep is the first periodic cycle (a sweep writes, start-up only reads and
-// probes).
+// startup is the start-up run: the checks with canaries, then (T028-D6,
+// MINOR3) a READ-ONLY sweep: start-up never writes, so a stuck entry (a set
+// password whose cleanup did not run, the F-5 window open) refuses start-up
+// instead of waiting for the first cycle; the operator cleans it (guide 8.9).
 func (g *credGate) startup(ctx context.Context) error {
 	code := g.checker.Check(ctx, true)
+	if code == "" {
+		sw := g.checker.Sweep(ctx, false)
+		switch {
+		case sw.Failed:
+			code = sw.Code
+		case sw.Found["stuck"] > 0:
+			code = "sweep_stuck_at_startup"
+			log.Printf("machine_cred_alert kind=stuck count=%d runbook=docs/machine-write-account.md:8.9", sw.Found["stuck"])
+		}
+	}
 	log.Printf("machine_cred_premise phase=startup result=%s", resultOrOK(code))
 	g.set(code)
 	if code != "" {
@@ -61,7 +81,9 @@ func (g *credGate) startup(ctx context.Context) error {
 // password operation like a failed check; orphan and foreign hits alert.
 func (g *credGate) runCycle(ctx context.Context) {
 	code := g.checker.Check(ctx, true)
-	sw := g.checker.Sweep(ctx)
+	// T028-D12 (MINOR2): with a failed check the W_cred grants are unproven, so
+	// the sweep only searches and counts; it never writes as W_cred.
+	sw := g.checker.Sweep(ctx, code == "")
 	log.Printf("machine_cred_sweep stuck=%d ttl=%d orphan=%d foreign=%d cleaned=%d result=%s",
 		sw.Found["stuck"], sw.Found["ttl"], sw.Found["orphan"], sw.Found["foreign"], sw.Cleaned, resultOrOK(sw.Code))
 	for _, kind := range []string{"orphan", "foreign"} {
@@ -82,8 +104,8 @@ func (g *credGate) runCycle(ctx context.Context) {
 }
 
 // run is the periodic loop of StartBackground; it ends with ctx.
-func (g *credGate) run(ctx context.Context, period time.Duration) {
-	t := time.NewTicker(period)
+func (g *credGate) run(ctx context.Context) {
+	t := time.NewTicker(g.cyclePeriod())
 	defer t.Stop()
 	for {
 		select {
@@ -97,21 +119,39 @@ func (g *credGate) run(ctx context.Context, period time.Duration) {
 	}
 }
 
-// beforeWrite is the setPassword pre-check: the last cycle's verdict, then
-// checks 1, 2 and 6 now (D379-15: the TOCTOU window left is check -> write, R-4).
+// beforeWrite is the setPassword pre-check: the last cycle passed and is at
+// most two periods old (MINOR4), then checks 1, 2 and 6 now (D379-15: the
+// TOCTOU window left is check -> write, R-4).
 func (g *credGate) beforeWrite(ctx context.Context) string {
 	g.mu.Lock()
-	code := g.cycle
+	code, done := g.cycle, g.done
 	g.mu.Unlock()
 	if code != "" {
 		return code
 	}
+	if g.clock().Sub(done) > 2*g.cyclePeriod() {
+		return premiseCycleStale
+	}
 	return g.checker.Check(ctx, false)
+}
+
+func (g *credGate) clock() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+func (g *credGate) cyclePeriod() time.Duration {
+	if g.period > 0 {
+		return g.period
+	}
+	return credPremisePeriod
 }
 
 func (g *credGate) set(code string) {
 	g.mu.Lock()
-	g.cycle = code
+	g.cycle, g.done = code, g.clock()
 	g.mu.Unlock()
 }
 

@@ -6,12 +6,14 @@ import (
 	"crypto/sha1" //nolint:gosec // {SSHA} is the pre-hashed form check 5 must see refused (EVIDENCE 2f D-4); a throwaway value
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/dasomel/ldapium/ui/backend/internal/config"
+	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 )
 
 // machine-write-scope-v2 T-028 (REQ-014, D379-15, D379-16, D379-18 Revision
@@ -55,6 +57,9 @@ const (
 type CredPremise struct {
 	cfg config.Config
 	now func() time.Time
+	// beforeCleanup is nil in production; the live proof uses it to change an
+	// entry between the sweep's search and its cleanup (the race T028-D7 handles).
+	beforeCleanup func(dn string)
 }
 
 // NewCredPremise takes the validated configuration; no connection is made.
@@ -201,7 +206,7 @@ func (p *CredPremise) checkAsMachine(ctx context.Context, defaultPolicy string) 
 	}
 	// Check 6: the children, never the base (D379-14, EVIDENCE 2e E-23a).
 	res, err := conn.Search(ldap.NewSearchRequest(credPremiseAccesslogBase, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, 5, false,
-		"(objectClass=*)", []string{"reqMod", "reqOld"}, nil))
+		accesslogProbeFilter, []string{"reqMod", "reqOld"}, nil))
 	entries := 0
 	if res != nil {
 		entries = len(res.Entries)
@@ -250,11 +255,35 @@ func (p *CredPremise) probeCanaries(ctx context.Context) string {
 	return ""
 }
 
-// sweepCleaned: the Modify succeeded, or the values were already gone
-// (noSuchAttribute: the request's own cleanup or another sweep won the race,
-// T028-D7), which leaves the entry as clean as a success.
-func sweepCleaned(err error) bool {
-	return err == nil || ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute)
+// cleanSwept is the W_cred cleanup of one swept entry with one retry. T028-D7
+// (Codex P1): the values the search saw may change before the Modify (the
+// request's own cleanup, another sweep, an operator), and a value delete of a
+// value that is gone fails the whole Modify (noSuchAttribute). So a failure is
+// never taken as success: M reads the entry again and the retry deletes only
+// what is still there; the entry counts as cleaned only when M then sees no
+// pending policy value on it.
+func (p *CredPremise) cleanSwept(ctx context.Context, m, cred *ldap.Conn, e *ldap.Entry) bool {
+	policy := p.cfg.Machine.Write.CredPendingPolicyDN
+	if cred.Modify(sweepCleanupModify(e.DN, attrValues(e, "employeeType"), policy)) == nil {
+		return true
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		now, err := readEntryAttr(ctx, m, e.DN, "employeeType", "pwdPolicySubentry")
+		if errors.Is(err, domain.ErrNotFound) {
+			return true // deleted meanwhile: nothing carries the policy
+		}
+		if err != nil {
+			return false
+		}
+		mod, done := sweepRetryModify(e.DN, attrValues(now, "employeeType"), attrValues(now, "pwdPolicySubentry"), policy)
+		if done {
+			return true
+		}
+		if attempt == 0 && cred.Modify(mod) != nil {
+			return false
+		}
+	}
+	return false
 }
 
 // hashedProbe replaces userPassword with the {SSHA} hash of a random
@@ -294,11 +323,14 @@ func (r *CredSweepResult) fail(code string) {
 }
 
 // Sweep runs the stuck, TTL, orphan and foreign sweeps as M over LDAP_BASE_DN
-// and cleans the first three as W_cred (D379-18 Revision 8/9). T028-D10: like
+// and, with clean, cleans the first three as W_cred (D379-18 Revision 8/9).
+// T028-D12: clean=false only searches and counts (no W_cred write): the cycle
+// passes it when its checks failed (the W_cred grants are then unproven), and
+// start-up uses it to refuse a stuck entry it may not clean. T028-D10: like
 // check 2 (the policies under ou=policies) this needs M's read base to be the
 // root, the documented default; a narrower M fails closed (unreadable). Cost:
 // v2c cannot run with a narrowed M. Escape hatch: none at this unit.
-func (p *CredPremise) Sweep(ctx context.Context) CredSweepResult {
+func (p *CredPremise) Sweep(ctx context.Context, clean bool) CredSweepResult {
 	w := p.cfg.Machine.Write
 	out := CredSweepResult{Found: map[string]int{}}
 	m, mDone, ok := p.bind(ctx, p.cfg.Machine.BindDN, p.cfg.Machine.BindPassword)
@@ -328,8 +360,8 @@ func (p *CredPremise) Sweep(ctx context.Context) CredSweepResult {
 				continue
 			}
 			out.Found[string(kind)]++
-			if kind == sweepForeign {
-				continue // W_cred cannot clean it (50): alert and runbook
+			if kind == sweepForeign || !clean {
+				continue // foreign: W_cred cannot clean it (50), alert and runbook
 			}
 			if cred == nil {
 				conn, done, ok := p.bind(ctx, w.Cred.BindDN, w.Cred.BindPassword)
@@ -340,8 +372,10 @@ func (p *CredPremise) Sweep(ctx context.Context) CredSweepResult {
 				defer done()
 				cred = conn
 			}
-			mod := sweepCleanupModify(e.DN, attrValues(e, "employeeType"), w.CredPendingPolicyDN)
-			if !sweepCleaned(cred.Modify(mod)) && !sweepCleaned(cred.Modify(mod)) {
+			if p.beforeCleanup != nil {
+				p.beforeCleanup(e.DN)
+			}
+			if !p.cleanSwept(ctx, m, cred, e) {
 				out.fail("sweep_" + string(kind) + "_cleanup_failed")
 				continue
 			}

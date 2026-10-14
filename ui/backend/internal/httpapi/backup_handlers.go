@@ -22,7 +22,7 @@ func (s *Server) StartBackground(ctx context.Context) {
 	}
 	s.sweepIdempotency(ctx)
 	if s.machineWrite != nil && s.machineWrite.premise != nil {
-		go s.machineWrite.premise.run(ctx, credPremisePeriod)
+		go s.machineWrite.premise.run(ctx)
 	}
 }
 func (s *Server) backupRoutes(api *echo.Group) {

@@ -207,7 +207,7 @@
 | 2 | **정책 값**: 같은 신원으로 ppolicy overlay의 `olcPPolicyDefault`를 읽고, `M`으로 그 정책 항목의 `pwdAttribute`·`pwdMinLength`·`pwdCheckQuality`·`pwdInHistory`를 읽어 설정 하한(`MACHINE_WRITE_CRED_MIN_LENGTH` 기본 12, quality ≥1, history ≥1)과 비교 | 기본 정책 | 하한 이상 | 기동 거부 / 503 |
 | 3 | **대상별 정책**(요청 직전만): `M` 사전 읽기로 대상의 `pwdPolicySubentry`를 읽어, 없으면 검사 2의 기본 정책, 있으면 `MACHINE_WRITE_CRED_POLICY_DNS` 허용 목록 안이어야 하고 그 항목도 검사 2의 하한을 만족해야 한다 | 대상 하나하나(표본 아님) | 만족 | 그 요청 403 |
 | 4 | **대상별 앱 게이트**(요청 직전만): 표지 태그 == 요청 client 태그, `creatorsName` == `W_data`, `pwdChangedTime` 없음(`M` 읽기 가능, `E-20`), 특권 멤버 아님 | 대상 하나하나 | 만족 | 그 요청 403 |
-| 5 | **카나리 프로브**(기동·주기): 상한 subtree **마다** 둔 카나리 3개(비밀번호 있는 표지 / 표지 없는 무비밀번호 / 표지 있는 무비밀번호, 모두 관리 잠금 상태)에 `W_cred`로 Password Modify — 앞의 둘은 50, 셋째는 1자 값으로 19(정책 길이) | 검사 1·2의 **실효 확인**(원문 대조가 slapd 해석과 같다는 증거) | 50/50/19 | 기동 거부 / 503, 셋째가 성공하면 카나리 재설정 필요 로그 |
+| 5 | **카나리 프로브**(기동·주기): 상한 subtree **마다** 둔 카나리 3개(비밀번호 있는 표지 / 표지 없는 무비밀번호 / 표지 있는 무비밀번호, 모두 관리 잠금 상태)에 `W_cred`로 Password Modify — 앞의 둘은 50, 셋째는 1자 값으로 19(정책 길이) | 검사 1·2의 **실효 확인**(원문 대조가 slapd 해석과 같다는 증거). **Revision 12(T028-F1)로 좁아짐**: 50 두 개는 비밀번호 항·표지 항을 각각 격리해 확인하고(표지 없는 카나리는 `W_data`가 만들고 대기 정책을 가짐), 19는 대기 정책이 `W_cred`에 적용됨만 보인다(ppolicy가 ACL보다 먼저 판정). 특권 filter·`CRED_DN` 경계 항은 카나리가 보지 않으며 검사 1이 유일한 통제다 | 50/50/19 | 기동 거부 / 503, 셋째가 성공하면 카나리 재설정 필요 로그 |
 | 6 | **accesslog 자식 읽기**: `M`으로 `cn=accesslog` **subtree** 검색(크기 1, 속성 `reqMod`·`reqOld`) — base가 아니라 자식 항목을 실제로 요청 | `M`이 읽을 수 있는 모든 로그 항목 | 0건 | 기동 거부 / 503(D379-14 상호 배제). 공존 모드(Q12)에서는 아래 검사 7로 대체 |
 | 7 | **공존 모드 전용 사후 확인**: 성공한 `setPassword`마다 `M`으로 그 쓰기의 accesslog 자식 항목(`reqAuthzID`=`W_cred`, `reqDN`=대상, `reqStart` ≥ 요청 시각)을 읽어 `reqMod`/`reqOld`에 `userPassword:` 값이 하나라도 보이면 비밀번호 오퍼레이션을 닫고 경보 | 실제 쓰기 기록 | 0건 | 503 + 경보(이미 한 건은 노출됐을 수 있음 → R-5) |
 | 8 | 설정: `MACHINE_WRITE_PRIVILEGED_GROUPS`·`MACHINE_WRITE_CRED_SUBTREES` 비어 있지 않음, 카나리가 subtree마다 존재 | 설정 | 만족 | 기동 거부 |
@@ -377,6 +377,12 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 - 코드 사실(P1–P23의 줄 번호)은 main `049fcc3`에서 읽어 확인했다. 이후 변경으로 어긋날 수 있다.
 
 ## Revision
+
+- 2026-10-14 Revision 12 (T-028 구현 검토: Codex P1 1, security-reviewer MAJOR 1·MINOR 5, BLOCKER 0; 실측 EVIDENCE.md §2j). 유지보수자 답(2026-10-14) 반영:
+  - **T028-F1 (MAJOR, 유지보수자 결정 필요)**: ppolicy가 값을 ACL보다 먼저 판정하므로 대기 카나리의 19는 ACL이 그 계정을 허용한다는 증거가 아니다(표지를 지워도 19, 실측). 검사 5의 역할을 좁힌다: 비밀번호 있는 표지 카나리의 50은 `!(userPassword=*)` 항, **`W_data`가 만들고 관리자가 대기 정책만 붙인** 표지 없는 카나리의 50은 표지 항을 격리해 확인하고(표지를 붙이면 `canary_unmarked_accepted`, 실측), 19 두 개는 대기 정책(길이·quality 2)이 `W_cred`에 적용됨만 보인다. **특권 filter 항·`CRED_DN` 경계 항은 카나리로 확인되지 않으며 검사 1(원문 대조)이 유일한 통제다.** 이 좁아진 역할의 수용은 유지보수자 결정으로 남긴다.
+  - **D379-16 확장(Q2 수용)**: 설정 읽기 신원 규칙이 메인 DB 항목의 `olcAddContentAcl`도 read(읽기 전용)한다 — Q15 선행 조건을 검사 1에서 확인하기 위해서다.
+  - Q1: 이미지 기본 `pwdMinLength` 8 < 하한 12는 의도된 운영 부담 — v2c 배포는 `LDAP_PASSWORD_MIN_LENGTH>=12`. Q3: `MACHINE_WRITE_CRED_PENDING_TTL` 기본 24h(잠정). Q4: `MACHINE_WRITE_CRED_POLICY_DNS`는 그대로(사전 읽기가 대기 정책만 받으므로 현재 효과 없음, 문서에 명시).
+  - Codex P1: 스윕 정리가 실패하면(검색 뒤 값이 바뀐 `noSuchAttribute` 포함) `M`으로 다시 읽어 남은 값만 지우고, 대기 정책 값이 없을 때만 정리로 센다(경쟁 실측). MINOR: accesslog 검사 filter `(|(objectClass=*)(reqMod=*)(reqOld=*)(reqDN=*))`; 검사가 실패한 주기의 스윕은 검색·계수만(`W_cred` 쓰기 없음); 기동 시 읽기 전용 스윕에서 stuck이 있으면 기동 거부; 마지막 주기가 2×주기보다 오래되면 비밀번호 오퍼레이션 503; 차트 가드 대소문자·공백 무시.
 
 - 2026-10-14 Revision 11 (T-021 구현 검토: security-reviewer MAJOR 2·MINOR 4, Codex P1 3; 실측 EVIDENCE.md §2i). 결정 문구 중 M-3 (a)와 배포 형태만 바뀐다.
   - **MAJOR-1**: M-3 (a)가 `inetOrgPerson`만 덮어, 관리자가 만든 `person`·`organizationalPerson`·`account`/`posixAccount` 항목은 지우고 같은 DN의 대기 `inetOrgPerson`으로 재생성할 수 있었다. (a)의 filter를 클래스와 무관하게 `(&(!(objectClass=groupOfNames))(!(creatorsName=<W_data>)))`로 바꿨다(그룹은 v2b `deleteGroup` 때문에 제외). Q16의 축소는 "W_data가 만들지 않은 사용자"에서 "W_data가 만들지 않은 그룹 아닌 항목"(컨테이너 포함, 앱은 원래 컨테이너 삭제를 거부)으로 표현만 넓어진다.

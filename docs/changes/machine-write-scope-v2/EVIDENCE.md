@@ -541,6 +541,22 @@ LDAPIUM_IMAGE=ldapium:t028 LDAPIUM_PREMISE_MUTATE=accesslog-base-search python3 
 RESULT: 66 checks passed, 1 failed, mutation=accesslog-base-search, 15s                 (exit 1)
 ```
 
+After the review (Revision 12; unmarked canary now W_data-made with the pending policy, re-read cleanup retry,
+accesslog filter on reqMod/reqOld/reqDN, read-only sweep), same script:
+
+```
+(none)                  RESULT: 77 checks passed, 0 failed, 16s                                    (exit 0)
+drop-acl-check          RESULT: 72 checks passed, 5 failed                                         (exit 1)
+accesslog-base-search   RESULT: 75 checks passed, 2 failed                                         (exit 1)
+accesslog-objectclass   RESULT: 76 checks passed, 1 failed (M reads reqMod/reqDN without objectClass) (exit 1)
+sweep-nosuchattr-ok     RESULT: 76 checks passed, 1 failed (race: cleaned 2, orphan 1 instead of 1/0)  (exit 1)
+```
+
+New rows: the unmarked canary gaining a marker -> `canary_unmarked_accepted` (the marker term isolated); M with read on
+`entry,reqMod,reqOld,reqDN` only (control: `(objectClass=*)` 0 entries, `(reqDN=*)` > 0) -> `accesslog_children_readable`;
+a read-only sweep finds a stuck entry and leaves its policy; the marker deleted between search and cleanup (test hook) ->
+the re-read retry removes the policy, `cleaned 1`, no orphan.
+
 | Scenario (AC-010b unless noted) | start-up/periodic | request |
 |---|---|---|
 | baseline (guide layout, two cred subtrees, canaries in both) | ok | ok |
@@ -561,7 +577,7 @@ RESULT: 66 checks passed, 1 failed, mutation=accesslog-base-search, 15s         
 
 Mutations: `drop-acl-check` (check 1 skipped) fails the `{0}`, filter-term and reader-rule scenarios in both modes, and
 the second-subtree scenario in the request mode; in the start-up/periodic mode the second subtree's with-password
-canary still catches that one (`canary_with_password_accepted`), which is the canaries' design role. `accesslog-base-search`
+canary still catches that one (`canary_with_password_accepted`), which is the canaries' (narrowed, Revision 12) role. `accesslog-base-search`
 fails exactly the hidden-base scenario (the opt-in returns the base entry itself and stays detected).
 
 - **T028-F1 (refines check 5, escalated):** the pending canary that LOST its marker still answers 19 to the 1-character

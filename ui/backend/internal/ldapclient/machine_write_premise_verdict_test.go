@@ -176,3 +176,37 @@ func TestIsCanary(t *testing.T) {
 		t.Error("isCanary")
 	}
 }
+
+// T028-D7 (Codex P1): the retry after a failed cleanup is built from what M
+// reads now, and "done" means the pending policy is gone - never "the first
+// Modify failed with noSuchAttribute".
+func TestSweepRetryModify(t *testing.T) {
+	pol, m := "cn=p,dc=x", CredentialPendingPrefix+"0123456789abcdef"
+	if mod, done := sweepRetryModify("uid=a,dc=x", []string{m}, []string{"CN=P, dc=x"}, pol); done || len(mod.Changes) != 2 {
+		t.Fatalf("both still present: done=%v %+v", done, mod)
+	}
+	// The race: the marker was removed after the search; only the policy remains.
+	mod, done := sweepRetryModify("uid=a,dc=x", nil, []string{pol}, pol)
+	if done || len(mod.Changes) != 1 || mod.Changes[0].Modification.Type != "pwdPolicySubentry" {
+		t.Fatalf("marker gone, policy left: done=%v %+v", done, mod)
+	}
+	// The policy is gone (with or without a leftover marker): cleaned.
+	for _, policies := range [][]string{nil, {"cn=other,dc=x"}} {
+		if _, done := sweepRetryModify("uid=a,dc=x", []string{m}, policies, pol); !done {
+			t.Fatalf("policy %v: not done", policies)
+		}
+	}
+}
+
+// MINOR1: check 6 asks for the attributes a reader may hold without
+// objectClass, and the filter compiles.
+func TestAccesslogProbeFilter(t *testing.T) {
+	if _, err := ldap.CompileFilter(accesslogProbeFilter); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"(objectClass=*)", "(reqMod=*)", "(reqOld=*)", "(reqDN=*)"} {
+		if !strings.Contains(accesslogProbeFilter, a) {
+			t.Errorf("filter lacks %s", a)
+		}
+	}
+}
