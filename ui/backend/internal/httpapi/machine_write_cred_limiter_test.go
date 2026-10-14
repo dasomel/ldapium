@@ -270,14 +270,15 @@ func TestPasswordLimits_SameTargetSerializedAcrossClients(t *testing.T) {
 }
 
 // Release on every way out after the lock (machine_limiter_panic_test.go
-// pattern): a panic, a client cancellation, the request timeout and a
+// pattern): a panic, the request timeout and a
 // directory refusal each leave no target held, and the next request on the
 // same target proceeds.
 func TestPasswordLimits_ReleaseOnPanicCancelTimeout(t *testing.T) {
 	const timeout = 300 * time.Millisecond
-	// The fake exop ignores its context's error, so a cancelled or timed-out
-	// request may still answer 200; what matters is that the context ended
-	// while the target was held and that the hold is gone afterwards.
+	// The fake exop ignores its context's error, so a timed-out request may
+	// still answer 200; what matters is that the context ended while the
+	// target was held and that the hold is gone afterwards. Cancellation is
+	// TestPasswordLimits_CancelKeepsHoldUntilWorkEnds.
 	var ctxEnded atomic.Bool
 	for _, tc := range []struct {
 		name  string
@@ -287,19 +288,6 @@ func TestPasswordLimits_ReleaseOnPanicCancelTimeout(t *testing.T) {
 		{"panic in the Password Modify", func(_ *wh, st *credState) {
 			st.onSet = func(context.Context) { panic("injected exop bug") }
 		}, nil},
-		{"client cancellation", func(_ *wh, st *credState) {
-			st.onSet = func(ctx context.Context) { <-ctx.Done(); ctxEnded.Store(true) }
-		}, func(w *wh) int {
-			ctx, cancel := context.WithCancel(context.Background())
-			time.AfterFunc(50*time.Millisecond, cancel)
-			req := httptest.NewRequest("POST", "/api/users/password", strings.NewReader(pwReq(credBob, sentinel(t), nil).body)).WithContext(ctx)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+w.tok("machine-a"))
-			req.Header.Set(headerIdempotencyKey, key()[headerIdempotencyKey][0])
-			rec := httptest.NewRecorder()
-			w.s.Handler().ServeHTTP(rec, req)
-			return rec.Code
-		}},
 		{"request timeout", func(_ *wh, st *credState) {
 			st.onSet = func(ctx context.Context) { <-ctx.Done(); ctxEnded.Store(true) }
 		}, nil},
@@ -318,7 +306,7 @@ func TestPasswordLimits_ReleaseOnPanicCancelTimeout(t *testing.T) {
 			} else {
 				code = w.send(pwReq(credBob, sentinel(t), hdr(key()))).Code
 			}
-			if ctxBound := strings.Contains(tc.name, "cancel") || strings.Contains(tc.name, "timeout"); ctxBound && !ctxEnded.Load() {
+			if ctxBound := strings.Contains(tc.name, "timeout"); ctxBound && !ctxEnded.Load() {
 				t.Fatal("the request context never ended inside the Password Modify")
 			} else if !ctxBound && code < 400 {
 				t.Fatalf("the injected failure answered %d", code)
@@ -341,6 +329,52 @@ func TestPasswordLimits_ReleaseOnPanicCancelTimeout(t *testing.T) {
 	wantCode(t, w.send(pwReq(credBob, sentinel(t), hdr(key()))), 403, codeScopeDenied)
 	if w.s.machineWrite.cred.held() != 0 {
 		t.Fatal("a refused pre-read holds the target")
+	}
+}
+
+// A client cancellation never frees the target while the write is still in
+// progress (the idempotency record detaches the request from cancellation, so
+// the Password Modify keeps running): a second request on the same target is
+// 429 until the work ends, and only then does the target go free.
+func TestPasswordLimits_CancelKeepsHoldUntilWorkEnds(t *testing.T) {
+	w := credHarness(t, nil)
+	st := credStateOf(w.dir)
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	st.onSet = func(context.Context) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-unblock
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest("POST", "/api/users/password", strings.NewReader(pwReq(credBob, sentinel(t), nil).body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+w.tok("machine-a"))
+	req.Header.Set(headerIdempotencyKey, key()[headerIdempotencyKey][0])
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	<-entered
+	cancel()
+	time.Sleep(50 * time.Millisecond) // room for any cancellation-triggered release
+	if n := w.s.machineWrite.cred.held(); n != 1 {
+		t.Fatalf("held = %d right after the cancel while the write runs, want 1", n)
+	}
+	second := pwReq(credBob, sentinel(t), hdr(key()))
+	second.client = "machine-w2"
+	wantCode(t, w.send(second), 429, codeMachineRateLimited)
+	close(unblock)
+	<-done
+	if n := w.s.machineWrite.cred.held(); n != 0 {
+		t.Fatalf("held = %d after the cancelled request ended", n)
+	}
+	second.headers = hdr(key())
+	if rec := w.send(second); rec.Code != 200 {
+		t.Fatalf("after the cancelled request ended: %d %s", rec.Code, rec.Body)
 	}
 }
 
