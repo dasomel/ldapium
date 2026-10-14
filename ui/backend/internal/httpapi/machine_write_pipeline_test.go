@@ -128,16 +128,24 @@ type fakeIdent struct {
 	// records "target|tag".
 	pending      func(target, tag string) error
 	pendingCalls []string
+	// uuid is the entryUUID the pending pre-read returns (default: "uuid:"+target).
+	uuid func(target string) string
 }
 
-func (f *fakeIdent) CheckCredentialPending(_ context.Context, target, tag string) error {
+func (f *fakeIdent) CheckCredentialPending(_ context.Context, target, tag string) (string, error) {
 	f.mu.Lock()
 	f.pendingCalls = append(f.pendingCalls, target+"|"+tag)
+	pending, uuid := f.pending, f.uuid
 	f.mu.Unlock()
-	if f.pending != nil {
-		return f.pending(target, tag)
+	if pending != nil {
+		if err := pending(target, tag); err != nil {
+			return "", err
+		}
 	}
-	return nil
+	if uuid != nil {
+		return uuid(target), nil
+	}
+	return "uuid:" + strings.ToLower(target), nil
 }
 
 func (f *fakeIdent) CheckNotPrivileged(_ context.Context, target string) error {

@@ -24,31 +24,47 @@ import (
 // pwdPolicySubentry, and has no pwdChangedTime yet. The first three are
 // ErrPermissionDenied; a pwdChangedTime is ErrConflict (409: a retry must not
 // become the 19/50 oracle of an already-set account). The object class and the
-// privileged-member refusal are Check and CheckNotPrivileged.
-func (r *WriteIdentityReader) CheckCredentialPending(ctx context.Context, target, tag string) error {
+// privileged-member refusal are Check and CheckNotPrivileged. On success it
+// returns the target's entryUUID, the per-target serialization key (REQ-013).
+func (r *WriteIdentityReader) CheckCredentialPending(ctx context.Context, target, tag string) (string, error) {
 	w := r.cfg.Machine.Write
 	if !r.cfg.Machine.Enabled || !r.cfg.Machine.WriteEnabled || !w.CredEnabled {
-		return domain.ErrPermissionDenied
+		return "", domain.ErrPermissionDenied
 	}
 	if _, ok := reproducibleWriteDN(target); !ok {
-		return domain.ErrPermissionDenied
+		return "", domain.ErrPermissionDenied
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	conn, stop, err := (&dialer{cfg: r.cfg}).newConn(ctx)
 	if err != nil {
-		return errWriteIdentityDirectory
+		return "", errWriteIdentityDirectory
 	}
 	defer conn.Close()
 	defer stop()
 	if err := conn.Bind(r.cfg.Machine.BindDN, r.cfg.Machine.BindPassword); err != nil {
-		return errWriteIdentityDirectory
+		return "", errWriteIdentityDirectory
 	}
-	entry, err := readEntryAttr(ctx, conn, target, "creatorsName", "employeeType", "pwdPolicySubentry", "pwdChangedTime")
+	entry, err := readEntryAttr(ctx, conn, target, "creatorsName", "employeeType", "pwdPolicySubentry", "pwdChangedTime", "entryUUID")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return credentialPendingVerdict(entry, tag, w.Data.BindDN, w.CredPendingPolicyDN)
+	if err := credentialPendingVerdict(entry, tag, w.Data.BindDN, w.CredPendingPolicyDN); err != nil {
+		return "", err
+	}
+	return pendingEntryUUID(entry)
+}
+
+// pendingEntryUUID is the serialization key of a pre-read entry: exactly one
+// non-empty entryUUID value, lower-cased (T023-D1: UUIDMatch ignores case, so
+// two spellings of one UUID must share a key). A missing or ambiguous value
+// cannot be serialized and is ErrPermissionDenied (fail closed, no write).
+func pendingEntryUUID(e *ldap.Entry) (string, error) {
+	v := attrValues(e, "entryUUID")
+	if len(v) != 1 || strings.TrimSpace(v[0]) == "" {
+		return "", domain.ErrPermissionDenied
+	}
+	return strings.ToLower(strings.TrimSpace(v[0])), nil
 }
 
 // credentialPendingVerdict judges the pre-read entry. Attribute names match

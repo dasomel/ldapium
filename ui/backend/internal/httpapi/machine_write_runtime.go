@@ -15,6 +15,9 @@ type machineWriteRuntime struct {
 	policies map[string]machineWritePolicy
 	limiter  *machineWriteLimiter
 	identity *ldapclient.WriteIdentityReader
+	// cred is the setPassword budget and per-target serialization (T-023),
+	// built only when MACHINE_WRITE_CRED_ENABLED is on.
+	cred *credLimiter
 }
 
 // checkMachineWritePrerequisites is the T-013 self-refusal: the switch that opens
@@ -100,6 +103,14 @@ func newMachineWriteRuntime(cfg config.Config, now func() time.Time) (*machineWr
 		l := m.Write.Limits
 		var err error
 		if rt.limiter, err = newMachineWriteLimiter(l.RPS, l.Burst, l.GlobalSlots, clients, now); err != nil {
+			return nil, err
+		}
+	}
+	if m.Write.CredEnabled {
+		// config.Load bounds the rate (1-10); a configuration built without it
+		// gets the REQ-013 default rather than an unbounded or refused budget.
+		var err error
+		if rt.cred, err = newCredLimiter(max(m.Write.CredRateLimitRPS, 1), 1, now); err != nil {
 			return nil, err
 		}
 	}

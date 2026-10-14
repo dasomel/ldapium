@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
@@ -124,12 +125,42 @@ func TestCredentialPendingCleanupModify(t *testing.T) {
 func TestCheckCredentialPendingRefusesBeforeDial(t *testing.T) {
 	base := config.Config{LDAPURL: "ldap://127.0.0.1:1", BaseDN: "dc=example,dc=org", Machine: config.MachineConfig{Enabled: true, WriteEnabled: true, BindDN: "cn=reader,dc=example,dc=org"}}
 	off := base
-	if err := NewWriteIdentityReader(off, nil).CheckCredentialPending(context.Background(), credTarget, credTag); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := NewWriteIdentityReader(off, nil).CheckCredentialPending(context.Background(), credTarget, credTag); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("v2c off: %v", err)
 	}
 	on := base
 	on.Machine.Write.CredEnabled = true
-	if err := NewWriteIdentityReader(on, nil).CheckCredentialPending(context.Background(), "uid=#04026f62,dc=example,dc=org", credTag); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := NewWriteIdentityReader(on, nil).CheckCredentialPending(context.Background(), "uid=#04026f62,dc=example,dc=org", credTag); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("BER target: %v", err)
+	}
+}
+
+// T-023 (REQ-013, T023-D1): the serialization key is exactly one entryUUID,
+// case-folded; none, empty or two values fail closed.
+func TestPendingEntryUUID(t *testing.T) {
+	const u = "5f2b1c9e-0d6a-4e8b-9c3f-1a2b3c4d5e6f"
+	for _, tc := range []struct {
+		name string
+		vals []string
+		want string
+		err  error
+	}{
+		{"one value", []string{u}, u, nil},
+		{"upper case folds to the same key", []string{strings.ToUpper(u)}, u, nil},
+		{"none", nil, "", domain.ErrPermissionDenied},
+		{"empty", []string{" "}, "", domain.ErrPermissionDenied},
+		{"two values", []string{u, u}, "", domain.ErrPermissionDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := pendingEntry(func(a map[string][]string) {
+				if tc.vals != nil {
+					a["entryUUID"] = tc.vals
+				}
+			})
+			got, err := pendingEntryUUID(e)
+			if got != tc.want || !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
+				t.Fatalf("got %q, %v; want %q, %v", got, err, tc.want, tc.err)
+			}
+		})
 	}
 }
