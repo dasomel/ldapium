@@ -210,10 +210,10 @@ func (r *WriteIdentityReader) CheckNotPrivileged(ctx context.Context, target str
 	return nil
 }
 
-// readEntryAttr reads one attribute of one entry. noSuchObject is ErrNotFound;
-// any other failure or an unexpected result shape is a directory error.
-func readEntryAttr(ctx context.Context, conn *ldap.Conn, dn, attr string) (*ldap.Entry, error) {
-	result, err := conn.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", []string{attr}, nil))
+// readEntryAttr reads the named attributes of one entry. noSuchObject is
+// ErrNotFound; any other failure or an unexpected result shape is a directory error.
+func readEntryAttr(ctx context.Context, conn *ldap.Conn, dn string, attrs ...string) (*ldap.Entry, error) {
+	result, err := conn.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 5, false, "(objectClass=*)", attrs, nil))
 	if noSuchObject(err) && ctx.Err() == nil {
 		return nil, domain.ErrNotFound
 	}

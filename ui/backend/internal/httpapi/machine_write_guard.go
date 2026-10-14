@@ -71,6 +71,16 @@ type machineWritePolicy struct {
 	Subtrees  []string
 	Protected []string
 	Groups    []string
+	// CredSubtrees is this client's MACHINE_WRITE_CRED_SUBTREES (Q9): the
+	// narrower ceiling of setPassword. Empty allows no password write.
+	CredSubtrees []string
+}
+
+// withinCredSubtree is the Q9 app check of setPassword (T022-D2): the target is
+// a STRICT descendant of one of the client's cred subtrees, before any LDAP
+// connection. The W_cred ACL is the second, independent fence.
+func (p machineWritePolicy) withinCredSubtree(raw string) bool {
+	return machineWritePolicy{Subtrees: p.CredSubtrees}.withinCeiling(raw, false)
 }
 
 // withinCeiling is the pre-connect ceiling check (B2/D20): the canonical target

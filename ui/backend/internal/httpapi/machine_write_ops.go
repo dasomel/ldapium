@@ -22,7 +22,7 @@ const (
 // first-ship operations; T-014 is the only unit that adds to it).
 type machineWriteOp struct {
 	machineOp
-	Compartment string // "data" | "lock": which W identity binds (D3)
+	Compartment string // "data" | "lock" | "cred": which W identity binds (D3)
 	Kind        string // audit target_kind: "user" | "group"
 	Class       string // objectClass the existing target must have (D19), "" for create
 	MemberClass string // membership only: objectClass of the member entry
@@ -32,7 +32,8 @@ type machineWriteOp struct {
 }
 
 // machineWriteCatalog is the first-ship set of Resolved Q2 (appendix A) plus the
-// v2b group rows and lockUser. Unlock and password operations are deliberately absent.
+// v2b group rows and lockUser, and the v2c setPassword row (T-022, not opened).
+// Unlock is deliberately absent.
 var machineWriteCatalog = []machineWriteOp{
 	{machineOp{"createUser", http.MethodPost, "/api/users", "directory.users.create"},
 		"data", "user", "", "", shapeCreate, false, false},
@@ -56,6 +57,12 @@ var machineWriteCatalog = []machineWriteOp{
 	// unlockUser row on purpose: unlock stays human-only (D379-7, REQ-008).
 	{machineOp{"lockUser", http.MethodPost, "/api/users/lock", "directory.users.lock"},
 		"lock", "user", "inetOrgPerson", "", shapeTarget, false, true},
+	// v2c setPassword (D379-9/10/18): binds W_cred; no If-Match (Password
+	// Modify carries no control, P10: one is a 400). Catalog only: T-026 adds it
+	// to machineWriteOps and config.MachineWriteOpenScopes, so until then a
+	// ceiling naming directory.users.password.write still fails start-up.
+	{machineOp{"setPassword", http.MethodPost, "/api/users/password", "directory.users.password.write"},
+		"cred", "user", "inetOrgPerson", "", shapeTarget, false, false},
 }
 
 // resolveMachineWriteOps joins the opened table with the catalog. Anything the
@@ -105,8 +112,8 @@ func writeBindIdentity(w config.MachineWriteConfig, compartment string) (config.
 			return w.Lock, true
 		}
 	case "cred":
-		// v2c T-020: selectable, but no catalog operation names this
-		// compartment until T-022/T-026.
+		// v2c: only the setPassword catalog row names this compartment, and it
+		// is not in machineWriteOps until T-026.
 		if w.CredEnabled && w.Cred.BindDN != "" {
 			return w.Cred, true
 		}

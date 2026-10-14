@@ -86,11 +86,15 @@ func newMachineWriteRuntime(cfg config.Config, now func() time.Time) (*machineWr
 	for _, g := range m.Write.Groups {
 		groups[g.ID] = g.DNs
 	}
+	cred := map[string][]string{}
+	for _, e := range m.Write.CredSubtrees {
+		cred[e.ID] = e.DNs
+	}
 	rt := &machineWriteRuntime{policies: map[string]machineWritePolicy{}}
 	var clients []string
 	for _, s := range m.Write.Subtrees {
 		clients = append(clients, s.ID)
-		rt.policies[s.ID] = machineWritePolicy{Subtrees: s.DNs, Protected: protected, Groups: groups[s.ID]}
+		rt.policies[s.ID] = machineWritePolicy{Subtrees: s.DNs, Protected: protected, Groups: groups[s.ID], CredSubtrees: cred[s.ID]}
 	}
 	if len(clients) > 0 {
 		l := m.Write.Limits
