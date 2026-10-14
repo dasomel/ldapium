@@ -131,7 +131,7 @@
 같은 대기 계정에 대해 (a) **같은 client**의 서로 다른 `Idempotency-Key` 두 요청을 동시에, (b) 앱을 우회한 `W_cred` 직접 Password Modify 병렬 N=10(서로 다른 값)을 보내면 각각 **정확히 한 건만** 성공하고 나머지는 쓰기 없이 실패한다(앱 경로는 직렬화 409/429 또는 ACL 거부, 직접 경로는 50). 최종 `userPassword`는 성공한 값으로만 bind된다. (c) **다른 client**의 동시 요청은 태그 검사로 쓰기 전에 403이다(AC-007b (d)와 같은 규칙). (b)가 성립하지 않으면 R-3이 열린 채로 남고 v2c는 출하하지 않는다. **Revision 9 범위(Codex P2)**: (b)의 "정확히 한 건"은 **한 provider 안에서만** 보장된다(단일 slapd 실측). 다중 provider에서는 앱 경로를 한 provider로 고정해도 `W_cred` 자격 증명으로 **다른 provider에 직접** 쓰는 경로는 막히지 않고, 복제는 last-write-wins다. 따라서 다중 provider 배포는 `W_cred` ACL 묶음을 고정 provider에만 설치하고(다른 provider에서는 `W_cred` none) 그것을 전제 검사로 확인해야 한다 — `cn=config`가 복제되는 구성에서는 이 방법이 성립하지 않는다(미실측, 출하 전 결정 필요).
 
 ### `AC-011` — 긴급 차단(구획별)
-(a) `MACHINE_WRITE_CRED_ENABLED=false` 재배포 → `setPassword` 403, 다른 쓰기 영향 없음. (b) `W_cred` 비밀번호 회전 → 다음 `setPassword` 503 `bind_failed`, `W_data`·`W_lock`·읽기 영향 없음. (c) 이미 bind된 진행 중 요청의 상한은 `MACHINE_REQUEST_TIMEOUT`(부모 EVIDENCE-drill.md와 같은 방식으로 실측).
+(a) `MACHINE_WRITE_CRED_ENABLED=false` 재배포 → `setPassword`는 쓰기·`W_cred` bind 없이 **503**(식별자 미구성; scope까지 ceiling에서 빠진 배포는 403), 다른 쓰기 영향 없음. **T-025 정정(2026-10-14)**: 플래그만 끄면 403이 아니라 503이다. 긴급 차단이 기동 실패가 되지 않게 503을 유지하며, T-026에서 확정한다(EVIDENCE.md §2k T025-F1). (b) `W_cred` 비밀번호 회전 → 다음 `setPassword` 503 `bind_failed`, `W_data`·`W_lock`·읽기 영향 없음. (c) 이미 bind된 진행 중 요청의 상한은 `MACHINE_REQUEST_TIMEOUT`(부모 EVIDENCE-drill.md와 같은 방식으로 실측).
 
 ### `AC-012` — 감사
 각 새 오퍼레이션의 허용·거부·재생·LDAP 거부가 정확히 한 줄이며 `compartment`=`data`/`lock`/`cred`, actor=client id. 비밀번호 오퍼레이션 줄에 비밀번호 관련 필드(값·길이·지문)가 없다.
@@ -249,6 +249,7 @@
 | lockout 무력화 | 머신이 잠금→해제 왕복, 여러 client, 재시작으로 ppolicy 잠금을 풀어 무차별 대입을 돕는다 | 머신 해제 미개방(D379-7, AC-005b) | 머신 `lockUser`가 ppolicy 시각 잠금을 무기한 표지로 바꿀 수 있음(더 엄격해질 뿐, 해제는 사람) |
 | 계정 탈취(비밀번호 설정) | 기존 사용자(비밀번호가 없는 SSO·외부 인증 사용자 포함)의 비밀번호를 알려진 값으로 설정해 로그인 | 표지·`creatorsName`·`!(userPassword=*)` ACL filter(D379-10), ACL 원문 대조·대상별 정책(D379-15/16), client 태그 확인, 특권 멤버 거부, 보호 DN, 상한, 기동 프로브 2·3 | ACL filter 미성립 시 출하 불가(E-08/E-16). **Revision 9 정정**: 탈취에 `W_cred` 침해는 필요 없다 — 유출된 `W_data` + `password.write`를 가진 정상 client 하나(앱이 `W_cred`로 설정)면 된다. 완화 전에는 관리자가 만든 특권 계정도 삭제→대기 재생성→설정→특권 그룹 재가입으로 탈취됐다(§2h M-3). 완화 (a)(비-`W_data` 사용자의 `entry` =rsc)·(b)(특권 그룹 `member` =rsc) 후 **남는 정확한 경계**: (1) `W_data`가 **스스로 만든** 계정(v2a createUser로 만든 SSO 사용자 포함)은 삭제·대기 재생성·설정이 가능하다(실측 0/0/0), (2) 특권 그룹의 **중첩** 그룹(`subadmins`) 멤버 추가는 막지 못한다(0). 두 가지 모두 수용 위험으로 유지보수자 결정에 올린다(Q16) |
 | `W_cred` 침해 | `W_cred` 비밀번호 유출 | ACL이 표지 있는 `W_data` 생성 비밀번호 없는 비특권 계정으로 한정, 다른 쓰기 없음, 긴급 회전(AC-011) | 대기 중(표지 있음·비밀번호 없음) 계정에 비밀번호 설정 가능; ACL은 client 태그를 구별하지 않음 |
+| `W_cred` 잠금 DoS | LDAP에 닿는 누구나 틀린 비밀번호 `pwdMaxFailure`(5)번으로 `W_cred`를 잠가 `setPassword`를 멈춤; 회전 뒤 거절된 요청도 실패 bind | 구획 분리(`W_data`·`W_lock`·읽기 무관), 잠금 해제 절차(`pwdAccountLockedTime` 삭제), 실패 bind 알림 | 기본 정책에서 가능. 무잠금 정책은 DoS를 없애지만 추측을 제한하지 않음 — **Q17 사용자 결정 필요** |
 | 비밀 유출 | 응답·감사·멱등·로그에 비밀번호 | D379-12, AC-009 센티널 스캔 | 멱등 HMAC 오프라인 추측(keyring 필요) |
 | 해시 유출 | auditlog stdout·accesslog `reqMod`/`reqOld`에 해시, `M`이나 다른 감사 독자가 accesslog **자식 항목**을 직접 읽기 | auditlog 동시 활성 금지(차트), `M` 자식 읽기 상호 배제(검사 6), 공존 시 사후 확인(검사 7), 해시 패턴 스캔(D379-14) | 차트 밖 auditlog(R-6), `M` 외 감사 독자(R-5), 공존 모드의 첫 노출 1건(R-5) |
 | 약한 비밀번호 | 머신이 정책 미달 비밀번호 설정, 또는 더 느슨한 사용자별 정책(`pwdPolicySubentry`)을 가진 대상에 설정 | slapd ppolicy(D379-13), 기본 정책 값 검사·대상별 정책 검사·카나리 길이 프로브(D379-15 검사 2·3·5), AC-010 | 품질·이력 규칙의 실효는 라이브 증거만(R-7) |
@@ -352,6 +353,7 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 14. **[유지보수자] F-5 창의 수용**(Revision 7). **Resolved 2026-10-13: 수용 + 스윕 강화**(Revision 8: stuck·TTL·외부 스윕, 분리 컨텍스트 정리, 409 사전 거부, 정직한 상한). 대기 정책이 붙은 계정은 비밀번호가 생긴 순간부터 정리 전까지 인증된 누구나 "현재 비밀번호와 같은가"를 lockout 없이 판별할 수 있다(19/50). 비밀번호가 없을 때는 오라클이 없다(§2f D-4). 권고: **수용** — 창은 정상 경로에서 같은 요청 안의 exop→정리 Modify 사이(ms)이고, 정리 실패 시 다음 주기 스윕이 정리를 시도하고 503·경보를 낸다(Revision 9: 고정 시간 상한은 주장하지 않음 — 스윕 처리량·backlog 미측정). 창을 0으로 하려면 탈출구(원자적 plain Modify, §2f D-7)를 택하되 accesslog `writes` 구성에 해시가 남는 비용(F-8, D379-14와 같은 상호 배제로 관리)을 진다.
 15. **[유지보수자] `olcAddContentAcl TRUE`**(Revision 7). **Resolved 2026-10-13: v2c 선행 조건으로 채택**(아래 권고는 기각됨). 출하 값(FALSE)에서는 Add가 속성별 ACL을 보지 않아 `W_data`가 Add 안에 임의의 `pwdPolicySubentry`(·`userPassword`, #386)를 실을 수 있다(§2f D-1). TRUE면 Add 시점 부착도 ACL로 정확한 DN·표지 항목에 한정되고 `userPassword` Add도 50이 된다(D-3). 다만 메인 DB 전체 스위치라 rootdn이 아닌 모든 Add 주체에 영향이 있다. 권고: 첫 v2c 출하는 FALSE 유지 + Modify 부착(ACL 한정) + "표지 없는 대기 정책" 스윕, TRUE는 #386과 함께 별도 결정.
 16. **[유지보수자] M-3 완화의 계약 영향과 잔여 위험**(Revision 9). **Resolved 2026-10-14: 수용** — **v2a 계약 축소(Q16, 2026-10-14 유지보수자 수용)**: v2c를 켠 배포(M-3 완화 규칙 (a) 설치)에서는 머신 `deleteUser`와 modrdn이 `W_data`가 만들지 않은 사용자(`creatorsName` ≠ `W_data`)에 대해 LDAP 50으로 거부되고 앱은 그것을 기존 매핑의 거부로 돌려준다. `W_data`가 만든 사용자와 v2c를 켜지 않은 배포는 바뀌지 않는다. 잔여 위험(스스로 만든 계정, 중첩 특권 그룹)도 권고대로 수용. 완화 (a)를 설치하면 머신 `deleteUser`(v2a)와 modrdn은 `W_data`가 만든 사용자에게만 동작한다(관리자가 만든 사용자 삭제는 50) — v2c를 켠 배포에서 v2a 계약이 좁아진다. 남는 위험: `W_data`가 스스로 만든 계정의 삭제→재생성→설정, 특권 그룹의 중첩 그룹. 권고: (a)·(b)를 `W_cred` 조각과 같이 설치하고(v2c 켤 때만), 두 잔여 위험을 수용하되 운영 가이드에 "v2a로 만든 계정을 SSO 신원으로 쓰는 배포는 v2c를 켜지 말 것"과 "특권 그룹의 하위 그룹을 `MACHINE_WRITE_PRIVILEGED_GROUPS`에 함께 나열할 것"을 둔다.
+17. **[유지보수자] `W_cred` 잠금 정책**(T-025). **사용자 결정 필요**: 기본 정책(`pwdLockout TRUE`, `pwdMaxFailure 5`)에서는 LDAP에 닿는 누구나 틀린 비밀번호 5번으로 `W_cred`를 잠가 `setPassword`를 멈출 수 있다(읽기·다른 구획은 무관, 라이브 실측 EVIDENCE.md §2k). `W_data`용 무잠금 정책(가이드 9.1)을 `W_cred`에 붙이면 잠기지 않는 것도 실측했다(13번 거절, T-028 기동 검사 통과). 대가: 잠금이 없으면 `W_cred` 비밀번호 추측이 제한되지 않는다(완화는 실패 bind 알림뿐). 선택지: (a) 기본 정책 유지(DoS 가능, 추측 제한), (b) 무잠금 정책(DoS 없음, 추측 무제한), (c) 짧은 잠금(`pwdLockoutDuration` 수 초~수 분). 권고 없음 — 위험 선호의 문제. 코드·가이드는 기본으로 아무것도 붙이지 않는다.
 
 ## Ship-gating open risks
 
@@ -378,6 +380,7 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 ## Revision
 
+- 2026-10-14 Revision 13 (T-025 드릴 검토 반영; 실측 EVIDENCE.md §2k). AC-011 (a) 정정(플래그만 끄면 503, 유지보수자 결정), 열린 질문 Q17(`W_cred` 잠금 정책)과 위협 행 추가. 설계 결정 문구는 불변.
 - 2026-10-14 Revision 12 (T-028 구현 검토: Codex P1 1, security-reviewer MAJOR 1·MINOR 5, BLOCKER 0; 실측 EVIDENCE.md §2j). 유지보수자 답(2026-10-14) 반영:
   - **T028-F1 (MAJOR, 유지보수자 결정 필요)**: ppolicy가 값을 ACL보다 먼저 판정하므로 대기 카나리의 19는 ACL이 그 계정을 허용한다는 증거가 아니다(표지를 지워도 19, 실측). 검사 5의 역할을 좁힌다: 비밀번호 있는 표지 카나리의 50은 `!(userPassword=*)` 항, **`W_data`가 만들고 관리자가 대기 정책만 붙인** 표지 없는 카나리의 50은 표지 항을 격리해 확인하고(표지를 붙이면 `canary_unmarked_accepted`, 실측), 19 두 개는 대기 정책(길이·quality 2)이 `W_cred`에 적용됨만 보인다. **특권 filter 항·`CRED_DN` 경계 항은 카나리로 확인되지 않으며 검사 1(원문 대조)이 유일한 통제다.** 이 좁아진 역할의 수용은 유지보수자 결정으로 남긴다.
   - **D379-16 확장(Q2 수용)**: 설정 읽기 신원 규칙이 메인 DB 항목의 `olcAddContentAcl`도 read(읽기 전용)한다 — Q15 선행 조건을 검사 1에서 확인하기 위해서다.

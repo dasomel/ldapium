@@ -681,7 +681,7 @@ fi
 경보를 받으면(관리자, 고정 provider):
 
 1. `foreign`·`orphan`: 그 항목이 왜 대기 정책을 가졌는지 먼저 본다(관리자 수동 부착, #399 수정 전 이미지의 자기 부착, Add 전용 규칙을 우회한 쓰기). 그다음 8.7의 `# v2c-cleanup` 블록처럼 관리자로 대기 정책 값(과 있으면 표지 값)만 지운다. 카나리는 지우지 않는다.
-2. `sweep_failed`(`sweep_stuck_cleanup_failed` 등): `W_cred` bind(회전·잠금, 9.1), 8.5 묶음의 `{3}`·`{4}` 정리 규칙, LDAP 상태를 확인한다. 정리 규칙이 고장이면 1과 같은 관리자 정리 후 묶음을 다시 넣는다. stuck 항목이 남아 있는 동안 그 계정에는 F-5 오라클이 열려 있다(Q14).
+2. `sweep_failed`(`sweep_stuck_cleanup_failed` 등): `W_cred` bind(회전·잠금, 9.1), 8.5 묶음의 `{3}`·`{4}` 정리 규칙, LDAP 상태를 확인한다. 정리 규칙이 고장이면 1과 같은 관리자 정리 후 묶음을 다시 넣는다. stuck 항목이 남아 있는 동안 그 계정에는 F-5 오라클이 열려 있다(Q14). `W_cred`가 회전·잠금 중이면 스윕이 정리할 수 없으므로 같은 관리자 정리를 손으로 한다: [machine-auth-operations.md "Manual cleanup while `W_cred` is rotated or blocked"](machine-auth-operations.md#manual-cleanup-while-w_cred-is-rotated-or-blocked-revision-8)(T-025, 라이브로 실행·검증).
 3. `machine_cred_premise … result=<코드>`로 비밀번호 오퍼레이션이 닫혔으면 위 8.8 표의 코드로 원인을 찾는다. 고친 뒤 다음 주기(60초 안)에 `result=ok`가 나오면 다시 열린다. 기동이 막힌 경우는 고친 뒤 다시 시작한다.
 
 ### 8.0 앱 설정 값 (T-020)
@@ -747,6 +747,7 @@ pwdPolicySubentry: cn=machine-writers,ou=policies,dc=example,dc=org
 
 - **`pwdLockout: FALSE`만 쓰고 `pwdMaxFailure`는 넣지 않는다.** `pwdMaxFailure: 5`를 남기고 플래그만 끄면(실측) 25번 실패 뒤 `pwdAccountLockedTime`이 **찍히지만**
   쓰기는 계속 되므로, 잠금 속성을 감시하는 알림이 거짓 양성이 된다.
+- `W_cred`에 같은 정책을 붙이는 것도 라이브로 측정했다(T-025, [machine-auth-operations.md](machine-auth-operations.md)): 13번 거절 뒤에도 잠기지 않고 T-028 기동 검사가 통과한다. 단 잠금이 없으면 `W_cred`에 대한 비밀번호 추측이 제한되지 않으므로 **붙일지는 유지보수자 결정**(CHANGE.md Q17)이고 기본으로 붙이지 않는다.
 - 이 정책에서 25번 틀린 비밀번호 bind 뒤에도 잠기지 않고 쓰기가 계속 된다(실측). 비밀번호 회전 차단은 그대로 동작한다: 회전 뒤 거절된 쓰기 8건, 계정 잠금 없음,
   복구 직후 다음 쓰기가 성공한다.
 - **대가**: 이 정책에서는 운영자가 `pwdAccountLockedTime`을 직접 넣어도 **무시된다**(실측: 영구 잠금 값을 넣은 뒤에도 쓰기 201). 긴급 차단은 비밀번호 회전(또는 쓰기만 끄는 재배포)만 쓴다.
