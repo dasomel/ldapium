@@ -54,11 +54,12 @@
 {{- $cn := dict "m" (lower (replace ", " "," (trim $ma.ldapBindDN))) "d" (lower (replace ", " "," (trim $w.data.bindDN))) "l" (lower (replace ", " "," (trim $w.lock.bindDN))) "a" (lower (replace ", " "," (trim $adminDN))) "c" (lower (replace ", " "," (trim $c.bindDN))) "r" (lower (replace ", " "," (trim $c.aclReader.dn))) -}}
 {{- if or (eq $cn.c $cn.m) (eq $cn.c $cn.d) (eq $cn.c $cn.a) (and $w.lock.enabled (eq $cn.c $cn.l)) }}{{ fail "ui.machineAuth.write.cred.bindDN must differ from the read identity, the data and lock identities and the LDAP administrator DN" }}{{ end -}}
 {{- if or (eq $cn.r $cn.m) (eq $cn.r $cn.d) (eq $cn.r $cn.a) (eq $cn.r $cn.c) (and $w.lock.enabled (eq $cn.r $cn.l)) }}{{ fail "ui.machineAuth.write.cred.aclReader.dn must differ from the read identity, every write identity and the LDAP administrator DN" }}{{ end -}}
-{{- $refs := list (printf "%s/%s" $ma.existingSecret $ma.existingSecretKey) (printf "%s/%s" $w.data.existingSecret $w.data.existingSecretKey) -}}
+{{- /* T-026 review MINOR b: the LDAP administrator's Secret key counts too (an identity's password must never be the rootdn's). */ -}}
+{{- $refs := list (printf "%s/%s" $ma.existingSecret $ma.existingSecretKey) (printf "%s/%s" $w.data.existingSecret $w.data.existingSecretKey) (printf "%s/%s" (include "ldapium.adminSecretName" .) .Values.auth.existingSecretKey) -}}
 {{- if $w.lock.enabled }}{{ $refs = append $refs (printf "%s/%s" $w.lock.existingSecret $w.lock.existingSecretKey) }}{{ end -}}
 {{- $credRef := printf "%s/%s" $c.existingSecret $c.existingSecretKey -}}
 {{- $readerRef := printf "%s/%s" $c.aclReader.existingSecret $c.aclReader.existingSecretKey -}}
-{{- if has $credRef $refs }}{{ fail "ui.machineAuth.write.cred must not reuse the Secret key of the read, data or lock identity" }}{{ end -}}
+{{- if has $credRef $refs }}{{ fail "ui.machineAuth.write.cred must not reuse the Secret key of the read, data or lock identity or of the LDAP administrator" }}{{ end -}}
 {{- if or (has $readerRef $refs) (eq $readerRef $credRef) }}{{ fail "ui.machineAuth.write.cred.aclReader must not reuse the Secret key of another identity" }}{{ end -}}
 {{- $subIDs := list -}}
 {{- range $e := $w.subtrees }}{{ $subIDs = append $subIDs $e.client }}{{ end -}}
@@ -120,6 +121,9 @@
 {{- if and (eq $w.data.existingSecret $ma.existingSecret) (eq $w.data.existingSecretKey $ma.existingSecretKey) }}{{ fail "ui.machineAuth.write.data must not reuse the read identity's Secret key (ui.machineAuth.existingSecret/existingSecretKey)" }}{{ end -}}
 {{- if and $w.lock.enabled (eq $w.lock.existingSecret $w.data.existingSecret) (eq $w.lock.existingSecretKey $w.data.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock must not reuse the data identity's Secret key" }}{{ end -}}
 {{- if and $w.lock.enabled (eq $w.lock.existingSecret $ma.existingSecret) (eq $w.lock.existingSecretKey $ma.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock must not reuse the read identity's Secret key" }}{{ end -}}
+{{- $adminSecret := include "ldapium.adminSecretName" . -}}
+{{- if and (eq $w.data.existingSecret $adminSecret) (eq $w.data.existingSecretKey .Values.auth.existingSecretKey) }}{{ fail "ui.machineAuth.write.data must not reuse the LDAP administrator's Secret key" }}{{ end -}}
+{{- if and $w.lock.enabled (eq $w.lock.existingSecret $adminSecret) (eq $w.lock.existingSecretKey .Values.auth.existingSecretKey) }}{{ fail "ui.machineAuth.write.lock must not reuse the LDAP administrator's Secret key" }}{{ end -}}
 {{- $known := list -}}
 {{- range $c := $ma.allowedClients }}{{ $known = append $known $c.id }}{{ end -}}
 {{- $subIDs := list -}}

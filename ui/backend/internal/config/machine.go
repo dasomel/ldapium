@@ -106,7 +106,8 @@ var MachineWriteScopes = []string{
 // scopes of machineWriteOps; a ceiling naming any other write scope (unlock) is
 // refused at startup. T026-D1: unlike directory.users.lock, the password scope
 // does not require its compartment (MACHINE_WRITE_CRED_ENABLED) at start-up, so
-// the flag-only emergency block (AC-011 (a)) starts and answers 503.
+// the flag-only emergency block (AC-011 (a)) starts; setPassword then answers
+// 403 scope_denied with no W_cred bind (no cred ceiling is read, Q19).
 var MachineWriteOpenScopes = []string{
 	"directory.users.create",
 	"directory.users.update",

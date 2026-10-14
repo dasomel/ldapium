@@ -203,10 +203,11 @@ func TestPasswordPipeline_SetsAsW_credAfterThePreReadsThenCleansUp(t *testing.T)
 	if got := w.ident.callList(); len(got) != 1 || got[0] != credBob+"|inetOrgPerson" {
 		t.Fatalf("Check calls = %v", got)
 	}
-	if len(w.ident.privCalls) != 1 || w.ident.privCalls[0] != credBob {
+	// T026-D3: each pre-read runs twice, before the target lock and inside it.
+	if len(w.ident.privCalls) != 2 || w.ident.privCalls[0] != credBob || w.ident.privCalls[1] != credBob {
 		t.Fatalf("privileged pre-read = %v", w.ident.privCalls)
 	}
-	if len(w.ident.pendingCalls) != 1 || w.ident.pendingCalls[0] != credBob+"|"+tag {
+	if len(w.ident.pendingCalls) != 2 || w.ident.pendingCalls[0] != credBob+"|"+tag || w.ident.pendingCalls[1] != credBob+"|"+tag {
 		t.Fatalf("pending pre-read = %v", w.ident.pendingCalls)
 	}
 	// The exop bind and the separate cleanup bind are both W_cred, never W_data.
@@ -393,8 +394,56 @@ func TestPasswordPipeline_TagIsTheRequestingClients(t *testing.T) {
 	if rec := w.send(pwReq(credBob, pw, hdr(key()))); rec.Code != 200 {
 		t.Fatalf("owner: %d %s", rec.Code, rec.Body)
 	}
-	if got := w.ident.pendingCalls; len(got) != 2 || got[0] != credBob+"|"+w.tagOf("machine-w2") || got[1] != credBob+"|"+owner {
+	if got := w.ident.pendingCalls; len(got) != 3 || got[0] != credBob+"|"+w.tagOf("machine-w2") || got[1] != credBob+"|"+owner || got[2] != credBob+"|"+owner {
 		t.Fatalf("pending pre-read tags = %v", got)
+	}
+}
+
+// T026-D3 (review MINOR a): the pre-reads run again inside the per-target lock.
+// A target that changed between the first read and the lock (a password set,
+// a privileged membership added, the entry replaced) is refused with no
+// Password Modify sent.
+func TestPasswordPipeline_PreReadsRepeatInsideTheTargetLock(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mod    func(w *wh)
+		status int
+		code   string
+	}{
+		"password set in between": {func(w *wh) {
+			n := 0
+			w.ident.pending = func(_, _ string) error {
+				if n++; n > 1 {
+					return domain.ErrConflict
+				}
+				return nil
+			}
+		}, 409, codeConflict},
+		"made privileged in between": {func(w *wh) {
+			n := 0
+			w.ident.privileged = func(string) error {
+				if n++; n > 1 {
+					return domain.ErrPermissionDenied
+				}
+				return nil
+			}
+		}, 403, codeScopeDenied},
+		"entry replaced in between": {func(w *wh) {
+			n := 0
+			w.ident.uuid = func(target string) string {
+				n++
+				return fmt.Sprintf("uuid-%d", n)
+			}
+		}, 409, codeConflict},
+	} {
+		w := credHarness(t, nil)
+		tc.mod(w)
+		rec := w.send(pwReq(credBob, sentinel(t), hdr(key())))
+		if rec.Code != tc.status || errBody(t, rec).Code != tc.code {
+			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, rec.Body, tc.status, tc.code)
+		}
+		if len(credStateOf(w.dir).sent()) != 0 {
+			t.Errorf("%s: a Password Modify was sent", name)
+		}
 	}
 }
 

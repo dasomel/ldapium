@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -849,6 +850,18 @@ func TestCredDrillLive(t *testing.T) {
 	}
 	r.obs("W_cred lockout trap, default policy (pwdMaxFailure %d): locked=%t after %d refused requests from a clean count", maxFail, locked, n)
 	r.check(maxFail > 0 && locked && n == maxFail, fmt.Sprintf("(b) the default policy locks W_cred at exactly pwdMaxFailure refused requests (%d of %d, locked=%t)", n, maxFail, locked))
+	// T026-D2 (Q18 (b)): without its no-lockout policy a replica does not start, whatever the Secret.
+	r.secret = rot
+	np := r.build("NP", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
+	r.check(np.h.startErr != nil && strings.Contains(np.h.startErr.Error(), "wcred_policy_missing"),
+		fmt.Sprintf("T026-D2: W_cred on the default policy: a replica refuses to start (wcred_policy_missing) (%v)", np.h.startErr))
+	r.secret = rotated
+	// the guide's no-lockout policy (8.1, Q17) back on W_cred (pwdAccountLockedTime is still set)
+	setPol := ldap.NewModifyRequest(wc, nil)
+	setPol.Replace("pwdPolicySubentry", []string{noLock})
+	if err := r.adminModify(setPol); err != nil {
+		t.Fatalf("attach the policy to W_cred: %v", err)
+	}
 
 	// the periodic premise cycle on a replica with the stale Secret closes the password operation by itself
 	ccx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -863,10 +876,17 @@ func TestCredDrillLive(t *testing.T) {
 
 	// restore by rollout of the rotated Secret
 	r.secret = rot
-	bl := r.build("BL", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true, startErr: true})
-	r.check(bl.h.startErr != nil && strings.Contains(bl.h.startErr.Error(), "wcred_bind_failed"),
-		fmt.Sprintf("locked W_cred: even the correct Secret does not start a replica (%v)", bl.h.startErr))
-	r.check(r.unlockWCred() && !r.wcredLocked(), "the administrator's delete of pwdAccountLockedTime unlocks W_cred")
+	// T-026: under pwdLockout FALSE slapd ignores the pwdAccountLockedTime the default policy stamped
+	// (guide 9.1), so re-attaching the 8.1 policy is itself the way out of the trap.
+	stamped := r.wcredLocked()
+	bl := r.build("BL", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
+	qbl := bl.pending("t026-after-trap")
+	vbl := drillRandom(14)
+	rbl := bl.setPassword("after-trap", qbl, vbl)
+	r.obs("after the trap, the 8.1 policy re-attached, pwdAccountLockedTime still set=%t: a replica with the correct Secret started and setPassword answered %d", stamped, rbl.status)
+	r.check(stamped && rbl.status == 200 && r.binds(qbl, vbl),
+		fmt.Sprintf("the no-lockout policy re-attached: W_cred binds although pwdAccountLockedTime is still set, a new replica starts and sets a password: 200 (got %d)", rbl.status))
+	r.check(r.unlockWCred() && !r.wcredLocked(), "the administrator's delete of pwdAccountLockedTime clears the stamp")
 	r.clearFailures()
 	rb := r.build("RB", drillOpt{timeout: 10 * time.Second, credEnabled: true, ceiling: true})
 	qb := rb.pending("t025-rot-rollout")
@@ -877,12 +897,7 @@ func TestCredDrillLive(t *testing.T) {
 	r.check(still.status == 503, fmt.Sprintf("(b) the replica that was not rolled out stays 503 (got %d)", still.status))
 
 	// the same failures with the guide's no-lockout policy (8.1, Q17; the 9.1 policy: pwdLockout FALSE,
-	// no pwdMaxFailure) attached to W_cred again
-	setPol := ldap.NewModifyRequest(wc, nil)
-	setPol.Replace("pwdPolicySubentry", []string{noLock})
-	if err := r.adminModify(setPol); err != nil {
-		t.Fatalf("attach the policy to W_cred: %v", err)
-	}
+	// no pwdMaxFailure), attached again above
 	r.clearFailures()
 	refusedAll := true
 	for i := 0; i < 2*maxFail+3; i++ {
@@ -929,6 +944,40 @@ func TestCredDrillLive(t *testing.T) {
 	vf := drillRandom(14)
 	back := g.setPassword("flag-back", pa1, vf)
 	r.check(back.status == 200 && r.binds(pa1, vf), fmt.Sprintf("(a) the replica with the flag on (not redeployed), the same account, sets the password: 200 (got %d)", back.status))
+
+	// ---- Q16 (Revision 10): with the v2c rules installed a machine deleteUser reaches only W_data-made entries ----
+	adminMade := "uid=t026-admin-made," + r.env("T_CREATE_BASE")
+	add := ldap.NewAddRequest(adminMade, nil)
+	add.Attribute("objectClass", []string{"inetOrgPerson"})
+	add.Attribute("uid", []string{"t026-admin-made"})
+	add.Attribute("cn", []string{"T026"})
+	add.Attribute("sn", []string{"T026"})
+	ac := r.admin()
+	if err := ac.Add(add); err != nil {
+		t.Fatalf("admin add: %v", err)
+	}
+	ac.Close()
+	del := func(dn string) drillResp {
+		csn := r.attrs(dn, "entryCSN")["entrycsn"]
+		if len(csn) != 1 {
+			return drillResp{status: -1}
+		}
+		return g.sendWith("delete "+dn, http.MethodDelete, "/api/users?dn="+url.QueryEscape(dn), "", r.key(), `"`+csn[0]+`"`)
+	}
+	exists := func(dn string) bool {
+		c := r.admin()
+		defer c.Close()
+		res, err := c.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 0, false, "(objectClass=*)", []string{"1.1"}, nil))
+		return err == nil && len(res.Entries) == 1
+	}
+	da := del(adminMade)
+	r.obs("Q16: machine deleteUser of an administrator-made user (v2c rules installed): %d %s", da.status, da.code)
+	r.check(da.status == 403 && da.code == codeForbidden && exists(adminMade),
+		fmt.Sprintf("Q16: machine deleteUser of an administrator-made user is 403 forbidden (LDAP 50) and the entry stays (got %d %s)", da.status, da.code))
+	ownDN, oc := g.createUser("t026-wdata-made", false)
+	dw := del(ownDN)
+	r.check(oc.status == 201 && dw.status == 204 && !exists(ownDN),
+		fmt.Sprintf("Q16: machine deleteUser of a W_data-made user still works: 204 (got create %d, delete %d %s)", oc.status, dw.status, dw.code))
 	total := 0
 	for _, sv := range r.servers {
 		_, f := sv.dialer.counts(wc)

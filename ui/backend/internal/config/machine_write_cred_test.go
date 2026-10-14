@@ -77,7 +77,8 @@ func TestMachineWriteCredValid(t *testing.T) {
 		t.Fatalf("password scope with W_cred on: %v", err)
 	}
 	// T026-D1 (AC-011 (a)): with the compartment off the same ceiling still
-	// starts (setPassword answers 503 at request time), unlike the lock scope.
+	// starts (setPassword answers 403 scope_denied at request time: no cred
+	// ceiling is read, T026-F1 / Q19), unlike the lock scope.
 	off, err := Load(credEnv(map[string]string{"MACHINE_WRITE_CRED_ENABLED": "false", "MACHINE_ALLOWED_CLIENTS": "machine-a=directory.users.read,directory.users.create,directory.users.password.write;machine-b=audit.read"}))
 	if err != nil || off.Machine.Write.CredEnabled {
 		t.Fatalf("password scope with W_cred off: %v", err)

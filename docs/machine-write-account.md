@@ -319,10 +319,10 @@ v2c를 켜지 않는 배포는 이 절 전체를 건너뛴다: `W_cred` 계정�
 - 그 뒤 정리: `W_data`가 만든 항목에서 표지 **값 하나**와 대기 정책 **값 하나**만 지운다(`=z`). 속성 전체 삭제·다른 값·정책 추가·다른 신원이 만든 항목은 50.
 
 `W_data` 쪽 v2c 규칙([`write-data-cred.ldif`](../scripts/test/fixtures/machine-acl/write-data-cred.ldif))은 표지와 정책을 **Add 안에서만** 붙이게 하고(Q15 `olcAddContentAcl TRUE` 필요: FALSE에서는 Add가 속성 ACL을 보지 않는다), M-3 완화 두 규칙을 더한다:
-(a) `W_data`가 만들지 않은 항목의 `entry`는 객체 클래스와 무관하게 `=rsc`(`groupOfNames`만 제외: v2b `deleteGroup`) — **v2c를 켠 배포에서 머신 `deleteUser`와 modrdn은 `W_data`가 만든 항목에만 동작한다**(관리자가 만든 `inetOrgPerson`·`person`·`organizationalPerson`·`account`/`posixAccount`·컨테이너는 LDAP 50, Q16 수용, v2a 계약 축소). `inetOrgPerson`만 막으면 다른 클래스의 관리자 항목을 지우고 같은 DN의 대기 `inetOrgPerson`으로 다시 만들 수 있었다(검토 MAJOR-1);
+(a) `W_data`가 만들지 않은 항목의 `entry`는 객체 클래스와 무관하게 `=rsc`(`groupOfNames`만 제외: v2b `deleteGroup`) — **v2c를 켠 배포에서 머신 `deleteUser`(와 `W_data`로 LDAP에 직접 하는 modrdn — 머신 API에는 이름 변경이 없다)는 `W_data`가 만든 항목에만 동작한다**(관리자가 만든 `inetOrgPerson`·`person`·`organizationalPerson`·`account`/`posixAccount`·컨테이너는 LDAP 50, Q16 수용, v2a 계약 축소). `inetOrgPerson`만 막으면 다른 클래스의 관리자 항목을 지우고 같은 DN의 대기 `inetOrgPerson`으로 다시 만들 수 있었다(검토 MAJOR-1);
 (b) 특권 그룹마다 `member`는 `=rsc`(탈취한 계정의 특권 재가입 차단).
 남는 위험(수용, Q16): `W_data`가 **스스로 만든** 계정(v2a `createUser`로 만든 SSO 신원 등)은 삭제→대기 재생성→설정할 수 있다 — **v2a로 만든 계정을 SSO 신원으로 쓰는 배포는 v2c를 켜지 않는다.** 특권 그룹의 **중첩** 그룹은 (b)가 덮지 않는다 — 하위 그룹도 `MACHINE_WRITE_PRIVILEGED_GROUPS`(= `$PRIV_GROUPS`)에 함께 나열한다.
-**세 번째 남는 위험(수용, 검토 MAJOR-2)**: (a)는 삭제·이름 변경만 막고 속성 쓰기는 막지 않는다. 유출된 `W_data`는 관리자가 만든(특권 포함) 사용자의 `mail`·`uid`를 다른 값으로 바꾼 뒤, 그 **옛 값**을 가진 대기 계정을 만들고 `password.write` client로 설정할 수 있다 — **로그인 이름이 `mail`·`uid`로 해석되는 소비자**(SSO·애플리케이션)에서는 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`가 관리자가 만든 사용자의 `mail`을 못 바꾸게 되어 Q16이 수용한 축소(삭제·modrdn)를 넘으므로 넣지 않았다. 완화는 운영 쪽이다: 소비자가 사용자를 `entryUUID` 같은 불변 식별자로 묶거나, `mail`·`uid` 변경을 감사에서 경보한다. 이것을 받아들일 수 없는 배포는 v2c를 켜지 않는다.
+**세 번째 남는 위험(수용, 검토 MAJOR-2; 2026-10-14 유지보수자 확인)**: (a)는 삭제·이름 변경만 막고 속성 쓰기는 막지 않는다. 유출된 `W_data`는 관리자가 만든(특권 포함) 사용자의 `mail`·`uid`를 다른 값으로 바꾼 뒤, 그 **옛 값**을 가진 대기 계정을 만들고 `password.write` client로 설정할 수 있다 — **로그인 이름이 `mail`·`uid`로 해석되는 소비자**(SSO·애플리케이션)에서는 그 신원으로 로그인된다. `mail`·`uid`를 (a)에 넣으면 v2a `patchUser`가 관리자가 만든 사용자의 `mail`을 못 바꾸게 되어 Q16이 수용한 축소(삭제·modrdn)를 넘으므로 넣지 않았다. 완화는 운영 쪽이다: 소비자가 사용자를 `entryUUID` 같은 불변 식별자로 묶거나, `mail`·`uid` 변경을 감사에서 경보한다. 이것을 받아들일 수 없는 배포는 v2c를 켜지 않는다.
 이미 대기인 항목에 **두 번째** 표지 값은 Modify로 붙는다(filter가 참이므로): 앱 사전 읽기가 표지 값 정확히 하나를 요구한다(T-022).
 설정과 정리 사이(Q14 창)에는 대기 정책(`pwdSafeModify FALSE`)이 그 계정에 적용된다: 이미지의 `by self write`로 사용자 자신도 옛 비밀번호 없이 `userPassword`를 바꿀 수 있고, 인증된 누구나 19/50 오라클을 쓸 수 있다. 정리가 실패하면 그 상태가 남으므로 stuck 스윕(`pwdChangedTime` 있음, T-022)이 정리를 재시도하고 경보한다 — 정리 전 자기 변경은 창을 다시 여는 것이 아니라 같은 창 안에 있다.
 **다중 provider**(Codex P1): 같은 대기 계정에 두 provider가 동시에 "첫 비밀번호"를 받아들이면 복제가 `entryCSN` last-write-wins로 하나를 조용히 버린다(AGENTS.md). 그래서 `W_cred` 묶음(`write-cred.ldif`)은 앱이 비밀번호 쓰기를 고정한 **provider 하나에만** 넣고, 다른 모든 provider에는 같은 자리에 [`write-cred-deny.ldif`](../scripts/test/fixtures/machine-acl/write-cred-deny.ldif)(`to * by W_cred none`)를 넣는다(8.5). 규칙이 없으면 그 노드에서 `W_cred`는 평범한 사용자다.
@@ -355,10 +355,10 @@ $EXEC sh -c 'umask 077; cat > /tmp/.pw-wcred' < wcred.pw
 ```sh
 # v2c-wcred-policy
 WCRED_POLICY_CN=${WCRED_POLICY_DN#cn=}; WCRED_POLICY_CN=${WCRED_POLICY_CN%%,*}
-CUR=$($EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$WCRED_POLICY_DN" -s base '(objectClass=pwdPolicy)' pwdLockout pwdMaxFailure 2>/dev/null)
+CUR=$($EXEC ldapsearch -x -H ldap://127.0.0.1 -D "cn=admin,$ROOT_DN" -y /tmp/.pw-admin -LLL -o ldif-wrap=no -b "$WCRED_POLICY_DN" -s base '(objectClass=pwdPolicy)' pwdLockout pwdMaxFailure pwdMaxAge pwdMustChange 2>/dev/null)
 if printf '%s\n' "$CUR" | grep -q '^dn: '; then
-  if ! printf '%s\n' "$CUR" | grep -qx 'pwdLockout: FALSE' || printf '%s\n' "$CUR" | grep -q '^pwdMaxFailure:'; then
-    echo "refusing: $WCRED_POLICY_DN exists and is not the no-lockout policy (pwdLockout FALSE, no pwdMaxFailure)"; exit 1
+  if ! printf '%s\n' "$CUR" | grep -qx 'pwdLockout: FALSE' || printf '%s\n' "$CUR" | grep -Eq '^pwdMaxFailure: [^0]|^pwdMaxAge: [^0]|^pwdMustChange: TRUE'; then
+    echo "refusing: $WCRED_POLICY_DN exists and is not the no-lockout policy (pwdLockout FALSE; no pwdMaxFailure, pwdMaxAge or pwdMustChange TRUE)"; exit 1
   fi
 else
   sed -e "s|@WCRED_POLICY_DN@|$WCRED_POLICY_DN|g" -e "s|@WCRED_POLICY_CN@|$WCRED_POLICY_CN|g" wcred-policy.ldif \
@@ -369,7 +369,7 @@ printf 'dn: %s\nchangetype: modify\nreplace: pwdPolicySubentry\npwdPolicySubentr
 echo "WCRED_POLICY=$WCRED_POLICY_DN"
 ```
 
-`$WCRED_POLICY_DN`은 `cn=<이름>,…` 형태여야 하고(RDN이 `cn`), 기본 정책·대기 정책(`$PENDING_POLICY_DN`)과 달라야 한다. 정책 항목은 데이터라 복제된다(한 노드에서 한 번). 실행 시 전제 검사(T-028)는 이 정책을 보지 않는다: 붙여도 기동 검사가 통과하고(실측), 붙이지 않아도 기동을 거부하지 않는다 — **붙였는지는 이 절차와 8.6 확인이 책임진다.**
+`$WCRED_POLICY_DN`은 `cn=<이름>,…` 형태여야 하고(RDN이 `cn`), 기본 정책·대기 정책(`$PENDING_POLICY_DN`)과 달라야 한다. 정책 항목은 데이터라 복제된다(한 노드에서 한 번). **실행 시 전제 검사가 이 정책을 강제한다**(Q18 (b), 2026-10-14): 기동 시와 60초마다 `M`이 `W_cred`의 `pwdPolicySubentry`와 그 정책 항목을 읽어, 값이 정확히 하나이고 기본·대기 정책이 아니며 `pwdLockout: FALSE`이고 `pwdMaxFailure`·`pwdMaxAge`(0 외)·`pwdMustChange: TRUE`가 없어야 한다. 아니면 기동 거부, 실행 중에는 비밀번호 오퍼레이션 503(`wcred_policy_missing`/`_shared`/`_unreadable`/`_lockout`/`_max_failure`/`_max_age`/`_must_change`, 라이브 실측). 그래서 `M`의 읽기 base(machine-ldap-account.md 3절의 기본값, 루트)가 `$WCRED_DN`과 이 정책 항목을 덮어야 한다. `W_cred` 자신은 자기 항목을 읽지 못한다(8.5 묶음 `{0}`이 `$SYSTEM_DN`에서 `none`, 실측).
 
 **대가와 운영자 책임.** 잠금이 없으면 디렉터리가 `W_cred` 비밀번호 추측 횟수를 제한하지 않는다. 그 완화는 운영자가 진다:
 

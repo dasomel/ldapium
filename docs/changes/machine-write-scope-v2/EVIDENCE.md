@@ -725,6 +725,7 @@ if the value differs; the rest is observation only.
 | Rev. 8 manual procedure | during the rotation the sweep (stale Secret) found `stuck=1`, `cleaned=0`, `wcred_bind_failed`; a replica started with the old Secret is refused on the canary probe, with the rotated Secret `sweep_stuck_at_startup`. Step 1: the broad M search `(pwdPolicySubentry=<pending>)` returned 9 entries (6 configured canaries, the stuck account, 2 legitimate pending accounts), the narrowed search minus the **configured canary DNs** exactly the stuck one. Step 2: after one `MACHINE_REQUEST_TIMEOUT` (10 s) the search returned the same single account. Step 3: the stuck account had two `employeeType` values; the administrator's Modify removed only the `ldapium-credential-pending:` value and the policy value, `contractor` stayed (asserted; mutation `runbook-wholeattr` loses it and fails), the set password still binds, a read-only sweep found `stuck=0`, the rotated Secret then rolled out and set a password (200) |
 | slapd side | accesslog: 28 failed `W_cred` binds (reqResult 49) over the drill against the application's own count of 22 across all its servers; asserted `slapd >= application` (slapd also sees the premise checks' and sweeps' binds, which the application counter does not) and `application >= 13` |
 
+- **Correction (Revision 15, 2026-10-14):** the 503 below came from a configuration built in code that kept every other cred value with the flag off; `config.Load` builds none of them, and that shape answers **403 `scope_denied`** (T026-F1, §2m). The maintainer decided (Q19) to keep 403; AC-011 (a) is revised. The decision this finding protected (an emergency block never fails start-up, no `W_cred` bind) holds.
 - **T025-F1 (maintainer decision 2026-10-14: 503 is right):** AC-011 (a) said 403. The code answers 403 only when the scope is also missing from the
   client's ceiling; with only the flag flipped it answers 503 (`writeBindIdentity` finds no cred identity), no write, no `W_cred` bind. AC-011 (a) is corrected
   (CHANGE.md). The 503 is kept so that an emergency block never becomes a start-up failure; T-026 confirms what a ceiling with `password.write` and the flag off means.
@@ -780,8 +781,35 @@ Mutations (unit, each restored after):
 Not covered here: `config.Load` from a real environment in the live proofs (the unit tests cover the parse; the live
 configurations are built in code), Keycloak tokens, a UI container (`docker logs` of the UI image) and a Kubernetes
 rollout, the chart rendered into a running cluster (render-time assertions only, `test-chart-machine-write.sh`), multi-provider,
-E-22, E-14, `pwdInHistory`, the 60 s timer firing during a run, GitHub Actions, a T-028 check of the `W_cred` policy (not
-implemented; CHANGE.md Q18), and the independent Class D review and dedicated security-reviewer round.
+E-22, E-14, `pwdInHistory`, the 60 s timer firing during a run, GitHub Actions, a T-028 check of the `W_cred` policy (not in this run; added and measured in §2n), and the independent Class D review and dedicated security-reviewer round.
+
+### 2n. T-026 review follow-up: Q18 (b) enforced, Q19 403, Q16 app path, in-lock re-read (2026-10-14, same branch)
+
+Reviews of `6753549`: security-reviewer BLOCKER 0; Class D critic ACCEPT-WITH-RESERVATIONS. Maintainer decisions
+2026-10-14: M-3 `mail`/`uid` accepted (documented), Q19 keep 403, Q18 (b) enforce the `W_cred` no-lockout policy.
+Same image `ldapium:t026` (`image/` unchanged).
+
+```
+test-machine-write-cred-premise-live.py                      RESULT: 95 checks passed, 0 failed, 18s   (exit 0)
+  LDAPIUM_PREMISE_MUTATE=drop-wcred-policy-check             RESULT: 88 passed, 7 failed (the 7 W_cred policy scenarios)  (exit 1)
+test-machine-write-cred-secret-live.py                       RESULT: 170 checks passed, 0 failed, 33s  (exit 0)
+test-machine-write-cred-drill.py                             RESULT: 74 checks passed, 0 failed, 38s   (exit 0)
+test-chart-machine-write.sh                                  97 PASS, exit 0 (off render byte-identical to origin/main)
+```
+
+| Item | Measurement |
+|---|---|
+| **T026-D2 (Q18 (b))** readability | as `M` (read base the root, the documented default): `W_cred`'s `pwdPolicySubentry` and the policy's `pwdLockout` are readable; as `W_cred` itself: nothing (the 8.5 bundle's `{0}` gives `W_cred` `none` on `$SYSTEM_DN` before any image `self` rule). The check therefore reads as `M`, at start-up and in the 60 s cycle (not before every write) |
+| T026-D2 scenarios (start-up/periodic; the request check stays ok) | policy detached → `wcred_policy_missing`; pointed at the default policy → `wcred_policy_shared`; pointed at a missing entry → `wcred_policy_unreadable`; `pwdLockout TRUE` → `wcred_policy_lockout`; `pwdMaxFailure 5` → `wcred_policy_max_failure`; `pwdMaxAge 86400` → `wcred_policy_max_age`; `pwdMustChange TRUE` → `wcred_policy_must_change`; each restored → ok. Unit: `TestWCredPolicyVerdict` (16 rows) |
+| drill, trap and recovery | default policy (8.1 policy detached): locked at the 5th refused request; a replica with the correct Secret refuses to start with `wcred_policy_missing`. Re-attaching the 8.1 policy while `pwdAccountLockedTime` is still set: `W_cred` binds (slapd ignores the stamp under `pwdLockout FALSE`), a new replica starts and sets a password (200); the administrator's delete then clears the stamp |
+| **Q16 app path** (review MINOR d) | flag-on replica, v2c rules installed: machine `deleteUser` of an administrator-made `inetOrgPerson` → **403 `forbidden`**, entry stays; of a `W_data`-made user → 204, gone |
+| **Q19** | unchanged code; AC-011 (a) revised to 403 (CHANGE.md Revision 15); §2l T025-F1 carries a correction note |
+| **T026-D3** (review MINOR a) | the privileged and pending pre-reads run again inside the per-target lock; `TestPasswordPipeline_PreReadsRepeatInsideTheTargetLock` (password set / privileged / entry replaced in between → 409 / 403 / 409, no Password Modify). Mutation (the in-lock re-read skipped) → 3 failures |
+| MINOR e | `setPassword` removed from the table: 17 named failures in 150 s, no test blocks (the waits are bounded at 10 s) |
+| MINOR b | chart: data, lock, cred and reader Secret keys may not be the LDAP administrator's (4 new refusals) |
+
+Not covered here: everything in §2m's list except the Q16 app path and the `W_cred` policy check, which are now measured; the `config.Load` shape of the
+flag-off redeploy is still built in code in the drill (no live run reads real environment variables).
 
 ## 3. Not verified
 
@@ -790,6 +818,6 @@ implemented; CHANGE.md Q18), and the independent Class D review and dedicated se
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
 
-T-026(§2m)의 Not verified: 실제 환경 변수의 `config.Load`를 거친 라이브 서버(라이브 구성은 코드로 만듦), Keycloak 토큰, UI 컨테이너·Kubernetes 롤아웃, 클러스터에 배포한 차트(렌더 단언만), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions, `W_cred` 정책의 T-028 검사(미구현, Q18), Class D 독립 검토·전용 security-reviewer(미실시). AC-011 (a)의 503은 코드로 만든 구성에서만 재현되고 실제 Load 경로는 403(T026-F1, Q19).
+T-026(§2m·§2n)의 Not verified (§2n에서 Q16 앱 경로 403은 실측으로 옮김): 실제 환경 변수의 `config.Load`를 거친 라이브 서버(라이브 구성은 코드로 만듦), Keycloak 토큰, UI 컨테이너·Kubernetes 롤아웃, 클러스터에 배포한 차트(렌더 단언만), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions, `W_cred` 정책 검사는 §2n에서 구현·실측, Class D 독립 검토·전용 security-reviewer(미실시). AC-011 (a)는 403으로 개정(Q19); 플래그 끈 Load 구성은 드릴에서 코드로 만들었다(실제 환경 변수 Load 라이브 실행 없음).
 
 T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.

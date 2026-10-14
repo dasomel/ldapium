@@ -879,8 +879,8 @@ ui:
       #    audit.enabled=true (the auditlog overlay writes the hash of every
       #    password set to the slapd log, D379-14) or an audit.accessLog.ops list
       #    holding `extended` or `all` (one Password Modify aborts slapd, F-7).
-      #    Turning it on narrows machine deleteUser/rename to entries W_data
-      #    created (Q16, docs/api.md). Passwords are Secret references only.
+      #    Turning it on narrows machine deleteUser (and W_data's direct LDAP
+      #    modrdn) to entries W_data created (Q16, docs/api.md). Passwords are Secret references only.
       cred:
         enabled: false
         # -- MACHINE_WRITE_CRED_BIND_DN, distinct from every other identity.

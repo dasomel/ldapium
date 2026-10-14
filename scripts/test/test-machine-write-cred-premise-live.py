@@ -33,6 +33,7 @@ source; the proof must then FAIL with named checks):
   accesslog-base-search   check 6 searches the cn=accesslog BASE instead of its children
   accesslog-objectclass   check 6 back to the (objectClass=*) filter (MINOR1)
   sweep-nosuchattr-ok     a cleanup failing with noSuchAttribute counts as cleaned (Codex P1)
+  drop-wcred-policy-check the W_cred no-lockout policy check (T026-D2, Q18 (b)) skipped
 
 Run (docker and go): python3 scripts/test/test-machine-write-cred-premise-live.py
 Override LDAPIUM_IMAGE / LDAPIUM_TEST_PREFIX; LDAPIUM_PREMISE_TEST_BINARY skips the build.
@@ -50,7 +51,7 @@ import time
 
 repo_root = pathlib.Path(__file__).resolve().parents[2]
 mutation = os.environ.get('LDAPIUM_PREMISE_MUTATE', '')
-MUTATIONS = ('drop-acl-check', 'accesslog-base-search', 'accesslog-objectclass', 'sweep-nosuchattr-ok')
+MUTATIONS = ('drop-acl-check', 'accesslog-base-search', 'accesslog-objectclass', 'sweep-nosuchattr-ok', 'drop-wcred-policy-check')
 if mutation not in ('',) + MUTATIONS:
   raise SystemExit('LDAPIUM_PREMISE_MUTATE must be one of ' + ', '.join(MUTATIONS))
 os.environ.setdefault('LDAPIUM_TEST_PREFIX', 'ldapium-cpre-')
@@ -107,6 +108,8 @@ def build_binary():
       text, n = re.subn(r'credPremiseAccesslogBase, ldap\.ScopeWholeSubtree', 'credPremiseAccesslogBase, ldap.ScopeBaseObject', text)
     elif mutation == 'accesslog-objectclass':
       text, n = re.subn(r'const accesslogProbeFilter = "[^"]*"', 'const accesslogProbeFilter = "(objectClass=*)"', text)
+    elif mutation == 'drop-wcred-policy-check':
+      text, n = re.subn(r'\n\tif wcred \{\n', '\n\tif wcred && false {\n', text)
     else:
       text, n = re.subn(r'if cred\.Modify\(sweepCleanupModify\(e\.DN, attrValues\(e, "employeeType"\), policy\)\) == nil \{',
                         'if err := cred.Modify(sweepCleanupModify(e.DN, attrValues(e, "employeeType"), policy)); err == nil || ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute) {', text)
@@ -273,6 +276,34 @@ def reader_sees_only_its_two_entries(node):
   check(lcode(res) == 50, 'the reader cannot write olcAccess (50)')
 
 
+def wcred_policy_scenarios(node, p):
+  """T026-D2 (CHANGE.md Q18 (b)): start-up and the 60 s cycle require W_cred's own no-lockout policy (guide 8.1),
+  read as M; the before-write check does not read it (request stays ok)."""
+  print('--- T026-D2: the W_cred no-lockout policy ---', flush=True)
+  # who can read W_cred's pwdPolicySubentry: M (the read base is the root) yes; W_cred itself no (bundle {0}: SYSTEM_DN none)
+  res = node.search('machine', wc_dn, '(objectClass=*)', ['pwdPolicySubentry'], 'base')
+  check(res.returncode == 0 and re.search(rf'^pwdPolicySubentry: {re.escape(wcred_policy)}$', res.stdout, re.M | re.I) is not None,
+        'M reads W_cred\'s pwdPolicySubentry (the check reads as M)')
+  res = node.search('wcred', wc_dn, '(objectClass=*)', ['pwdPolicySubentry'], 'base')
+  check('pwdPolicySubentry' not in res.stdout, 'W_cred cannot read its own entry (bundle {0}: SYSTEM_DN none; no self read reaches it)')
+  res = node.search('machine', wcred_policy, '(objectClass=*)', ['pwdLockout'], 'base')
+  check(re.search(r'^pwdLockout: FALSE$', res.stdout, re.M) is not None, 'M reads the W_cred policy entry (pwdLockout FALSE)')
+  attach = f'dn: {wc_dn}\nchangetype: modify\nreplace: pwdPolicySubentry\npwdPolicySubentry: {wcred_policy}\n'
+  scenario(p, 'W_cred without its policy (the default, locking policy: 8.1 skipped)', 'wcred_policy_missing', 'ok',
+           setup_fn=lambda: admin(node, f'dn: {wc_dn}\nchangetype: modify\ndelete: pwdPolicySubentry\n'), undo=lambda: admin(node, attach))
+  scenario(p, 'W_cred pointed at the default policy explicitly', 'wcred_policy_shared', 'ok',
+           setup_fn=lambda: attr_set(node, wc_dn, 'pwdPolicySubentry', default_pol), undo=lambda: admin(node, attach))
+  scenario(p, 'W_cred pointed at a policy entry that does not exist', 'wcred_policy_unreadable', 'ok',
+           setup_fn=lambda: attr_set(node, wc_dn, 'pwdPolicySubentry', 'cn=absent,ou=policies,' + base_dn), undo=lambda: admin(node, attach))
+  for label, ldif, undo_ldif, want in (
+      ('W_cred policy pwdLockout TRUE', 'replace: pwdLockout\npwdLockout: TRUE\n', 'replace: pwdLockout\npwdLockout: FALSE\n', 'wcred_policy_lockout'),
+      ('W_cred policy pwdMaxFailure 5 (9.1: false-positive lock stamps)', 'add: pwdMaxFailure\npwdMaxFailure: 5\n', 'delete: pwdMaxFailure\n', 'wcred_policy_max_failure'),
+      ('W_cred policy pwdMaxAge 1 day (the password expires)', 'add: pwdMaxAge\npwdMaxAge: 86400\n', 'delete: pwdMaxAge\n', 'wcred_policy_max_age'),
+      ('W_cred policy pwdMustChange TRUE', 'add: pwdMustChange\npwdMustChange: TRUE\n', 'delete: pwdMustChange\n', 'wcred_policy_must_change')):
+    scenario(p, label, want, 'ok', setup_fn=lambda l=ldif: admin(node, f'dn: {wcred_policy}\nchangetype: modify\n{l}'),
+             undo=lambda u=undo_ldif: admin(node, f'dn: {wcred_policy}\nchangetype: modify\n{u}'))
+
+
 def scenario(p, label, want_full, want_request=None, setup_fn=None, undo=None):
   if setup_fn:
     setup_fn()
@@ -350,6 +381,7 @@ def main():
       ('pending policy pwdMinLength 8', pending_pol, 'pwdMinLength', '8', '12', 'policy_pending_min_length')):
     scenario(p, label, want, setup_fn=lambda dn=dn, attr=attr, bad=bad: attr_set(node, dn, attr, bad),
              undo=lambda dn=dn, attr=attr, good=good: attr_set(node, dn, attr, good))
+  wcred_policy_scenarios(node, p)
   pp = re.search(r'^dn: (.*)$', node.cfgtool('ldapsearch', ['-LLL', '-b', MAIN, '-s', 'one', '(objectClass=olcPPolicyConfig)', 'dn']).stdout, re.M).group(1)
   scenario(p, 'no olcPPolicyDefault (stands in for a policy-less node)', 'policy_default_unknown',
            setup_fn=lambda: cfg_mod(node, f'dn: {pp}\nchangetype: modify\ndelete: olcPPolicyDefault\n'),

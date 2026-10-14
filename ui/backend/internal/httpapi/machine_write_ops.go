@@ -112,9 +112,10 @@ func writeBindIdentity(w config.MachineWriteConfig, compartment string) (config.
 			return w.Lock, true
 		}
 	case "cred":
-		// v2c: only setPassword names this compartment. T026-D1: with the flag
-		// off there is no identity, so a ceiling still holding the scope answers
-		// 503 before any bind instead of failing start-up (AC-011 (a)).
+		// v2c: only setPassword names this compartment. With the flag off
+		// config.Load reads no cred value, so the target guard (no cred ceiling)
+		// already answers 403 before this point (AC-011 (a), Q19); this check is
+		// the second fence for a configuration built in code (503, no bind).
 		if w.CredEnabled && w.Cred.BindDN != "" {
 			return w.Cred, true
 		}

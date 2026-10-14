@@ -273,6 +273,14 @@ refuses "cred reuses the data Secret key" 'write.cred must not reuse' "${wr[@]}"
 	--set ui.machineAuth.write.cred.existingSecret=machine-ldap-write --set ui.machineAuth.write.cred.existingSecretKey=machine-ldap-write-data-password
 refuses "cred reuses the read Secret key" 'write.cred must not reuse' "${wr[@]}" "${cred[@]}" \
 	--set ui.machineAuth.write.cred.existingSecret=machine-ldap --set ui.machineAuth.write.cred.existingSecretKey=machine-ldap-bind-password
+refuses "data reuses the LDAP administrator Secret key" 'write.data must not reuse the LDAP administrator' "${wr[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.data.existingSecret=ldap-admin --set ui.machineAuth.write.data.existingSecretKey=admin-password
+refuses "lock reuses the LDAP administrator Secret key" 'write.lock must not reuse the LDAP administrator' "${wr[@]}" "${lock[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.lock.existingSecret=ldap-admin --set ui.machineAuth.write.lock.existingSecretKey=admin-password
+refuses "cred reuses the LDAP administrator Secret key" 'or of the LDAP administrator' "${wr[@]}" "${cred[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.cred.existingSecret=ldap-admin --set ui.machineAuth.write.cred.existingSecretKey=admin-password
+refuses "reader reuses the LDAP administrator Secret key" 'write.cred.aclReader must not reuse' "${wr[@]}" "${cred[@]}" \
+	--set auth.existingSecret=ldap-admin --set ui.machineAuth.write.cred.aclReader.existingSecret=ldap-admin --set ui.machineAuth.write.cred.aclReader.existingSecretKey=admin-password
 refuses "reader reuses the cred Secret key" 'write.cred.aclReader must not reuse' "${wr[@]}" "${cred[@]}" \
 	--set ui.machineAuth.write.cred.aclReader.existingSecret=machine-ldap-write-cred --set ui.machineAuth.write.cred.aclReader.existingSecretKey=machine-ldap-write-cred-password
 refuses "cred subtrees name a client without write subtrees" 'write.cred.subtrees client "svc-monitor" has no ui.machineAuth.write.subtrees entry' "${wr[@]}" "${cred[@]}" \
