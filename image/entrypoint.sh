@@ -1130,6 +1130,18 @@ d}" "$cn_config"
   # applies); `by * break` hands every other identity to the catch-all, so
   # their access is exactly what it was. The rootdn bypasses ACLs and the
   # ppolicy overlay never writes this attribute, so neither depends on it.
+  #
+  # D400-1 (#400): the same rule also covers the ppolicy state attributes
+  # pwdReset, pwdStartTime, pwdEndTime and pwdAccountLockedTime, which `by self
+  # write` let a user replace/delete (clear its own forced reset, extend its own
+  # validity window) or add (lock itself). Extending this attrs= list, instead
+  # of a new rule, keeps the rule count and every {n} position. The overlay's
+  # own lock/unlock/reset writes are internal and not ACL-checked, and the
+  # rootdn bypasses ACLs, so lockout, reset and replication are unaffected.
+  # Cost: a user can no longer manage these on itself. Escape hatch: none; an
+  # operator who wants self-managed validity windows must use an admin
+  # identity. pwdChangedTime/pwdFailureTime/pwdGraceUseTime/pwdLastSuccess/
+  # pwdHistory are NO-USER-MODIFICATION (19) already and stay out of the list.
   # Bootstrap only, like the rest of this block: an existing volume keeps its
   # stored olcAccess (image/README.md, "Access control").
   anon_read_access="${work}/anon-read-access.ldif"
@@ -1143,7 +1155,7 @@ d}" "$cn_config"
       printf '  by users read\n'
       printf 'olcAccess: {3}to attrs=uid,objectClass\n'
       printf '  by users read\n'
-      printf 'olcAccess: {4}to attrs=pwdPolicySubentry\n'
+      printf 'olcAccess: {4}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime\n'
       printf '  by self read\n'
       printf '  by * break\n'
       printf 'olcAccess: {5}to *\n'
@@ -1157,7 +1169,7 @@ d}" "$cn_config"
       printf 'olcAccess: {1}to attrs=entry,uid,objectClass\n'
       printf '  by anonymous read\n'
       printf '  by users read\n'
-      printf 'olcAccess: {2}to attrs=pwdPolicySubentry\n'
+      printf 'olcAccess: {2}to attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime\n'
       printf '  by self read\n'
       printf '  by * break\n'
       printf 'olcAccess: {3}to *\n'
