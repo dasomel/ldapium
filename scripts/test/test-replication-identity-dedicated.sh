@@ -30,7 +30,14 @@
 #   a full disk on a tmpfs sized to the config) must leave the original file intact, and a later normal
 #   start repairs and runs.
 # Part 4 (only with a base image): `prepare` pair is byte-identical to the base image
-#   (cn=config and olcSyncrepl). The admin comparison is test-replication-identity-env.sh.
+#   (cn=config and olcSyncrepl), except for olcAccess values that do not name the
+#   replication identity (D1); on IMAGE itself, prepare's olcAccess must be the admin-mode
+#   list with only the replication rule added. The admin comparison is
+#   test-replication-identity-env.sh.
+# D1 BASE_IMAGE is the older PR-base image, so a deliberate image ACL change (e.g. #399)
+#   would fail a byte diff although prepare behaves the same. Every olcAccess value naming
+#   cn=replicator is still compared against the base, and the same-image check proves
+#   prepare adds nothing else. Escape hatch: drop the filter in base_norm.
 #
 # NOT covered here (later units / package acceptance conditions): the operator
 # ensure/rotate/retire/reconcile commands, restore.sh total-loss (D63), Kubernetes
@@ -1493,6 +1500,10 @@ if want base; then
   if [ -n "$base_image" ]; then
     echo "== Part 4: prepare pair vs base image"
     dump() { cfg_dump "$1" | norm >"$2.cfg"; grep '^olcSyncrepl' "$2.cfg" >"$2.syncrepl" || true; }
+    # D1: olcAccess values that do not mention the replication identity.
+    base_norm() { grep -v -E '^olcAccess: ' "$1" || true; grep -i -E '^olcAccess: .*cn=replicator,' "$1" || true; }
+    # main-database olcAccess without {n} and without the replication rule
+    acl_rest() { grep -E '^olcAccess: ' "$1" | grep -v -i 'cn=replicator,' | sed 's/^olcAccess: {[0-9]*}/olcAccess: /' || true; }
     run_prepare_pair() { # label image
       local label="$1" img="$2" n sid
       local pp="ldap://${n1}:389,ldap://${n2}:389"
@@ -1509,6 +1520,8 @@ if want base; then
           -e LDAP_REPLICATION_PEERS="$pp" "$img" >/dev/null
         wait_ready "$n" || { bad "${label}: $(short "$n") (admin) never ready"; return 1; }
       done
+      dump "$n1" "${work}/${label}.admin.n1"
+      dump "$n2" "${work}/${label}.admin.n2"
       for n in "$n1" "$n2"; do
         sid=2
         [ "$n" = "$n1" ] && sid=1
@@ -1526,11 +1539,18 @@ if want base; then
     run_prepare_pair new "$image" || exit 1
     for part in n1 n2; do
       [ -s "${work}/base.${part}.cfg" ] || bad "${part}: empty base dump"
-      if diff -u "${work}/base.${part}.cfg" "${work}/new.${part}.cfg" >"${work}/${part}.diff"; then
-        ok "prepare ${part}: cn=config identical to the base image ($(wc -l <"${work}/base.${part}.cfg" | tr -d ' ') lines)"
+      if diff -u <(base_norm "${work}/base.${part}.cfg") <(base_norm "${work}/new.${part}.cfg") >"${work}/${part}.diff"; then
+        ok "prepare ${part}: cn=config identical to the base image (olcAccess compared for the replication identity only, D1)"
       else
         bad "prepare ${part}: cn=config differs from the base image"
         head -n 40 "${work}/${part}.diff" >&2
+      fi
+      if [ -s "${work}/new.admin.${part}.cfg" ] &&
+        diff -u <(acl_rest "${work}/new.admin.${part}.cfg") <(acl_rest "${work}/new.${part}.cfg") >"${work}/${part}.acl.diff"; then
+        ok "prepare ${part}: olcAccess is the admin-mode list plus the replication rule only (same image)"
+      else
+        bad "prepare ${part}: prepare changed olcAccess beyond the replication rule"
+        head -n 40 "${work}/${part}.acl.diff" >&2
       fi
       [ -s "${work}/base.${part}.syncrepl" ] || bad "${part}: no olcSyncrepl rendered"
       if diff -u "${work}/base.${part}.syncrepl" "${work}/new.${part}.syncrepl" >/dev/null; then

@@ -462,12 +462,18 @@ The `mdb` database ships with a default-deny-to-anonymous ACL (`olcAccess` on
    authenticated users. This is deliberately narrow — it's exactly what a
    search-then-bind login flow needs to resolve a bare `uid` to a DN, and
    nothing more (no `cn`, `mail`, `mobile`, etc. leaks to anonymous).
-   The `entry` pseudo-attribute is not optional here: rule 3's
+   The `entry` pseudo-attribute is not optional here: rule 4's
    `by anonymous none` covers `entry` too, so without it an anonymous
    `(uid=...)` search fails with `No such object (32)` — the attribute is
    readable but the entry's existence is never disclosed — and uid login
    breaks entirely. Verified the hard way.
-3. Everything else: the entry itself may write, any authenticated user may
+3. `pwdPolicySubentry` only: the entry itself may **read** it and nothing
+   more; every other identity falls through to rule 4 (`by * break`), so
+   their access is unchanged. Without this rule, rule 4's `by self write`
+   let any user point its own entry at any `pwdPolicy` subentry, i.e. pick a
+   policy with no lockout, no quality check or no history for itself (#399).
+   Only the admin assigns a policy to a user.
+4. Everything else: the entry itself may write, any authenticated user may
    read, anonymous gets nothing.
 
 Without this, slapd's built-in default (`to * by * read`) lets anyone who can
@@ -479,6 +485,7 @@ As a matrix — rows are what is being reached for, columns are who is reaching:
 |---|---|---|---|---|
 | `userPassword`, `shadowLastChange` | bind only, never read | none | write | write |
 | `entry`, `uid`, `objectClass` | read — DIT-wide by default, only under `LDAP_ANONYMOUS_READ_BASE` when that is set (see below) | read | read (see below) | write |
+| `pwdPolicySubentry` | none | read | **read** | write |
 | every other attribute | none | read | write | write |
 | another user's entry (write or delete) | none | **none** | n/a | write |
 | `cn=config` | none | none | n/a | no — it is a separate database with its own admin identity, `cn=admin,cn=config` |
@@ -495,12 +502,13 @@ existence, `uid` and `objectClass` of *every* entry — `ou=groups`,
 `ou=policies` included — even though the only thing that read exists for is
 resolving a `uid` under wherever the user entries live. Setting
 `LDAP_ANONYMOUS_READ_BASE` to that subtree (it must sit under `LDAP_ROOT_DN`)
-replaces rules 2–3 with four:
+replaces rules 2–4 with five:
 
 1. `dn.subtree="<base>"`, `entry`/`uid`/`objectClass`: anonymous read, users read
 2. `entry`, everywhere: anonymous **search**, users read
 3. `uid`/`objectClass`, everywhere else: users read (anonymous nothing)
-4. everything else: exactly the old rule 3
+4. `pwdPolicySubentry`: exactly the old rule 3
+5. everything else: exactly the old rule 4
 
 The load-bearing one is 2. `search` and `read` on the `entry` pseudo-attribute
 are different grants: `search` lets slapd use an entry as a search base and
@@ -522,7 +530,7 @@ also a `user`, so an entry reaching for its own `uid` matches `by users read`
 first and stops. More to the point it would be wrong if it did apply: rewriting
 your own `uid` breaks the relationship between the DN and its naming attribute,
 and rewriting your own `objectClass` is how a user grants themselves attributes
-the schema would otherwise deny. Self-service writes belong to rule 3 (`to *`),
+the schema would otherwise deny. Self-service writes belong to rule 4 (`to *`),
 where `by self write` comes first and does apply — which is why a user can
 change their own `sn` and not their own `uid`.
 
@@ -540,7 +548,29 @@ leaving them as intent: an anonymous read of `userPassword`, an authenticated
 user modifying, deleting and reading the password of *another* user, and
 `cn=config` over the LDAP service all have to be refused — and, because a
 deny-everything ACL would satisfy all of that, a user writing their own entry
-has to still succeed.
+has to still succeed. A user setting or removing its own `pwdPolicySubentry`
+has to be refused too (rule 3), while the admin can still assign one.
+
+**Existing volumes keep their old ACL.** The rules are written at bootstrap
+only, so a volume created by an image before #399 still lets a user choose its
+own password policy after the upgrade. Insert the rule by hand, directly before
+the catch-all `to * by self write by users read by anonymous none` rule (its
+index `N` is `{2}`, or `{4}` with `LDAP_ANONYMOUS_READ_BASE`, plus any rules
+you prepended, e.g. the machine-account fragments), as `cn=admin,cn=config`:
+
+```sh
+ldapsearch -x -H ldap://<host> -D cn=admin,cn=config -W -o ldif-wrap=no \
+  -b 'olcDatabase={1}mdb,cn=config' -s base olcAccess   # find N
+ldapmodify -x -H ldap://<host> -D cn=admin,cn=config -W <<'EOF'
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {N}to attrs=pwdPolicySubentry by self read by * break
+EOF
+```
+
+Then look for values users may already have set on themselves:
+`ldapsearch -x -H ldap://<host> -D <admin DN> -W -b <root DN> '(pwdPolicySubentry=*)' pwdPolicySubentry modifiersName`.
 
 This is one ordered multi-valued attribute, not hardcoded logic — replace it
 wholesale for a different policy via `ldapmodify` as `cn=admin,cn=config`

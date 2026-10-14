@@ -1102,6 +1102,16 @@ d}" "$cn_config"
   # anonymous bind and never matches them. Order matters — rule {1} must
   # come before rule {2} or anonymous would match {2} first on `entry` with
   # only `search`, never reaching the `read` grant under the base.
+  #
+  # Both branches put a pwdPolicySubentry rule right before the catch-all
+  # `to *` (#399, F-9): without it `by self write` let any user point its own
+  # entry at any pwdPolicy subentry, i.e. pick a policy with no lockout, no
+  # quality check or no history. Self keeps read (it can see which policy
+  # applies); `by * break` hands every other identity to the catch-all, so
+  # their access is exactly what it was. The rootdn bypasses ACLs and the
+  # ppolicy overlay never writes this attribute, so neither depends on it.
+  # Bootstrap only, like the rest of this block: an existing volume keeps its
+  # stored olcAccess (image/README.md, "Access control").
   anon_read_access="${work}/anon-read-access.ldif"
   if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
     {
@@ -1113,7 +1123,10 @@ d}" "$cn_config"
       printf '  by users read\n'
       printf 'olcAccess: {3}to attrs=uid,objectClass\n'
       printf '  by users read\n'
-      printf 'olcAccess: {4}to *\n'
+      printf 'olcAccess: {4}to attrs=pwdPolicySubentry\n'
+      printf '  by self read\n'
+      printf '  by * break\n'
+      printf 'olcAccess: {5}to *\n'
       printf '  by self write\n'
       printf '  by users read\n'
       printf '  by anonymous none\n'
@@ -1124,7 +1137,10 @@ d}" "$cn_config"
       printf 'olcAccess: {1}to attrs=entry,uid,objectClass\n'
       printf '  by anonymous read\n'
       printf '  by users read\n'
-      printf 'olcAccess: {2}to *\n'
+      printf 'olcAccess: {2}to attrs=pwdPolicySubentry\n'
+      printf '  by self read\n'
+      printf '  by * break\n'
+      printf 'olcAccess: {3}to *\n'
       printf '  by self write\n'
       printf '  by users read\n'
       printf '  by anonymous none\n'
