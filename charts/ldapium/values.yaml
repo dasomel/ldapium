@@ -472,6 +472,8 @@ audit:
     # -- Operations to log in cn=accesslog. Defaults to "reads bind" in the image.
     #    When the UI is enabled (ui.enabled=true), defaults to "writes reads bind"
     #    so the web console operator action history records writes.
+    #    Must not contain `extended` or `all`: the image refuses to start (OpenLDAP
+    #    2.6.15 aborts slapd on the first Password Modify, #398). Use "writes reads bind".
     ops: ""
 
 backup:
