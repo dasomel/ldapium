@@ -10,6 +10,20 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-14
+
+### Breaking / behaviour changes
+
+- **Machine `deleteUser` / modrdn narrowed (Q16).** With the v2c LDAP rules installed,
+  machine `deleteUser` and modrdn only reach entries created through `W_data`; other
+  entries are refused.
+- **ppolicy state attributes are read-only for self (#400).** `pwdReset`,
+  `pwdStartTime`, `pwdEndTime` and `pwdAccountLockedTime` can no longer be written by
+  the user on its own entry. The ACL is bootstrap-only: existing volumes keep their
+  stored `olcAccess` until upgraded in place (see `image/README.md`, in-place upgrade).
+- **The image refuses to start with `extended` or `all` in `LDAP_ACCESSLOG_OPS` (#398).**
+  Use `writes reads bind`.
+
 ### Web UI
 
 - Users and Groups lists page through the cursor API (`limit`/`cursor`/`q`, #253).
@@ -772,5 +786,6 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0
 [0.1.1]: https://github.com/dasomel/ldapium/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dasomel/ldapium/releases/tag/v0.1.0
