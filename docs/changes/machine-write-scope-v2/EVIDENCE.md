@@ -744,4 +744,4 @@ Not covered here: a Kubernetes rolling update and the real Secret rollout, multi
 
 T-015 드릴의 Not verified: GitHub Actions 러너에서의 실행(로컬 Docker Desktop에서만 실행; CI 결과는 PR에서), `MACHINE_WRITE_GROUP_SEED_DN`의 `olcMemberOfDangling` 경로(E-04, 드릴은 placeholder 항목을 만들어 둠), 차트의 `MACHINE_WRITE_GROUP_SEED_DN` 배선(2cd19eb로 `ui.machineAuth.write.groupSeedDN` 추가, 렌더 시험은 통과; 차트 `allowedClients` 스키마는 여전히 읽기 scope만 허용해 차트로 쓰기 scope 자체를 줄 수 없음), T-005의 security-reviewer 1라운드와 Class D 독립 검토(미실시).
 
-T-025 드릴(§2k)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
+T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
