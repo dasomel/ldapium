@@ -175,6 +175,7 @@ type machineWriteFields struct {
 	IdempotencySubject string `json:"idempotency_subject_fingerprint,omitempty"`
 	IfMatch            bool   `json:"if_match"`
 	LDAPResult         *int   `json:"ldap_result,omitempty"`
+	Cleanup            string `json:"cleanup,omitempty"`
 }
 
 // Closed vocabularies of the write fields. A value outside them is logged as
@@ -209,6 +210,14 @@ var machineWriteScopes = func() map[string]bool {
 var (
 	machineWriteCompartments = map[string]bool{"data": true, "lock": true}
 	machineWriteTargetKinds  = map[string]bool{"user": true, "group": true}
+	// setPassword's pending cleanup (T-022): the password was applied either
+	// way; "failed" means the marker and pending policy are still on the entry.
+	machineWriteCleanups = map[string]bool{cleanupDone: true, cleanupFailed: true}
+)
+
+const (
+	cleanupDone   = "done"
+	cleanupFailed = "failed"
 )
 
 // machineWriteInput is what a write operation tells the audit wrapper. Subject
@@ -223,6 +232,9 @@ type machineWriteInput struct {
 	Subject     string
 	IfMatch     bool
 	LDAPResult  *int
+	// Cleanup is setPassword's pending cleanup result (cleanupDone or
+	// cleanupFailed), "" on every other operation.
+	Cleanup string
 }
 
 // machineEventInput is everything buildMachineEvent decides from. Nothing in
@@ -316,6 +328,9 @@ func buildWriteFields(w machineWriteInput, status int, plainDN bool) *machineWri
 		IdempotencySubject: fingerprintIdentity(w.Subject),
 		IfMatch:            w.IfMatch,
 		LDAPResult:         w.LDAPResult,
+	}
+	if w.Cleanup != "" {
+		f.Cleanup = pick(w.Cleanup, machineWriteCleanups)
 	}
 	if plainDN {
 		f.TargetDN = w.TargetDN

@@ -35,14 +35,14 @@ func ldapCode(n int) *int { return &n }
 func fullWrite() machineWriteInput {
 	return machineWriteInput{
 		Scope: "directory.users.update", Compartment: "data", TargetKind: "user", TargetDN: sentinelDN,
-		Outcome: outcomeApplied, Subject: sentinelSubject, IfMatch: true, LDAPResult: ldapCode(0),
+		Outcome: outcomeApplied, Subject: sentinelSubject, IfMatch: true, LDAPResult: ldapCode(0), Cleanup: cleanupFailed,
 	}
 }
 
 // The documented set (docs/audit-event-schema.md). Adding a field to
 // machineWriteFields without adding it here and to the doc fails the tests.
 var documentedWriteFields = []string{
-	"compartment", "idempotency_subject_fingerprint", "if_match", "ldap_result", "outcome",
+	"cleanup", "compartment", "idempotency_subject_fingerprint", "if_match", "ldap_result", "outcome",
 	"target_dn", "target_dn_fingerprint", "target_kind", "write_scope",
 }
 

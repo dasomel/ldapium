@@ -447,6 +447,7 @@ and no write field is emitted). `operation` carries the operation id.
 | `idempotency_subject_fingerprint` | fingerprint of the idempotency principal (the client), **never** the `Idempotency-Key` value |
 | `if_match` | whether an `If-Match` header was present (the value is never logged) |
 | `ldap_result` | the directory result code when the request reached the directory, otherwise absent |
+| `cleanup` | `setPassword` only (v2c, not opened yet: T-026): `done` or `failed` for the `W_cred` removal of the pending marker and pending policy after the password was set; absent on every other operation. `failed` still answers the success (the password was applied); the entry keeps its pending state until the stuck sweep (T-028) or an operator clears it |
 
 `replayed` from D6 is carried by `outcome=replayed` instead of a separate field.
 Never in the line: the token, passwords, request body values, the

@@ -29,6 +29,10 @@ func machineWriteBodyAllowed(operation string, raw []byte) bool {
 		allowed = []string{"cn", "description"}
 	case "lockUser":
 		allowed = []string{"dn"}
+	case "setPassword":
+		// D379-9, REQ-011: an administrator-style initial set. No oldPassword
+		// (self-service meaning), no generation (empty is refused by the pipeline).
+		allowed = []string{"dn", "password"}
 	case "patchGroup":
 		// D379-5: description only. cn is the group's RDN and the downstream role
 		// key, so a rename is not a machine write.

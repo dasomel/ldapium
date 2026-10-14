@@ -124,6 +124,20 @@ type fakeIdent struct {
 	// privileged is the memberOf check (CheckNotPrivileged); privCalls records its targets.
 	privileged func(target string) error
 	privCalls  []string
+	// pending is the setPassword pre-read (CheckCredentialPending); pendingCalls
+	// records "target|tag".
+	pending      func(target, tag string) error
+	pendingCalls []string
+}
+
+func (f *fakeIdent) CheckCredentialPending(_ context.Context, target, tag string) error {
+	f.mu.Lock()
+	f.pendingCalls = append(f.pendingCalls, target+"|"+tag)
+	f.mu.Unlock()
+	if f.pending != nil {
+		return f.pending(target, tag)
+	}
+	return nil
 }
 
 func (f *fakeIdent) CheckNotPrivileged(_ context.Context, target string) error {
@@ -437,7 +451,8 @@ func TestWritePipeline_TableValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 9 {
+	// Nine opened rows plus setPassword (T-022, catalog only until T-026).
+	if m, err := resolveMachineWriteOps(catalogOps()); err != nil || len(m) != 10 {
 		t.Fatalf("catalog: %v %d", err, len(m))
 	}
 }

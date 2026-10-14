@@ -7,13 +7,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/labstack/echo/v4"
 
+	"github.com/dasomel/ldapium/ui/backend/internal/config"
 	"github.com/dasomel/ldapium/ui/backend/internal/domain"
 	"github.com/dasomel/ldapium/ui/backend/internal/ldapclient"
 	"github.com/dasomel/ldapium/ui/backend/internal/machineauth"
@@ -60,6 +64,8 @@ type writeIdentityChecker interface {
 	Check(ctx context.Context, target, requiredClass string) error
 	// CheckNotPrivileged refuses a target that is a member of a privileged group.
 	CheckNotPrivileged(ctx context.Context, target string) error
+	// CheckCredentialPending is the setPassword pre-read (D379-18 Revision 8).
+	CheckCredentialPending(ctx context.Context, target, tag string) error
 }
 
 type machineWritePipeline struct {
@@ -132,6 +138,12 @@ type wreq struct {
 	// the D9 idempotency subject, set at step 7, from which its tag derives.
 	pending bool
 	subject string
+	// password is the setPassword body value (REQ-012): it is passed to the
+	// W_cred Password Modify and nowhere else - never to an error, the audit
+	// state, a log line or the response.
+	password string
+	// deadline is the end of the request's one MACHINE_REQUEST_TIMEOUT (step 8).
+	deadline time.Time
 }
 
 func (w *machineWritePipeline) serve(c echo.Context, p *machineauth.Principal, op machineWriteOp, next echo.HandlerFunc) error {
@@ -243,6 +255,36 @@ func (r *wreq) step4Parse() error {
 			return r.deny(reasonScope, outcomeDeniedGuard, codeScopeDenied, msgWriteDNRefused)
 		}
 	}
+	if r.op.Compartment == "cred" && !pol.withinCredSubtree(r.dns[0].raw) {
+		return r.deny(reasonScope, outcomeDeniedGuard, codeScopeDenied, msgWriteDNRefused)
+	}
+	return nil
+}
+
+// machineCredMinLengthFloor is config's credMinLengthDefault (T020-D1): a
+// configuration built without config.Load cannot lower the floor below it.
+const machineCredMinLengthFloor = 12
+
+// parsePassword reads the setPassword value (REQ-011): a non-empty string
+// within validate.Password's cap and at least MACHINE_WRITE_CRED_MIN_LENGTH.
+// T022-D3: the length is counted in UTF-8 BYTES, not characters: bytes >=
+// characters, so the floor never refuses a value the policy (>= the floor,
+// T-028 check 2) would accept, whichever way slapd counts. Cost: a non-ASCII
+// value with fewer characters than the floor can pass here; slapd's
+// pwdMinLength is then the character floor. Documented in
+// docs/machine-write-account.md section 8. No error names or echoes the value.
+func (r *wreq) parsePassword(get func(string) (string, bool)) error {
+	pw, ok := get("password")
+	if !ok {
+		return errors.New("password is required")
+	}
+	if err := validate.Password(pw); err != nil {
+		return err
+	}
+	if len(pw) < max(r.w.s.cfg.Machine.Write.CredMinLength, machineCredMinLengthFloor) {
+		return errors.New("password is shorter than the machine write minimum length")
+	}
+	r.password = pw
 	return nil
 }
 
@@ -318,6 +360,11 @@ func (r *wreq) parseDNs(raw []byte) ([]writeDN, error) {
 		dn, err := need("dn")
 		if err != nil {
 			return nil, err
+		}
+		if r.op.ID == "setPassword" {
+			if err := r.parsePassword(get); err != nil {
+				return nil, err
+			}
 		}
 		return []writeDN{{raw: dn, class: r.op.Class}}, nil
 	default:
@@ -410,8 +457,14 @@ func (r *wreq) step5Denylist() error {
 // step6IfMatch: modifications need exactly one concrete strong entryCSN tag.
 func (r *wreq) step6IfMatch() error {
 	r.w.stage("ifmatch")
+	present := len(r.c.Request().Header.Values("If-Match")) > 0
 	if r.st.write != nil {
-		r.st.write.IfMatch = len(r.c.Request().Header.Values("If-Match")) > 0
+		r.st.write.IfMatch = present
+	}
+	// REQ-011, P10: Password Modify carries no control, so an If-Match could not
+	// be honoured; a 400 as on the human route (rejectIfMatch).
+	if r.op.Compartment == "cred" && present {
+		return r.reject(http.StatusBadRequest, codeInvalidRequest, "If-Match is not supported for password changes")
 	}
 	if !r.op.IfMatch {
 		return nil
@@ -451,7 +504,9 @@ func (r *wreq) step7Idempotency() error {
 		r.st.write.Subject = subject
 	}
 	r.subject = subject
-	return r.w.s.idempotent(r.execute, false)(r.c)
+	// REQ-011, P13: a credential route records in password mode (stored reply
+	// "{}", a generating body refused with the key).
+	return r.w.s.idempotent(r.execute, r.op.Compartment == "cred")(r.c)
 }
 
 // execute is steps 8 and 9; it runs inside the idempotency record, so a replay
@@ -473,7 +528,16 @@ func (r *wreq) execute(c echo.Context) error {
 		r.setOutcome(outcomeRejected)
 		return apiErr(http.StatusServiceUnavailable, codeUnavailable, "machine group seed is not configured")
 	}
-	ctx, cancel := context.WithTimeout(c.Request().Context(), r.w.exec.timeout)
+	// ONE MACHINE_REQUEST_TIMEOUT bounds the whole request (emergency-block and
+	// shutdown-grace bounds). setPassword splits it (T022-D5): the pre-reads and
+	// the Password Modify run until deadline-reserve, the detached cleanup until
+	// deadline, so the cleanup never adds a second timeout while the slot is held.
+	r.deadline = time.Now().Add(r.w.exec.timeout)
+	writeDeadline := r.deadline
+	if r.op.ID == "setPassword" {
+		writeDeadline = r.deadline.Add(-credCleanupReserve(r.w.exec.timeout))
+	}
+	ctx, cancel := context.WithDeadline(c.Request().Context(), writeDeadline)
 	defer cancel()
 	for _, d := range r.dns {
 		if d.class == "" {
@@ -485,18 +549,32 @@ func (r *wreq) execute(c echo.Context) error {
 	}
 	// D379-8 (REQ-007): a member of a privileged group is never locked by a
 	// machine. This is an M read of the target's memberOf, before the W bind.
-	if r.op.ID == "lockUser" {
+	if r.op.ID == "lockUser" || r.op.ID == "setPassword" {
 		if err := r.w.ident.CheckNotPrivileged(ctx, r.dns[0].raw); err != nil {
 			return r.identityRefusal(err)
 		}
 	}
+	if r.op.ID == "setPassword" {
+		// REQ-018, D379-18 Revision 8: W_data-made, exactly one marker with THIS
+		// client's tag, the pending policy, no pwdChangedTime (409).
+		if err := r.w.ident.CheckCredentialPending(ctx, r.dns[0].raw, credentialPendingTag(r.subject)); err != nil {
+			return r.identityRefusal(err)
+		}
+		// Seams, not implemented here: T-028 runs the D379-15 premise checks
+		// right here (failure: 503, no write); T-023 takes the per-target
+		// serialization (key: entryUUID, shared across clients) and the global
+		// password budget here, released by defer like the write limiter.
+	}
 	// runAs derives its own timeout from the request context: handing it ours
-	// keeps the M pre-read and the write inside ONE MACHINE_REQUEST_TIMEOUT
-	// (emergency-block and shutdown-grace bounds), not two back to back.
+	// keeps the M pre-read and the write inside the deadline above, not two
+	// timeouts back to back.
 	c.SetRequest(c.Request().WithContext(ctx))
 	return r.w.exec.runAs(c, r.p, id.BindDN, id.BindPassword, func(c echo.Context) error {
 		c.Set(definitiveKey, false) // from here on a 5xx may hide an applied write
 		c.Set(machineIdempotencyDoneKey, true)
+		if r.op.ID == "setPassword" {
+			return r.setPassword(c, id)
+		}
 		ctx := ldapclient.WithMachineWriteConstraints(c.Request().Context())
 		if r.op.ID == "createGroup" {
 			ctx = ldapclient.WithMachineGroupSeed(ctx, seed)
@@ -510,10 +588,120 @@ func (r *wreq) execute(c echo.Context) error {
 	})
 }
 
+// setPassword is the machine setPassword write (D379-9, REQ-011): one RFC 3062
+// Password Modify as W_cred with no old password (the existing SetPassword, so
+// the value is never a Modify/Add attribute), then the pending cleanup. The
+// human handler and its passwordLimiter are not used (P12). The reply is
+// exactly "{}": no generatedPassword can occur (a value is always sent).
+func (r *wreq) setPassword(c echo.Context, id config.MachineWriteIdentity) error {
+	if _, err := currentSession(c).Bound.SetPassword(c.Request().Context(), r.dns[0].raw, "", r.password); err != nil {
+		return respondErr(c, classifyCredWriteError(err))
+	}
+	r.cleanupPending(c, id)
+	return c.JSON(http.StatusOK, setPasswordResponse{})
+}
+
+// credCleanupReserve is the slice of the request budget kept for the cleanup
+// (T022-D5): 2s, at most half of MACHINE_REQUEST_TIMEOUT. Cost: the Password
+// Modify gets the budget minus the reserve. Escape hatch: raise
+// MACHINE_REQUEST_TIMEOUT; a cleanup that does not fit is cleanup=failed and
+// the T-028 stuck sweep's job.
+func credCleanupReserve(timeout time.Duration) time.Duration {
+	return min(2*time.Second, timeout/2)
+}
+
+// credWriteError is the only error the password-bearing exop hands on (REQ-012,
+// T022-D6): a fixed class and the LDAP result code. The exop error's own text
+// never reaches a response or a log line: a slapd diagnostic, a password policy
+// module or a wrapper could carry the value or its hash.
+type credWriteError struct {
+	class error // a domain sentinel or a context error (fixed texts), or nil
+	code  int   // the LDAP result code, -1 when there is none
+}
+
+func (e credWriteError) Error() string {
+	class := "directory error"
+	if e.class != nil {
+		class = e.class.Error()
+	}
+	return fmt.Sprintf("password modify: %s (ldap result %d)", class, e.code)
+}
+
+func (e credWriteError) Unwrap() error { return e.class }
+
+var credWriteClasses = []error{
+	domain.ErrNotFound, domain.ErrAlreadyExists, domain.ErrConflict, domain.ErrInvalidCredentials,
+	domain.ErrPermissionDenied, domain.ErrInvalidInput, domain.ErrCurrentPasswordRejected,
+	domain.ErrRevisionConflict, context.DeadlineExceeded, context.Canceled,
+}
+
+func classifyCredWriteError(err error) error {
+	out := credWriteError{code: -1}
+	for _, class := range credWriteClasses {
+		if errors.Is(err, class) {
+			out.class = class
+			break
+		}
+	}
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		out.code = int(le.ResultCode)
+	}
+	return out
+}
+
+// cleanupPending removes the marker and the pending policy in ONE Modify as
+// W_cred (D379-18 Revision 8, Revision 9 MINOR). T022-D4: on a fresh W_cred
+// connection under a context detached from the request (context.WithoutCancel:
+// neither a client disconnect nor the spent write deadline aborts it), bounded
+// by the request's own deadline (T022-D5: the reserved slice), both attempts
+// together, one retry. Its errors are never logged or returned (REQ-012).
+// Failure leaves the applied password applied: the reply is still the success,
+// the audit line says cleanup=failed and the T-028 stuck sweep takes over.
+func (r *wreq) cleanupPending(c echo.Context, id config.MachineWriteIdentity) {
+	ctx, cancel := context.WithDeadline(context.WithoutCancel(c.Request().Context()), r.deadline)
+	defer cancel()
+	tag, policy := credentialPendingTag(r.subject), r.w.s.cfg.Machine.Write.CredPendingPolicyDN
+	for attempt := 0; attempt < 2; attempt++ {
+		if r.clearPending(ctx, id, tag, policy) == nil {
+			r.setCleanup(cleanupDone)
+			return
+		}
+	}
+	r.setCleanup(cleanupFailed)
+	// No error text: it can name the target DN, which the audit line only fingerprints.
+	log.Printf("machine_credential_cleanup_failed request_id=%s client=%s", logQuote(requestIDOf(c)), logQuote(r.p.ClientID))
+}
+
+func (r *wreq) clearPending(ctx context.Context, id config.MachineWriteIdentity, tag, policy string) error {
+	bound, err := r.w.exec.dialer.Bind(ctx, id.BindDN, id.BindPassword)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = bound.Close() }()
+	clr, ok := bound.(ldapclient.CredentialPendingClearer)
+	if !ok {
+		return errors.New("the W_cred connection cannot clear the pending state")
+	}
+	return clr.ClearCredentialPending(ctx, r.dns[0].raw, tag, policy)
+}
+
+func (r *wreq) setCleanup(v string) {
+	if r.st != nil && r.st.write != nil {
+		r.st.write.Cleanup = v
+	}
+}
+
 // identityRefusal maps an M pre-read failure to the response of step 8.
 func (r *wreq) identityRefusal(err error) error {
 	if errors.Is(err, domain.ErrPermissionDenied) || errors.Is(err, domain.ErrInvalidInput) {
 		return r.deny(reasonScope, outcomeDeniedProtected, codeScopeDenied, "target is not permitted for machine writes")
+	}
+	if errors.Is(err, domain.ErrConflict) {
+		// setPassword: the target already has a password (pwdChangedTime).
+		r.st.setReason(reasonRequestRejected)
+		r.setOutcome(outcomeRejected)
+		return apiErr(http.StatusConflict, codeConflict, "target already has a password")
 	}
 	if errors.Is(err, domain.ErrNotFound) {
 		// Only a genuine noSuchObject for the target reaches here; the

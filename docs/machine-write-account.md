@@ -305,7 +305,7 @@ T-020(v2c 설정·기동 검증)이 읽는 값 — `MACHINE_WRITE_ENABLED=true`�
 | `MACHINE_WRITE_CRED_BIND_DN`/`_PASSWORD` | 둘 다 필수, 비밀번호는 다른 `W_*`와 같은 Secret 관례. DN은 D26 형식(`uid`/`cn`/`ou`/`dc`, 별칭·OID·이상한 공백 거부)이고 `M`·`W_data`·`W_lock`(켠 경우)·관리자·서비스 계정·rootdn·복제 신원과 `ParseDN` 동등이면 거부(REQ-009). 보호 집합에 들어가므로 이 DN을 담는 `MACHINE_WRITE_SUBTREES` 상한도 거부된다. |
 | `MACHINE_WRITE_CRED_SUBTREES` | `client=dn|dn;…`, 비어 있으면 거부(검사 8). 각 DN은 **같은 client의** `MACHINE_WRITE_SUBTREES` 상한과 같거나 그 안이어야 하고(Q9), 특권 그룹 자신이나 그 아래는 거부. |
 | `MACHINE_WRITE_PRIVILEGED_GROUPS` | v2c를 켜면 비어 있으면 거부(검사 8). |
-| `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. |
+| `MACHINE_WRITE_CRED_MIN_LENGTH` | 정책 하한, 기본 12. 12–1024 정수만(내릴 수 없다). 실제 비교는 T-028의 실행 시 검사. 머신 `setPassword`(T-022, 아직 미개방)는 본문 비밀번호를 이 값과 **바이트**(UTF-8) 수로 비교해 미만이면 400이다(T022-D3) — 문자 수가 아니므로 비 ASCII 비밀번호는 문자 수가 이 값보다 적어도 통과할 수 있고, 그 경우의 문자 수 하한은 slapd 정책(`pwdMinLength`)이 맡는다. |
 | `MACHINE_WRITE_CRED_PENDING_POLICY_DN` | 필수(D379-18). D26 형식, `LDAP_BASE_DN`의 엄격한 하위, 이미지 기본 정책(`cn=default,ou=policies,<base>`)과 다르고 보호 신원·특권 그룹·seed와 달라야 한다. |
 | `MACHINE_WRITE_CRED_POLICY_DNS` | 선택, `;`로 구분한 대상별 정책 허용 목록(검사 3). D26 형식, base의 엄격한 하위, 최대 16개, 대소문자 무시 중복 거부, 대기 정책 DN은 넣지 않는다. |
 
