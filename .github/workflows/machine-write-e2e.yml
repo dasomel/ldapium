@@ -21,6 +21,10 @@ name: Machine write E2E (real Keycloak)
 #     image configured by environment only (config.Load) and a real slapd prepared like the T-028 proof, with the
 #     AC-009 secret scans of responses, UI / slapd / Keycloak logs and cn=accesslog, and the emergency block.
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
+#
+# The second job, `machine write measurements (E-22, two-provider R-3)` (#429), repeats the #417 (c) measurements
+# (EVIDENCE §2q, §2r) on every change. It is deliberately NOT release-critical: E-22 waits on the real 60 s premise
+# ticker, so its timing margins on shared runners are observed here before anyone makes it a gate.
 
 on:
   # No paths filter, deliberately: release-critical checks must always report
@@ -115,6 +119,59 @@ jobs:
             esac
             # shellcheck disable=SC2086
             out=$(docker $kind --filter name=ldapium-mwk- --filter name=ldapium-mwd- --filter name=ldapium-cpre- --filter name=ldapium-t024- --filter name=ldapium-t025- --format "$fmt")
+            if [ -n "$out" ]; then
+              echo "::error::leftover docker objects ($kind):"
+              echo "$out"
+              leaks=1
+            fi
+          done
+          [ "$leaks" -eq 0 ]
+
+  # Not in release.yml's required list (see the header). Neither script needs Keycloak or the UI image.
+  measurements:
+    name: machine write measurements (E-22, two-provider R-3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's migration-dryrun job for the
+    # full rationale. Lane a: lane b already carries both machine Keycloak jobs (about 30 min).
+    concurrency:
+      group: heavy-e2e-lane-a-${{ github.event.pull_request.number || github.sha }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # E-22's Go side is a `live`-tagged test binary cross-compiled by the script.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ui/backend/go.mod
+          cache-dependency-path: ui/backend/go.sum
+
+      - name: Build server image
+        run: docker build -t "$LDAPIUM_IMAGE" image
+
+      - name: E-22 check-to-write window (held write, own-check 503, 60 s ticker close, held-write abort)
+        run: python3 scripts/test/test-machine-write-cred-e22-live.py
+
+      - name: R-3 on two providers (pinned bundle, concurrent sets, bundle-on-both control, deny rule)
+        run: python3 scripts/test/test-machine-write-cred-multiprovider-live.py
+
+      - name: Fail on leftover docker objects
+        if: always()
+        run: |
+          set -u
+          leaks=0
+          for kind in "ps -a" "volume ls" "network ls"; do
+            case "$kind" in
+              "ps -a") fmt='{{.Names}} {{.Status}}' ;;
+              *) fmt='{{.Name}}' ;;
+            esac
+            # shellcheck disable=SC2086
+            out=$(docker $kind --filter name=ldapium-e22- --filter name=ldapium-v2cmp- --format "$fmt")
             if [ -n "$out" ]; then
               echo "::error::leftover docker objects ($kind):"
               echo "$out"
