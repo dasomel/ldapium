@@ -113,7 +113,7 @@ RUN make -C contrib/slapd-modules/ppm ppm CRACK=no \
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
-FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS exporter-builder
+FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.18
 ARG EXPORTER_X_CRYPTO_VERSION=v0.56.0
 ARG TARGETARCH
