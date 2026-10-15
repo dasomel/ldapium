@@ -934,4 +934,4 @@ T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secre
 
 T-040 (2026-10-14, §2o)의 Not verified: 위 "Not run, and why" 목록 전부(`cmd/server` 포함 `go test ./...`, 프런트엔드 빌드, `licenses.sh`·`check-make-parity.sh`·나머지 차트 스크립트, 라이브 드릴 재실행, 변이 목록 재실행), 태그 SHA에서의 T-027 게이트.
 
-#417 (2026-10-15, §2p-§2r)이 옮긴 것: E-13의 Keycloak·UI 컨테이너 부분과 실제 `config.Load`(§2p), E-22(§2q, 실행 중 60초 주기 발화 포함), 다중 provider의 R-3(§2r, 두 provider). 여전히 미실측: E-14, `pwdInHistory`(R-7), R-4의 1 rps 예산 계수, 운영자가 직접 복제하는 `cn=config`와 세 provider 이상, Kubernetes 롤아웃, E-22·§2r의 GitHub Actions 실행(CI 미합류).
+#417 (2026-10-15, §2p-§2r)이 옮긴 것: E-13의 Keycloak·UI 컨테이너 부분과 실제 `config.Load`(§2p), E-22(§2q, 실행 중 60초 주기 발화 포함), 다중 provider의 R-3(§2r, 두 provider). 여전히 미실측: E-14, `pwdInHistory`(R-7), R-4의 1 rps 예산 계수, 운영자가 직접 복제하는 `cn=config`와 세 provider 이상, Kubernetes 롤아웃. E-22·§2r는 #429부터 `machine-write-e2e.yml`의 `machine write measurements (E-22, two-provider R-3)` job으로 GitHub Actions에서 매 변경마다 실행된다(릴리스 필수 검사는 아님: 공유 러너에서 60초 주기 발화의 시간 여유를 먼저 관찰).
