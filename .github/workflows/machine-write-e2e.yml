@@ -17,6 +17,9 @@ name: Machine write E2E (real Keycloak)
 #     test-machine-write-cred-drill.py (T-025 per-compartment emergency block). Their Go side is a `live`-tagged test
 #     binary cross-compiled by the script, so this job sets up Go. The v2c ACL proof (T-021) stays in
 #     api-credentials-e2e.yml with the other ACL proofs; it is not repeated here.
+#   - test-machine-write-cred-keycloak-live.py (#417 (b)): setPassword through a real Keycloak token, the production UI
+#     image configured by environment only (config.Load) and a real slapd prepared like the T-028 proof, with the
+#     AC-009 secret scans of responses, UI / slapd / Keycloak logs and cn=accesslog, and the emergency block.
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
 
 on:
@@ -94,6 +97,9 @@ jobs:
 
       - name: Machine write v2c emergency-block drill (W_cred rotation, flag off, in-flight window, manual procedure)
         run: python3 scripts/test/test-machine-write-cred-drill.py
+
+      - name: Machine write v2c setPassword end to end (real Keycloak token, production UI image + config.Load, secret scans, emergency block)
+        run: python3 scripts/test/test-machine-write-cred-keycloak-live.py
 
       # The scripts remove their own containers, volumes and networks even on failure. The runner is
       # fresh per job, so anything left under these prefixes belongs to this run: list it and fail.
