@@ -835,6 +835,92 @@ Not run, and why: `go test ./...` / `go build ./...` / `go vet ./...` over `cmd/
 here; their results stay as recorded in §2b–§2n and CI (`machine-write-e2e.yml`, joined to `release_critical` by PR #412). The mutation list of CHANGE.md
 "Verification plan" was not rerun. T-027's "success at the tag SHA" is checked at the v0.2.0 tag only.
 
+### 2p. #417 (b): setPassword through a real Keycloak token, the UI image and `config.Load` (2026-10-15, PR #427)
+
+`scripts/test/test-machine-write-cred-keycloak-live.py`, joined to `machine-write-e2e.yml` (job `machine write (real Keycloak)`, a release-gate
+name). Real Keycloak client-credentials tokens; the production UI image configured only by environment variables, so the real `config.Load`
+runs; slapd prepared per `docs/machine-write-account.md` 4.2/4.3, 8.1-8.5, 8.8. Local, Colima, images built from main `9356bb0`.
+
+```
+LDAPIUM_IMAGE=ldapium:ckc LDAPIUM_UI_IMAGE=ldapium-ui:ckc python3 scripts/test/test-machine-write-cred-keycloak-live.py
+  RESULT: 41 checks passed, 0 failed, mutation=none, 30s
+LDAPIUM_CREDKC_MUTATE=leak-hash ...   (also leak, leak-b64)
+  RESULT: 40 checks passed, 1 failed, mutation=leak-hash, 28s
+    FAILED: slapd container log: 0 hash patterns
+  MUTATION SELF-TEST: caught by the slapd log scan
+```
+
+| Path | Result |
+|---|---|
+| setPassword on a `credentialPending` account the same client created | 200 `{}`; the new password binds (`ldapwhoami`) |
+| same key, same body | `Idempotent-Replayed: true` |
+| token without `directory.users.password.write` | 403 `scope_denied` |
+| too-short value; value the pending policy refuses | 400 `invalid_request`; 400 |
+| second set on a completed account | **403 `scope_denied`** (the cleanup cleared the marker); 409 `conflict` only for a stuck entry (reproduced by re-adding this client's marker and the pending policy as admin) — T417-F1 |
+| `MACHINE_WRITE_CRED_ENABLED=false` restart | 403 `scope_denied`, 0 `W_cred` binds in accesslog |
+| AC-009 scans: HTTP responses, UI `docker logs` (audit lines), slapd log, Keycloak log, `cn=accesslog` `reqMod`/`reqOld` (rootdn) | 0 plaintext, 0 base64, 0 hash, each surface |
+
+T417-F1: `docs/api.md` and the 0.2.0 CHANGELOG said an already-set account answers 409. The code (`identityRefusal`, `machine_write_pipeline.go`)
+answers 409 only when the marker is still present, i.e. a stuck entry; the documentation was corrected, the behaviour is unchanged.
+Independent review: PASS (minors fixed in the PR's second commit). Not verified here: the GitHub runner (the PR's CI is the first run); the
+HTTP-response scan has no mutation (it would need an app change); the Keycloak log is clean by construction (passwords never reach it).
+
+### 2q. #417 (c): E-22, the R-4 check-to-write window (2026-10-15)
+
+`TestCredE22Live` (`ui/backend/internal/httpapi/machine_write_cred_e22_live_test.go`, `live` tag) driven by
+`scripts/test/test-machine-write-cred-e22-live.py`, inside the slapd container as the T-025 drill. The proxy holds the `W_cred` Password Modify
+(after the per-request premise check returned); while it is held, `to dn.subtree=<cred subtree> attrs=userPassword by users write` is inserted
+in front of the `W_cred` bundle; the request is released; the next request follows; the **real** 60 s `credGate.run` ticker closes the
+operation; the rule is removed. No hook in non-test code (the check's return time comes from a test-side wrapper of the checker).
+
+```
+LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-e22-live.py     (~5 min, T_E22_RUNS=5)
+  49 checks passed, 0 failed, 322s
+```
+
+| Run | Ticker phase at insert | Check -> write at proxy | Held request | Next request | Periodic close |
+|---|---|---|---|---|---|
+| 0 | 6 s | 10 ms | 200 | 503 | 54.0 s |
+| 1 | 18 s | 10 ms | 200 | 503 | 42.0 s |
+| 2 | 30 s | 13 ms | 200 | 503 | 30.0 s |
+| 3 | 42 s | 12 ms | 200 | 503 | 18.0 s |
+| 4 | 54 s | 10 ms | 200 | 503 | 6.0 s |
+
+Asserted per run: the next request is 503 `unavailable` from its **own** per-request check (the cycle verdict still open before and after it,
+the check returned after the request started, result `acl_cred_bundle_mismatch`), and the ticker's verdict is exactly `acl_cred_bundle_mismatch`.
+Unheld, check returned -> HTTP response received is 33 ms; the next-request 503 arrives 77-107 ms after the insert. Timeout bound: with the looser rule inserted and the write held,
+the request aborted about 7.9 s after the check (asserted 7-10 s: 10 s `MACHINE_REQUEST_TIMEOUT` minus the 2 s cleanup reserve), 409
+`idempotency_outcome_unknown`, nothing written (`pwdChangedTime` absent). Reading: the R-4 window is real and exactly one request wide (the request whose check already passed); the natural window is
+tens of milliseconds; the hard bound is the request timeout; the periodic close is the next tick (≤ 60 s). Independent review: the first version asserted only a generic 503 and a non-empty verdict, and
+its failure-path cleanup could miss a wrapped rule; all fixed before these numbers. Not verified: one container run; the 1 rps budget factor of R-4 was not exercised; not in CI.
+
+### 2r. #417 (c): R-3 on two real providers (2026-10-15)
+
+`scripts/test/test-machine-write-cred-multiprovider-live.py`: two providers from the image with `LDAP_REPLICATION_ENABLED` (serverID 1, 2),
+the experiments' `W_data`/`W_cred` setup per node; A pinned (the `W_cred` bundle), B `write-cred-deny` only. Not in CI.
+
+```
+LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-multiprovider-live.py      (MP_ROUNDS=5, MP_N=10)
+  ALL 16 CHECKS PASSED in 102s
+```
+
+| # | Measurement | Result |
+|---|---|---|
+| M1 | `W_cred` on B as shipped (deny, no bundle): Password Modify and Modify | 50 / 50 (`W_cred` binds on B: the 50 is the ACL) |
+| M1b | B with no deny and no bundle | 50 / 50: the image rules alone refuse; the deny is a backstop there |
+| M1b | B with the bundle and the deny in front of it | 50 / 50: the deny decides |
+| M1b | B with the bundle and no deny | Password Modify **0** (lands): the deny is what keeps a bundled node closed |
+| M2 | N=10 parallel Password Modify on A, 5 rounds | one 0 and nine 50 each round; after convergence the winner binds on A and B, losers on neither, hashes equal |
+| M3 | 5 on A and 5 on B together; and B partitioned while A sets | B 50 every time, A one success, one value binds on both providers |
+| M4 | `cn=config` replication in the shipped topology | not replicated: `olcSyncrepl` only on the main `mdb`; a probe `olcAccess` on A (read back) absent on B after 15 s |
+| M5 | control: bundle on both, B partitioned | 5/5 rounds two successes; after healing one value survives on both, the other success is silently lost |
+| M5 | control: bundle on both, unpartitioned | 1-2 of 5 rounds two successes (latency-dependent, recorded not asserted); always one surviving value |
+
+Reading: with the bundle pinned to one provider R-3 holds across two providers; the shipped image does not replicate `cn=config`, so the
+per-provider split is stable; with the bundle on both, last-write-wins loses a "successful" first password. Independent review found M1
+vacuous in the first version (the deny was not what decided); M1b was added. Not verified: an operator who replicates `cn=config` themselves
+(the image does not render it), more than two providers.
+
 ## 3. Not verified
 
 §2e(2026-10-13)가 E-07–E-12·E-16·E-17·E-20·E-21·E-23을 실측했다(E-17·E-12·E-13은 LDAP 직접 경로·slapd 로그 부분만). 남은 것: E-01–E-06, E-13(전체), E-14, E-15, E-18, E-19, E-22와 E-17의 앱 경로 절반. (2026-10-14 T-028, §2j: E-21의 설정 읽기 신원과 AC-010b의 직접 검사 부분을 앱 검사 코드로 실측; E-22는 `setPassword`가 열리지 않아 여전히 미실측.) (2026-10-14 T-024, §2k: E-13을 `live` 시험 서버(프로세스 안 UI)·slapd 로그·accesslog(rootdn·`M`) 범위에서, E-17 앱 경로 절반(한 provider), E-10 앱 경로를 실측 — E-13의 Keycloak·UI 컨테이너 부분은 아님. 여전히 미실측: Keycloak 컨테이너 로그(토큰은 하니스 내장 IdP), UI 컨테이너 `docker logs`(서버는 프로세스 안에서 실행, 로그 전체를 수집), 다중 provider, E-22·E-14, `pwdInHistory`, 실행 중 60초 주기 발화, GitHub Actions. T024-F1은 2026-10-14 결정(프로브 유지, 공개 상수로 고정·허용 목록).) §2b의 T-015 드릴이 부수적으로 본 것: E-05(그룹 `cn` 직접 replace -> `Naming violation (64)`), E-06의 `W_lock` 직접 쓰기 거부, E-07의 `W_lock` 특권 멤버 직접 쓰기(필터 없는 fixture에서 성공), E-15의 앱 경로 해제 우회 5종, E-19의 duration 0 잠금 값 형태(**마커와 다름**, F-1). 이것들은 T-002의 정식 실측을 대체하지 않는다.
@@ -847,3 +933,5 @@ T-026(§2m·§2n)의 Not verified (§2n에서 Q16 앱 경로 403은 실측으로
 T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secret 롤아웃, 다중 provider, `MACHINE_REQUEST_TIMEOUT` 10 s·4 s 이외 값, 900 s 잠금의 자연 해제, 60 s 타이머(주기 검사는 직접 호출), CI 합류(T-027). T025-F1(플래그만 끈 재배포는 403이 아니라 503)은 T-026에서 결정한다.
 
 T-040 (2026-10-14, §2o)의 Not verified: 위 "Not run, and why" 목록 전부(`cmd/server` 포함 `go test ./...`, 프런트엔드 빌드, `licenses.sh`·`check-make-parity.sh`·나머지 차트 스크립트, 라이브 드릴 재실행, 변이 목록 재실행), 태그 SHA에서의 T-027 게이트.
+
+#417 (2026-10-15, §2p-§2r)이 옮긴 것: E-13의 Keycloak·UI 컨테이너 부분과 실제 `config.Load`(§2p), E-22(§2q, 실행 중 60초 주기 발화 포함), 다중 provider의 R-3(§2r, 두 provider). 여전히 미실측: E-14, `pwdInHistory`(R-7), R-4의 1 rps 예산 계수, 운영자가 직접 복제하는 `cn=config`와 세 provider 이상, Kubernetes 롤아웃, E-22·§2r의 GitHub Actions 실행(CI 미합류).

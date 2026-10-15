@@ -101,7 +101,7 @@
 `description` 설정·`null` 제거는 성공, `cn`을 담은 머신 본문은 400(쓰기 없음), 알 수 없는 필드 400. 사람 경로의 `cn` 변경 거동은 변하지 않는다(현재 거동은 `E-05`로 기록).
 
 ### `AC-005` — 잠금, 그리고 해제 거부
-`W_lock`이 꺼진 배포에서 lock scope를 상한에 쓰면 기동 실패. 켠 배포에서: 강한 `If-Match`+키로 잠금 → 대상 `pwdAccountLockedTime=000001010000Z`, 같은 키 재시도는 재생, 그룹 DN 대상은 단언 실패로 쓰기 없음, 특권 그룹 멤버 대상은 403, 보호 DN 403. 이미 ppolicy로 잠긴 계정(시각 값)에 머신 잠금을 하면 값이 표지로 바뀜(더 엄격해짐)을 기록하고, 그 뒤에도 머신 해제 경로가 없음을 단언한다. 잠긴 계정은 단순 bind가 실패한다(이미 발급된 다운스트림 세션·토큰은 영향 없음을 문서화). `directory.users.unlock`을 상한에 쓰면 기동 실패다.
+`W_lock`이 꺼진 배포에서 lock scope를 상한에 쓰면 기동 실패. 켠 배포에서: 강한 `If-Match`+키로 잠금 → 대상 `pwdAccountLockedTime=000001010000Z`, 같은 키 재시도는 재생, 그룹 DN 대상은 단언 실패로 쓰기 없음, 특권 그룹 멤버 대상은 403, 보호 DN 403. 이미 ppolicy로 잠긴 계정(시각 값)에 머신 잠금을 하면 409이고 그 타임스탬프는 그대로다(D394-1: `W_lock`은 Add만 하며, 단일 값 속성 위의 Add는 19). 그 뒤에도 머신 해제 경로가 없음을 단언한다. **Revision 17 개정(#417 (a))**: 원 문언 "값이 표지로 바뀜(더 엄격해짐)"은 D394-1 이전 동작이다. 잠긴 계정은 단순 bind가 실패한다(이미 발급된 다운스트림 세션·토큰은 영향 없음을 문서화). `directory.users.unlock`을 상한에 쓰면 기동 실패다.
 
 ### `AC-005b` — 해제 우회 거부(ppolicy 시각 잠금, duration 0 잠금, 왕복, 재시작)
 각각에서 머신 `POST /api/users/unlock`은 403 `scope_denied`·bind 0이고 대상의 `pwdAccountLockedTime`은 변하지 않는다: (a) 무차별 대입으로 ppolicy가 잠근 계정(시각 값), (b) `pwdLockoutDuration=0` 정책으로 잠긴 계정(표지 형태, P22), (c) 같은 client가 `lockUser` 직후 같은 대상에 해제, (d) (c)를 UI 재시작 뒤 반복, (e) 다른 client가 해제. 사람 경로 해제는 바이트 불변이다(`h/user_handlers.go:200-221`). 변이: 해제를 열린 표에 넣으면 이 시험이 실패한다.
@@ -122,13 +122,13 @@
 센티널 비밀번호(무작위 32자)로 성공·실패(정책 위반·ACL 거부·412 해당 없음·429·422)·재생 경로를 모두 실행한 뒤, 모든 HTTP 응답 본문·헤더, UI 감사 줄, UI·slapd·Keycloak 컨테이너 로그(`docker logs`, `LDAP_AUDIT_ENABLED=true` 구성의 auditlog stdout 포함), `LDAP_ACCESSLOG_OPS`에 쓰기를 넣은 구성의 `cn=accesslog` `reqMod`/`reqOld`(관리자 읽기와 `M` 읽기 각각)에서 센티널 평문 **과** 해시 패턴(REQ-012)이 0건이다. 해시가 발견되는 구성은 D379-14에 따라 기동·렌더가 거부되는 구성이어야 한다. 멱등 기록은 지문 외에 비밀을 담지 않음을 단위 시험으로 고정한다(메모리는 라이브로 덤프하지 않는다).
 
 ### `AC-010` — 정책 적용
-`W_cred`로 `pwdMinLength` 미만·이력(`pwdInHistory`) 재사용 비밀번호를 설정하면 slapd가 거부하고 앱은 400/409 계열 오류 코드(기존 매핑)로 응답한다. 적용되지 않으면 v2c를 열지 않는다(REQ-014).
+`W_cred`로 `pwdMinLength` 미만 비밀번호를 설정하면 slapd가 거부하고 앱은 400 계열 오류 코드(기존 매핑)로 응답한다(E-10: 대기 정책의 `pwdMinLength`를 값보다 크게 올린 경로, 그리고 `pwdCheckQuality 2`에서 미리 해시한 값의 직접 Modify 거부). 적용되지 않으면 v2c를 열지 않는다(REQ-014). **Revision 17 개정(#417 (a))**: 원 문언의 "이력(`pwdInHistory`) 재사용" 거부는 초기 설정으로는 증명할 수 없다 — 대기 계정에는 이전 비밀번호가 없어 이력이 비어 있고, 같은 계정의 두 번째 설정은 앱 경로에서는 표지 검사가 403으로, `W_cred` 직접 경로에서는 ACL이 거부한다(D379-10). 이력 규칙의 실효는 R-7(수용)로 남는다.
 
 ### `AC-010b` — 실행 시 강제: 범위별 오구성과 검사 후 변경(P1-c, 2차 P1-2/P1-3)
 `MACHINE_WRITE_CRED_ENABLED=true`에서 다음 각각은 UI 기동 실패(비0 종료, 원인 코드만 로그, 값 없음)다: 정책 비활성 컨테이너; `W_cred` 규칙 묶음이 고정 원문과 다르거나 그 앞에 `W_cred`에 적용될 수 있는 다른 규칙이 있는 `olcAccess`(D379-16); **상한 subtree가 둘인데 둘째 subtree에만 더 느슨한 규칙**(예: `to dn.subtree=<둘째> attrs=userPassword by users write`를 `W_cred` 묶음 앞에 삽입)이 있는 구성 — 카나리가 첫째 subtree에만 있어도 원문 대조가 거부해야 한다; 기본 정책 임계값이 설정 하한 미만; 표지 카나리 프로브 실패; `M`이 `cn=accesslog`의 **자식 항목**을 하나라도 읽을 수 있는 구성(base는 숨기고 자식에 read를 준 구성 포함, D379-14); `MACHINE_WRITE_PRIVILEGED_GROUPS` 비어 있음. **대상별**: `pwdPolicySubentry`가 허용 목록 밖이거나 그 정책 임계값이 하한 미만인 대상은 그 요청만 403(쓰기 없음). **검사 후 변경**: 기동 후 느슨한 규칙을 삽입하면 다음 `setPassword`가 요청 직전 검사에서 503(쓰기 없음)이고, 요청이 없을 때도 60초 안에 주기 검사가 비밀번호 오퍼레이션을 닫는다. 검사 읽기와 쓰기 사이에 규칙을 바꾸는 경쟁은 R-4의 수용 창으로 기록한다.
 
 ### `AC-010c` — 동시 초기 설정(P2-b)
-같은 대기 계정에 대해 (a) **같은 client**의 서로 다른 `Idempotency-Key` 두 요청을 동시에, (b) 앱을 우회한 `W_cred` 직접 Password Modify 병렬 N=10(서로 다른 값)을 보내면 각각 **정확히 한 건만** 성공하고 나머지는 쓰기 없이 실패한다(앱 경로는 직렬화 409/429 또는 ACL 거부, 직접 경로는 50). 최종 `userPassword`는 성공한 값으로만 bind된다. (c) **다른 client**의 동시 요청은 태그 검사로 쓰기 전에 403이다(AC-007b (d)와 같은 규칙). (b)가 성립하지 않으면 R-3이 열린 채로 남고 v2c는 출하하지 않는다. **Revision 9 범위(Codex P2)**: (b)의 "정확히 한 건"은 **한 provider 안에서만** 보장된다(단일 slapd 실측). 다중 provider에서는 앱 경로를 한 provider로 고정해도 `W_cred` 자격 증명으로 **다른 provider에 직접** 쓰는 경로는 막히지 않고, 복제는 last-write-wins다. 따라서 다중 provider 배포는 `W_cred` ACL 묶음을 고정 provider에만 설치하고(다른 provider에서는 `W_cred` none) 그것을 전제 검사로 확인해야 한다 — `cn=config`가 복제되는 구성에서는 이 방법이 성립하지 않는다(미실측, 출하 전 결정 필요).
+같은 대기 계정에 대해 (a) **같은 client**의 서로 다른 `Idempotency-Key` 두 요청을 동시에, (b) 앱을 우회한 `W_cred` 직접 Password Modify 병렬 N=10(서로 다른 값)을 보내면 각각 **정확히 한 건만** 성공하고 나머지는 쓰기 없이 실패한다(앱 경로는 직렬화 409/429 또는 ACL 거부, 직접 경로는 50). 최종 `userPassword`는 성공한 값으로만 bind된다. (c) **다른 client**의 동시 요청은 태그 검사로 쓰기 전에 403이다(AC-007b (d)와 같은 규칙). (b)가 성립하지 않으면 R-3이 열린 채로 남고 v2c는 출하하지 않는다. **Revision 9 범위(Codex P2)**: (b)의 "정확히 한 건"은 **한 provider 안에서만** 보장된다(단일 slapd 실측). 다중 provider에서는 앱 경로를 한 provider로 고정해도 `W_cred` 자격 증명으로 **다른 provider에 직접** 쓰는 경로는 막히지 않고, 복제는 last-write-wins다. 따라서 다중 provider 배포는 `W_cred` ACL 묶음을 고정 provider에만 설치하고(다른 provider에서는 `W_cred` none) 그것을 전제 검사로 확인해야 한다 — `cn=config`가 복제되는 구성에서는 이 방법이 성립하지 않는다(미실측, 출하 전 결정 필요). **2026-10-15 실측(#417, EVIDENCE §2r)**: 출하 토폴로지는 `cn=config`를 복제하지 않으므로 이 방법이 성립하고, 고정 provider 구성에서 (b)가 두 provider에 걸쳐 성립했다.
 
 ### `AC-011` — 긴급 차단(구획별)
 (a) `MACHINE_WRITE_CRED_ENABLED=false` 재배포 → 서버는 **기동하고**, `setPassword`는 쓰기·`W_cred` bind·연결 없이 **403 `scope_denied`**(플래그가 꺼지면 다른 `MACHINE_WRITE_CRED_*`를 읽지 않아 cred 상한이 없다; scope까지 ceiling에서 빠진 배포도 403), 다른 쓰기 영향 없음. **Revision 15 개정(2026-10-14, 유지보수자 Q19 결정: 403 유지)**: 원 문언은 403이었고, T-025가 코드로 만든 구성(플래그만 끄고 다른 cred 값 유지)에서 503을 재서 503으로 정정했으며(T025-F1), T-026이 실제 `config.Load` 구성은 403임을 확인했다(T026-F1, EVIDENCE §2m). 유지보수자가 지킨 성질(긴급 차단이 기동 실패가 되지 않음, `W_cred` bind 0)은 그대로이며 응답 코드는 403으로 확정한다. 503은 코드로만 만들 수 있는 구성의 두 번째 방어선 응답이다. (b) `W_cred` 비밀번호 회전 → 다음 `setPassword` 503 `bind_failed`, `W_data`·`W_lock`·읽기 영향 없음. (c) 이미 bind된 진행 중 요청의 상한은 `MACHINE_REQUEST_TIMEOUT`(부모 EVIDENCE-drill.md와 같은 방식으로 실측).
@@ -246,7 +246,7 @@
 | 그룹 삭제로 권한 회수·서비스 거부 | 허용 목록 그룹 삭제로 다수 사용자의 역할 상실 | 허용 목록, 특권 그룹 거부, `If-Match`, 한도, 감사 | 허용 목록 안에서는 비가역 |
 | 그룹 개명 | `cn` 변경으로 역할 매핑 변경 | `description`만(D379-5) | — |
 | 관리자 잠금(가용성) | 관리자·운영자 계정 잠금 | 보호 DN, 특권 멤버 거부(D379-8) | 특권 그룹 설정 누락, 사전 읽기 TOCTOU |
-| lockout 무력화 | 머신이 잠금→해제 왕복, 여러 client, 재시작으로 ppolicy 잠금을 풀어 무차별 대입을 돕는다 | 머신 해제 미개방(D379-7, AC-005b) | 머신 `lockUser`가 ppolicy 시각 잠금을 무기한 표지로 바꿀 수 있음(더 엄격해질 뿐, 해제는 사람) |
+| lockout 무력화 | 머신이 잠금→해제 왕복, 여러 client, 재시작으로 ppolicy 잠금을 풀어 무차별 대입을 돕는다 | 머신 해제 미개방(D379-7, AC-005b) | 없음 — D394-1 이후 머신 `lockUser`는 ppolicy 시각 잠금 위에서 409이고 타임스탬프를 바꾸지 않는다(Revision 17 정정) |
 | 계정 탈취(비밀번호 설정) | 기존 사용자(비밀번호가 없는 SSO·외부 인증 사용자 포함)의 비밀번호를 알려진 값으로 설정해 로그인 | 표지·`creatorsName`·`!(userPassword=*)` ACL filter(D379-10), ACL 원문 대조·대상별 정책(D379-15/16), client 태그 확인, 특권 멤버 거부, 보호 DN, 상한, 기동 프로브 2·3 | ACL filter 미성립 시 출하 불가(E-08/E-16). **Revision 9 정정**: 탈취에 `W_cred` 침해는 필요 없다 — 유출된 `W_data` + `password.write`를 가진 정상 client 하나(앱이 `W_cred`로 설정)면 된다. 완화 전에는 관리자가 만든 특권 계정도 삭제→대기 재생성→설정→특권 그룹 재가입으로 탈취됐다(§2h M-3). 완화 (a)(비-`W_data` 사용자의 `entry` =rsc)·(b)(특권 그룹 `member` =rsc) 후 **남는 정확한 경계**: (1) `W_data`가 **스스로 만든** 계정(v2a createUser로 만든 SSO 사용자 포함)은 삭제·대기 재생성·설정이 가능하다(실측 0/0/0), (2) 특권 그룹의 **중첩** 그룹(`subadmins`) 멤버 추가는 막지 못한다(0). 두 가지 모두 수용 위험으로 유지보수자 결정에 올린다(Q16) |
 | `W_cred` 침해 | `W_cred` 비밀번호 유출 | ACL이 표지 있는 `W_data` 생성 비밀번호 없는 비특권 계정으로 한정, 다른 쓰기 없음, 긴급 회전(AC-011) | 대기 중(표지 있음·비밀번호 없음) 계정에 비밀번호 설정 가능; ACL은 client 태그를 구별하지 않음 |
 | `W_cred` 잠금 DoS | LDAP에 닿는 누구나 틀린 비밀번호 `pwdMaxFailure`(5)번으로 `W_cred`를 잠가 `setPassword`를 멈춤; 회전 뒤 거절된 요청도 실패 bind | 구획 분리(`W_data`·`W_lock`·읽기 무관), 잠금 해제 절차(`pwdAccountLockedTime` 삭제), 실패 bind 알림 | **Q17 결정(2026-10-14, 무잠금)**: 8.1이 무잠금 정책을 붙여 DoS를 없앤다. 남는 것: 추측 횟수 무제한 — 긴 무작위 비밀번호·네트워크 제한·실패 bind 경보(운영자 책임, 가이드 8.1). 8.1을 건너뛴 배포는 기동하지 않는다(Q18 (b), Revision 15: 기동·주기 검사가 무잠금 정책을 강제) |
@@ -377,6 +377,8 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 **2026-10-14 유지보수자 수용**(Revision 16, T-060 BLOCKER의 해소): R-4 **수용** — TOCTOU 창 ≤ `MACHINE_REQUEST_TIMEOUT` 10초 × 1 rps, 닫을 수 없음, E-22는 실행하지 않았고 "Not verified"로 남는다. R-6 **수용**(Q12) — 차트 밖 배포의 auditlog+v2c 동시 활성은 문서 경고만, 런타임 강제 없음. R-7 잔여 **수용** — `W_cred`가 설정한 비밀번호에 대한 이력·ppm 규칙은 증명되지 않았고 `pwdCheckQuality 2`로 완화(D379-13). R-3(단일 provider는 닫힘, 다중 provider는 고정 provider + `write-cred-deny.ldif`로 완화하되 실측하지 않음)과 R-5(상호 배제 유지)는 변경 없음.
 
+**2026-10-15 실측 후 상태**(#417, EVIDENCE.md §2q·§2r): R-4는 **수용 유지**, E-22로 창을 실측했다 — 검사를 통과한 그 한 요청만 옛 전제로 쓰고(보류 없이 검사→쓰기 10–13 ms), 다음 요청은 503, 실제 60초 주기 검사가 다음 틱(실측 6–54 s)에 닫으며, 쓰기를 붙잡아도 요청 시간 상한(10 s에서 정리 예약 2 s를 뺀 7.9 s)에서 쓰기 없이 끝난다. R-3은 **두 provider에서 고정 번들로 닫힘** — `W_cred` 번들이 A에만 있으면 B는 50, A의 N=10 병렬은 한 건만 성공해 B로 복제되고, 출하 토폴로지는 `cn=config`를 복제하지 않아 provider별 차이가 유지된다(M4). 번들을 두 provider에 모두 두면 last-write-wins로 "성공한" 첫 비밀번호가 사라지는 것을 대조군으로 확인했다. 운영자가 `cn=config`를 직접 복제하는 구성과 세 provider 이상은 미실측.
+
 ## Not verified
 
 - (2026-10-13 갱신) EVIDENCE.md §2b·§2d·§2e가 E-05·E-06·E-07–E-12·E-15·E-16·E-17(LDAP 직접)·E-19·E-20·E-21·E-23을 실측했다. 남은 것은 EVIDENCE.md §3. 아래는 작성 당시의 원문이다.
@@ -385,6 +387,12 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 
 ## Revision
 
+- 2026-10-15 Revision 17 (#417, T-060 후속; 유지보수자 결정 2026-10-15, 전부 권고대로).
+  - (a) 문언 개정: AC-005의 ppolicy 잠금 위 머신 잠금은 409·타임스탬프 유지(D394-1), AC-010은 `pwdMinLength` 거부만 수용 조건으로 두고 이력 거부는 초기 설정으로 증명할 수 없어 R-7로 돌린다. 위협 표의 "lockout 무력화" 잔여 칸도 같은 이유로 정정. 설계 결정 문구는 불변.
+  - **D417-1 (F-3 수용)**: 출하 `write-lock.ldif`에 특권 그룹 `filter=` 백스톱을 넣지 않는다. 유출된 `W_lock` 자격 증명으로 LDAP에 직접 쓰면 특권 그룹의 직접 멤버도 잠글 수 있다. 근거: 영향은 가용성(잠금)뿐이고 해제는 불가(D394-1 add-only)하며 사람 경로 해제와 rootdn으로 복구된다. filter는 `MACHINE_WRITE_PRIVILEGED_GROUPS`와 ACL 원문을 계속 맞춰야 하는 운영 비용과 기존 배포의 조각 재적용을 요구한다. 비용: `W_lock` 유출 시 관리자 잠금 DoS. 탈출구: E-07이 직접 멤버에 대한 filter 의미를 이미 실측했으므로, 필요해지면 별도 Class D 변경으로 조각과 점검 스크립트에 추가한다.
+  - (b) 실제 Keycloak 토큰·UI 이미지·환경 변수 `config.Load` 경로의 `setPassword`와 AC-009 스캔을 실측해 릴리스 게이트 잡에 합류(EVIDENCE §2p, PR #427). T417-F1: 설정을 마친 계정의 두 번째 설정은 409가 아니라 403(표지가 지워졌으므로); 409는 stuck 항목만 — `docs/api.md`·CHANGELOG 정정, 동작 불변.
+  - (c) E-22(EVIDENCE §2q)와 두 provider의 R-3(EVIDENCE §2r) 실측. 위 "2026-10-15 실측 후 상태" 참조. 두 스크립트는 CI에 넣지 않는다(일회성 실측, 재현용으로 보관).
+  - **D417-2 (중첩 특권 그룹 잠금 DoS 수용 유지)**: D17b(부모 CHANGE.md)의 수용을 그대로 둔다. nestgroup `memberof-filter` 기반 완화는 채택하지 않는다. 운영자 완화: 하위 그룹까지 `MACHINE_WRITE_PRIVILEGED_GROUPS`에 나열하면 그 멤버는 나열된 그룹의 직접 멤버가 되어 `lockUser`가 거부한다(`docs/machine-write-account.md` 4.3절에 문구 추가).
 - 2026-10-14 Revision 16 (T-060 독립 완료 검토: 구현이 위협 모델과 일치, BLOCKER 1건 = T-005 출하 게이트에 필요한 유지보수자 결정이 CHANGE.md에 없던 것; 유지보수자 결정 2026-10-14, 전부 권고대로). Q11·Q12·Q13 확정(Q12는 R-6 수용 포함), R-4·R-6·R-7 잔여 수용, R-3·R-5 불변. 설계 결정 문구는 불변. BLOCKER 0.
 - 2026-10-14 Revision 15 (T-026 검토 반영: security-reviewer BLOCKER 0, Class D critic ACCEPT-WITH-RESERVATIONS; 유지보수자 결정 2026-10-14; 실측 EVIDENCE.md §2n).
   - **M-3 MAJOR-2(`mail`·`uid` 바꿔치기)**: 수용(유지보수자 확인). 경고를 `docs/api.md`·`llms.txt`·가이드 8절에 명시.
@@ -476,3 +484,5 @@ v2b·v2c 각각: 기본 꺼짐 병합 → 라이브 증명 → 운영자가 scop
 - (b) `setPassword`를 실제 Keycloak + UI 컨테이너 + `config.Load` 경로로 끝까지 돌리고 로그 스캔을 수행(AC-009는 부분 검증).
 - (c) E-22와 다중 provider 실측.
 - (d) 추적 이슈 만들기: F-3(`W_lock` 특권 filter 안전망, #394 항목 1에서 채택하지 않음), 중첩 특권 그룹 잠금 DoS(#394 항목 2).
+
+2026-10-15 처리(#417, Revision 17): (a) 문언 개정, (b) §2p, (c) §2q·§2r, (d) D417-1·D417-2(둘 다 수용). 남은 미실측은 EVIDENCE.md §3 마지막 단락.

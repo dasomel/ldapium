@@ -10,6 +10,15 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Machine `setPassword` second-set response corrected (#417).** The 0.2.0 notes and
+  `docs/api.md` said an account whose password was already set answers 409. A completed
+  set clears the pending marker, so a second request is refused 403 by the marker check;
+  409 `conflict` only appears for a stuck entry (password present, marker left by a
+  failed cleanup). The behaviour is unchanged and was measured through a real Keycloak
+  token and the UI image.
+
 ## [0.2.0] — 2026-10-14
 
 ### Breaking / behaviour changes
