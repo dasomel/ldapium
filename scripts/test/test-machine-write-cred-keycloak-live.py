@@ -21,10 +21,15 @@ log, the Keycloak container log, and cn=accesslog reqMod/reqOld read as the acce
 constant allowlisted exactly as in the secret proof, T024-F1). Controls prove each scanner can see: the seed's plain
 userPassword Adds make the accesslog hash scan non-zero. A hit fails the run and names the surface, never the value.
 
+A second set on a completed account is 403 scope_denied (the cleanup cleared the marker); 409 is only for a stuck
+entry (password, marker and pending policy together), which the script recreates as the administrator.
+
 Mutation self-test (LDAPIUM_CREDKC_MUTATE writes the value into the slapd container log, a scanned surface):
   leak       a sentinel in plain text                      -> must FAIL (scan)
   leak-b64   the same sentinel base64-encoded               -> must FAIL (scan)
   leak-hash  a {SSHA} hash                                  -> must FAIL (scan)
+The injection is verified to have landed; the run exits 1 only when exactly the slapd-log scan check(s) failed
+("MUTATION SELF-TEST: caught by the slapd log scan"), and 3 when the failure is anything else or nothing failed.
 
 Run (docker; builds not included):
   docker build -t ldapium:e2e image && docker build -t ldapium-ui:e2e ui
@@ -75,8 +80,11 @@ def _on_live_network(cmd, *a, **kw):
 
 acl.run = _on_live_network
 sentinels = list(sec.SENTINELS)
-for s in sentinels:
-  live.secret(s)
+for s in sentinels:  # a failure dump masks the whole value, its 11-character prefix (the short request) and base64 forms
+  for v in (s, s[:sec.SHORTEST]):
+    live.secret(v)
+    for f in sec.b64_forms(v):
+      live.secret(f)
 
 
 def next_sentinel():
@@ -213,7 +221,8 @@ def main():
   time.sleep(1.2)  # reqStart has second precision
   t0 = sec.slapd_now(node)
   A = start_ui('a')
-  check(True, 'the production UI image started from environment variables alone (config.Load accepted the v2c contract, premise checks passed)')
+  check(A.call('GET', '/api/auth/config')[0] == 200,
+        'the production UI image started from environment variables alone (config.Load accepted the v2c contract, premise checks passed) and answers')
   tok = token('svc-pw')
 
   # --- success -> the new password binds -> replay -> second set -------------------------------------------
@@ -236,7 +245,8 @@ def main():
   status, _, text = set_password(A, '422', tok, p1, s1, k1)
   check(status == 422 and code_of(text) == 'idempotency_key_reused', f'same key + another password -> 422 idempotency_key_reused (got {status} {code_of(text)})')
   status, _, text = set_password(A, 'second-cleaned', tok, p1, s2, key())
-  check(status == 403, f'a second set with a new key on the cleaned account (no marker) -> 403 (got {status} {code_of(text)})')
+  check(status == 403 and code_of(text) == 'scope_denied',
+        f'a second set with a new key on the cleaned account (no marker) -> 403 scope_denied (got {status} {code_of(text)})')
   admin_ldif(f'dn: {p1}\nchangetype: modify\nadd: employeeType\nemployeeType: {marker}\n-\nadd: pwdPolicySubentry\npwdPolicySubentry: {acl.pending_pol}\n')
   status, _, text = set_password(A, 'second-stuck', tok, p1, s2, key())
   check(status == 409, f'a second set on the same account as a stuck entry (password, marker, pending policy) -> 409 (got {status} {code_of(text)})')
@@ -248,7 +258,7 @@ def main():
   status, _, text = set_password(A, 'no-scope', token('svc-nopw'), p2, next_sentinel(), key())
   check(status == 403 and code_of(text) == 'scope_denied', f'token without {CRED_SCOPE} -> 403 scope_denied (got {status} {code_of(text)})')
   status, _, text = set_password(A, 'short', tok, p2, next_sentinel()[:11], key())
-  check(status == 400, f'a value shorter than MACHINE_WRITE_CRED_MIN_LENGTH (11 < 12) -> 400 (got {status} {code_of(text)})')
+  check(status == 400 and code_of(text) == 'invalid_request', f'a value shorter than MACHINE_WRITE_CRED_MIN_LENGTH (11 < 12) -> 400 (got {status} {code_of(text)})')
   check(not entry_attrs(p2, 'pwdChangedTime').get('pwdchangedtime') and entry_attrs(p2, 'employeeType').get('employeetype'),
         'the refused requests changed nothing: p2 is still pending and has no password')
   pend = acl.pending_pol
@@ -278,6 +288,9 @@ def main():
   if mutation:  # the scan must bite: put the value on a scanned surface (the slapd container log)
     leak = {'leak': sentinels[0], 'leak-b64': base64.b64encode(sentinels[0].encode()).decode(), 'leak-hash': '{SSHA}' + 'A' * 28}[mutation]
     require(run(['docker', 'exec', '-u', 'ldap', '-e', 'LEAK=' + leak, node.container, 'sh', '-c', 'echo "$LEAK" > /proc/1/fd/1']).returncode == 0, 'mutation inject')
+    time.sleep(0.5)
+    landed = run(['docker', 'logs', node.container])
+    require(leak in landed.stdout + landed.stderr, 'mutation inject did not land in the slapd container log')
   rows = [('HTTP responses (status, headers, body)', '\n'.join(capture))]
   logs = ''
   for name in ui_names:
@@ -321,4 +334,8 @@ if __name__ == '__main__':
   print(f'RESULT: {acl.passed} checks passed, {len(acl.failed)} failed, mutation={mutation or "none"}, {time.monotonic() - acl.start_time:.0f}s', flush=True)
   for f in acl.failed:
     print('  FAILED: ' + f, flush=True)
+  if mutation:
+    caught = bool(acl.failed) and not code and all(f.startswith('slapd container log:') for f in acl.failed)
+    print('MUTATION SELF-TEST: ' + ('caught by the slapd log scan' if caught else 'NOT attributable to the slapd log scan'), flush=True)
+    sys.exit(1 if caught else 3)
   sys.exit(1 if acl.failed or code else 0)
