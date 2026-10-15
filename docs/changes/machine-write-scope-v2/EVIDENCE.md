@@ -856,7 +856,7 @@ LDAPIUM_CREDKC_MUTATE=leak-hash ...   (also leak, leak-b64)
 | same key, same body | `Idempotent-Replayed: true` |
 | token without `directory.users.password.write` | 403 `scope_denied` |
 | too-short value; value the pending policy refuses | 400 `invalid_request`; 400 |
-| second set on a completed account | **403 `scope_denied`** (the cleanup cleared the marker); 409 `conflict` only for a stuck entry (marker re-added by admin) — T417-F1 |
+| second set on a completed account | **403 `scope_denied`** (the cleanup cleared the marker); 409 `conflict` only for a stuck entry (reproduced by re-adding this client's marker and the pending policy as admin) — T417-F1 |
 | `MACHINE_WRITE_CRED_ENABLED=false` restart | 403 `scope_denied`, 0 `W_cred` binds in accesslog |
 | AC-009 scans: HTTP responses, UI `docker logs` (audit lines), slapd log, Keycloak log, `cn=accesslog` `reqMod`/`reqOld` (rootdn) | 0 plaintext, 0 base64, 0 hash, each surface |
 
