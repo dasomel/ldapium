@@ -131,7 +131,9 @@ jobs:
   measurements:
     name: machine write measurements (E-22, two-provider R-3)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # Above the scripts' own worst-case deadlines run back to back (E-22 1110 s + R-3 1500 s, about 44 min),
+    # so a stuck script fails on its deadline and the leftover check still runs. Typical: about 9 min.
+    timeout-minutes: 50
     # Shares one of three heavy-E2E lanes per PR/commit; see e2e.yml's migration-dryrun job for the
     # full rationale. Lane a: lane b already carries both machine Keycloak jobs (about 30 min).
     concurrency:
