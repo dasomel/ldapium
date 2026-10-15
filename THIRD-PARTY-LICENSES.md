@@ -39,18 +39,18 @@ SBOM attached to that release, or:
 | `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.8/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.5/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.5/json/LICENSE) |
-| `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.14/LICENSE) |
+| `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.15/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.16.0/LICENSE) |
 | `github.com/labstack/gommon` | MIT | [link](https://github.com/labstack/gommon/blob/v0.5.0/LICENSE) |
 | `github.com/mattn/go-colorable` | MIT | [link](https://github.com/mattn/go-colorable/blob/v0.1.15/LICENSE) |
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
 | `github.com/munnerz/goautoneg` | BSD-3-Clause | [link](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
-| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | BSD-3-Clause | [link](https://github.com/prometheus/client_golang/blob/v1.24.1/internal/github.com/golang/gddo/LICENSE) |
-| `github.com/prometheus/client_golang/prometheus` | Apache-2.0 | [link](https://github.com/prometheus/client_golang/blob/v1.24.1/LICENSE) |
-| `github.com/prometheus/client_model/go` | Apache-2.0 | [link](https://github.com/prometheus/client_model/blob/v0.6.2/LICENSE) |
-| `github.com/prometheus/common` | Apache-2.0 | [link](https://github.com/prometheus/common/blob/v0.70.1/LICENSE) |
-| `github.com/prometheus/procfs` | Apache-2.0 | [link](https://github.com/prometheus/procfs/blob/v0.21.1/LICENSE) |
+| `github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil` | BSD-3-Clause | [link](https://github.com/prometheus/client_golang/blob/v1.25.0/internal/github.com/golang/gddo/LICENSE) |
+| `github.com/prometheus/client_golang/prometheus` | Apache-2.0 | [link](https://github.com/prometheus/client_golang/blob/v1.25.0/LICENSE) |
+| `github.com/prometheus/client_model/go` | Apache-2.0 | [link](https://github.com/prometheus/client_model/blob/v0.6.3/LICENSE) |
+| `github.com/prometheus/common` | Apache-2.0 | [link](https://github.com/prometheus/common/blob/v0.72.0/LICENSE) |
+| `github.com/prometheus/procfs` | Apache-2.0 | [link](https://github.com/prometheus/procfs/blob/v0.22.0/LICENSE) |
 | `github.com/valyala/bytebufferpool` | MIT | [link](https://github.com/valyala/bytebufferpool/blob/v1.0.0/LICENSE) |
 | `github.com/valyala/fasttemplate` | MIT | [link](https://github.com/valyala/fasttemplate/blob/v1.2.2/LICENSE) |
 | `golang.org/x/crypto` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/crypto/+/v0.57.0:LICENSE) |
@@ -59,7 +59,7 @@ SBOM attached to that release, or:
 | `golang.org/x/sys/unix` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE) |
 | `golang.org/x/text` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/text/+/v0.42.0:LICENSE) |
 | `golang.org/x/time/rate` | BSD-3-Clause | [link](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
-| `google.golang.org/protobuf` | BSD-3-Clause | [link](https://github.com/protocolbuffers/protobuf-go/blob/v1.36.11/LICENSE) |
+| `google.golang.org/protobuf` | BSD-3-Clause | [link](https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE) |
 
 ## UI frontend (npm, production dependencies)
 
