@@ -526,7 +526,7 @@ case "$LDAP_ACCESSLOG_ENABLED" in
   true|1)
     case " $(printf '%s' "$LDAP_ACCESSLOG_OPS" | tr ',[:upper:]' ' [:lower:]') " in
       *" extended "*|*" all "*)
-        die "LDAP_ACCESSLOG_OPS contains extended or all (got: ${LDAP_ACCESSLOG_OPS}): OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password Modify extended operation (accesslog.c:1623 assertion, F-7, #398). Use 'writes reads bind' instead; there is no override until upstream fixes it" ;;
+        die "LDAP_ACCESSLOG_OPS contains extended or all (got: ${LDAP_ACCESSLOG_OPS}): the accesslog overlay aborts slapd on the first Password Modify (#398). Use 'writes reads bind'" ;;
     esac ;;
 esac
 
@@ -1141,7 +1141,6 @@ d}" "$cn_config"
   # pwdHistory are NO-USER-MODIFICATION (19) already and stay out of the list.
   # Bootstrap only, like the rest of this block: an existing volume keeps its
   # stored olcAccess (image/README.md, "Access control").
-  # rendered in both branches below; D400-1
   self_read_attrs=pwdPolicySubentry,pwdReset,pwdStartTime,pwdEndTime,pwdAccountLockedTime
   anon_read_access="${work}/anon-read-access.ldif"
   if [ -n "$LDAP_ANONYMOUS_READ_BASE" ]; then
