@@ -219,11 +219,10 @@ auth:
   existingSecretKey: admin-password
 
 tls:
-  # -- UNVERIFIED PATH: as of 0.1.0 the TLS path (server certificates and
-  #    TLS-protected replication) has not been exercised end-to-end against a
-  #    running cluster. The templates render and the entrypoint handles it,
-  #    but nobody has watched it work. Validate it yourself before relying on
-  #    it, and please report what you find.
+  # -- Serve LDAPS on 636 and move replication to ldaps://. The TLS E2E jobs in
+  #    .github/workflows/e2e.yml (standalone and replicated) install the chart
+  #    with this on in a kind cluster on every change and check LDAPS,
+  #    StartTLS, TLS replication and the protocol/cipher floor.
   enabled: false
   # -- Secret containing the TLS material, mounted read-only at /etc/openldap/tls.
   #    Expected keys match the standard kubernetes.io/tls Secret shape

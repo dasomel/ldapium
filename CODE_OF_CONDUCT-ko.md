@@ -22,4 +22,8 @@ English | **한국어**
 
 프로젝트 관리자는 심각한 행동 강령 위반에 대해 경고, 콘텐츠 제거, 참여 제한 등의 조치를 취할 수 있습니다.
 
-문제는 공개 issue에서 논쟁하기보다 프로젝트의 적절한 비공개 채널을 통해 신고하십시오.
+문제는 공개 issue에서 논쟁하기보다 GitHub의 비공개 security advisory를 열거나 `charts/ldapium/Chart.yaml`에 적힌 maintainer에게 연락해 비공개로 신고하십시오. 모든 신고는 신속하고 공정하게 검토되며, maintainer는 신고자의 사생활과 보안을 존중할 의무가 있습니다.
+
+## 출처
+
+이 행동 강령은 [Contributor Covenant](https://www.contributor-covenant.org/) 2.1 버전을 바탕으로 합니다. 영문 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)에는 연령, 장애, 민족, 성 정체성 등에 관계없이 괴롭힘 없는 참여를 보장한다는 서약 전문이 있습니다.

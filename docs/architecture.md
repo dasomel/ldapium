@@ -21,7 +21,7 @@ flowchart LR
 | Component | Source | Responsibility |
 |---|---|---|
 | Server image | `image/` | OpenLDAP built from upstream source, overlays, TLS and startup validation |
-| UI backend | `ui/backend/` | LDAP-bind authentication, directory operations and optional OIDC integration |
+| UI backend | `ui/backend/` | LDAP-bind authentication, directory operations, optional OIDC integration and opt-in machine bearer access |
 | UI frontend | `ui/frontend/` | DIT browsing and user/group administration |
 | Helm chart | `charts/ldapium/` | StatefulSet, Services, Secrets, storage, replication, UI and backup jobs |
 | Operations | `scripts/` | Backup, restore, air-gap packaging, verification and compatibility tests |
@@ -48,6 +48,8 @@ With one replica, replication is disabled. With multiple replicas, each pod has 
 - No default directory password or UI session secret is embedded.
 - LDAP-bind is the default administrator authentication path.
 - Optional Keycloak login is role-gated and uses a dedicated LDAP service account.
+- Optional machine bearer access (off by default): a Keycloak service-account token is verified and the request runs as a separate dedicated LDAP identity bound per request; reads use one read-only account, writes (`MACHINE_WRITE_ENABLED`) use separate write identities behind their own ACLs. See [machine-ldap-account.md](machine-ldap-account.md) and [machine-write-account.md](machine-write-account.md).
+- Replication binds as the administrator DN by default; the opt-in `LDAP_REPLICATION_IDENTITY=dedicated` mode uses a read-only `cn=replicator` identity over verified LDAPS. See [migration.md](migration.md).
 - TLS material is supplied by Secret and requires a rolling restart after renewal.
 - Encryption at rest belongs to the storage/platform boundary; see [encryption at rest](encryption-at-rest.md).
 

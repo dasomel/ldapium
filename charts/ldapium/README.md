@@ -1,6 +1,6 @@
 # ldapium Helm chart
 
-Deploys the `image/` OpenLDAP 2.6.14 server as a StatefulSet, with an optional
+Deploys the `image/` OpenLDAP 2.6.15 server as a StatefulSet, with an optional
 management UI (`ui/`). See the repo root [README.md](../../README.md) for why
 this project exists. The replication design this chart implements
 (N-way multi-provider, peer list injected from `replicaCount`, admin-identity
@@ -109,7 +109,7 @@ version or the replication configuration changes.
 
 | Layer | Supported / verified combination | Evidence |
 |---|---|---|
-| OpenLDAP | 2.6.14, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
+| OpenLDAP | 2.6.15, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
 | Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
 | Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
 | HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior (D11) | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
@@ -231,7 +231,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 |---|---|---|
 | `replicaCount` | `1` | Server replica count. StatefulSet only. |
 | `image.repository` | `ghcr.io/dasomel/ldapium` | Placeholder — override before real use. |
-| `image.tag` | `""` (→ `.Chart.AppVersion`) | Server image tag. |
+| `image.tag` | `""` (→ `.Chart.Version`) | Server image tag. Empty uses the chart version, which is the release tag both images are published under. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
 | `nameOverride` / `fullnameOverride` | `""` | |
@@ -243,7 +243,12 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `ldap.orgName` | `""` | → `LDAP_ORG_NAME` (image derives a default when unset). |
 | `ldap.adminDN` | `""` | → `LDAP_ADMIN_DN` (image derives a default when unset). |
 | `ldap.anonymousReadBase` | `""` | → `LDAP_ANONYMOUS_READ_BASE`. Empty keeps today's DIT-wide anonymous read of `entry`/`uid`/`objectClass`; set to a DN under `ldap.rootDN` to narrow it to that subtree only (`image/README.md`, "Access control (ACL)"). DN-shaped, so it hits the `--set` comma footgun above — use `--set-string` with an escaped comma (`--set-string 'ldap.anonymousReadBase=ou=people\,dc=example\,dc=org'`) or a values file. |
+| `ldap.dbMaxSize` | `""` | → `LDAP_DB_MAX_SIZE` (`olcDbMaxSize`, bytes). Empty derives it from `persistence.data.size`. Applied at first bootstrap only. |
+| `ldap.maxOpenFiles` | `4096` | → `LDAP_MAX_OPEN_FILES`: caps slapd's file-descriptor limit and so the connection table it reserves (~680 bytes per fd). Raise `resources.limits.memory` with it. |
 | `ldap.logLevel` | `stats` | → `LDAP_LOG_LEVEL`. |
+| `ldap.passwordHash` | `{ARGON2}` | → `LDAP_PASSWORD_HASH`. Hash scheme for cleartext password changes and the bootstrap admin hash. Applied at first bootstrap only. |
+| `ldap.uniqueAttributes` | `uid,mail` | → `LDAP_UNIQUE_ATTRIBUTES`. Attributes the `unique` overlay enforces; empty omits the overlay at first bootstrap. |
+| `ldap.passwordPolicyEnabled` | `true` | → `LDAP_PASSWORD_POLICY_ENABLED`. Creates the default ppolicy entry (lockout, history). |
 | `ldap.passwordFailureInterval` | `900` | → `LDAP_PASSWORD_FAILURE_INTERVAL` (seconds until ppolicy forgets failed binds). |
 | `ldap.limits.idleTimeout` / `writeTimeout` | `600` / `30` | → `LDAP_IDLE_TIMEOUT` / `LDAP_WRITE_TIMEOUT` (seconds). See [Hardening](#hardening). |
 | `ldap.limits.connMaxPending` / `connMaxPendingAuth` | `100` / `1000` | → `LDAP_CONN_MAX_PENDING` / `LDAP_CONN_MAX_PENDING_AUTH`. |
@@ -300,13 +305,13 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | |
 | `startupProbe` / `livenessProbe` / `readinessProbe` | see values.yaml | All exec `ldapwhoami` over the ldapi socket, matching the image's own `HEALTHCHECK`. |
 | `ui.enabled` | `false` | |
-| `ui.image.repository` / `ui.image.tag` | `ghcr.io/dasomel/ldapium-ui` / `""` | Placeholder — override before real use. |
+| `ui.image.repository` / `ui.image.tag` | `ghcr.io/dasomel/ldapium-ui` / `""` (→ `.Chart.Version`) | UI image; empty tag uses the chart version, like `image.tag`. |
 | `ui.replicaCount` | `1` | |
 | `ui.service.type` / `ui.service.port` | `ClusterIP` / `8080` | |
 | `ui.ldap.url` | `""` (→ this release's server Service) | → `LDAP_URL`. |
 | `ui.ldap.baseDN` | `""` (→ `ldap.rootDN`) | → `LDAP_BASE_DN`. |
 | `ui.ldap.userSearchBase` / `groupSearchBase` / `userCreateBase` / `groupCreateBase` | `""` | → matching `LDAP_*_BASE` vars. |
-| `ui.ldap.userSearchFilter` | `""` | → `LDAP_USER_SEARCH_FILTER`. Empty = DN-only login. |
+| `ui.ldap.userSearchFilter` | `(uid=%s)` | → `LDAP_USER_SEARCH_FILTER`. Set empty for DN-only login. |
 | `ui.ldap.startTLS` | `false` | → `LDAP_START_TLS`. |
 | `ui.ldap.tlsCACert` | `""` | → `LDAP_TLS_CA_CERT`. |
 | `ui.ldap.tlsInsecureSkipVerify` | `false` | → `LDAP_TLS_INSECURE_SKIP_VERIFY`. |
@@ -653,11 +658,12 @@ What it checks:
 
 | Check | Catches |
 |---|---|
-| Anonymous root DSE search | Service/DNS wiring, server not listening |
+| Authenticated root DSE search (admin-bound, so `ldap.hardening.disallowAnonBind` / `requireAuthc` do not fail it) | Service/DNS wiring, server not listening |
 | Admin bind | Wrong or unsynchronised admin Secret |
 | Root DN exists | Bootstrap never completed |
 | Create OU + user + group, then delete | Admin identity cannot write |
 | `memberOf` appears on the test user | **The memberof overlay is not actually loaded** — slapd starts happily without it, so nothing else notices |
+| Duplicate `uid` and duplicate `mail` are each refused with a constraint violation, and the baseline entry survives | **The unique overlay is not actually loaded** — slapd would accept the duplicate |
 | Entry reaches every peer (replicated installs) | Replication configured but not converging |
 
 The write checks create `ou=helm-test,<rootDN>` and remove it again, deleting
@@ -667,7 +673,7 @@ assertion has to read back from the node that performed the write, since a
 Service read can land on a pod the entry has not reached yet. Propagation to
 the other pods is what the replication check covers. Against a directory you
 would rather nothing wrote to, `--set tests.write=false` leaves only the
-read-only checks.
+read-only checks. `tests.timeoutSeconds` (default `60`) is the budget for each wait: the server answering, and replication converging on each peer. With `tls.enabled` the test pod connects over `ldaps://` and mounts the TLS Secret.
 
 A failed test pod is deliberately **not** deleted — its log is the entire
 report. `helm test` again removes it before creating the next one.

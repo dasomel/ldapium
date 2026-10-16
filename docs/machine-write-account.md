@@ -3,10 +3,11 @@
 머신(bearer) 쓰기는 읽기 신원 `M`과 **다른** 별도 LDAP 계정으로만 실행된다(REQ-002, D3). 이 문서는 그 계정과 ACL 조각의
 확정 LDIF·적용·확인·롤백 절차다. 읽기 계정은 [machine-ldap-account.md](machine-ldap-account.md)이고, 이 문서는 그 위에 얹힌다.
 
-> **이 문서는 아무 쓰기 오퍼레이션도 열지 않는다.** `MACHINE_WRITE_ENABLED`와 쓰기 오퍼레이션 표(`machineWriteOps`)는 아직
-> 비어 있고(T-013이 마지막에 연다), 이 ACL을 적용해도 ldapium의 머신 요청 경로는 달라지지 않는다. 계정과 ACL은 먼저 준비해 두는 것이다.
-> ACL의 라이브 증명 전체는 T-021(예정)이고, 이 문서에 딸린 짧은 스모크
-> [`scripts/test/test-machine-write-acl-smoke.sh`](../scripts/test/test-machine-write-acl-smoke.sh)는 아직 CI에 연결되어 있지 않다.
+> **ACL만 적용해서는 쓰기가 열리지 않는다.** 머신 쓰기 오퍼레이션은 0.2.0부터 등록되어 있지만(T-013, v2b·v2c 포함)
+> `MACHINE_WRITE_ENABLED=true`이고 client별 쓰기 scope·상한이 설정된 경우에만 동작한다. 이 문서의 계정과 ACL은 그 전제 조건이다.
+> ACL의 라이브 증명은 T-021 [`scripts/test/test-machine-write-acl-live.py`](../scripts/test/test-machine-write-acl-live.py)이고
+> `api-credentials-e2e.yml`에서 실행된다. 이 문서에 딸린 짧은 스모크
+> [`scripts/test/test-machine-write-acl-smoke.sh`](../scripts/test/test-machine-write-acl-smoke.sh)는 CI에 연결되어 있지 않다.
 
 - 설계·근거: [CHANGE.md](changes/machine-write-scope/CHANGE.md) REQ-002/004/011, D1/D3/D11/D17/D18/D19/D26, AC-002/003(d)/008/010,
   Resolved Q3(구획 3개)·Q6(ACL 순서), 부록 A(오퍼레이션별 속성). [ADR.md](changes/machine-write-scope/ADR.md), [TASKS.md](changes/machine-write-scope/TASKS.md) `T-020`.

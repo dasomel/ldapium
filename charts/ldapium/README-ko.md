@@ -1,6 +1,6 @@
 # ldapium Helm chart
 
-`image/`의 OpenLDAP 2.6.14 서버를 StatefulSet으로 배포하고, 선택적으로 관리 UI(`ui/`)를 함께 배포합니다.
+`image/`의 OpenLDAP 2.6.15 서버를 StatefulSet으로 배포하고, 선택적으로 관리 UI(`ui/`)를 함께 배포합니다.
 
 English | **한국어**
 
@@ -18,13 +18,13 @@ OCI registry에서 릴리스 chart를 설치하는 경우:
 
 ```bash
 helm install directory oci://ghcr.io/dasomel/charts/ldapium \
-  --version 0.1.0 \
+  --version 0.2.1 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
   --set ldap.rootDN='dc=example,dc=org'
 ```
 
-기본 관리자 비밀번호는 없습니다. `auth.adminPassword` 또는 `auth.existingSecret`이 없으면 `helm template`과 `helm install`이 실패합니다.
+기본 관리자 비밀번호는 없습니다(`image/entrypoint.sh`는 비밀번호 없이 시작하지 않음). `auth.adminPassword`와 `auth.existingSecret`이 모두 없으면 실제 `helm install`은 64자 비밀번호를 한 번 생성해 `<release>-ldapium-admin` Secret(`helm.sh/resource-policy: keep`)에 저장하고 업그레이드 때 `lookup`으로 재사용합니다. `lookup`이 비는 오프라인 렌더(`helm template`, ArgoCD, `--dry-run=client`)와 새 namespace(`--create-namespace`)에서는 매 렌더마다 다른 비밀번호가 만들어져 데이터 볼륨이 잠기므로 chart가 렌더링을 중단합니다. 이때는 `auth.existingSecret`(권장) 또는 `auth.adminPassword`를 지정하십시오. 업그레이드 시 관리자 Secret이 없어도 생성하지 않고 중단합니다(원래 비밀번호를 지정).
 
 ## HA / Replication
 
@@ -42,8 +42,13 @@ replication을 강제로 켜거나 끄려면 `replication.enabled`를 명시할 
 |---|---|---|
 | `replicaCount` | `1` | LDAP 서버 replica 수 |
 | `image.repository` | `ghcr.io/dasomel/ldapium` | 서버 이미지 |
-| `image.tag` | Chart의 `appVersion` | 이미지 tag |
+| `image.tag` | Chart의 `version` | 이미지 tag. chart와 이미지는 같은 `vX.Y.Z` 태그로 함께 릴리스되며, OpenLDAP 버전은 `appVersion`입니다 |
 | `ldap.rootDN` | `dc=example,dc=org` | LDAP base DN |
+| `ldap.dbMaxSize` | `""` | → `LDAP_DB_MAX_SIZE` (`olcDbMaxSize`, 바이트). 비어 있으면 `persistence.data.size`에서 계산. 첫 bootstrap 때만 적용 |
+| `ldap.maxOpenFiles` | `4096` | → `LDAP_MAX_OPEN_FILES`: slapd의 fd 상한이자 연결 테이블 크기(fd당 약 680바이트)를 결정. 올리면 `resources.limits.memory`도 함께 올리십시오 |
+| `ldap.passwordHash` | `{ARGON2}` | → `LDAP_PASSWORD_HASH`. 평문 비밀번호 변경과 bootstrap 관리자 해시에 쓰는 해시 방식. 첫 bootstrap 때만 적용 |
+| `ldap.uniqueAttributes` | `uid,mail` | → `LDAP_UNIQUE_ATTRIBUTES`. `unique` overlay가 강제하는 속성. 비우면 첫 bootstrap 때 overlay를 만들지 않음 |
+| `ldap.passwordPolicyEnabled` | `true` | → `LDAP_PASSWORD_POLICY_ENABLED`. 기본 ppolicy entry(잠금, 이력) 생성 |
 | `ldap.passwordFailureInterval` | `900` | → `LDAP_PASSWORD_FAILURE_INTERVAL` (ppolicy가 실패한 bind를 잊기까지의 시간, 초) |
 | `ldap.limits.idleTimeout` / `writeTimeout` | `600` / `30` | → `LDAP_IDLE_TIMEOUT` / `LDAP_WRITE_TIMEOUT` (초). [Hardening](#hardening) 참고 |
 | `ldap.limits.connMaxPending` / `connMaxPendingAuth` | `100` / `1000` | → `LDAP_CONN_MAX_PENDING` / `LDAP_CONN_MAX_PENDING_AUTH` |
@@ -59,14 +64,25 @@ replication을 강제로 켜거나 끄려면 `replication.enabled`를 명시할 
 | `networkPolicy.enabled` | `false` | 서버 pod용 NetworkPolicy 생성. [Hardening](#hardening) 참고 |
 | `networkPolicy.ingressFrom` | `[{podSelector: {}}]` | 389/636 접근을 허용할 NetworkPolicy `from` peer 원문 (기본값: 같은 namespace). 비어 있으면 안 됨: `from: []`은 전체 허용을 의미하므로 chart가 렌더링 대신 실패함 |
 | `networkPolicy.monitoringNamespaceSelector` | `kubernetes.io/metadata.name: monitoring` | 9330 포트 scrape를 허용할 namespace (`metrics.enabled`일 때만) |
-| `auth.adminPassword` | 없음 | 관리자 비밀번호, 필수 |
-| `auth.existingSecret` | 없음 | 기존 Secret에서 비밀번호 사용 |
-| `tls.enabled` | `false` | TLS 활성화 여부. 현재 end-to-end 검증 필요 |
+| `auth.adminPassword` | `""` | 관리자 비밀번호(chart가 만드는 Secret). 오프라인 렌더에서는 `existingSecret`이 없으면 필수, 실제 install에서 비우면 생성 후 유지 |
+| `auth.existingSecret` | `""` | 기존 Secret에서 비밀번호 사용 (key 기본값 `auth.existingSecretKey=admin-password`) |
+| `tls.enabled` | `false` | 636 포트에서 LDAPS를 제공하고 replication을 `ldaps://`로 전환. [TLS](#tls) 참고 |
+| `tls.existingSecret` | `""` | `tls.crt`/`tls.key`(선택 `ca.crt`)가 든 Secret, `/etc/openldap/tls`에 마운트 |
 | `backup.enabled` | `false` | backup CronJob 활성화 |
 | `ui.enabled` | `false` | 관리 UI 활성화 |
+| `ui.ldap.userSearchFilter` | `(uid=%s)` | → `LDAP_USER_SEARCH_FILTER`. 비우면 전체 DN 로그인만 가능 |
+| `ui.machineAuth.enabled` | `false` | machine bearer 인증(Keycloak 서비스 클라이언트용, 읽기 전용 HTTP API) opt-in. 끄면 아무것도 렌더링하지 않음. 켜면 `ui.trustedProxies=private`(기본값)은 거부됩니다 |
 | `ui.sso.enabled` | `false` | Keycloak OIDC SSO 활성화 |
 
 전체 값은 `values.yaml`에서 확인하십시오.
+
+## TLS
+
+`tls.enabled=true`이면 `tls.existingSecret`을 `/etc/openldap/tls`에 마운트하고 636 포트에 LDAPS 리스너를 추가하며, replication 설치에서는 모든 `olcSyncrepl` provider를 `ldaps://`로 전환합니다. 이미지는 `LDAPTLS_REQCERT=demand`를 설정하므로 설정된 CA로 검증되지 않는 인증서는 평문으로 되돌아가지 않고 연결이 실패합니다. TLS가 켜져 있으면 `olcTLSProtocolMin: 3.3`(TLS 1.2)이 항상 설정되며 값으로 바꿀 수 없습니다.
+
+Secret 키: `tls.crt`(필수), `tls.key`(필수), `ca.crt`(`tls.caFile`을 설정할 때). 인증서는 Service 이름(`<release>-ldapium.<ns>.svc.<clusterDomain>`)과 syncrepl이 쓰는 pod별 headless 이름(`*.<release>-ldapium-headless.<ns>.svc.<clusterDomain>`)을 모두 포함해야 합니다.
+
+`slapd`는 키를 시작 시 한 번만 읽으므로 인증서 갱신은 Secret 갱신 후 `kubectl -n <ns> rollout restart statefulset/<fullname>`까지 두 단계입니다. `replicaCount > 1`이면 PodDisruptionBudget 아래 순차 재시작이라 LDAPS가 계속 응답하고, 단일 replica는 pod 재시작 시간만큼 중단됩니다. **CA**를 교체할 때는 옛 CA와 새 CA를 함께 담은 `ca.crt`로 재시작, 새 CA로 발급한 leaf로 재시작, 옛 CA 제거의 세 단계를 거치십시오. 한 번에 바꾸면 이미 재시작한 pod의 인증서를 아직 재시작하지 않은 pod가 신뢰하지 않아 replication이 끊깁니다.
 
 ## 실제 운영 시 주의사항
 
@@ -81,7 +97,7 @@ replication을 강제로 켜거나 끄려면 `replication.enabled`를 명시할 
 helm test <release> --namespace <namespace> --logs
 ```
 
-테스트는 관리자 bind, 디렉터리 entry 생성/삭제, `memberOf` overlay 동작 및 replication 환경의 전달 여부 등을 확인합니다.
+테스트는 다음을 확인합니다. 관리자로 bind한 root DSE 검색, 관리자 bind, root DN 존재, OU/사용자/그룹 생성 후 삭제, 테스트 사용자의 `memberOf` 생성(memberof overlay 로드 여부), 중복 `uid`와 중복 `mail`이 각각 constraint violation으로 거부되고 기준 entry가 유지되는지(unique overlay 로드 여부), 복제 환경에서 모든 peer에 entry가 도달하는지. 쓰기 검사는 `ou=helm-test,<rootDN>`을 만들었다가 지우며, 이전 실행의 잔재가 있으면 먼저 삭제합니다. 쓰기를 원치 않으면 `--set tests.write=false`로 읽기 전용 검사만 실행하십시오. `tests.timeoutSeconds`(기본 `60`)는 각 대기(서버 응답, peer별 복제 수렴)의 한도이며, `tls.enabled`이면 테스트 pod는 `ldaps://`로 접속합니다. 실패한 테스트 pod는 로그가 곧 리포트이므로 삭제되지 않습니다.
 
 ## Hardening
 

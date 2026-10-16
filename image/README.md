@@ -75,7 +75,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_ORG_NAME` | no | first `dc=` component of `LDAP_ROOT_DN` | Used as the `o:` attribute on the root entry. |
 | `LDAP_ADMIN_DN` | no | `cn=admin,${LDAP_ROOT_DN}` | Must use `cn=` as its RDN attribute. |
 | `LDAP_ANONYMOUS_READ_BASE` | no | `""` (whole DIT) | Must sit under `LDAP_ROOT_DN` if set. Narrows anonymous read of `entry`/`uid`/`objectClass` (see [Access control (ACL)](#access-control-acl)) to this subtree instead of the whole directory; a bind-then-search client (SSSD, this project's UI) can still resolve a `uid` from a root-base search, but anonymous can no longer enumerate entries outside this base. Applied at bootstrap only (see below). |
-| `LDAP_ADMIN_PASSWORD` | **yes**\* | — | No default, ever. Container refuses to start if unset. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
+| `LDAP_ADMIN_PASSWORD` | no\* | generated | No default, ever. If neither this nor `_FILE` is set, a fresh container generates a random 64-hex password into `${DATA_DIR}/.credentials/ldap-admin-password` (mode 600); it refuses instead when `LDAP_REPLICATION_ENABLED=true` or existing configuration needs its original password. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
 | `LDAP_ADMIN_PASSWORD_FILE` | no\* | — | Path to a file containing the admin password (for secret mounts). Takes precedence if both are set and readable. |
 | `LDAP_LOG_LEVEL` | no | `stats` | Passed to `slapd -d`. Any value (including a quiet one) keeps slapd in the foreground, which is required for it to run as PID 1. |
 | `LDAP_TLS_ENABLED` | no | `false` | `true`/`1` to enable `ldaps:///`. |
@@ -89,6 +89,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_SIZE_LIMIT` | no | `10000` | `olcSizeLimit` on the `mdb` database. Digits, or `unlimited`. Applied at bootstrap only (see below). |
 | `LDAP_PAGED_TOTAL_LIMIT` | no | unset | Opt-in, **stateless**: unset = hands off (no `olcLimits` rule is read, changed or removed); a positive integer up to `2147483647` or `unlimited` = converge to exactly one rule `users size.prtotal=<value>` appended after the operator's rules, so an authenticated non-root identity can page past `LDAP_SIZE_LIMIT`; `off` = remove exactly `users size.prtotal=<value>`. The selector `users` is reserved while the setting is on. Any failure to apply, verify or restore aborts startup. See [Paged-search total](#paged-search-total-ldap_paged_total_limit). `0`, leading zeros, other non-digits and anything above 2147483647 are refused. |
 | `LDAP_TIME_LIMIT` | no | `3600` | `olcTimeLimit` on the `mdb` database, in seconds. Digits, or `unlimited`. Applied at bootstrap only (see below). |
+| `LDAP_DB_MAX_SIZE` | no | `1073741824` | `olcDbMaxSize` on the `mdb` database, in bytes (digits only). Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_HASH` | no | `{ARGON2}` | `olcPasswordHash` on the frontend database, and the scheme used to mint the bootstrap admin hash. Any `{SCHEME}`-shaped value slapd supports (e.g. `{SSHA}`). Applied at bootstrap only (see below). |
 | `LDAP_UNIQUE_ATTRIBUTES` | no | `uid,mail` | Comma-separated attributes the `unique` overlay enforces uniqueness on. **Empty string disables the overlay entirely** — it is not created at all, rather than created with nothing to check. See [Uniqueness enforcement](#uniqueness-enforcement). Applied at bootstrap only (see below). |
 | `LDAP_PASSWORD_POLICY_ENABLED` | no | `true` | `false`/`0` disables the whole password policy: no `ou=policies`/`cn=default` entries, no `olcPPolicyDefault` on the `ppolicy` overlay. See [Password policy](#password-policy). Applied at bootstrap only (see below). |
@@ -103,6 +104,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_SOCKBUF_MAX_INCOMING` | no | `262143` | `olcSockbufMaxIncoming`: max incoming PDU size, anonymous. |
 | `LDAP_SOCKBUF_MAX_INCOMING_AUTH` | no | `4194303` | `olcSockbufMaxIncomingAuth`: max incoming PDU size, authenticated (bulk `ldapmodify`/large member lists need this headroom). |
 | `LDAP_MAX_FILTER_DEPTH` | no | `20` | `olcMaxFilterDepth`: rejects deeply nested search filters. |
+| `LDAP_MAX_OPEN_FILES` | no | `4096` | Soft open-file limit (`ulimit -n`) set before `exec slapd`; slapd sizes its connection table from it (~680 bytes per descriptor). Digits only. A value above the hard limit logs a warning and slapd keeps the inherited limit. |
 | `LDAP_TLS_EC_NAME` | no | `""` (unset) | `olcTLSECName` (ECDHE curve), written only when `LDAP_TLS_ENABLED` and non-empty; empty removes it (OpenSSL negotiates). Validated at startup against `[A-Za-z0-9_-]+` and `openssl ecparam -list_curves`, since a bad name would stop slapd on the next boot. No DH parameter file. Reconciled on every start. |
 | `LDAP_LASTBIND_ENABLED` | no | `false` | `true`/`1` sets `olcLastBind: TRUE` on the main `mdb` database, so a successful bind records `pwdLastSuccess`. Opt-in. **WARNING: keep it off with multi-provider replication** (see below): in one observed run it silently reverted a password change made on another node during a partition. |
 | `LDAP_LASTBIND_PRECISION` | no | `3600` | `olcLastBindPrecision` (seconds): `pwdLastSuccess` is rewritten at most once per user per interval. Only applied when `LDAP_LASTBIND_ENABLED`. Digits only. |
@@ -122,6 +124,11 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_SSSVLV_MAIN_ENABLED` | no | `false` | `sssvlv` overlay on the main database (server-side sort / VLV). Opt-in. |
 | `LDAP_SSSVLV_MAX` / `_MAX_KEYS` / `_MAX_PER_CONN` | no | `10` / `5` / `5` | `olcSssVlvMax`, `olcSssVlvMaxKeys`, `olcSssVlvMaxPerConn`. Digits only. |
 | `LDAP_OTP_ENABLED` | no | `false` | `otp` overlay (TOTP; needs per-user enrollment). Opt-in. |
+| `LDAP_AUDIT_ENABLED` | no | `false` | `true`/`1` enables the `auditlog` overlay (an LDIF record per write). Applied at bootstrap only (see below). |
+| `LDAP_AUDIT_FILE` | no | `/dev/stdout` | `olcAuditlogFile`. Stdout leaves retention and shipping to your container log collector. |
+| `LDAP_ACCESSLOG_ENABLED` | no | `false` | `true`/`1` enables the `accesslog` overlay with its own `cn=accesslog` mdb database under the data directory. Applied at bootstrap only (see below). |
+| `LDAP_ACCESSLOG_OPS` | no | `reads bind` | `olcAccessLogOps`. Containing `extended` or `all` is refused at startup when accesslog is enabled (the overlay aborts slapd on the first Password Modify, #398); use `writes reads bind`. Failures are logged too (`olcAccessLogSuccess: FALSE`). |
+| `LDAP_ACCESSLOG_PURGE_DAYS` | no | `30` | Days of `cn=accesslog` history kept (`olcAccessLogPurge`). |
 | `LDAP_REPLICATION_ENABLED` | no | `false` | `true`/`1` enables N-way multi-provider replication. See [Replication](#replication) below. |
 | `LDAP_REPLICATION_PEERS` | if replication enabled | — | Comma-separated LDAP URLs of **every** node, including this one, e.g. `ldap://ols-0.ols-hl.ns.svc.cluster.local:389,ldap://ols-1.ols-hl.ns.svc.cluster.local:389`. |
 | `LDAP_SERVER_ID` | no | hostname's numeric ordinal suffix + 1 | `1`..`4095`. Auto-derivation expects a hostname ending in `-<N>` (e.g. `ols-0`); if it doesn't, the container refuses to start rather than risk two nodes silently sharing an ID. |
@@ -132,7 +139,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_REPLICATION_RETRY` | no | `5 10 30 +` | `olcSyncrepl` `retry=` value. |
 | `LDAP_REPLICATION_INTERVAL` | no | `00:00:00:10` | `olcSyncrepl` `interval=` value. |
 
-\* Exactly one of `LDAP_ADMIN_PASSWORD` / `LDAP_ADMIN_PASSWORD_FILE` must resolve to a non-empty value.
+\* `LDAP_ADMIN_PASSWORD_FILE` takes precedence and must not be empty. With neither set, the password is generated as above; replication and an existing configuration require one to be supplied.
 
 ### TLS caveat
 
@@ -331,7 +338,8 @@ entries; on an existing volume add them with `ldapmodify` and run `slapindex`.
 
 `LDAP_SIZE_LIMIT`, `LDAP_TIME_LIMIT`, `LDAP_PASSWORD_HASH`,
 `LDAP_UNIQUE_ATTRIBUTES`, `LDAP_PASSWORD_POLICY_ENABLED` and its three
-`LDAP_PASSWORD_*` knobs, `LDAP_DB_MAX_SIZE`, and `LDAP_ANONYMOUS_READ_BASE`
+`LDAP_PASSWORD_*` knobs, `LDAP_DB_MAX_SIZE`, `LDAP_AUDIT_*`, `LDAP_ACCESSLOG_*`,
+and `LDAP_ANONYMOUS_READ_BASE`
 are all baked into
 `cn=config` (or, for the policy entries, directly into the `mdb` database)
 the same way TLS is — read once, at first launch, from
@@ -754,7 +762,8 @@ The following are loaded as modules (`olcModuleload`) but deliberately
 **not** instantiated as overlays — each needs a deployment-specific
 decision the image can't make for you, and turning one on is the same
 `ldapmodify` against `cn=admin,cn=config` as any other. `accesslog` and
-`auditlog` are also loaded but are *not* in this table: both graduated to
+`auditlog` are also loaded but are *not* in this table: both are switched on
+by `LDAP_AUDIT_ENABLED` / `LDAP_ACCESSLOG_ENABLED` and graduated to
 chart values (`audit.enabled`, `audit.accessLog.enabled`) — see
 `charts/ldapium/README.md`, "Audit" — precisely because retention and a
 storage decision were the blockers here, and the chart now makes both for

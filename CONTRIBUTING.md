@@ -48,22 +48,29 @@ directory.
 `make check` runs what CI runs, in the same order, which is faster than a round
 trip. `scripts/check-make-parity.sh` runs in both places — inside `make check`
 and as a step in CI — and fails when the two drift apart, so the sentence above
-stays true rather than staying written. The one deliberate exception is
+stays true rather than staying written. The deliberate exceptions are
 `scripts/check-base-images.sh`, which queries a registry for each pinned base
-image digest and so needs network that an air-gapped checkout will not have; it
-is listed as such in the parity script. Individually:
+image digest, and `scripts/verify-chart-schema.sh`, which needs the kubeconform
+binary; both are listed as such in the parity script. The parity script only
+compares top-level `scripts/*.sh` calls, so the `scripts/test/*.sh` steps are
+kept in the Makefile by hand. `make check` also runs `govulncheck`, which
+needs network. Individually (the Makefile's `check` target is the authority):
 
 ```sh
 # Frontend first — ui/backend/web embeds the built SPA, so the Go module does
 # not compile until this has been run at least once.
 cd ui/frontend && npm ci && npm run lint && npm run build
-cd ui/backend  && gofmt -l . && go vet ./... && go test ./...
+cd ui/backend  && gofmt -l . && go vet ./... && go vet -tags live ./... && go test ./... && go build ./...
 helm lint charts/ldapium
-shellcheck -s sh image/entrypoint.sh && shellcheck scripts/*.sh
 ./scripts/check-versions.sh
 ./scripts/check-modules.sh
+shellcheck -s sh image/entrypoint.sh
+shellcheck scripts/*.sh scripts/test/*.sh charts/ldapium/files/tests/*.sh
+./scripts/test-incident-evidence.sh
 ./scripts/licenses.sh --check
 ./scripts/check-make-parity.sh
+# plus the `./scripts/test/test-*.sh` steps listed in the Makefile's `check` target
+cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 ```
 
 Changes to `image/` need an actual container build and boot, not just a
@@ -102,7 +109,7 @@ reconstruct it from two sets of files.
 
 | Local | Purpose | CI equivalent |
 |---|---|---|
-| `make check` | lint, unit tests, build, `check-versions.sh`, `check-modules.sh`, `licenses.sh --check` | `ci.yml`: `backend`, `frontend`, `helm`, `licenses`, `shellcheck` — same commands, same order |
+| `make check` | lint, unit tests, build, `check-versions.sh`, `check-modules.sh`, shellcheck, `scripts/test/` chart and script tests, `test-incident-evidence.sh`, `licenses.sh --check`, `govulncheck` | `ci.yml`: `backend`, `frontend`, `helm`, `licenses`, `shellcheck`, `incident-evidence` — same commands; `govulncheck` also runs as `security-scan.yml`'s `Go vulnerabilities (reachable)` |
 | `make licenses` | regenerate `THIRD-PARTY-LICENSES.md` | `ci.yml`'s `licenses` job runs the check form (`--check`), not the regenerating one — CI verifies the file, it never writes it |
 | `make sbom` | SBOM for the images this build produced, written to `./sbom` | `build-multiarch.yml`'s SBOM step — same tool (syft), against the image the workflow just built rather than one you built locally |
 | `make local-init` / `local-up` / `local-down` / `local-logs` / `local-credentials` / `frontend-dev` / `ldap-replication-load` / `k8s-credentials` / `k8s-ui-forward` | local dev loop; optional JMeter LDAP load profile is documented in `docs/scale-benchmarks.md` | none — these exist because CI cannot give you a directory to click through |
@@ -111,7 +118,7 @@ The other direction — CI stages nothing in `make` reaches:
 
 | CI stage | Workflow(s) | Why there is no local target |
 |---|---|---|
-| e2e (install, TLS, upgrade, backup/restore, replication chaos, metrics, security, UI browser) | `e2e.yml`, `upgrade-e2e.yml`, `backup-restore.yml`, `replication-chaos-e2e.yml`, `metrics-e2e.yml`, `security-e2e.yml`, `ui-e2e.yml` | each needs a kind cluster and takes minutes, not seconds — see the kind snippet above for running one by hand instead of packaging it as a target that would just wrap the same three commands. `ui-e2e.yml` additionally needs Playwright's browser binaries (`npx playwright install --with-deps chromium` in `ui/frontend`) and something to point `E2E_BASE_URL`/`E2E_ADMIN_DN`/`E2E_ADMIN_PASSWORD` at — `npx playwright test` in `ui/frontend` once you have those. |
+| e2e (install, TLS, upgrade, backup/restore, replication chaos, metrics, security, UI browser, API, machine auth/write, Keycloak federation, SSSD) | `e2e.yml`, `upgrade-e2e.yml`, `backup-restore.yml`, `replication-chaos-e2e.yml`, `metrics-e2e.yml`, `security-e2e.yml`, `ui-e2e.yml`, `ui-fixture-e2e.yml`, `api-credentials-e2e.yml`, `api-cursor-e2e.yml`, `machine-keycloak-e2e.yml`, `machine-write-e2e.yml`, `keycloak-federation-e2e.yml`, `sssd-e2e.yml`, `chart-machine-auth-kind.yml` | each needs a kind cluster and takes minutes, not seconds — see the kind snippet above for running one by hand instead of packaging it as a target that would just wrap the same three commands. `ui-e2e.yml` additionally needs Playwright's browser binaries (`npx playwright install --with-deps chromium` in `ui/frontend`) and something to point `E2E_BASE_URL`/`E2E_ADMIN_DN`/`E2E_ADMIN_PASSWORD` at — `npx playwright test` in `ui/frontend` once you have those. |
 | `base-images` (`scripts/check-base-images.sh`) | `ci.yml` | queries a container registry for each pinned digest; needs network `make check` deliberately does not require |
 | `Chart manifests pass kubeconform` (`scripts/verify-chart-schema.sh`) | `ci.yml` | needs the kubeconform binary; CI downloads it as its own step, `make check` deliberately does not require installing it locally |
 | `hadolint`, CodeQL, Scorecard, Trivy (`images` job) | `ci.yml`, `codeql.yml`, `scorecard.yml`, `security-scan.yml` | hosted analysis tools without a meaningful local equivalent |

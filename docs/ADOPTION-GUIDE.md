@@ -18,7 +18,7 @@ Use Docker Compose for the smallest local evaluation and Helm for Kubernetes ado
 
 ## 3. Expand only after the baseline
 
-After standalone behavior is verified, evaluate replication, backup/restore, Keycloak/OIDC integration, air-gap operation, rolling upgrades, or mTLS/SASL EXTERNAL independently. Each has a different trust and evidence boundary.
+After standalone behavior is verified, evaluate replication, backup/restore, Keycloak/OIDC integration, air-gap operation, rolling upgrades, mTLS/SASL EXTERNAL, the machine bearer API, or the dedicated replication identity independently. Each has a different trust and evidence boundary.
 
 ## 4. Read next
 
