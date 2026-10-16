@@ -79,14 +79,17 @@ if [ "$npm_version" != "$chart_version" ]; then
 	note "ui/frontend/package.json version ($npm_version) != release version ($chart_version)"
 fi
 
-# README.md's install examples are what people copy; a stale version there
-# sends them to a tag that may not exist yet.
-readme_tags=$(grep -oE 'ldapium(-ui)?:[0-9]+\.[0-9]+\.[0-9]+' README.md | sed 's/.*://' | sort -u)
-readme_chart=$(grep -oE -- '--version [0-9]+\.[0-9]+\.[0-9]+' README.md | awk '{ print $2 }' | sort -u)
-for v in $readme_tags $readme_chart; do
-	if [ "$v" != "$chart_version" ]; then
-		note "README.md refers to version $v, expected $chart_version"
-	fi
+# The install and verification examples are what people copy; a stale version
+# there sends them to an old tag. The Korean copies drifted to 0.1.0 unnoticed
+# through three releases because only README.md was checked.
+for doc in README.md README-ko.md charts/ldapium/README.md charts/ldapium/README-ko.md docs/legal.md; do
+	doc_tags=$(grep -oE 'ldapium(-ui)?:[0-9]+\.[0-9]+\.[0-9]+' "$doc" | sed 's/.*://' | sort -u)
+	doc_chart=$(grep -oE -- '--version [0-9]+\.[0-9]+\.[0-9]+' "$doc" | awk '{ print $2 }' | sort -u)
+	for v in $doc_tags $doc_chart; do
+		if [ "$v" != "$chart_version" ]; then
+			note "$doc refers to version $v, expected $chart_version"
+		fi
+	done
 done
 
 # The chart's own rendering is the thing users actually pull, so assert on

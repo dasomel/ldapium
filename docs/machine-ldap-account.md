@@ -377,7 +377,7 @@ $EXEC rm -f /tmp/.pw-admin /tmp/.pw-machine /tmp/.pw-machine-new
 rm -f machine.pw machine.new.pw
 ```
 
-## Revocation subtree (staged #286 T-013)
+## Revocation subtree (#286 T-013)
 
 The reserved writer subtree is `ou=revocations,ou=system,<root>`, a single-valued
 `organizationalUnit`. It holds only direct `device` children: `cn=sentinel`
@@ -386,8 +386,10 @@ entries/digest/ts/ret), `cn=jti-<identifier>` and immutable
 `cn=cutoff-<client>-<nonce>` (each with one `ou` client id). `createTimestamp` is
 server-owned; no expiry or memo attribute is used. Maintenance is performed by
 [`scripts/machine-revocation.sh`](../scripts/machine-revocation.sh), outside the UI.
-The API consumer and request-path restrictions are still pending; writing an
-entry alone has no effect on authentication today.
+The API consumer is shipped (#286, default off): a replica started with
+`MACHINE_REVOCATION_ENABLED=true` reads the subtree as M and refuses revoked tokens;
+see [`machine-auth-operations.md`](machine-auth-operations.md). Without it, writing an
+entry has no effect on authentication.
 
 For `B=<root>`, the existing machine read rule already covers this subtree,
 including search/read of `createTimestamp`, `modifyTimestamp`, `serialNumber`

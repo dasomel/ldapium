@@ -247,8 +247,7 @@ multi-provider cluster to the read-only identity `cn=replicator,<root>` in three
 `admin` (default, unchanged), `prepare` (installs the identity ACL and limits, still
 replicates as admin) and `dedicated` (consumer-only, binds as the identity over verified
 LDAPS). Design and limits: [change package](changes/replication-identity/CHANGE.md) and
-[ADR](changes/replication-identity/ADR.md). This is a partial implementation: `rotate` and
-`rollback-admin` do not exist yet, and the restored-cluster and Kubernetes acceptance
+[ADR](changes/replication-identity/ADR.md). This is a partial implementation: the restored-cluster and Kubernetes acceptance
 paths are not verified (see [IMPLEMENTATION-STATUS](IMPLEMENTATION-STATUS.md)).
 
 Preconditions: TLS enabled with a CA that verifies every peer certificate
@@ -281,9 +280,9 @@ nodes to `dedicated` before every node has completed `prepare`.
    together). Restart nodes one at a time and re-run the check with `--dedicated` after
    each. A wrong credential stalls that consumer with rc 49 rather than failing loudly.
    Shared administrator credential restriction D43 stays in force.
-6. **Rollback.** There is no `rollback-admin` command yet. Roll back by hand only when
-   every node holds data and none is resynchronizing, and the admin password is valid on
-   all peers: switch DN and Secret together to `admin` (the chart refuses a leftover
+6. **Rollback.** `scripts/replication-identity.sh rollback-admin` is the gate: it changes
+   nothing, refuses unless every node holds data, none is resynchronizing and the admin
+   password is valid on all peers, and prints the remaining steps. Then switch DN and Secret together to `admin` (the chart refuses a leftover
    `replication.existingSecret`), and never start an empty serverID 1 in `admin` mode
    (it would bootstrap a new directory tree). `prepare` after `dedicated` is refused;
    roll back through `admin`.
@@ -316,8 +315,8 @@ verification (`LDAPTLS_REQCERT=demand`, the default). A failed command means pee
 must remain stopped. A successful bind alone does not prove complete directory
 replication: verify the restored node's ACLs and data before starting peers and
 comparing their data. This command does not automate peer isolation, full-loss
-restore, rotation, or removal of old credentials; those acceptance paths remain
-pending in the replication identity change package.
+restore or removal of old credentials (rotation is the separate `rotate` command);
+those acceptance paths remain pending in the replication identity change package.
 
 ### Data volume lost, config volume kept
 

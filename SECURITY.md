@@ -27,8 +27,9 @@ security report.
 
 ## Supported versions
 
-Only the latest release. This project is at 0.x: there are no backports, and a
-fix ships in the next release rather than as a patch to an older one.
+Only the latest release (currently 0.2.x; see `CHANGELOG.md`). This project is
+at 0.x: there are no backports, and a fix ships in the next release rather than
+as a patch to an older one.
 
 Both images are also rebuilt weekly (`.github/workflows/weekly-rebuild.yml`)
 so Debian package security updates reach the `:main` tag without waiting for a
@@ -55,3 +56,6 @@ Worth knowing before reporting, because these are deliberate:
   LDAP on a cluster-internal Service is the documented default, not an
   accident — but do report anything that leaks credentials outside that
   boundary.
+  When TLS is enabled, the `TLS E2E` job in `.github/workflows/e2e.yml` exercises
+  LDAPS and, for replicated installs, syncrepl over `ldaps://` with strict CA
+  verification on every pull request and every push to `main`.

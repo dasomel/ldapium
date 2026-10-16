@@ -2,7 +2,7 @@
 
 관리 UI(`ldapium-ui`)의 HTTP API를 운영하는 사람을 위한 절차와 주의점이다. 계약(필드·코드·상태)의 정본은 [api.md](api.md), 결정의 이유는 [오류 봉투 ADR](changes/api-error-envelope/ADR.md)와 [조건부 쓰기 ADR](changes/api-conditional-writes/ADR.md)에 있다. 차트 값은 [charts/ldapium/README.md](../charts/ldapium/README.md), 환경 변수는 [ui/README.md](../ui/README.md)가 정본이다.
 
-> 검증 범위: 아래 YAML은 필수 시크릿(`ui.session.secret`, `auth.adminPassword`, `auth.configPassword`)을 더해 `helm template`으로 렌더해 확인했다(이 YAML만으로는 오프라인 렌더가 되지 않는다). 클러스터에서 실제 스크랩·NetworkPolicy 집행·프록시 동작은 이 문서를 쓰는 동안 실행하지 않았다.
+> 검증 범위: 아래 YAML은 필수 시크릿(`ui.session.secret`, `auth.adminPassword`)을 더해 `helm template`으로 렌더해 확인했다(이 YAML만으로는 오프라인 렌더가 되지 않는다). 클러스터에서 실제 스크랩·NetworkPolicy 집행·프록시 동작은 이 문서를 쓰는 동안 실행하지 않았다.
 
 ## `/metrics` 켜기와 스크랩
 
@@ -85,9 +85,10 @@ ui:
 
 `Idempotency-Key`의 코어 쓰기(사용자·그룹·엔트리 이동) 기록은 UI 프로세스의 메모리에 있다.
 
-- 활성화는 `ui.idempotency.enabled=true`(서버 `UI_IDEMPOTENCY_ENABLED`)다. 차트는 `ui.replicaCount`가 **1**일 때만 `true`로 렌더하고 `strategy: Recreate`를 쓴다. 복제본이 2 이상이면 `false`로 남고 `helm install` 출력(`NOTES.txt`)이 경고하며, 키가 붙은 쓰기는 422 `idempotency_unsupported`로 거부된다. 복제본마다 기록이 달라 한 복제본의 재생 보증이 다른 복제본에서는 없기 때문이다.
-- 재시작하면 기록이 사라진다(TTL 기본 24h, 전체 10,000건·신원당 1,000건). 재시작 뒤 같은 키로 재시도하면 새 요청으로 실행된다(생성은 409 `already_exists`, 삭제는 404). 상한에 도달하면 새 키만 503 `idempotency_capacity`로 거부한다.
+- 활성화는 `ui.idempotency.enabled=true`(서버 `UI_IDEMPOTENCY_ENABLED`, 차트 기본값은 `false`)다. 차트는 이 값이 켜져 있고 `ui.replicaCount`가 **1**일 때만 `true`로 렌더하고 `strategy: Recreate`를 쓴다. 복제본이 2 이상이면 `false`로 남고 `helm install` 출력(`NOTES.txt`)이 경고하며, 키가 붙은 쓰기는 422 `idempotency_unsupported`로 거부된다. 복제본마다 기록이 달라 한 복제본의 재생 보증이 다른 복제본에서는 없기 때문이다.
+- 재시작하면 기록이 사라진다(TTL `UI_IDEMPOTENCY_TTL` 기본 24h(1m-7d), 전체 10,000건·신원당 1,000건). 재시작 뒤 같은 키로 재시도하면 새 요청으로 실행된다(생성은 409 `already_exists`, 삭제는 404). 상한에 도달하면 새 키만 503 `idempotency_capacity`로 거부한다.
 - 백업 시작은 예외다. 키가 영속 job 기록에 있어 재시작 뒤에도 같은 job을 재생한다. `UI_IDEMPOTENCY_KEY_FILE`(차트는 백업이 켜지면 백업 PVC의 `.idempotency/key`로 지정)이 없으면 키는 422로 거부된다. 키 파일을 잃으면 기존 기록은 재생되지 않고 409 `idempotency_outcome_unknown`이 된다.
+- 서버가 비밀번호를 생성하는 요청(`password` 생략)은 재생할 수 없으므로 키를 실을 수 없다. 머신 쓰기(`MACHINE_WRITE_ENABLED`)도 이 저장소와 단일 복제본을 전제로 하며, 둘 중 하나라도 없으면 차트 렌더가 실패한다(`ui.machineAuth.write.enabled`).
 - 현재 활성 여부는 로그인한 세션으로 `GET /api/server-settings`의 `idempotencyEnabled`에서 읽는다.
 
 ## `message` 필드의 호환 메모

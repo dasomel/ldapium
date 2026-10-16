@@ -17,7 +17,7 @@ build-time tooling is the execution path.
 | Base images | tag **and digest** in each Dockerfile | Dependabot, weekly |
 | OpenLDAP source | version **and** sha256 in `image/Dockerfile` | by hand — Dependabot cannot see a tarball URL |
 | `syft`, used to build air-gap SBOMs | **image digest** in `scripts/offline-bundle.sh` | by hand |
-| `govulncheck` | version in `.github/workflows/security-scan.yml` | by hand |
+| `govulncheck` | version in `.github/workflows/security-scan.yml` and the `Makefile` `check` target | by hand |
 
 The last two were `:latest` and `@latest`. Both are build-time execution paths —
 the syft container is handed the docker socket while a release is being
@@ -163,7 +163,10 @@ GOPROXY=off GOFLAGS=-mod=readonly GOMODCACHE=/some/cache/dir go build ./...
 - **The cooling window is process, not tooling.** Nothing checks that a PR
   actually waited the seven days "Reviewing a dependency change" above
   describes before merging a new module/tool release — it depends on the
-  reviewer following the doc.
+  reviewer following the doc. It has been skipped in practice: the 0.1.1 and
+  0.2.1 dependency updates (the latter #420–#424) were merged before the window
+  had elapsed, as `CHANGELOG.md` records for both releases. `.github/dependabot.yml`
+  has no cooldown setting.
 - **SBOM/provenance covers the shipped artifact's dependency tree, not a
   separate build-toolchain inventory.** `go version`, `govulncheck`'s pinned
   version, and the other build-time tool pins are recorded in the workflow

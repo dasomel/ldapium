@@ -29,3 +29,9 @@ tokens:
   danger: var(--of-color-status-danger, #ef4444)
   success: var(--of-color-status-success, #22c55e)
 ```
+
+## 아키텍처와 UI 경계 (Architecture and UI Boundaries)
+
+- 트리 탐색과 속성 편집은 디렉터리 수준의 스키마 안전성을 유지합니다.
+- 일괄 작업은 명시적인 확인 대화상자를 요구합니다.
+- 파괴적 변경(하위 트리 삭제, 비밀번호 초기화)에는 danger 시맨틱을 사용합니다.

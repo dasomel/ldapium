@@ -19,9 +19,9 @@ being viable.
 > you can check an install rather than take this paragraph's word for it. See
 > [CHANGELOG.md](CHANGELOG.md) for the known gaps.
 
-> **Registry note:** the repository contains the GHCR release workflow, but
-> registry publication must be verified from the actual GitHub Release/Actions
-> run before treating `0.1.0` images and the OCI chart as published artifacts.
+> **Registry note:** GitHub Releases and GHCR packages (both images and the OCI
+> chart) exist for `0.1.0`, `0.1.1`, `0.2.0` and `0.2.1`. Verify the one you
+> install, for example with the attestation command under "Supply chain".
 
 ## Why this exists
 
@@ -60,7 +60,7 @@ without waiting for a release.
 | Path | What |
 |---|---|
 | `image/` | OpenLDAP 2.6.15 server, built from source. Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
-| `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. |
+| `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. Opt-in bearer-token access for Keycloak service clients (read-only by default; writes behind a separate switch), see `docs/api.md`. |
 | `charts/ldapium/` | Helm chart deploying the server, with the UI as an optional component. |
 
 See the [architecture guide](docs/architecture.md) for the runtime boundaries, HA topology,
@@ -68,9 +68,9 @@ and differences between Helm and Compose deployments.
 
 ## Install
 
-Both images and the chart are **intended** to be published to GHCR and cut from the same git tag,
-so `0.1.0` means the same thing everywhere. Confirm the corresponding GitHub Release and GHCR
-packages exist before using the commands below as published-artifact instructions.
+Both images and the chart are published to GHCR and cut from the same git tag,
+so `0.2.1` means the same thing everywhere. Confirm the corresponding GitHub Release and GHCR
+packages exist for the version you pick.
 
 ### Kubernetes (Helm)
 

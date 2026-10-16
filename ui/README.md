@@ -108,10 +108,15 @@ LDAP connection details and a session secret explicitly.
 |---|---|---|---|
 | `LDAP_URL` | yes | — | `ldap://host:389` or `ldaps://host:636` |
 | `LDAP_BASE_DN` | yes | — | Search base for the tree browser and user/group listings |
-| `SESSION_SECRET` | yes | — | HMAC key for signing session cookies; **32+ bytes** |
+| `SESSION_SECRET` | no | generated, see `SESSION_SECRET_STORE` | HMAC key for signing session cookies; **32+ bytes**. Resolution order: `SESSION_SECRET_FILE`, then `SESSION_SECRET`, then a persisted generated secret |
+| `SESSION_SECRET_FILE` | no | *(unset)* | Path to a file holding the session secret (at least 32 bytes after trimming); takes precedence over `SESSION_SECRET` |
+| `SESSION_SECRET_STORE` | no | `/var/lib/ldapium/secrets/session-secret` | Absolute path where a secret is generated once and reused when neither of the above is set. Needs a private `0700` directory owned by the UI user and a `0600` file; startup is refused otherwise |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
+| `APP_VERSION` | no | `development` | Application version reported by `GET /api/v1/meta` and the server-settings view (the chart sets it) |
+| `OPENLDAP_VERSION` / `OPENLDAP_PASSWORD_HASH` / `OPENLDAP_UNIQUE_ATTRIBUTES` / `OPENLDAP_MODULES` / `OPENLDAP_OVERLAYS` / `OPENLDAP_PASSWORD_POLICY_ENABLED` | no | _unset_ / _unset_ / _unset_ / _unset_ / _unset_ / `true` | Declared deployment metadata echoed by `GET /api/server-settings` (`cn=config` is not readable by a UI session, so modules/overlays are never read live). The version is taken from the server's Root DSE when readable, else from `OPENLDAP_VERSION`, else `unknown`. The chart fills them from its values |
 | `LDAP_USER_SEARCH_BASE` | no | `LDAP_BASE_DN` | Subtree searched to resolve uid → DN at login |
 | `LDAP_USER_SEARCH_FILTER` | no | *(unset)* | Filter template with one `%s`, e.g. `(uid=%s)`. Unset = full-DN login only |
+| `LDAP_GROUP_SEARCH_BASE` | no | `LDAP_BASE_DN` | Subtree searched for `groupOfNames` entries |
 | `LDAP_USER_CREATE_BASE` | no | `LDAP_BASE_DN` | Where new users are created, e.g. `ou=people,dc=example,dc=com` |
 | `LDAP_GROUP_CREATE_BASE` | no | `LDAP_BASE_DN` | Where new groups are created, e.g. `ou=groups,dc=example,dc=com` |
 | `LDAP_START_TLS` | no | `false` | Negotiate StartTLS on a plain `ldap://` connection |
@@ -122,14 +127,21 @@ LDAP connection details and a session secret explicitly.
 | `UI_LOGIN_FAILURE_LIMIT` | no | `10` | Failed `POST /api/login` attempts allowed per client IP (see `UI_TRUSTED_PROXIES` below for how that IP is resolved) within the window before a `429` is returned; `0` disables the limiter. In-memory and per-pod — with multiple UI replicas the OpenLDAP ppolicy lockout is the backstop that holds cluster-wide |
 | `UI_LOGIN_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_LOGIN_FAILURE_LIMIT` applies over (Go duration syntax) |
 | `UI_LOGIN_LIMITER_MAX_ENTRIES` | no | `10000` | Hard cap on client sources the login limiter tracks (IPv6 counts per /64; must be >= 1). When full, expired sources go first, then the non-blocked source with the fewest stored failures (as of its last update; oldest on ties); a blocked source is never evicted, and only if all slots are blocked does a new source get the same `429` a blocked one does |
-| `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients: read-only `GET` operations only (#214, change package `machine-principal-auth`). Unset, no `MACHINE_*` variable is read and nothing changes. All other `MACHINE_*` variables, defaults, bounds and the startup failure rules are in [Machine bearer authentication](#machine-bearer-authentication) below. |
-| `MACHINE_WRITE_ENABLED` | no | `false` | Opens five machine write operations (`createUser` without a password, `patchUser`, `deleteUser`, `addGroupMember`, `removeGroupMember`) for clients whose ceiling and `MACHINE_WRITE_SUBTREES` allow them (#285 T-013, change package `machine-write-scope`). Off, every machine write is `403 scope_denied`. On, it refuses itself at startup unless `MACHINE_AUTH_ENABLED`, `UI_IDEMPOTENCY_ENABLED`, the `MACHINE_WRITE_DATA_BIND_*` identity, the write limits, a `MACHINE_WRITE_SUBTREES` client with a write scope and the machine audit are all in place. Unset or false, no other `MACHINE_WRITE_*` variable is read. |
-| `MACHINE_WRITE_SUBTREES` | no | _unset_ | Reserved; parsed and validated only, nothing consumes it yet (#285 T-012, `machine-write-scope`). Read only when `MACHINE_WRITE_ENABLED` is true. Per-client write subtree ceilings: `clientId=dn\|dn;clientId2=dn` (clients must be in `MACHINE_ALLOWED_CLIENTS`; at most 16 DNs each; v1 `MACHINE_ALLOWED_CLIENTS` syntax unchanged). DNs must be canonical: lowercase `uid`/`cn`/`ou`/`dc`, no escapes, spaces or multi-valued RDNs; strictly inside `LDAP_BASE_DN` (the base itself is refused) and not overlapping `MACHINE_LDAP_BIND_DN`, the write identities, the service account, rootdns, the replication/administrator identities or a privileged group. Unset: no client may write. |
-| `MACHINE_WRITE_GROUPS` | no | _unset_ | Reserved; parsed and validated only (#285 T-019). Per-client writable group allowlist, same `clientId=dn\|dn;...` syntax; each group must be strictly inside that client's `MACHINE_WRITE_SUBTREES` and not a privileged group. Needs `MACHINE_WRITE_PRIVILEGED_GROUPS`. Unset: no membership change. |
-| `MACHINE_WRITE_PRIVILEGED_GROUPS` | no | _unset_ | Reserved; parsed and validated only (#285 T-019). `;`-separated canonical group DNs (administrator groups) that no machine client may change, even when allowlisted. |
+| `UI_PASSWORD_CHANGE_FAILURE_LIMIT` | no | `10` | Failed password changes allowed per session and target DN (a wrong current password counts) within the window before a `429` with `Retry-After`; `0` disables the limiter |
+| `UI_PASSWORD_CHANGE_FAILURE_WINDOW` | no | `1m` | Sliding window `UI_PASSWORD_CHANGE_FAILURE_LIMIT` applies over (Go duration syntax, must be positive) |
+| `UI_PASSWORD_CHANGE_LIMITER_MAX_ENTRIES` | no | `10000` | Hard cap on session/target pairs the password-change limiter tracks (must be >= 1) |
+| `MACHINE_AUTH_ENABLED` | no | `false` | Machine bearer authentication for Keycloak service clients: read-only `GET` operations unless `MACHINE_WRITE_ENABLED` opens writes (#214, change package `machine-principal-auth`). Unset, no `MACHINE_*` variable is read and nothing changes. All other `MACHINE_*` variables, defaults, bounds and the startup failure rules are in [Machine bearer authentication](#machine-bearer-authentication) below. |
+| `MACHINE_WRITE_ENABLED` | no | `false` | Opens the machine write operations (`createUser`, `patchUser`, `deleteUser`, `addGroupMember`, `removeGroupMember`, and the v2b `createGroup`, `patchGroup`, `deleteGroup`) for clients whose ceiling and `MACHINE_WRITE_SUBTREES` allow them (#285, change packages `machine-write-scope` and `machine-write-scope-v2`). `lockUser` additionally needs `MACHINE_WRITE_LOCK_ENABLED` and `setPassword` needs `MACHINE_WRITE_CRED_ENABLED`; unlock stays human-only. Off, every machine write is `403 scope_denied`. On, it refuses itself at startup unless `MACHINE_AUTH_ENABLED`, `UI_IDEMPOTENCY_ENABLED`, the `MACHINE_WRITE_DATA_BIND_*` identity, the write limits, a `MACHINE_WRITE_SUBTREES` client with a write scope and the machine audit are all in place. Unset or false, no other `MACHINE_WRITE_*` variable is read. |
+| `MACHINE_WRITE_SUBTREES` | no | _unset_ | Read only when `MACHINE_WRITE_ENABLED` is true. Per-client write subtree ceilings: `clientId=dn\|dn;clientId2=dn` (clients must be in `MACHINE_ALLOWED_CLIENTS`; at most 16 DNs each; v1 `MACHINE_ALLOWED_CLIENTS` syntax unchanged). DNs must be canonical: lowercase `uid`/`cn`/`ou`/`dc`, no escapes, spaces or multi-valued RDNs; strictly inside `LDAP_BASE_DN` (the base itself is refused) and not overlapping `MACHINE_LDAP_BIND_DN`, the write identities, the service account, rootdns, the replication/administrator identities or a privileged group. Unset: no client may write. |
+| `MACHINE_WRITE_GROUPS` | no | _unset_ | Per-client writable group allowlist, same `clientId=dn\|dn;...` syntax; each group must be strictly inside that client's `MACHINE_WRITE_SUBTREES` and not a privileged group. Needs `MACHINE_WRITE_PRIVILEGED_GROUPS`. Unset: no membership change. |
+| `MACHINE_WRITE_PRIVILEGED_GROUPS` | no | _unset_ | `;`-separated canonical group DNs (administrator groups) that no machine client may change, even when allowlisted. |
 | `MACHINE_WRITE_AUDIT_TARGET_DN` | no | `false` | Read only when `MACHINE_WRITE_ENABLED=true`. Adds the target DN in plaintext to the machine write audit line next to its fingerprint (#285 T-015, Resolved Q4). Default: fingerprint only. |
-| `MACHINE_WRITE_RATE_LIMIT_RPS` / `MACHINE_WRITE_RATE_LIMIT_BURST` / `MACHINE_WRITE_GLOBAL_SLOTS` | no | `1` / `2` / `2` | Reserved; parsed and validated only (#285 T-016). `1`-`100` / `1`-`100` / `1`-`64`. Write budget per verified client and global concurrent write slots, separate from the read budget; one concurrent write per client is fixed. Startup also requires (write clients + 1 human share) x 1000 (idempotency per-subject quota) <= 10000 (store records), i.e. at most 9 write clients. |
-| `MACHINE_REVOCATION_ENABLED` | no | `false` | Reserved; parsed and validated only, nothing consumes it yet (#286 T-010, change package `machine-token-revocation`). Ignored when `MACHINE_AUTH_ENABLED` is off; when false no other `MACHINE_REVOCATION_*` variable is read. When true, startup validates `_REFRESH` (1s-60s, default 5s), `_MAX_STALE` (`_REFRESH`-10m, at least `_REFRESH`+5s, default 3x`_REFRESH`), `_SENTINEL_MAX_AGE` (30s-1h, default 5m), `_MAX_ENTRIES` (1-2500, default 2000) and `_BASE_DN` (exactly `ou=revocations,<parent DN>`, default `ou=revocations,ou=system,<LDAP_BASE_DN>`). |
+| `MACHINE_WRITE_DATA_BIND_DN` / `MACHINE_WRITE_DATA_BIND_PASSWORD` | with write | none | The `W_data` LDAP identity machine writes bind as per request. Distinct from the read, lock, credential, administrator, service-account, root and replication identities. Inject the password from a Secret |
+| `MACHINE_WRITE_LOCK_ENABLED` | no | `false` | Opens `lockUser`. When true, `MACHINE_WRITE_LOCK_BIND_DN` / `MACHINE_WRITE_LOCK_BIND_PASSWORD` (the `W_lock` identity, distinct from `W_data`) are required. A client ceiling naming `directory.users.lock` with this off fails startup. Read only when `MACHINE_WRITE_ENABLED=true` |
+| `MACHINE_WRITE_GROUP_SEED_DN` | with `createGroup` | _unset_ | Canonical DN strictly inside `LDAP_BASE_DN`, a direct child of the container holding `MACHINE_WRITE_DATA_BIND_DN`: the placeholder first `member` of a machine-created group. Required when a ceiling names `directory.groups.create` |
+| `MACHINE_WRITE_CRED_ENABLED` | no | `false` | Opens machine `setPassword` (#379 v2c): the **initial** password of an account the same client created with `credentialPending: true`, as the separate `W_cred` identity behind run-time premise checks. Off, the scope is `403 scope_denied` without a `W_cred` bind. When off no other `MACHINE_WRITE_CRED_*` variable is read. When on, startup requires `MACHINE_WRITE_CRED_BIND_DN` / `_BIND_PASSWORD`, `MACHINE_WRITE_CRED_ACL_READER_DN` / `_PASSWORD` (a `cn=config` reader), `MACHINE_WRITE_CRED_SUBTREES` (per client, `clientId=dn\|dn;...`, inside that client's `MACHINE_WRITE_SUBTREES`), `MACHINE_WRITE_CRED_PENDING_POLICY_DN` (not the default policy), `MACHINE_WRITE_CRED_CANARIES` (`;`-separated sets `with-password\|unmarked\|pending`, at most 16) and a non-empty `MACHINE_WRITE_PRIVILEGED_GROUPS`. Optional: `_MIN_LENGTH` (`12`-`1024`, default `12`), `_RATE_LIMIT_RPS` (`1`-`10`, default `1`), `_PENDING_TTL` (`1h`-`720h`, default `24h`) and `_POLICY_DNS` (`;`-separated). See `docs/machine-write-account.md` section 8 |
+| `MACHINE_WRITE_RATE_LIMIT_RPS` / `MACHINE_WRITE_RATE_LIMIT_BURST` / `MACHINE_WRITE_GLOBAL_SLOTS` | no | `1` / `2` / `2` | `1`-`100` / `1`-`100` / `1`-`64`. Write budget per verified client and global concurrent write slots, separate from the read budget; one concurrent write per client is fixed. Startup also requires (write clients + 1 human share) x 1000 (idempotency per-subject quota) <= 10000 (store records), i.e. at most 9 write clients. |
+| `MACHINE_REVOCATION_ENABLED` | no | `false` | Live token revocation: validated tokens are checked against a background LDAP snapshot (#286, change package `machine-token-revocation`; see `docs/machine-auth-operations.md`). Ignored when `MACHINE_AUTH_ENABLED` is off; when false no other `MACHINE_REVOCATION_*` variable is read. When true, startup validates `_REFRESH` (1s-60s, default 5s), `_MAX_STALE` (`_REFRESH`-10m, at least `_REFRESH`+5s, default 3x`_REFRESH`), `_SENTINEL_MAX_AGE` (30s-1h, default 5m), `_MAX_ENTRIES` (1-2500, default 2000) and `_BASE_DN` (exactly `ou=revocations,<parent DN>`, default `ou=revocations,ou=system,<LDAP_BASE_DN>`). |
 | `UI_IDEMPOTENCY_ENABLED` | no | `false` | Honour `Idempotency-Key` on the core user/group writes (#216). Records are in process memory (24h) and a restart forgets them, so enable it only for a single UI process (the chart does: one replica, `Recreate`). Off, a keyed write is refused with `422 idempotency_unsupported` |
 | `UI_IDEMPOTENCY_TTL` | no | `24h` | How long a completed record replays (1m-7d) |
 | `UI_IDEMPOTENCY_KEY_FILE` | no | _(unset)_ | Absolute path of the persisted fingerprint key: created once with mode 0600 in a 0700 directory owned by the UI user, never regenerated; startup is refused if it is unsafe. Two lines (`current`, `previous`) rotate it. Required for `Idempotency-Key` on backup start (the key lives in the durable job record); without it that key is refused. Never logged |
@@ -201,7 +213,10 @@ defaults); already tracked sources are unaffected.
 
 Off by default. With `MACHINE_AUTH_ENABLED=true` a Keycloak service-account access
 token (`client_credentials`) can call eight read-only `GET` operations; every other
-operation answers a bearer token with `403 scope_denied`. The HTTP contract, error
+operation answers a bearer token with `403 scope_denied` unless the optional machine
+write switch (`MACHINE_WRITE_ENABLED`, below and
+[`docs/machine-write-account.md`](../docs/machine-write-account.md)) opens it for a client whose
+scope ceiling names it. Unlock stays human-only. The HTTP contract, error
 codes and a worked `curl` example are in [`docs/api.md`](../docs/api.md); the
 operator guides are [`docs/machine-keycloak-client.md`](../docs/machine-keycloak-client.md)
 (Keycloak client), [`docs/machine-ldap-account.md`](../docs/machine-ldap-account.md)
@@ -215,7 +230,7 @@ or empty variable takes its default and a value outside its bounds fails startup
 | `MACHINE_OIDC_INSECURE_HTTP` | no | `false` | Local-test exception that allows an `http://` issuer; logs a WARN at startup. Not a Helm value |
 | `MACHINE_OIDC_AUDIENCE` | yes | none | Must be an exact member of the token `aud`. `account` (Keycloak's default `aud`) is refused at startup |
 | `MACHINE_OIDC_ALGS` | no | `RS256,ES256` | Comma list from `RS256/384/512, PS256/384/512, ES256/384/512, EdDSA`. `none` and `HS*` fail startup |
-| `MACHINE_ALLOWED_CLIENTS` | yes | none | `clientId=scope,scope;clientId2=scope`. The per-client scope ceiling: effective rights are the token scope intersected with this list. Known scopes: `directory.users.read`, `directory.groups.read`, `directory.tree.read`, `directory.entry.read`, `directory.policies.read`, `server.monitor.read`, and the opt-in `audit.read`, `server.settings.read`. Unknown scope, duplicate client, empty scope list or the SSO browser client (when SSO is on) fail startup |
+| `MACHINE_ALLOWED_CLIENTS` | yes | none | `clientId=scope,scope;clientId2=scope`. The per-client scope ceiling: effective rights are the token scope intersected with this list. Known scopes: `directory.users.read`, `directory.groups.read`, `directory.tree.read`, `directory.entry.read`, `directory.policies.read`, `server.monitor.read`, and the opt-in `audit.read`, `server.settings.read`. Write scopes (effective only with `MACHINE_WRITE_ENABLED`): `directory.users.create`/`update`/`delete`/`lock`/`password.write`, `directory.groups.create`/`update`/`delete`, `directory.groups.members.add`/`remove`; `directory.users.unlock` is refused at startup. Unknown scope, duplicate client, empty scope list or the SSO browser client (when SSO is on) fail startup |
 | `MACHINE_SA_USERNAME_PREFIX` | no | `service-account-` | Expected `preferred_username` prefix of a service account. Not a Helm value |
 | `MACHINE_TOKEN_MAX_TTL` | no | `10m` | `1ms` to `1h` inclusive; a token whose `exp - iat` is larger is refused |
 | `MACHINE_CLOCK_SKEW` | no | `30s` | `0s` to `60s` |
@@ -287,7 +302,7 @@ place of `preferred_username`: it is used as the LDAP `uid` lookup key.
 
 ### Retired: the `machinewritedrill` drill image (machine write)
 
-Until T-013 the five machine write operations existed only in a drill-only build (`--build-arg GO_TAGS=machinewritedrill`)
+Until T-013 the first five machine write operations existed only in a drill-only build (`--build-arg GO_TAGS=machinewritedrill`)
 so the emergency-block drill could run before writes were opened. T-013 registers them in `machineWriteOps` for every
 build; the build tag, the `GO_TAGS` build argument, the `+DRILL-BUILD` version marker, the source guard and the
 artifact check are removed. `scripts/test/test-machine-write-drill.py` now runs against the normal image. What keeps writes
@@ -305,23 +320,32 @@ docker run -p 8080:8080 \
   ldapium-ui
 ```
 
-## v1 scope
+## Scope
 
-Login/logout, a lazy-loading DIT tree browser with an attribute inspector,
-user CRUD with password changes via the RFC 3062 Password Modify extended
-operation (never a raw `userPassword` write), and group CRUD with member
-management on `groupOfNames`/`member`. Explicitly out of scope: schema
-editor, ACL editor, replication management, self-service password portal.
+Login/logout (LDAP bind or Keycloak SSO), a lazy-loading DIT tree browser with
+an attribute inspector, user CRUD (including lock/unlock and generated initial
+passwords) with password changes via the RFC 3062 Password Modify extended
+operation (never a raw `userPassword` write), group CRUD with member
+management on `groupOfNames`/`member`, and cursor-paged user/group lists.
+Further pages: backups and application profiles (both opt-in), server
+settings, health, an audit/operator action history and API docs, plus a
+change-password page for the signed-in user (`UI_PASSWORD_CHANGE_*` limits its
+failed attempts). The same binary serves the machine bearer API (see
+[Machine bearer authentication](#machine-bearer-authentication)).
+Explicitly out of scope: schema editor, ACL editor, replication management,
+and an unauthenticated forgot/reset-password flow (the change-password page
+requires a session).
 
 Note: `groupOfNames` requires at least one `member` value by schema, so a
-newly created group is seeded with the creating user as its first member —
-there's no service account to use as a placeholder instead. Add the real
-member(s) and remove yourself from the group afterwards if you don't want
-to remain on it.
+newly created group is seeded with the creating user as its first member (the
+bound user's DN; there is no service account to use as a placeholder). Add the
+real member(s) and remove yourself from the group afterwards if you don't want
+to remain on it. A machine-created group is instead seeded with the fixed
+placeholder `MACHINE_WRITE_GROUP_SEED_DN`.
 
 ## HTTP API
 
-This table covers the console's core endpoints. The complete, machine-readable contract (including `/api/v1/*`) is served at `/api/v1/openapi.json`; see [`docs/api.md`](../docs/api.md) and `/llms.txt`.
+This table covers the console's core endpoints. The complete, machine-readable contract (including `/api/v1/*`) is served at `/api/v1/openapi.json`, with unauthenticated build/auth-mode discovery at `GET /api/v1/meta`; see [`docs/api.md`](../docs/api.md) and `/llms.txt`.
 
 All endpoints under `/api` except `/api/auth/config`, `/api/health/ldap`, `/api/login`,
 and `/api/sso/*` require an active session cookie (`ldapium_session`). Which identity an
@@ -349,16 +373,18 @@ individual Keycloak user. See
 | `GET` | `/api/entry` | Get full attribute set of `?dn=` (redacts `userPassword`) | `200`, `400`, `401`, `403`, `404` |
 | `POST` | `/api/entry/move` | Move entry to new parent DN (`{dn, newParentDn}`). *Exposed API-only for now.* | `204`, `400`, `401`, `403`, `404`, `409` (`400` if `newParentDn` would move the entry across naming contexts/backends; `409` if an entry with the same RDN already exists under `newParentDn` — OpenLDAP mdb moves a non-leaf entry together with its subtree, so children alone do not cause a `409`) |
 | `GET` | `/api/password-policies` | List password policy entries under base | `200`, `401`, `403` |
-| `GET` | `/api/users` | List user entries under search base | `200`, `401`, `403` |
+| `GET` | `/api/users` | List user entries under search base. Paged (keyset) when any of `limit` (1-200, default 50), `cursor`, `q` (substring over `uid`/`cn`/`mail`/`displayName`) or `sort=uid` is sent: follow `nextCursor` while `hasMore` (cursors are bound to the login session and the `q`). Otherwise the legacy listing, at most 5000 entries with `truncated` | `200`, `400` (`cursor_invalid`), `401`, `403`, `422` (`size_limit_exceeded` for a non-admin identity, see `LDAP_PAGED_TOTAL_LIMIT`), `503` |
 | `POST` | `/api/users` | Create user under `LDAP_USER_CREATE_BASE` | `201`, `400`, `401`, `403`, `409` (conflict if uid exists) |
-| `PUT` | `/api/users` | Update attributes on user | `204`, `400`, `401`, `403`, `404` |
+| `PUT` | `/api/users` | Update attributes on user (erases optional fields the body omits; prefer `PATCH`) | `204`, `400`, `401`, `403`, `404` |
+| `PATCH` | `/api/users` | JSON Merge Patch: changes only the attributes present; optional `If-Match` (the entry `etag`) for an atomic edit | `204`, `400`, `401`, `403`, `404`, `409`, `412`, `415`, `422`, `503` |
 | `DELETE` | `/api/users` | Delete user at `?dn=` | `204`, `400`, `401`, `403`, `404` (not found if already deleted) |
-| `POST` | `/api/users/password` | Change password via RFC 3062 Password Modify | `200`, `400`, `401`, `403`, `404` |
+| `POST` | `/api/users/password` | Change password via RFC 3062 Password Modify. With `password` omitted the server generates one and returns it once as `generatedPassword`; `oldPassword` is for self-service changes; `If-Match` is not supported (`400`) | `200`, `400`, `401`, `403`, `404`, `409`, `422`, `429` (repeated wrong current password, `Retry-After`), `503` |
 | `POST` | `/api/users/unlock` | Clear ppolicy lockout (`pwdAccountLockedTime`); idempotent, `204` even if not locked | `204`, `400`, `401`, `403`, `404` |
 | `POST` | `/api/users/lock` | Administratively disable user account | `204`, `400`, `401`, `403`, `404` |
-| `GET` | `/api/groups` | List groups under search base | `200`, `401`, `403` |
+| `GET` | `/api/groups` | List groups under search base. Same paging contract as `/api/users` (`q` matches `cn`/`description`, `sort=cn`) | `200`, `400` (`cursor_invalid`), `401`, `403`, `422`, `503` |
 | `POST` | `/api/groups` | Create group under `LDAP_GROUP_CREATE_BASE` | `201`, `400`, `401`, `403`, `409` (conflict if group exists) |
 | `PUT` | `/api/groups` | Update group attributes | `204`, `400`, `401`, `403`, `404` |
+| `PATCH` | `/api/groups` | JSON Merge Patch: changes only the attributes present; optional `If-Match` | `204`, `400`, `401`, `403`, `404`, `409`, `412`, `415`, `422`, `503` |
 | `DELETE` | `/api/groups` | Delete group at `?dn=` | `204`, `400`, `401`, `403`, `404` (not found if already deleted) |
 | `POST` | `/api/groups/members` | Add member to group (`{groupDn, memberDn}`) | `204`, `400`, `401`, `403`, `404`, `409` |
 | `DELETE` | `/api/groups/members` | Remove member from group (`?groupDn=&memberDn=` query parameters, no body) | `204`, `400`, `401`, `403`, `404` |
@@ -498,7 +524,7 @@ account; never use the master realm or an administrator's password.
 
 Writes additionally require `KEYCLOAK_ISOLATED_REALM=true`, explicit
 `KEYCLOAK_DELEGATE_CLIENTS` (a subset of observed clients), and explicit
-`KEYCLOAK_MANAGED_GROUP_IDS` for group mappings. The isolated-realm flag is an
+`KEYCLOAK_MANAGED_GROUP_IDS` for group mappings. `KEYCLOAK_ALLOW_LOCAL_HTTP=true` (default `false`) permits an `http://` admin URL only for `localhost`/`127.0.0.1`/`::1`, for development. The isolated-realm flag is an
 operator assertion: coarse Keycloak service-account privileges must be confined to
 that dedicated realm. Shared-realm writes are unsupported until fine-grained admin
 permissions have been proven. Read-only access still requires suitable upstream

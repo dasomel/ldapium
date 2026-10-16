@@ -137,14 +137,14 @@ The password hashing scheme can be configured at bootstrap or modified at runtim
    Pass the `LDAP_PASSWORD_HASH` environment variable (default `{ARGON2}`) or set
    `ldap.passwordHash` in `charts/ldapium/values.yaml`. This defines `olcPasswordHash`
    and sets the scheme used by `slappasswd` to mint the initial directory administrator
-   password hash (`image/entrypoint.sh:469-478`).
+   password hash (the `LDAP_PASSWORD_HASH` handling in `image/entrypoint.sh`).
 
 2. **On an existing deployment (runtime change)**:
    Modify `olcPasswordHash` on the frontend configuration database using `ldapmodify`
    authenticated as `cn=admin,cn=config` over the local IPC socket:
 
    ```bash
-   docker exec ldap ldapmodify -x -H "ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi" \
+   docker exec -i ldap ldapmodify -x -H "ldapi://%2Fvar%2Flib%2Fopenldap%2Frun%2Fldapi" \
      -D "cn=admin,cn=config" -w "$LDAP_ADMIN_PASSWORD" <<'EOF'
    dn: olcDatabase={0}frontend,cn=config
    changetype: modify

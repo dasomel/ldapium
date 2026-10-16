@@ -43,17 +43,38 @@ One git tag publishes everything. `v0.1.0` produces:
 5. **Merge to `main` and wait for CI to be green.** Tag from a commit that has
    already passed, not from one you hope will.
 
-   The release gate requires the jobs **`machine bearer auth (real Keycloak)`**
-   (`machine-keycloak-e2e.yml`) and **`machine write (real Keycloak)`**
-   (`machine-write-e2e.yml`) and **`generated credentials + API edge codes (live)`**
-   (`api-credentials-e2e.yml`, the v2c ACL live proof) to have succeeded **on the tagged SHA**, like the
-   other release-critical checks. A main commit that predates a workflow has no
-   such run, so tagging it **fails the gate**. Either re-run the workflow on that
-   SHA (`gh workflow run machine-keycloak-e2e.yml --ref <branch-or-tag-at-that-SHA>`
+   `release.yml`'s `preflight` job gates the tag on the **tagged SHA** and fails
+   the whole release unless all of these hold:
+
+   - the SHA is an ancestor of `main`;
+   - **every** check run on that SHA concluded `success`, `skipped` or
+     `neutral` — any other conclusion, including one still `pending`, fails it,
+     not only the release-critical ones below;
+   - every status check `main`'s branch protection requires succeeded on it;
+   - each of these release-critical jobs succeeded on it:
+
+     | Job | Workflow |
+     |---|---|
+     | `Go vulnerabilities (reachable)` | `security-scan.yml` |
+     | `rolling upgrade + rollback (standalone)` / `(replicated)` | `upgrade-e2e.yml` |
+     | `backup → verify → corrupt-check → restore` | `backup-restore.yml` |
+     | `3-node backup → bad delete → restore → resync` | `backup-restore.yml` |
+     | `machine bearer auth (real Keycloak)` | `machine-keycloak-e2e.yml` |
+     | `machine write (real Keycloak)` | `machine-write-e2e.yml` |
+     | `generated credentials + API edge codes (live)` | `api-credentials-e2e.yml` (the v2c ACL live proof) |
+
+   A main commit that predates a workflow has no such run, so tagging it **fails
+   the gate**. Either re-run the workflow on that SHA (for example
+   `gh workflow run machine-keycloak-e2e.yml --ref <branch-or-tag-at-that-SHA>`
    and wait for success; it must be a run for that exact commit) or tag a newer
    commit. A skipped or cancelled run, or a success on another SHA, never satisfies
    the gate. The `machine write (real Keycloak)` job also runs the v2b and v2c
    (setPassword) drills and live proofs, so one name gates all of them.
+
+   A flaky failure on the SHA can be cleared by re-running that job: the
+   check-runs API reports the latest attempt, so a green re-run replaces the red
+   one. Wait for main's own checks to finish first — the gate does not poll, and
+   the upgrade and backup e2e take 10-20 minutes.
 
 6. **Tag and push:**
 
@@ -64,6 +85,12 @@ One git tag publishes everything. `v0.1.0` produces:
 
    Never put `[skip ci]` in a tag annotation — the tag push is what triggers
    the release.
+
+   The tag push also starts the `Research evidence` workflow (`research-check`),
+   which has to finish before Release's preflight reads the check runs. If
+   preflight runs while it is still pending, it fails with `pending research-check`
+   (this happened on v0.2.0 and v0.2.1). Wait for `research-check` to complete,
+   then `gh run rerun <release-run-id>` — do not re-tag.
 
 7. **Verify what was published**, rather than assuming the green check means
    it worked:
