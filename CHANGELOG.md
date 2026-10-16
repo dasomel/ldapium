@@ -10,6 +10,24 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-16
+
+Maintenance release: dependency and base-image refreshes, one documentation
+correction, and more live proof for the machine password operation. No behaviour or
+configuration changes; upgrading from 0.2.0 is an image/chart version bump.
+
+### Images
+
+- Go toolchain in the image builds: `golang:1.27.2` (was 1.27.1) for the exporter
+  builder in the server image (#424), and the UI backend builder re-pinned to a new
+  `golang:1.27.2-alpine` digest (`f92b6ef`, #420).
+- UI backend Go modules: `github.com/go-ldap/ldap/v3` 3.4.15,
+  `github.com/prometheus/client_golang` 1.25.0 (#421).
+- UI frontend dependencies (#422): the Radix UI primitives (`react-dialog` 1.2.0,
+  `react-slot` 1.4.0, `react-tooltip` 1.3.0 and patch releases of the rest),
+  `lucide-react` 1.55.0, `vite` 8.3.4, `@vitejs/plugin-react` 6.1.2, `oxlint` 1.87.0,
+  `@playwright/test` 1.64.0, `@types/node` 26.6.5.
+
 ### Documentation
 
 - **Machine `setPassword` second-set response corrected (#417).** The 0.2.0 notes and
@@ -18,6 +36,29 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   409 `conflict` only appears for a stuck entry (password present, marker left by a
   failed cleanup). The behaviour is unchanged and was measured through a real Keycloak
   token and the UI image.
+- **Machine write v2 follow-ups closed (#417).** Acceptance wording AC-005/AC-010 now
+  matches the measured behaviour; maintainer decisions D417-1 (no privileged-group
+  `filter=` backstop in `write-lock.ldif`) and D417-2 (nested privileged-group lock
+  risk stays accepted; list subgroups in `MACHINE_WRITE_PRIVILEGED_GROUPS`,
+  `docs/machine-write-account.md` 4.3) are recorded in the change package.
+
+### Release pipeline and CI
+
+- The `machine write (real Keycloak)` release gate also runs `setPassword` end to end
+  through a real Keycloak token, the production UI image configured by environment
+  only, and a real slapd, with the plaintext/hash secret scans (#427).
+- New non-release-critical job `machine write measurements (E-22, two-provider R-3)`
+  repeats the check-to-write window and two-provider replication measurements on
+  every change (#428, #430).
+- GitHub Actions bumped (#423): `actions/upload-artifact` 7.0.2,
+  `actions/download-artifact` 8.0.2, `actions/setup-node` 7.1.0,
+  `github/codeql-action` 4.38.3, `step-security/harden-runner` 2.22.1,
+  `ossf/scorecard-action` 2.5.0, `helm/kind-action` 1.15.1.
+
+### Note on the dependency policy
+
+The dependency updates (#420–#424) were merged before the seven-day cooling window in
+`docs/dependency-policy.md` had elapsed, alongside the 0.2.0 release work.
 
 ## [0.2.0] — 2026-10-14
 
@@ -795,6 +836,7 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0
 [0.1.1]: https://github.com/dasomel/ldapium/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dasomel/ldapium/releases/tag/v0.1.0
