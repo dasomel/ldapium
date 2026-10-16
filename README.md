@@ -49,11 +49,70 @@ directory that a real identity provider federates, those become real users. This
 creates the base DN, the admin entry, and nothing else; seeding is an explicit opt-in via
 a mounted LDIF directory.
 
-**No default admin password.** The container refuses to start unless one is supplied.
+**No default admin password.** None is baked into the image or the chart. Supply one, or let a
+fresh standalone container generate a random one on first start (written to
+`<data volume>/.credentials/ldap-admin-password`, mode 600, read back with
+`scripts/get-credentials.sh`). Generation is refused when replication is enabled (every node
+must share one operator-supplied password) and when existing configuration needs its
+original password.
 
 **Multi-architecture** — `linux/amd64` and `linux/arm64`, built on native runners rather
 than emulation, and rebuilt on a schedule so security fixes in the base layers land
 without waiting for a release.
+
+## Features
+
+Everything below is merged to `main`; opt-in features are marked. The linked document is
+the authoritative description, and [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)
+records what was verified and how.
+
+**Replication and HA**
+
+- N-way multi-provider replication, reconciled on every start: [image/README.md](image/README.md#replication)
+- Opt-in dedicated read-only replication identity; `scripts/replication-identity.sh` has `ensure`, `retire`, `reconcile`, `rotate` and `rollback-admin`: [docs/migration.md](docs/migration.md)
+- Opt-in replication check CronJob (`replication.check.*`) and the `LDAPiumReplicationCheckFailed` alert: [docs/ha-profile.md](docs/ha-profile.md)
+- HA topology profile with a failure-modes matrix and RPO/RTO targets: [docs/ha-profile.md](docs/ha-profile.md)
+
+**Security hardening**
+
+- No default admin password: a fresh standalone server generates a random one on first start, the UI generates and persists its own session secret, and the chart generates both Secrets on a live `helm install`; `scripts/get-credentials.sh` reads them back: [image/README.md](image/README.md)
+- `ppolicy`, deny-by-default ACLs and opt-in anonymous-read scoping (`LDAP_ANONYMOUS_READ_BASE`): [image/README.md](image/README.md#access-control-acl)
+- LDAPS and StartTLS with a TLS 1.2 floor; opt-in `requireTls`, `disallowAnonBind` and `requireAuthc`: [charts/ldapium/README.md](charts/ldapium/README.md#hardening)
+- `auditlog` and `accesslog` (reads and binds) with an NDJSON export: [docs/audit-event-schema.md](docs/audit-event-schema.md)
+- `userPassword` is never returned by the HTTP API, even hashed: [AGENTS.md](AGENTS.md)
+
+**Backup and restore**
+
+- Scheduled backup CronJob with an integrity manifest (`backup.enabled`): [charts/ldapium/README.md](charts/ldapium/README.md)
+- `scripts/verify-backup.sh` and an offline `scripts/restore.sh` into an empty target: [docs/migration.md](docs/migration.md)
+- `scripts/backup.sh` for deployments without Kubernetes: [Backups without Kubernetes](#backups-without-kubernetes)
+- Opt-in UI Backups page with schedules and local, S3, FTP and SSH destinations: [ui/README.md](ui/README.md#scheduled-local--s3--ftp--ssh-backups)
+
+**Observability**
+
+- Prometheus exporter sidecar, ServiceMonitor, alert rules and a Grafana dashboard (`metrics.*`): [charts/ldapium/README.md](charts/ldapium/README.md)
+- Opt-in UI backend `/metrics` on a separate listener: [docs/ui-operations.md](docs/ui-operations.md)
+- `scripts/export-incident-evidence.sh`, a redacted snapshot of health, replication and backup state: [docs/incident-evidence.md](docs/incident-evidence.md)
+
+**Management UI**
+
+- DIT browser; users and groups with cursor paging, create, edit, delete, lock/unlock; password change: [ui/README.md](ui/README.md)
+- Operator action history, server health, server settings and an API docs page: [ui/README.md](ui/README.md)
+- Application SSO profiles and Keycloak SSO login (opt-in): [docs/auth-provider-policy.md](docs/auth-provider-policy.md)
+
+**HTTP API**
+
+- `/api/v1`, an OpenAPI 3.1 spec served by the running build, one error envelope: [docs/api.md](docs/api.md)
+- Conditional writes (`ETag` / `If-Match`) and opt-in `Idempotency-Key`: [docs/api.md](docs/api.md)
+- Opt-in Keycloak machine bearer access: eight read-only operations, optional token revocation, and a separate switch for scoped writes including `setPassword`: [docs/machine-auth-operations.md](docs/machine-auth-operations.md)
+
+**Clients, migration, delivery**
+
+- Checked client boundaries for SSSD/PAM/nsswitch, Windows/AD and Kubernetes RBAC via Keycloak: [docs/client-compatibility.md](docs/client-compatibility.md)
+- PAM and credential-vault boundary: [docs/pam-boundary.md](docs/pam-boundary.md)
+- Staged migration from an external LDAP/AD with a dry-run reconciliation report: [docs/migration.md](docs/migration.md)
+- Air-gapped bundle and install: [docs/air-gap.md](docs/air-gap.md)
+- Reproducible scale benchmarks, 1M profile in CI-sized runs and 10M and larger locally: [docs/scale-benchmarks.md](docs/scale-benchmarks.md)
 
 ## Components
 
@@ -82,10 +141,13 @@ helm install directory oci://ghcr.io/dasomel/charts/ldapium \
   --set ldap.rootDN=dc=example,dc=org
 ```
 
-There is no default admin password — the chart refuses to render without one,
-because the image refuses to start without one. To keep the password out of
-your shell history and out of `helm get values`, create the Secret yourself
-and point `auth.existingSecret` at it instead.
+There is no default admin password. If you leave `auth.adminPassword` empty, a
+live `helm install` generates a random one into the release's admin Secret and
+reuses it on upgrade (via `lookup`); offline renders (`helm template`,
+`--dry-run=client`, GitOps controllers that render without cluster access)
+cannot see the Secret and fail instead. To keep the password out of your shell
+history and out of `helm get values`, create the Secret yourself and point
+`auth.existingSecret` at it.
 
 Useful from there:
 
@@ -193,10 +255,11 @@ make k8s-credentials KUBE_NAMESPACE=directory KUBE_RELEASE=ldapium
 make k8s-ui-forward KUBE_NAMESPACE=directory
 ```
 
-No default admin password or session secret is baked in anywhere — same
-principle as the image and the Helm chart (see "No default admin password"
-above): compose refuses to start without them, loudly, rather than run with
-a guessable credential.
+No default admin password or session secret is baked in anywhere. If
+`LDAP_ADMIN_PASSWORD` / `SESSION_SECRET` are left empty, the server generates
+a random admin password into the `ldap-data` volume and the UI generates and
+persists its session secret, so nothing guessable is ever used;
+`./scripts/get-credentials.sh --local` shows the generated password.
 
 ### Backups without Kubernetes
 
@@ -258,6 +321,60 @@ Trivy scans dependencies and manifests on every change and the published
 images weekly; CodeQL analyses the Go and TypeScript sources.
 [docs/legal.md](docs/legal.md) covers the licensing position in full,
 including why the Debian base's GPL packages do not reach this project's code.
+
+## What CI verifies
+
+These run on pull requests and pushes to `main` (several are path-filtered), against real
+containers or a kind cluster rather than mocks.
+
+| Workflow | Proves |
+|---|---|
+| `e2e.yml` | chart install and `helm test` (standalone and 3-node), TLS and certificate rotation, migration dry-run |
+| `upgrade-e2e.yml` | rolling upgrade and rollback, standalone and replicated |
+| `backup-restore.yml` | backup, verify, corrupt-check, restore; 3-node bad delete, restore, resync |
+| `replication-chaos-e2e.yml` | network partition, same-entry conflict, dedicated replication identity |
+| `security-e2e.yml` | ACL negative tests (anonymous, other users, password policy, `cn=config`), LDAP injection, audit and accesslog records, chart security context |
+| `sssd-e2e.yml` | SSSD `getent`/`id` identity resolution |
+| `keycloak-federation-e2e.yml` | Keycloak LDAP user federation |
+| `metrics-e2e.yml` | exporter metrics and alert rules firing on injected faults |
+| `ui-e2e.yml` | UI browser regression against a real directory |
+| `machine-keycloak-e2e.yml`, `machine-write-e2e.yml` | machine bearer read and write with real Keycloak and slapd |
+| `api-credentials-e2e.yml` | generated credentials and API edge codes |
+| `offline-bundle.yml` | bundle build and install with no registry |
+
+`release.yml` refuses a tag unless these succeeded on its commit: the reachable-vulnerability
+scan, rolling upgrade + rollback (standalone and replicated), backup restore and the 3-node
+restore, machine bearer auth, machine write, and generated credentials + API edge codes.
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [docs/ADOPTION-GUIDE.md](docs/ADOPTION-GUIDE.md) | Choosing an entry path and what counts as a first success |
+| [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) | What is merged and how each part was verified |
+| [docs/architecture.md](docs/architecture.md) | Runtime boundaries, HA topology, Helm versus Compose |
+| [docs/api.md](docs/api.md) | HTTP API contract, machine bearer authentication (Korean) |
+| [docs/ui-operations.md](docs/ui-operations.md) | Operating the UI backend: metrics, Origin gate, conditional writes, idempotency keys (Korean) |
+| [docs/auth-provider-policy.md](docs/auth-provider-policy.md) | LDAP bind versus Keycloak SSO and failure behaviour |
+| [docs/machine-keycloak-client.md](docs/machine-keycloak-client.md) | Keycloak client setup for machine calls (Korean) |
+| [docs/machine-ldap-account.md](docs/machine-ldap-account.md) | Machine read account and read-only ACL (Korean) |
+| [docs/machine-write-account.md](docs/machine-write-account.md) | Machine write account and write ACL (Korean) |
+| [docs/machine-auth-operations.md](docs/machine-auth-operations.md) | Machine auth rollback, emergency revocation, compatibility (Korean) |
+| [docs/ha-profile.md](docs/ha-profile.md) | HA topology, failure modes, RPO/RTO |
+| [docs/migration.md](docs/migration.md) | Staged cutover, dry-run reconciliation, rollback, replication identity procedure |
+| [docs/air-gap.md](docs/air-gap.md) | Air-gapped bundle, verification and install |
+| [docs/client-compatibility.md](docs/client-compatibility.md) | What works for SSSD, Windows/AD, Keycloak and other clients |
+| [docs/audit-event-schema.md](docs/audit-event-schema.md) | Identity audit event schema and export |
+| [docs/incident-evidence.md](docs/incident-evidence.md) | Redacted incident evidence export |
+| [docs/scale-benchmarks.md](docs/scale-benchmarks.md) | Reproducible load and scale measurements |
+| [docs/encryption-at-rest.md](docs/encryption-at-rest.md) | Who is responsible for encryption at rest |
+| [docs/dependency-policy.md](docs/dependency-policy.md) | Pinning, cooling window and dependency rollback |
+| [docs/legal.md](docs/legal.md) | Licensing, attribution and compliance (Korean: legal-ko.md) |
+| [docs/product-boundary.md](docs/product-boundary.md) | Scope and non-goals |
+| [docs/pam-boundary.md](docs/pam-boundary.md) | PAM and credential-vault boundary |
+| [docs/agent-execution-security.md](docs/agent-execution-security.md) | Directory-control profile for agent-driven operations |
+
+Component references: [image/README.md](image/README.md), [ui/README.md](ui/README.md), [charts/ldapium/README.md](charts/ldapium/README.md).
 
 ## Contributing, security, releases
 

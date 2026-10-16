@@ -75,7 +75,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_ORG_NAME` | no | first `dc=` component of `LDAP_ROOT_DN` | Used as the `o:` attribute on the root entry. |
 | `LDAP_ADMIN_DN` | no | `cn=admin,${LDAP_ROOT_DN}` | Must use `cn=` as its RDN attribute. |
 | `LDAP_ANONYMOUS_READ_BASE` | no | `""` (whole DIT) | Must sit under `LDAP_ROOT_DN` if set. Narrows anonymous read of `entry`/`uid`/`objectClass` (see [Access control (ACL)](#access-control-acl)) to this subtree instead of the whole directory; a bind-then-search client (SSSD, this project's UI) can still resolve a `uid` from a root-base search, but anonymous can no longer enumerate entries outside this base. Applied at bootstrap only (see below). |
-| `LDAP_ADMIN_PASSWORD` | **yes**\* | — | No default, ever. Container refuses to start if unset. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
+| `LDAP_ADMIN_PASSWORD` | no\* | generated | No default, ever. If neither this nor `_FILE` is set, a fresh container generates a random 64-hex password into `${DATA_DIR}/.credentials/ldap-admin-password` (mode 600); it refuses instead when `LDAP_REPLICATION_ENABLED=true` or existing configuration needs its original password. Hashed with `slappasswd -h "$LDAP_PASSWORD_HASH"` before it touches disk — never stored in plaintext. |
 | `LDAP_ADMIN_PASSWORD_FILE` | no\* | — | Path to a file containing the admin password (for secret mounts). Takes precedence if both are set and readable. |
 | `LDAP_LOG_LEVEL` | no | `stats` | Passed to `slapd -d`. Any value (including a quiet one) keeps slapd in the foreground, which is required for it to run as PID 1. |
 | `LDAP_TLS_ENABLED` | no | `false` | `true`/`1` to enable `ldaps:///`. |
@@ -139,7 +139,7 @@ docker run --rm -v "$PWD/scripts:/scripts:ro" -v /tmp/ldap-backup:/backup \
 | `LDAP_REPLICATION_RETRY` | no | `5 10 30 +` | `olcSyncrepl` `retry=` value. |
 | `LDAP_REPLICATION_INTERVAL` | no | `00:00:00:10` | `olcSyncrepl` `interval=` value. |
 
-\* Exactly one of `LDAP_ADMIN_PASSWORD` / `LDAP_ADMIN_PASSWORD_FILE` must resolve to a non-empty value.
+\* `LDAP_ADMIN_PASSWORD_FILE` takes precedence and must not be empty. With neither set, the password is generated as above; replication and an existing configuration require one to be supplied.
 
 ### TLS caveat
 

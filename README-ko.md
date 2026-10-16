@@ -30,6 +30,58 @@ ldapium은 이 문제를 다음 구성으로 해결합니다.
 - 다중 제공자 replication
 - 백업과 설치 검증용 `helm test`
 
+## 주요 기능
+
+모두 `main`에 병합된 기능이며 opt-in은 표시했습니다. 각 항목의 링크가 정본 문서이고, 검증 범위는 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)에 있습니다.
+
+**Replication / HA**
+
+- N-way multi-provider replication, 매 기동마다 조정: [image/README.md](image/README.md#replication)
+- opt-in 전용 읽기 전용 replication 계정과 `scripts/replication-identity.sh`(`ensure`, `retire`, `reconcile`, `rotate`, `rollback-admin`): [docs/migration.md](docs/migration.md)
+- opt-in replication 점검 CronJob(`replication.check.*`)과 `LDAPiumReplicationCheckFailed` 알림: [docs/ha-profile.md](docs/ha-profile.md)
+- HA 토폴로지 프로필, 장애 모드 표, RPO/RTO: [docs/ha-profile.md](docs/ha-profile.md)
+
+**보안**
+
+- 기본 관리자 비밀번호 없음. 지정하지 않으면 새 단독 서버가 첫 기동 시 무작위 값을 생성하고, UI는 세션 시크릿을 스스로 생성·보존하며, chart는 실제 `helm install`에서 두 Secret을 생성합니다. `scripts/get-credentials.sh`로 확인: [image/README.md](image/README.md)
+- `ppolicy`, 기본 거부 ACL, opt-in 익명 읽기 범위 제한(`LDAP_ANONYMOUS_READ_BASE`): [image/README.md](image/README.md#access-control-acl)
+- LDAPS/StartTLS(TLS 1.2 하한), opt-in `requireTls`, `disallowAnonBind`, `requireAuthc`: [charts/ldapium/README.md](charts/ldapium/README.md#hardening)
+- `auditlog`/`accesslog`(읽기와 bind 포함)와 NDJSON export: [docs/audit-event-schema.md](docs/audit-event-schema.md)
+- `userPassword`는 해시 상태로도 HTTP API 응답에 나가지 않음: [AGENTS.md](AGENTS.md)
+
+**백업 / 복원**
+
+- 무결성 manifest를 갖는 정기 백업 CronJob(`backup.enabled`): [charts/ldapium/README.md](charts/ldapium/README.md)
+- `scripts/verify-backup.sh`, 빈 대상에 오프라인 복원하는 `scripts/restore.sh`: [docs/migration.md](docs/migration.md)
+- Kubernetes 없는 환경용 `scripts/backup.sh`: [README.md](README.md#backups-without-kubernetes)
+- opt-in UI 백업 페이지(스케줄, local/S3/FTP/SSH 대상): [ui/README.md](ui/README.md#scheduled-local--s3--ftp--ssh-backups)
+
+**관측성**
+
+- Prometheus exporter sidecar, ServiceMonitor, 알림 규칙, Grafana 대시보드(`metrics.*`): [charts/ldapium/README.md](charts/ldapium/README.md)
+- opt-in UI 백엔드 `/metrics`(별도 listener): [docs/ui-operations.md](docs/ui-operations.md)
+- `scripts/export-incident-evidence.sh`: 상태/replication/백업의 redact된 스냅샷: [docs/incident-evidence.md](docs/incident-evidence.md)
+
+**관리 UI**
+
+- DIT 브라우저, 사용자/그룹(cursor 페이지네이션, 생성/수정/삭제, 잠금/해제), 비밀번호 변경: [ui/README.md](ui/README.md)
+- 운영 작업 이력, 서버 상태, 서버 설정, API 문서 페이지: [ui/README.md](ui/README.md)
+- 애플리케이션 SSO 프로필, Keycloak SSO 로그인(opt-in): [docs/auth-provider-policy.md](docs/auth-provider-policy.md)
+
+**HTTP API**
+
+- `/api/v1`, 실행 중인 빌드가 제공하는 OpenAPI 3.1 명세, 단일 오류 봉투: [docs/api.md](docs/api.md)
+- 조건부 쓰기(`ETag`/`If-Match`), opt-in `Idempotency-Key`: [docs/api.md](docs/api.md)
+- opt-in Keycloak 머신 bearer: 읽기 전용 8개 오퍼레이션, 선택적 토큰 revocation, 별도 스위치의 범위 제한 쓰기(`setPassword` 포함): [docs/machine-auth-operations.md](docs/machine-auth-operations.md)
+
+**클라이언트 / 마이그레이션 / 배포**
+
+- 확인된 클라이언트 경계(SSSD/PAM/nsswitch, Windows/AD, Keycloak 경유 Kubernetes RBAC): [docs/client-compatibility.md](docs/client-compatibility.md)
+- PAM/credential vault 경계: [docs/pam-boundary.md](docs/pam-boundary.md)
+- 외부 LDAP/AD에서 단계적 전환, dry-run 조정 보고서: [docs/migration.md](docs/migration.md)
+- 폐쇄망 번들과 설치: [docs/air-gap.md](docs/air-gap.md)
+- 재현 가능한 규모 벤치마크(1M은 CI 규모, 10M 이상은 로컬): [docs/scale-benchmarks.md](docs/scale-benchmarks.md)
+
 ## 구성 요소
 
 런타임 경계, HA 토폴로지 및 Helm/Compose 배포 차이는
@@ -55,7 +107,7 @@ helm install directory oci://ghcr.io/dasomel/charts/ldapium \
   --set ldap.rootDN='dc=example,dc=org'
 ```
 
-관리자 비밀번호는 기본값이 없습니다. 이미지가 비밀번호 없이는 기동을 거부하므로 chart도 렌더링을 거부합니다. 셸 히스토리와 `helm get values`에 남기지 않으려면 Secret을 직접 만들고 `auth.existingSecret`으로 지정하십시오.
+관리자 비밀번호는 기본값이 없습니다. `auth.adminPassword`를 비워 두면 실제 `helm install`이 무작위 값을 release의 관리자 Secret에 생성하고 upgrade 때 `lookup`으로 재사용합니다. 클러스터에 접근하지 않는 오프라인 렌더(`helm template`, `--dry-run=client`, GitOps 컨트롤러)는 Secret을 볼 수 없어 실패합니다. 셸 히스토리와 `helm get values`에 남기지 않으려면 Secret을 직접 만들고 `auth.existingSecret`으로 지정하십시오.
 
 자주 쓰는 옵션:
 
@@ -101,13 +153,26 @@ make local-up
 make local-credentials
 ```
 
-`replicaCount: 1`인 chart도 서버를 단독 실행하며(replication 자동 비활성화), 서버/UI 이미지는 Kubernetes를 전제하지 않아 `docker run`으로도 동일하게 동작합니다.
+- 단독 실행: `replicaCount: 1`인 chart도 서버를 단독 실행하며(replication 자동 비활성화), 서버/UI 이미지는 Kubernetes를 전제하지 않아 `docker run`으로도 동일하게 동작합니다.
 
-기본적으로 UI는 `http://localhost:8080`(`${UI_PORT}`), LDAP는 `ldap://localhost:389`(`${LDAP_PORT}`)에서 사용할 수 있고, 데이터는 이름 있는 `ldap-config`/`ldap-data` 볼륨에 보존되어 `docker compose down`(`-v` 없이)과 재생성 후에도 남습니다. 관리자 bind DN과 비밀번호는 `./scripts/get-credentials.sh --local`로 확인합니다(비밀번호를 터미널에 출력하며, `--password-only`는 다른 로컬 명령으로 파이프할 때만 사용). 기본 관리자 비밀번호나 세션 시크릿은 어디에도 내장되어 있지 않아 compose도 이를 지정하지 않으면 기동하지 않습니다.
+접속 정보와 데이터:
 
-로컬 Keycloak LDAP federation은 `make keycloak-up` 후 `http://127.0.0.1:8180/admin/`에서 확인하며 [로컬 Keycloak 테스트](docs/testing/keycloak-local.md)에 절차가 있습니다. UI를 수정할 때는 Compose를 유지한 채 `make frontend-dev`로 Vite(`http://127.0.0.1:5173`, API는 로컬 8080으로 proxy)를 따로 실행하고, 기존 Helm 배포를 대상으로는 `make k8s-credentials`와 `make k8s-ui-forward`를 사용합니다(`KUBE_NAMESPACE`, `KUBE_RELEASE`로 대상 선택).
+- UI: `http://localhost:8080` (`${UI_PORT}`)
+- LDAP: `ldap://localhost:389` (`${LDAP_PORT}`)
+- 데이터: 이름 있는 `ldap-config`/`ldap-data` 볼륨에 보존되며 `docker compose down`(`-v` 없이)과 재생성 후에도 남습니다.
+- 관리자 bind DN과 비밀번호: `./scripts/get-credentials.sh --local`로 확인합니다. 비밀번호를 터미널에 출력하며, `--password-only`는 다른 로컬 명령으로 파이프할 때만 사용합니다.
+- 기본 관리자 비밀번호나 세션 시크릿은 어디에도 내장되어 있지 않습니다. `LDAP_ADMIN_PASSWORD`/`SESSION_SECRET`을 비워 두면 서버가 무작위 관리자 비밀번호를 `ldap-data` 볼륨에 생성하고 UI가 세션 시크릿을 생성·보존합니다. 생성된 비밀번호는 `./scripts/get-credentials.sh --local`로 확인합니다.
 
-Kubernetes 밖에서는 CronJob이 없으므로 `scripts/backup.sh`가 `docker run`/Compose 배포의 백업(data tree + `cn=config`를 `ldapsearch`로 dump, gzip, 보존 기간 정리, 디렉터리 `ou=operations`에 상태 기록)을 맡습니다.
+개발 도구:
+
+- `make keycloak-up`: 로컬 Keycloak LDAP federation을 `http://127.0.0.1:8180/admin/`에서 확인합니다. 절차는 [로컬 Keycloak 테스트](docs/testing/keycloak-local.md)에 있습니다.
+- `make frontend-dev`: Compose를 유지한 채 Vite(`http://127.0.0.1:5173`)를 따로 실행하며, API는 로컬 8080으로 proxy합니다.
+- `make k8s-credentials`, `make k8s-ui-forward`: 기존 Helm 배포를 대상으로 합니다. 대상은 `KUBE_NAMESPACE`, `KUBE_RELEASE`로 선택합니다.
+
+Kubernetes 밖에서는 CronJob이 없으므로 `scripts/backup.sh`를 사용합니다.
+
+- 대상: `docker run`/Compose 배포의 백업
+- 동작: data tree와 `cn=config`를 `ldapsearch`로 dump하고 gzip 압축, 보존 기간이 지난 파일 정리, 디렉터리 `ou=operations`에 상태 기록
 
 ```bash
 export LDAP_ADMIN_PASSWORD=...   # 또는 --password-file
@@ -134,6 +199,22 @@ gh attestation verify oci://ghcr.io/dasomel/ldapium:0.2.1 --repo dasomel/ldapium
 - 의존성과 빌드 도구는 고정되고 강제됩니다. Go 모듈은 `go.sum`으로 검증하고 Actions는 commit SHA로 고정하며 `syft`와 `govulncheck`는 digest/버전으로 고정합니다([docs/dependency-policy.md](docs/dependency-policy.md)).
 - 의존성 라이선스는 허용 목록 방식이며 `./scripts/licenses.sh --check`가 CI에서 목록 밖 라이선스나 오래된 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)를 실패시킵니다. Trivy와 CodeQL도 실행됩니다.
 
+## CI 검증 범위
+
+pull request와 `main` push에서 실행되며(일부는 path 필터), mock이 아니라 실제 컨테이너나 kind 클러스터를 대상으로 합니다.
+
+- `e2e.yml`: chart 설치와 `helm test`(단독/3노드), TLS와 인증서 교체, 마이그레이션 dry-run
+- `upgrade-e2e.yml`: rolling 업그레이드와 롤백(단독/복제)
+- `backup-restore.yml`: 백업, 검증, 손상 점검, 복원, 3노드 삭제 후 복원/재동기화
+- `replication-chaos-e2e.yml`: 네트워크 분리, 동일 항목 충돌, 전용 replication 계정
+- `security-e2e.yml`: ACL 부정 테스트, LDAP injection, audit/accesslog, chart security context
+- `sssd-e2e.yml`, `keycloak-federation-e2e.yml`: SSSD 신원 조회, Keycloak LDAP federation
+- `metrics-e2e.yml`, `ui-e2e.yml`: exporter 지표와 알림 규칙, UI 브라우저 회귀
+- `machine-keycloak-e2e.yml`, `machine-write-e2e.yml`, `api-credentials-e2e.yml`: 머신 bearer 읽기/쓰기(실제 Keycloak), 생성된 credential과 API 오류 코드
+- `offline-bundle.yml`: registry 없는 번들 설치
+
+`release.yml`은 도달 가능한 취약점 스캔, rolling 업그레이드/롤백(단독/복제), 백업 복원과 3노드 복원, 머신 bearer 인증, 머신 쓰기, 생성된 credential + API 오류 코드가 해당 commit에서 모두 성공하지 않으면 tag를 거부합니다.
+
 ## 개발
 
 ```bash
@@ -159,6 +240,34 @@ make check
 - [docs/product-boundary.md](docs/product-boundary.md) — 제품 범위, 비목표, 경계 책임
 - [docs/pam-boundary.md](docs/pam-boundary.md) — 특권 접근 관리와 credential vault 경계
 - [docs/air-gap.md](docs/air-gap.md) — 폐쇄망 설치
+
+### 문서 색인
+
+| 문서 | 목적 |
+|---|---|
+| [docs/ADOPTION-GUIDE.md](docs/ADOPTION-GUIDE.md) | 도입 경로와 첫 성공 기준 |
+| [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) | 병합된 기능과 검증 범위 |
+| [docs/architecture.md](docs/architecture.md) | 런타임 경계, HA 토폴로지, Helm/Compose 차이 |
+| [docs/api.md](docs/api.md) | HTTP API 계약, 머신 bearer 인증 |
+| [docs/ui-operations.md](docs/ui-operations.md) | UI 백엔드 운영(metrics, Origin 게이트, 조건부 쓰기, 멱등 키) |
+| [docs/auth-provider-policy.md](docs/auth-provider-policy.md) | LDAP bind와 Keycloak SSO, 실패 시 동작 |
+| [docs/machine-keycloak-client.md](docs/machine-keycloak-client.md) | 머신 호출용 Keycloak client 설정 |
+| [docs/machine-ldap-account.md](docs/machine-ldap-account.md) | 머신 읽기 계정과 읽기 전용 ACL |
+| [docs/machine-write-account.md](docs/machine-write-account.md) | 머신 쓰기 계정과 쓰기 ACL |
+| [docs/machine-auth-operations.md](docs/machine-auth-operations.md) | 머신 인증 롤백, 긴급 차단, 호환성 |
+| [docs/ha-profile.md](docs/ha-profile.md) | HA 토폴로지, 장애 모드, RPO/RTO |
+| [docs/migration.md](docs/migration.md) | 단계적 전환, dry-run, 롤백, replication 계정 절차 |
+| [docs/air-gap.md](docs/air-gap.md) | 폐쇄망 번들 검증과 설치 |
+| [docs/client-compatibility.md](docs/client-compatibility.md) | SSSD, Windows/AD, Keycloak 등 클라이언트 호환 |
+| [docs/audit-event-schema.md](docs/audit-event-schema.md) | 신원 감사 이벤트 스키마와 export |
+| [docs/incident-evidence.md](docs/incident-evidence.md) | redact된 장애 증거 export |
+| [docs/scale-benchmarks.md](docs/scale-benchmarks.md) | 재현 가능한 부하/규모 측정 |
+| [docs/encryption-at-rest.md](docs/encryption-at-rest.md) | 저장 시 암호화의 책임 경계 |
+| [docs/dependency-policy.md](docs/dependency-policy.md) | 고정, cooling window, 의존성 롤백 |
+| [docs/legal-ko.md](docs/legal-ko.md) | 라이선스와 법률 안내 |
+| [docs/product-boundary.md](docs/product-boundary.md) | 제품 범위와 비목표 |
+| [docs/pam-boundary.md](docs/pam-boundary.md) | PAM/credential vault 경계 |
+| [docs/agent-execution-security.md](docs/agent-execution-security.md) | 에이전트 구동 작업용 디렉터리 제어 프로필 |
 
 ## 라이선스
 
