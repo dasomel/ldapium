@@ -1,6 +1,7 @@
-"""D59 stable-CSN comparison. Prints counts only; hashes never enter diagnostics."""
+"""D59 stable-CSN comparison and D434-2 divergence detector. Attribute values never enter diagnostics."""
 import argparse
 import base64
+import hashlib
 import os
 import secrets
 import shlex
@@ -115,13 +116,22 @@ def tool(args, command, user=None, stdin=False):
   return command
 
 
+class DirectoryOperationError(ValueError):
+  """Raised when a directory subprocess exits non-zero, preserving output."""
+  def __init__(self, code, stdout=b'', stderr=b''):
+    super().__init__('directory operation failed (code %d)' % code)
+    self.code = code
+    self.stdout = stdout
+    self.stderr = stderr
+
+
 def tool_run(args, command, data=None, user=None):
   environment = dict(os.environ, LDAPTLS_REQCERT='demand', LDAPTLS_CACERT=args.ca_file)
   result = subprocess.run(tool(args, command, user, data is not None), input=data,
                           capture_output=True, timeout=30, env=environment)
   if result.returncode:
     # Server diagnostics may contain sensitive data: report only operation status.
-    raise ValueError('directory operation failed (code %d)' % result.returncode)
+    raise DirectoryOperationError(result.returncode, result.stdout, result.stderr)
   return result.stdout
 
 
@@ -228,6 +238,276 @@ def read_password_file(args, path):
     return file.read()
 
 
+
+OPATTRS = frozenset({
+    'entrycsn', 'entryuuid', 'hassubordinates', 'subschemasubentry',
+    'structuralobjectclass', 'createtimestamp', 'creatorsname',
+    'modifytimestamp', 'modifiersname', 'contextcsn'
+})
+
+
+def get_entry_csn(entry):
+  if not entry:
+    return ()
+  for k, v in entry.items():
+    if k.lower() == 'entrycsn':
+      return v
+  return ()
+
+
+def generalized_time(timestamp):
+  return time.strftime('%Y%m%d%H%M%SZ', time.gmtime(timestamp))
+
+
+def divergence_filter(window_minutes, now_timestamp=None):
+  if now_timestamp is None:
+    now_timestamp = time.time()
+  window_seconds = window_minutes * 60
+  gt = generalized_time(now_timestamp - window_seconds)
+  # D434-2: modifyTimestamp is not indexed in image/ldifs/01-cn-config.ldif:78 (only entryCSN eq is),
+  # so this evaluates entries under the base without an index. Catches modified and newly created
+  # entries as well as the #432 defect signature where an entry has no entryCSN / no modifyTimestamp.
+  return '(|(modifyTimestamp>=%s)(createTimestamp>=%s)(!(entryCSN=*)))' % (gt, gt)
+
+
+def canonical_user_attr_hash(entry, opattrs=OPATTRS):
+  if entry is None:
+    return None
+  hasher = hashlib.sha256()
+  norm = {k.lower(): v for k, v in entry.items() if k.lower() not in opattrs}
+  for key in sorted(norm.keys()):
+    hasher.update(key.encode('utf-8'))
+    hasher.update(b':')
+    for val in sorted(norm[key]):
+      hasher.update(str(len(val)).encode('ascii'))
+      hasher.update(b':')
+      hasher.update(val)
+      hasher.update(b';')
+    hasher.update(b'|')
+  return hasher.hexdigest()
+
+
+def diff_attributes(entry_a, entry_b, opattrs=OPATTRS):
+  if entry_a is None or entry_b is None:
+    return []
+  map_a = {k.lower(): v for k, v in entry_a.items() if k.lower() not in opattrs}
+  map_b = {k.lower(): v for k, v in entry_b.items() if k.lower() not in opattrs}
+  diff = set()
+  for k in map_a.keys() ^ map_b.keys():
+    diff.add(k)
+  for k in map_a.keys() & map_b.keys():
+    if sorted(map_a[k]) != sorted(map_b[k]):
+      diff.add(k)
+  return sorted(diff)
+
+
+def evaluate_entry_divergence(entries_by_target, opattrs=OPATTRS):
+  """Evaluates candidate entry divergence across targets.
+
+  Never prints or stores raw attribute values (especially userPassword);
+  only exposes target URIs, truncated hashes, CSN status, and differing attribute names.
+  """
+  missing_targets = [t for t, e in entries_by_target.items() if e is None]
+  present_entries = {t: e for t, e in entries_by_target.items() if e is not None}
+
+  if not present_entries:
+    return False, {}
+
+  if missing_targets:
+    return True, {
+        'missing_targets': sorted(missing_targets),
+        'lacks_csn_targets': [],
+        'hashes': {},
+        'csns': {},
+        'differing_attrs': [],
+    }
+
+  lacks_csn_targets = []
+  for t, e in present_entries.items():
+    csn = get_entry_csn(e)
+    if len(csn) != 1 or not csn[0]:
+      lacks_csn_targets.append(t)
+
+  if lacks_csn_targets:
+    return True, {
+        'missing_targets': [],
+        'lacks_csn_targets': sorted(lacks_csn_targets),
+        'hashes': {},
+        'csns': {},
+        'differing_attrs': [],
+    }
+
+  hashes = {t: canonical_user_attr_hash(e, opattrs) for t, e in present_entries.items()}
+  distinct_hashes = set(hashes.values())
+
+  csns = {t: get_entry_csn(e)[0] for t, e in present_entries.items()}
+  distinct_csns = set(csns.values())
+
+  if len(distinct_hashes) > 1:
+    differing_attrs = set()
+    targets_list = list(present_entries.keys())
+    for i in range(len(targets_list)):
+      for j in range(i + 1, len(targets_list)):
+        differing_attrs.update(
+            diff_attributes(present_entries[targets_list[i]],
+                            present_entries[targets_list[j]],
+                            opattrs)
+        )
+    return True, {
+        'missing_targets': [],
+        'lacks_csn_targets': [],
+        'hashes': hashes,
+        'csns': csns,
+        'differing_attrs': sorted(differing_attrs),
+    }
+
+  if len(distinct_csns) > 1:
+    return True, {
+        'missing_targets': [],
+        'lacks_csn_targets': [],
+        'hashes': hashes,
+        'csns': csns,
+        'differing_attrs': [],
+    }
+
+  return False, {}
+
+
+def format_divergence_reason(details):
+  parts = []
+  if details.get('missing_targets'):
+    parts.append('missing entry on %s' % ', '.join(details['missing_targets']))
+  if details.get('lacks_csn_targets'):
+    parts.append('lacks entryCSN on %s' % ', '.join(details['lacks_csn_targets']))
+  if len(set(details.get('hashes', {}).values())) > 1:
+    attrs = details.get('differing_attrs') or []
+    attr_msg = (' differing attributes: %s' % ', '.join(attrs)) if attrs else ''
+    hash_summary = ', '.join('%s=%s' % (t, h[:16] if h else 'none')
+                             for t, h in sorted(details['hashes'].items()))
+    parts.append('user attribute mismatch (%s)%s' % (hash_summary, attr_msg))
+  if len(set(details.get('csns', {}).values())) > 1:
+    csn_summary = ', '.join('%s=%s' % (t, c.decode('ascii', errors='replace')
+                                        if isinstance(c, bytes) else str(c))
+                            for t, c in sorted(details['csns'].items()))
+    parts.append('entryCSN mismatch (%s)' % csn_summary)
+  return '; '.join(parts) if parts else 'unknown divergence'
+
+
+def read_candidate_entry(args, dn):
+  dn_str = dn.decode('utf-8') if isinstance(dn, bytes) else dn
+  command = ['ldapsearch', '-x', '-LLL', '-o', 'ldif-wrap=no', '-H', args.uri,
+             '-D', args.admin_dn, '-y', args.admin_password_file,
+             '-b', dn_str, '-s', 'base', '(objectClass=*)', '*', 'entryCSN']
+  try:
+    rows = parse_ldif(tool_run(args, command))
+    if not rows:
+      return None
+    for row in rows.values():
+      return row
+    return None
+  except ValueError as error:
+    if str(error).endswith('(code 32)'):
+      return None
+    raise
+
+
+def paged_results_args(page_size):
+  if page_size < 1:
+    raise ValueError('page size must be at least 1')
+  return ['-E', 'pr=%d/noprompt' % page_size]
+
+
+def find_candidates(args, targets, filter_str, page_size=500):
+  all_dns = set()
+  hit_size_limit = False
+  for target in targets:
+    node_args = SimpleNamespace(**vars(args))
+    node_args.uri = target
+    command = ['ldapsearch', '-x', '-LLL', '-o', 'ldif-wrap=no',
+               *paged_results_args(page_size),
+               '-H', target,
+               '-D', args.admin_dn, '-y', args.admin_password_file,
+               '-b', args.base, filter_str, 'dn']
+    try:
+      raw = tool_run(node_args, command)
+    except DirectoryOperationError as error:
+      if error.code == 4:  # LDAP_SIZELIMIT_EXCEEDED
+        hit_size_limit = True
+        raw = error.stdout
+      else:
+        raise
+    rows = parse_ldif(raw)
+    all_dns.update(rows.keys())
+  if hit_size_limit:
+    print('WARN: divergence candidate search reached server size limit (code 4); checking available candidates', file=sys.stderr)
+  return sorted(all_dns)
+
+
+def run_divergence_check(args, targets):
+  flt = divergence_filter(args.divergence_window_minutes)
+  page_size = getattr(args, 'divergence_page_size', 500)
+  candidates = find_candidates(args, targets, flt, page_size=page_size)
+  if not candidates:
+    print('PASS: divergence check: 0 candidate entries within %d minutes across %d selected nodes'
+          % (args.divergence_window_minutes, len(targets)))
+    return 0
+
+  max_candidates = getattr(args, 'divergence_max_candidates', 500)
+  total_candidates = len(candidates)
+  capped = False
+  if total_candidates > max_candidates:
+    capped = True
+    print('WARN: candidate count %d exceeds cap %d; checking first %d entries deterministically'
+          % (total_candidates, max_candidates, max_candidates), file=sys.stderr)
+    candidates = candidates[:max_candidates]
+
+  # D434-2 cap: per-candidate per-node read subprocesses bounded by max_candidates * len(targets).
+  # Exceeding candidate cap returns rc 0 with WARN: batch modifications should not fail
+  # replication check (rc 2) while healthy syncrepl is active; cost: remaining entries uninspected
+  # in this run; escape hatch: increase --divergence-max-candidates or inspect WARN logs.
+  suspects = {}
+  for dn in candidates:
+    entries = {}
+    for target in targets:
+      node_args = SimpleNamespace(**vars(args))
+      node_args.uri = target
+      entries[target] = read_candidate_entry(node_args, dn)
+    diverged, details = evaluate_entry_divergence(entries)
+    if diverged:
+      suspects[dn] = details
+
+  if suspects:
+    if args.divergence_grace_seconds > 0:
+      time.sleep(args.divergence_grace_seconds)
+    confirmed = {}
+    for dn in suspects:
+      recheck_entries = {}
+      for target in targets:
+        node_args = SimpleNamespace(**vars(args))
+        node_args.uri = target
+        recheck_entries[target] = read_candidate_entry(node_args, dn)
+      diverged, details = evaluate_entry_divergence(recheck_entries)
+      if diverged:
+        confirmed[dn] = details
+
+    if confirmed:
+      for dn, details in confirmed.items():
+        dn_display = dn.decode('utf-8', errors='replace') if isinstance(dn, bytes) else str(dn)
+        print('FAIL: divergence detected for dn="%s": %s'
+              % (dn_display, format_divergence_reason(details)), file=sys.stderr)
+      print('FAIL: %d entry divergence(s) detected across %d selected nodes'
+            % (len(confirmed), len(targets)), file=sys.stderr)
+      return 1
+
+  if capped:
+    print('PASS: divergence check: %d of %d candidate entries verified across %d selected nodes (capped)'
+          % (len(candidates), total_candidates, len(targets)))
+  else:
+    print('PASS: divergence check: %d candidate entries verified across %d selected nodes'
+          % (len(candidates), len(targets)))
+  return 0
+
+
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--uri', required=True)
@@ -248,14 +528,35 @@ def main():
                       help='write, observe on every selected node, and delete one throwaway entry (a directory mutation)')
   parser.add_argument('--canary-timeout', type=int, default=30)
   parser.add_argument('--attributes', nargs='+', default=list(ATTRS))
+  parser.add_argument('--divergence', action='store_true',
+                      help='detect cross-provider state divergence for recently modified entries (#434)')
+  parser.add_argument('--divergence-window-minutes', type=int, default=45,
+                      help='lookback window in minutes for recent modifications')
+  parser.add_argument('--divergence-grace-seconds', type=int, default=5,
+                      help='grace period in seconds to wait before re-reading divergent entries')
+  parser.add_argument('--divergence-max-candidates', type=int, default=500,
+                      help='maximum candidate entries to evaluate across providers')
+  parser.add_argument('--divergence-page-size', type=int, default=500,
+                      help='page size for paged candidate searches')
   args = parser.parse_args()
   targets = list(dict.fromkeys([args.uri, *args.peer]))
   if any(not valid_uri(target) for target in targets):
     parser.error('one pinned verified LDAPS URI is required per target; lists and URI options are refused')
   args.attributes = [key.lower() for key in args.attributes]
   if any(key in ('*', '+', 'contextcsn', 'entrycsn') or not key.isalnum()
-         for key in args.attributes):
+          for key in args.attributes):
     parser.error('attributes must be an explicit data-attribute list')
+  if args.divergence:
+    if args.configuration_only:
+      parser.error('--divergence needs the data check')
+    if args.divergence_window_minutes < 1:
+      parser.error('--divergence-window-minutes must be at least 1')
+    if args.divergence_grace_seconds < 0:
+      parser.error('--divergence-grace-seconds must be non-negative')
+    if args.divergence_max_candidates < 1:
+      parser.error('--divergence-max-candidates must be at least 1')
+    if args.divergence_page_size < 1:
+      parser.error('--divergence-page-size must be at least 1')
   if args.canary and (args.configuration_only or not 1 <= args.canary_timeout <= 600):
     parser.error('--canary needs the data check and a timeout of 1-600 seconds')
   if args.local and args.configuration_only:
@@ -305,6 +606,10 @@ def main():
         print('PASS: configuration predicates and %d consumer credential fingerprints' % consumers)
     if args.configuration_only:
       return 0
+    if args.divergence:
+      rc = run_divergence_check(args, targets)
+      if rc != 0:
+        return rc
     for attempt in range(5):
       anchor_first = admin_view(args, args)
       if not anchor_first:

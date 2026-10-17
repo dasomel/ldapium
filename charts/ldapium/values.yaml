@@ -292,6 +292,27 @@ replication:
     # -- Also write, observe and delete one throwaway cn=ridcheck-* entry per run to prove
     #    propagation. A directory WRITE by the administrator; off by default.
     canary: false
+    # -- Cross-provider state-based divergence detector (#434 / D434-2).
+    #    Periodically inspects entries modified within windowMinutes across all
+    #    providers and verifies user attributes and entryCSN agree.
+    divergence:
+      # -- Enable cross-provider divergence detection.
+      enabled: false
+      # -- Window (in minutes) to search for recent modifications on any provider.
+      #    NOTE: modifyTimestamp is not indexed in 01-cn-config.ldif (and entryCSN
+      #    only has eq index), so candidate discovery evaluates entries under the
+      #    base without an index (unindexed scan). Keep the schedule and window reasonable.
+      #    MUST be >= the CronJob schedule interval plus margin (default 45 min with
+      #    the */30 schedule) so modifications between runs are not missed.
+      windowMinutes: 45
+      # -- Grace period (in seconds) to pause before re-reading divergent candidate
+      #    entries to avoid false positives during in-flight syncrepl propagation.
+      graceSeconds: 5
+      # -- Maximum candidate entries to evaluate across providers in a single run.
+      #    Bounds the per-candidate per-node read subprocesses (maxCandidates * nodes).
+      #    If candidates exceed this cap, the first N deterministically sorted entries
+      #    are checked and a WARN is emitted (exit 0; D434-2 cap).
+      maxCandidates: 500
     successfulJobsHistoryLimit: 1
     # -- Minimum 1: a failed Job that is pruned at once never reaches kube-state-metrics, so the alert
     #    could not fire.

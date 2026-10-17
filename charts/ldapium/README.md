@@ -278,6 +278,7 @@ served certificate, the `cn=config` TLS attributes, and the rotation samples:
 | `replication.existingSecret` / `existingSecretKey` | `""` / `replication-password` | Dedicated-only: the caller-owned Secret with the operator-created replication credential (required when `replication.identity=dedicated`, refused otherwise). |
 | `replication.check.enabled` | `false` | Periodic replication identity check CronJob (see "Scheduled replication identity check"). Needs `replication.identity=dedicated` and `replication.check.image.*`. |
 | `replication.check.schedule` / `requireConverged` / `canary` | `*/30 * * * *` / `true` / `false` | Cron schedule; strict five-pass convergence gate; opt-in directory write (one throwaway entry per run). |
+| `replication.check.divergence.enabled` / `windowMinutes` / `graceSeconds` / `maxCandidates` | `false` / `45` / `5` / `500` | State-based cross-provider divergence detector (#434 / D434-2); inspects recent modifications and missing entryCSNs across providers, re-reading after graceSeconds to skip in-flight syncrepl. windowMinutes must be >= schedule interval + grace. Candidate evaluation uses paged scan and is capped at maxCandidates. |
 | `replication.check.image.repository` / `tag` / `pullPolicy` | `""` / `""` / `IfNotPresent` | Required when enabled: an image with `python3` and `ldapsearch`. |
 | `seed.enabled` | `false` | Mount `seed.ldifs` as a ConfigMap at `LDAP_SEED_DIR`, applied once on the first bootstrap of the node that creates the base DIT (a failed seed rolls back and retries on the next start; replicas skip seeding and receive the data by replication). This project ships no sample data by default. |
 | `seed.ldifs` | `{}` | Map of filename → LDIF content. |
@@ -1024,7 +1025,7 @@ and nothing here has verified it — check it against your own metric.
 | `LDAPiumConnectionSaturation` | connections exceed `connectionSaturationPercent` of the file-descriptor ceiling for 10m | Who is connecting: `cn=Connections,cn=Monitor`. The ceiling comes from the container's open-file limit (`LDAP_MAX_OPEN_FILES`, `ldap.maxOpenFiles`); raise it only after ruling out a client that never closes connections, which is the more common cause. |
 | `LDAPiumBackupFailed` | a backup Job reports failure for `backupFailureFor` | `kubectl logs job/<fullname>-backup-<id>`. The run either could not reach the directory or could not write the PVC; both are in the log. |
 | `LDAPiumBackupStale` | the newest completed backup is older than `backupMaxAgeSeconds`, for 10m | The CronJob may be suspended, unschedulable, or failing before it completes. Note this fires on *age*, so it also catches a CronJob that silently stopped being created at all. |
-| `LDAPiumReplicationCheckFailed` | the newest replication identity check Job failed (started after the newest successful one) for `replicationCheckFailureFor` (default 5m); **only rendered when `replication.check.enabled`**, needs kube-state-metrics | `kubectl logs job/<fullname>-replication-check-<id>` has the fixed reason (stable entries differ, identity configuration, unreachable node). Unit-tested in `tests/prometheus/replication_check_test.yaml`. |
+| `LDAPiumReplicationCheckFailed` | the newest replication identity check Job failed (started after the newest successful one) for `replicationCheckFailureFor` (default 5m); **only rendered when `replication.check.enabled`**, needs kube-state-metrics | `kubectl logs job/<fullname>-replication-check-<id>` has the fixed reason (stable entries differ, cross-provider divergence detected, identity configuration, unreachable node). Unit-tested in `tests/prometheus/replication_check_test.yaml`. |
 | `LDAPiumTLSCertificateExpiringSoon` | the expiry metric is inside `tlsExpiryWarningSeconds` | Renew and restart — see the TLS section. **Only rendered when `tlsCertificateExpirationExpr` is set**; there is no built-in certificate metric, so leaving it empty means no expiry alerting at all. |
 | `LDAPiumMDBUsageHigh` | mdb pages exceed 80% of the map for 15m | `ldap.dbMaxSize` is the map size, and it cannot be grown while slapd is running. Plan the restart before the directory hits the ceiling, because hitting it fails writes outright. |
 
@@ -1423,8 +1424,15 @@ pod over the headless Service: stable-CSN data comparison between the administra
 dedicated identity's views, the identity configuration predicates, consumer credential
 fingerprints and provider membership, with `--require-converged` (set
 `replication.check.requireConverged=false` for warn-only). `replication.check.canary=true`
-adds a canary write (one `cn=ridcheck-*` entry, replicated and deleted again). Details:
-[docs/ha-profile.md](../../docs/ha-profile.md).
+adds a canary write (one `cn=ridcheck-*` entry, replicated and deleted again). `replication.check.divergence.enabled=true`
+adds cross-provider state divergence detection for recently modified entries (#434 / D434-2).
+`windowMinutes` must be >= schedule interval + grace (default 45m for the default 30m schedule).
+Candidate discovery queries `modifyTimestamp`/`createTimestamp` without directory indexes (unindexed
+scan cost) using simple paged results (`ldapsearch -E pr=500/noprompt` requesting `dn`) to avoid hitting
+`LDAP_SIZE_LIMIT` (default 10,000). Candidate evaluation runs per-candidate per-node read subprocesses
+(`O(candidates * nodes)`), bounded by `replication.check.divergence.maxCandidates` (default 500); exceeding
+the cap deterministically checks the first N entries and emits a WARN line with exit 0 (D434-2 cap).
+Details: [docs/ha-profile.md](../../docs/ha-profile.md).
 
 - Needs `replication.identity=dedicated` (the render fails otherwise) and an image with
   `python3` plus `ldapsearch`. The server image has no Python, so build one:

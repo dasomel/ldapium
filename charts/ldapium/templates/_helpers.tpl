@@ -251,6 +251,14 @@ ldapsearch (the server image has no python3 and the chart does not change it). *
 {{- if not .Values.replication.check.image.repository -}}
 {{- fail "replication.check.enabled requires replication.check.image.repository: an image with python3 and ldapsearch (the server image has no python3; see charts/ldapium/README.md)" -}}
 {{- end -}}
+{{- if and .Values.replication.check.divergence .Values.replication.check.divergence.enabled -}}
+{{- if and (hasKey .Values.replication.check.divergence "windowMinutes") (lt (int .Values.replication.check.divergence.windowMinutes) 1) -}}
+{{- fail "replication.check.divergence.windowMinutes must be at least 1" -}}
+{{- end -}}
+{{- if and (hasKey .Values.replication.check.divergence "maxCandidates") (lt (int .Values.replication.check.divergence.maxCandidates) 1) -}}
+{{- fail "replication.check.divergence.maxCandidates must be at least 1" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if and (or $h.disallowAnonBind $h.requireAuthc) .Values.ldap.anonymousReadBase -}}
