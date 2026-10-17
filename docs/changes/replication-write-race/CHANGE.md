@@ -3,7 +3,7 @@
 - Change class: `D` — 복제 시맨틱·데이터 정합성·가용성 토폴로지 (AGENTS.md)
 - Owner: dasomel (유지보수자 결정 대기)
 - Related issue: [#434](https://github.com/dasomel/ldapium/issues/434) (근본 원인 [#432](https://github.com/dasomel/ldapium/issues/432), 실측 기록 [#435](https://github.com/dasomel/ldapium/pull/435))
-- Status: `Proposed (awaiting maintainer decision)`
+- Status: `Accepted (2026-10-17: D434-1, D434-2, D434-3 accepted by the maintainer; D434-4 stands as proposed deferral)`
 - Accepted by / date: 미정 (유지보수자 결정 대기)
 
 ## Problem
@@ -73,7 +73,7 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 - **대안 3 (캐리 패치)**: `syncrepl.c`의 `retry_diff:` 구간에서 `slap_entry2mods`로 `*modlist`를 재생성하여 결함을 완화하겠다는 것은 **해결 가설(미실증, D434-3에서 증명)**이다. 소진된 modlist 재생성 가설 또한 미실증 상태이며, 아키텍처나 기존 결정을 훼손하지 않는 변경안이나 C 코드 변경의 실증 증명(D434-3)이 필수적이다.
 - **대안 4 (탐지기 + 수용)**: 결함을 직접 막지는 못하나, 발생률(~0.9%)이 낮고 재기록으로 복구 가능한 점을 고려하여 프로덕션 위험을 관측 가능성 테두리 안에서 통제한다.
 
-### 제안 결정 (Proposed Decisions)
+### 결정 (Decisions — D434-1~3 수용 2026-10-17)
 
 - `D434-1`: 업스트림 ITS 버그 리포트 공식 등록
   - Reason: 근본 해결책은 OpenLDAP 공식 픽스이며 초안(`.omc/logs/agy-432-its-draft.md`)이 준비되어 있다.
@@ -144,7 +144,7 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 
 ## Review record
 
-- **Accepted scope/requirements**: 유지보수자 결정 대기 (Status: Proposed).
+- **Accepted scope/requirements**: 2026-10-17 유지보수자가 D434-1(업스트림 ITS 게시), D434-2(2단계 탐지기 구현), D434-3(브랜치에서 패치 실증, 출하는 별도 결정)을 수용했다. D434-4(단일 쓰기·delta-syncrepl 보류)는 제안 그대로 유지한다. D434-2 구현은 Kubernetes에서 다른 컨테이너 stdout을 읽기 어려우므로 상태 기반(교차 provider 비교)을 1차로, 로그 트리거를 보조로 한다.
 - **Material changes after acceptance and re-review**: N/A
 - **Open questions or blockers**:
   1. **[PARTIAL 검증] `W_cred` 라우팅 일치 여부**: `docs/machine-write-account.md:329`에는 `W_cred`가 비밀번호 쓰기를 고정한 1개 노드에만 설치된다고 명시되어 있으나, UI 백엔드 설정상 머신 cred 쓰기를 특정 노드로 고정하는 구성이 발견되지 않았다(UI `LDAP_URL`은 로드밸런싱 Service를 향함). 비고정 노드로 라우팅될 때 fail-closed(50) 거부되는 현상이 의도된 것인지, 아니면 라우팅 고정 로직의 누락인지 검증이 필요하다.
