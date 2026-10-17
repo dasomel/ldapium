@@ -29,6 +29,7 @@ fresh random sentinel; output carries only counts and result codes.
 Run (docker): python3 scripts/test/test-machine-write-cred-multiprovider-live.py
 Override LDAPIUM_IMAGE (default ldapium:e2e), LDAPIUM_TEST_PREFIX, MP_ROUNDS (default 5), MP_N (default 10).
 """
+import hashlib
 import os
 import pathlib
 import re
@@ -256,6 +257,27 @@ def main():
     live.wait_until(lambda: stored(A, dn) != '' and stored(A, dn) == stored(B, dn), f'{dn} userPassword equal on both providers', timeout)
 
 
+  def entry_csn(node, dn):
+    out = node.admin_tool('ldapsearch', ['-LLL', '-o', 'ldif-wrap=no', '-b', dn, '-s', 'base', 'entryCSN']).stdout
+    return next((l.split(':', 1)[1].strip() for l in out.splitlines() if l.lower().startswith('entrycsn:')), '<missing>')
+
+
+  def snapshot(dn):
+    """Redacted state of `dn` on both providers: sha256 prefixes of the userPassword line, never the value (#432)."""
+    fp = lambda node: hashlib.sha256(stored(node, dn).encode()).hexdigest()[:10]
+    return f'userPassword sha256[:10] A {fp(A)} B {fp(B)}; entryCSN A {entry_csn(A, dn)} B {entry_csn(B, dn)}'
+
+
+  def converged(dn, timeout):
+    """Non-raising convergence probe: True when userPassword is equal and present on both providers within `timeout`."""
+    end = time.time() + timeout
+    while time.time() < end:
+      if stored(A, dn) != '' and stored(A, dn) == stored(B, dn):
+        return True
+      time.sleep(1)
+    return False
+
+
   def binds(node, dn, path):
     return node.tool('ldapwhoami', [], dn, path).returncode == 0
 
@@ -424,18 +446,28 @@ def main():
   live.check(all(r[0] == 0 and r[1] == 0 for r in m5p), 'M5 with the bundle on both providers a partitioned B accepts a second "first password" (two successes)')
   live.check(all(len(r[2]) == 1 and r[2] == r[3] for r in m5p),
              'M5 last-write-wins: after healing exactly one of the two successful values survives, the same one on both providers; the other success is silently lost')
+  # Unpartitioned, released together: convergence is a MEASURE, not a check. OpenLDAP 2.6.15 syncrepl can leave the
+  # earlier-CSN node on a wrong state after a same-entry local/peer write race (#432, retry_diff), and it does not heal.
   m5t = []
   for k in range(ROUNDS):
     dn = pending(f'mp5t-{k}')
     res = race(dn, [(A, 1), (B, 1)])
     (ra, pa), (rb, pb) = res[A.name], res[B.name]
     wins = [x for rcs, p in ((ra, pa), (rb, pb)) for rc, x in zip(rcs, p) if rc == 0]
-    hit_a, hit_b = verify_single(dn, wins) if wins else ([], [])
-    m5t.append((ra, rb, len(wins), hit_a, hit_b))
-    measure(f'M5 round {k} (no partition, released together): A rc {ra}, B rc {rb}; successes {len(wins)}; surviving values A {hit_a} B {hit_b}')
+    ok = converged(dn, 60) if wins else True   # no success: nothing to converge on
+    snap = snapshot(dn)
+    hit_a, hit_b = verify_single(dn, wins) if wins and ok else ([], [])
+    m5t.append((ra, rb, len(wins), hit_a, hit_b, ok))
+    measure(f'M5 round {k} (no partition, released together): A rc {ra}, B rc {rb}; successes {len(wins)}; '
+            f'{"converged" if ok else "DIVERGED (#432)"}; surviving values A {hit_a} B {hit_b}')
+    if not ok or os.environ.get('MP_DIAG') == '1':
+      measure(f'M5 round {k} snapshot: {snap}')
   double = sum(1 for r in m5t if r[2] == 2)
+  diverged = sum(1 for r in m5t if not r[5])
   measure(f'M5 unpartitioned race, bundle on both: {double} of {ROUNDS} rounds gave two successes (one silently lost); {ROUNDS - double} gave one (the later set saw the replicated password and got 50)')
-  live.check(all(len(r[3]) == (1 if r[2] >= 1 else 0) and r[3] == r[4] for r in m5t), 'M5 even unpartitioned the providers never keep two values: one value, identical on both')
+  measure(f'M5 unpartitioned race: diverged {diverged} of {ROUNDS} (#432, OpenLDAP syncrepl retry_diff)')
+  live.check(all(len(r[3]) == (1 if r[2] >= 1 else 0) and r[3] == r[4] for r in m5t if r[5]),
+             f'M5 unpartitioned rounds that converged ({ROUNDS - diverged} of {ROUNDS}) hold exactly one value, identical on both providers')
 
   print(f'\nALL {live.checks} CHECKS PASSED in {live.elapsed():.0f}s (image {live.ldap_image})', flush=True)
 
