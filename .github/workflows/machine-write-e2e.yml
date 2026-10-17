@@ -23,8 +23,10 @@ name: Machine write E2E (real Keycloak)
 # It is a release-critical check: release.yml requires the exact job name below on the tagged SHA.
 #
 # The second job, `machine write measurements (E-22, two-provider R-3)` (#429), repeats the #417 (c) measurements
-# (EVIDENCE §2q, §2r) on every change. It is deliberately NOT release-critical: E-22 waits on the real 60 s premise
-# ticker, so its timing margins on shared runners are observed here before anyone makes it a gate.
+# (EVIDENCE §2q, §2r) on every change. Its name is not required by release.yml, but release.yml's preflight fails on ANY
+# non-success check run on the tagged SHA, so a red run of this job still blocks a release until it is rerun. E-22 waits
+# on the real 60 s premise ticker, so its timing margins on shared runners are observed here before anyone makes it a
+# gate. Since #432 the unpartitioned M5 divergence (OpenLDAP 2.6.15 syncrepl retry_diff) is a MEASURE, not a failure.
 
 on:
   # No paths filter, deliberately: release-critical checks must always report

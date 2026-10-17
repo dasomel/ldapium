@@ -914,12 +914,21 @@ LDAPIUM_IMAGE=ldapium:e2e python3 scripts/test/test-machine-write-cred-multiprov
 | M3 | 5 on A and 5 on B together; and B partitioned while A sets | B 50 every time, A one success, one value binds on both providers |
 | M4 | `cn=config` replication in the shipped topology | not replicated: `olcSyncrepl` only on the main `mdb`; a probe `olcAccess` on A (read back) absent on B after 15 s |
 | M5 | control: bundle on both, B partitioned | 5/5 rounds two successes; after healing one value survives on both, the other success is silently lost |
-| M5 | control: bundle on both, unpartitioned | 1-2 of 5 rounds two successes (latency-dependent, recorded not asserted); always one surviving value |
+| M5 | control: bundle on both, unpartitioned | 1-2 of 5 rounds two successes (latency-dependent, recorded not asserted); 정정(#432): 항상 한 값이 남는 것은 아니다. 아래 "#432 정정" 참조. 재측정(10 rounds): 5 two successes, diverged 0 of 10 |
 
 Reading: with the bundle pinned to one provider R-3 holds across two providers; the shipped image does not replicate `cn=config`, so the
 per-provider split is stable; with the bundle on both, last-write-wins loses a "successful" first password. Independent review found M1
 vacuous in the first version (the deny was not what decided); M1b was added. Not verified: an operator who replicates `cn=config` themselves
 (the image does not render it), more than two providers.
+
+**#432 정정.** 위 M5 "항상 한 값이 남는다"(비분할 경쟁에서 두 provider가 두 값을 갖지 않는다)는 주장은 틀렸다. OpenLDAP 2.6.15 syncrepl 버그다:
+한 provider의 로컬 modify가 커밋되는 동안 그 provider의 syncrepl consumer가 peer의 같은 항목 변경을 적용하면 consumer의 be_modify가 122(ITS#10358
+assertion, 2.6.11에서 추가)로 실패하고, `retry_diff:` 경로(syncrepl.c:4200-4226)가 이미 소비된 수신 mod list로 다시 diff해 재시도가 0으로 "성공"하지만
+잘못된 modify를 적용한다. 먼저 CSN을 가진 노드가 틀린 상태로 남고(비밀번호: 자기 userPassword만 있고 entryCSN/modifiersName/modifyTimestamp 없음;
+일반 `description`: 속성이 통째로 삭제됨) 양쪽 contextCSN은 이미 두 SID를 모두 나열하므로 그 항목에 다음 쓰기가 있을 때까지 재수렴하지 않는다
+(600 s 대기와 양쪽 재시작으로도 치유되지 않음). colima 실측: 비밀번호 M5 비분할 경쟁 약 0.3-0.4 % round, 일반 admin `replace: description` 경쟁 약 0.9 % (10/1170).
+출하 토폴로지(W_cred 번들을 provider 하나에 고정)는 영향이 없다. 같은 항목에 대한 동시 쓰기가 두 provider에 떨어지는 모든 구성이 노출된다.
+스크립트는 이 round를 이제 MEASURE(`diverged N of ROUNDS (#432, ...)`, sha256 접두 지문과 entryCSN 스냅샷)로 기록하고, 수렴한 round만 "한 값, 양쪽 동일"을 검사한다.
 
 ## 3. Not verified
 
@@ -935,3 +944,5 @@ T-025 드릴(§2l)의 Not verified: Kubernetes 롤링 업데이트·실제 Secre
 T-040 (2026-10-14, §2o)의 Not verified: 위 "Not run, and why" 목록 전부(`cmd/server` 포함 `go test ./...`, 프런트엔드 빌드, `licenses.sh`·`check-make-parity.sh`·나머지 차트 스크립트, 라이브 드릴 재실행, 변이 목록 재실행), 태그 SHA에서의 T-027 게이트.
 
 #417 (2026-10-15, §2p-§2r)이 옮긴 것: E-13의 Keycloak·UI 컨테이너 부분과 실제 `config.Load`(§2p), E-22(§2q, 실행 중 60초 주기 발화 포함), 다중 provider의 R-3(§2r, 두 provider). 여전히 미실측: E-14, `pwdInHistory`(R-7), R-4의 1 rps 예산 계수, 운영자가 직접 복제하는 `cn=config`와 세 provider 이상, Kubernetes 롤아웃. E-22·§2r는 #429부터 `machine-write-e2e.yml`의 `machine write measurements (E-22, two-provider R-3)` job으로 GitHub Actions에서 매 변경마다 실행된다(릴리스 필수 검사는 아님: 공유 러너에서 60초 주기 발화의 시간 여유를 먼저 관찰).
+
+#432 (2026-10-17, §2r): 비분할 M5에서 두 provider가 영구히 갈라질 수 있다(OpenLDAP 2.6.15 syncrepl `retry_diff`, 위 "#432 정정"). 출하 토폴로지는 영향 없음. 미해결(업스트림 수정 대기): 같은 항목 동시 쓰기가 두 provider에 떨어지는 구성의 자동 재수렴. `machine write measurements` job의 빨간 실행은 release.yml preflight(태그 SHA의 모든 비성공 check run 실패 처리)를 막으므로, 이 발산이 실패가 아니라 측정이 되도록 바꿔 완화했다.
