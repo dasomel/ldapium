@@ -525,6 +525,28 @@
             "canary": {
               "type": "boolean"
             },
+            "divergence": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "windowMinutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Lookback window in minutes for recent modifications. Must be >= schedule interval + grace (e.g. 45 for default */30 schedule)."
+                },
+                "graceSeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxCandidates": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Maximum candidate entries to evaluate across providers in a single run. Bounds per-candidate per-node read subprocesses. Default: 500."
+                }
+              }
+            },
             "successfulJobsHistoryLimit": {
               "type": "integer",
               "minimum": 0

@@ -59,6 +59,7 @@ has "$on" 'name: replication-secret'
 has "$on" 'app.kubernetes.io/component: replication-check'
 has "$on" 'alert: LDAPiumReplicationCheckFailed'
 lacks "$on" '- --canary'
+lacks "$on" '- --divergence'
 lacks "$on" 'chart-test-password'
 cron=$(render "${dedicated[@]}" "${check[@]}" --show-only templates/replication-check-cronjob.yaml)
 lacks "$cron" 'tls.key'
@@ -69,6 +70,14 @@ has "$policy" 'app.kubernetes.io/component: replication-check'
 canary=$(render "${dedicated[@]}" "${check[@]}" --set replication.check.canary=true --set replication.check.requireConverged=false --show-only templates/replication-check-cronjob.yaml)
 has "$canary" '- --canary'
 lacks "$canary" '- --require-converged'
+divergence=$(render "${dedicated[@]}" "${check[@]}" --set replication.check.divergence.enabled=true --show-only templates/replication-check-cronjob.yaml)
+has "$divergence" '- --divergence'
+has "$divergence" '- --divergence-window-minutes'
+has "$divergence" '"45"'
+has "$divergence" '- --divergence-grace-seconds'
+has "$divergence" '"5"'
+has "$divergence" '- --divergence-max-candidates'
+has "$divergence" '"500"'
 echo 'PASS enabled render'
 
 refuse "${check[@]}"
@@ -77,6 +86,8 @@ refuse "${dedicated[@]}" "${check[@]}" --set-string replication.check.image.tag=
 refuse "${check[@]}" --set replication.identity=prepare
 refuse "${dedicated[@]}" "${check[@]}" --set replication.check.schedule=
 refuse "${dedicated[@]}" "${check[@]}" --set replication.check.failedJobsHistoryLimit=0
+refuse "${dedicated[@]}" "${check[@]}" --set replication.check.divergence.enabled=true --set replication.check.divergence.windowMinutes=0
+refuse "${dedicated[@]}" "${check[@]}" --set replication.check.divergence.enabled=true --set replication.check.divergence.maxCandidates=0
 
 # The scripts shipped in the ConfigMap are the ones the operator runs.
 for name in replication_identity_check.py replication_identity_config.py replication_uri.py; do
