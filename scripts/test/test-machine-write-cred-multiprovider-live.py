@@ -20,8 +20,9 @@ policy; the pending account is made by W_data, marker in employeeType, creatorsN
       NOT replicated (olcAccess differs per node, a probe rule written on A never reaches B)
   M5  negative control: the bundle on BOTH providers. A partitioned B accepts a second "first password"
       (two successes), and after healing one value silently wins on both nodes (asserted: the loss is
-      shown). The same race without a partition (one set on A, one on B, released together) is counted,
-      not asserted: how often the window is hit depends on replication latency
+      shown). The same race without a partition (one set on A, one on B, released together) is asserted to
+      converge on every round (#432: the carried retry_diff patch in image/patches/); how often both sets
+      succeed is only counted, since that depends on replication latency
 
 Exit 0 only if every assertion holds. The raw numbers are printed as `MEASURE ...` lines. Every password is a
 fresh random sentinel; output carries only counts and result codes.
@@ -446,8 +447,9 @@ def main():
   live.check(all(r[0] == 0 and r[1] == 0 for r in m5p), 'M5 with the bundle on both providers a partitioned B accepts a second "first password" (two successes)')
   live.check(all(len(r[2]) == 1 and r[2] == r[3] for r in m5p),
              'M5 last-write-wins: after healing exactly one of the two successful values survives, the same one on both providers; the other success is silently lost')
-  # Unpartitioned, released together: convergence is a MEASURE, not a check. OpenLDAP 2.6.15 syncrepl can leave the
-  # earlier-CSN node on a wrong state after a same-entry local/peer write race (#432, retry_diff), and it does not heal.
+  # Unpartitioned, released together: every round must converge. Stock OpenLDAP 2.6.15 syncrepl can leave the
+  # earlier-CSN node on a wrong state after a same-entry local/peer write race (#432, retry_diff) and it does not
+  # heal; the image carries a patch for it (image/patches/), so this fails on an image built without that patch.
   m5t = []
   for k in range(ROUNDS):
     dn = pending(f'mp5t-{k}')
@@ -466,6 +468,7 @@ def main():
   diverged = sum(1 for r in m5t if not r[5])
   measure(f'M5 unpartitioned race, bundle on both: {double} of {ROUNDS} rounds gave two successes (one silently lost); {ROUNDS - double} gave one (the later set saw the replicated password and got 50)')
   measure(f'M5 unpartitioned race: diverged {diverged} of {ROUNDS} (#432, OpenLDAP syncrepl retry_diff)')
+  live.check(diverged == 0, f'M5 unpartitioned race: every round converged (diverged {diverged} of {ROUNDS}; #432 patched retry_diff)')
   live.check(all(len(r[3]) == (1 if r[2] >= 1 else 0) and r[3] == r[4] for r in m5t if r[5]),
              f'M5 unpartitioned rounds that converged ({ROUNDS - diverged} of {ROUNDS}) hold exactly one value, identical on both providers')
 

@@ -3,8 +3,10 @@ Copyright 2026 dasomel
 
 This product includes software developed by the OpenLDAP Project.
 
-The container images published by this project bundle unmodified binaries of
-OpenLDAP Software, compiled from the official upstream source release.
+The container images published by this project bundle binaries of OpenLDAP
+Software compiled from the official upstream source release with one carried
+syncrepl patch (image/patches/, also at /usr/share/doc/openldap/patches/); the
+binaries are therefore modified.
 
     OpenLDAP Software
     Copyright 1998-2026 The OpenLDAP Foundation.  All rights reserved.

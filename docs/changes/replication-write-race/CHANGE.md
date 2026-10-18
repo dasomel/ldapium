@@ -1,10 +1,10 @@
 # Change: 다중 프로바이더 동일 엔트리 동시 쓰기 발산 완화 설계
 
 - Change class: `D` — 복제 시맨틱·데이터 정합성·가용성 토폴로지 (AGENTS.md)
-- Owner: dasomel (유지보수자 결정 대기)
+- Owner: dasomel
 - Related issue: [#434](https://github.com/dasomel/ldapium/issues/434) (근본 원인 [#432](https://github.com/dasomel/ldapium/issues/432), 실측 기록 [#435](https://github.com/dasomel/ldapium/pull/435))
-- Status: `Accepted (2026-10-17: D434-1, D434-2, D434-3 accepted by the maintainer; D434-4 stands as proposed deferral). 2026-10-18: D434-2 merged (#437); D434-3 patch proven on a branch (see "D434-3 실증 결과"), shipping not yet decided`
-- Accepted by / date: 미정 (유지보수자 결정 대기)
+- Status: `Accepted (2026-10-17: D434-1, D434-2, D434-3 accepted by the maintainer; D434-4 stands as proposed deferral). 2026-10-18: D434-2 merged (#437); D434-3 patch proven on a branch (see "D434-3 실증 결과") and shipped by the maintainer's decision (#440)`
+- Accepted by / date: dasomel, 2026-10-17 (D434-1~3), 2026-10-18 (D434-3 출하)
 
 ## Problem
 
@@ -84,7 +84,7 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
   - Cost: 로그 파서 사이드카(Vector/Fluentbit) 또는 스크립트 확장, `image/ldifs/01-cn-config.ldif:78`에 `entryCSN eq`만 있어 부등호 윈도우 검색 부하 주의 필요.
   - Escape hatch: 실시간 로그 파싱 구현 부담 시 `replication.check` CronJob에서 의심 엔트리 주기적 샘플 검사로 대체.
 - `D434-3`: 브랜치 기반 캐리 패치 실증 검증 선행
-  - Reason: C 소스 패치는 검증 대상 가설(미실증, D434-3에서 증명)이므로 격리 브랜치에서 빌드 및 실측 검증(신규 구축 예정인 경합 하네스로 2,000회 이상 무발산 실증, chaos E2E 통과)을 완수한 후 메인 도입을 결정한다. 릴리스 시 OpenLDAP PL 2.8 제3조에 따라 `2.6.15-ldapium1`로 라벨링한다.
+  - Reason: C 소스 패치는 검증 대상 가설(미실증, D434-3에서 증명)이므로 격리 브랜치에서 빌드 및 실측 검증(신규 구축 예정인 경합 하네스로 2,000회 이상 무발산 실증, chaos E2E 통과)을 완수한 후 메인 도입을 결정한다. 출하 시 수정판임을 표기한다(2026-10-18 정정: OpenLDAP PL 2.8은 바이너리 재배포 시 저작권 고지·조건·면책 문구(제2조)와 라이선스 사본(제3조)만 요구하며 수정판 재표기 의무는 없다. 그래도 NOTICE, `docs/legal*.md`, THIRD-PARTY-LICENSES, 이미지 label `io.ldapium.openldap.patches`, 이미지 내 `/usr/share/doc/openldap/patches/`로 자발적으로 표기한다).
   - Cost: 브랜치 빌드 파이프라인 및 장시간 하네스 실행 공수, 업스트림 버전 범프 시 리베이스 유지보수.
   - Escape hatch: 하네스 실측 중 예상치 못한 코너케이스나 사이드이펙트 발견 시 즉시 기각하고 D434-2 체제로 안착.
 - `D434-4`: 단일 쓰기 프로바이더 및 delta-syncrepl 전환 보류
@@ -98,9 +98,9 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 |---|---|
 | Source / API / command | N/A — 외부 API 및 CLI 명령 변경 없음 |
 | Dependencies / lockfiles | N/A — Go/Python 의존성 락파일 변경 없음 |
-| Runtime / toolchain | D434-3 채택 시 `image/Dockerfile`에 OpenLDAP 소스 패치 주입 및 컴파일 수행 |
+| Runtime / toolchain | `image/Dockerfile`이 OpenLDAP 2.6.15 소스에 `image/patches/openldap-2.6.15-its-retry-diff.patch`를 `--fuzz=0`으로 적용해 컴파일한다(#440) |
 | CI / CD | `.github/workflows/machine-write-e2e.yml` 측정 항목 유지, 캐리 패치 검증 워크플로 추가 |
-| Release / packaging | 이미지 태그 버전 라벨링(`2.6.15-ldapium1`), OpenLDAP Public License 2.8 제3조 고지 반영 |
+| Release / packaging | `appVersion`은 `2.6.15` 유지(`check-versions.sh`가 Dockerfile tarball 버전과 일치를 요구하고 UI가 `OPENLDAP_VERSION`으로 표시). 패치 식별은 이미지 label `io.ldapium.openldap.patches`와 이미지 내 패치 사본으로 한다 |
 | Generated output | N/A — 자동 생성 산출물 없음 |
 | Security / supply chain | C 소스 패치 무결성 검증, Syft SBOM에 패치 버전 라벨 명시 |
 | Offline / air-gap | N/A — 외부 네트워크 연결 불필요 (패치 파일은 저장소 내 번들링) |
@@ -139,7 +139,7 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 - **Rollout sequence**:
   1. D434-1: 유지보수자 승인 후 업스트림 ITS 공식 제출.
   2. D434-2: 2단계 탐지 메트릭 및 PrometheusRule 경보를 차트에 배포.
-  3. D434-3: 브랜치에서 신규 구축 하네스를 통한 캐리 패치 실증 테스트(2,000회 이상 무발산) 통과 시 이미지 태그(`2.6.15-ldapium1`) 릴리스 검토.
+  3. D434-3: 브랜치에서 신규 구축 하네스를 통한 캐리 패치 실증 테스트(2,000회 이상 무발산) 통과 후 유지보수자 결정으로 출하(#440). 다음 릴리스에 포함.
 - **Rollback trigger and procedure**:
   - 패치 이미지 적용 후 예기치 않은 slapd 비정상 종료나 복제 스톨 발생 시 즉시 순정 2.6.15 이미지로 롤백하고 D434-2(사후 탐지 및 수동 복구) 체제로 전환한다.
 - **Data/configuration recovery**:
@@ -169,5 +169,5 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 - **Open questions or blockers**:
   1. **[PARTIAL 검증] `W_cred` 라우팅 일치 여부**: `docs/machine-write-account.md:329`에는 `W_cred`가 비밀번호 쓰기를 고정한 1개 노드에만 설치된다고 명시되어 있으나, UI 백엔드 설정상 머신 cred 쓰기를 특정 노드로 고정하는 구성이 발견되지 않았다(UI `LDAP_URL`은 로드밸런싱 Service를 향함). 비고정 노드로 라우팅될 때 fail-closed(50) 거부되는 현상이 의도된 것인지, 아니면 라우팅 고정 로직의 누락인지 검증이 필요하다.
   2. **[해결 2026-10-18] 캐리 패치 디프 스케치 및 `dni.mods==NULL` 주장**: `dni.mods==NULL` 주장은 틀렸다(2차 패스는 일부만 남은 modlist로 DELETE를 만들어 두 번째 `be_modify (0)`이 된다). `slap_entry2mods` 재생성 패치는 "D434-3 실증 결과"에서 실증됐다.
-  4. **[결정 대기] 패치 출하**: `2.6.15-ldapium1`로 출하할지(OpenLDAP PL 2.8 제3조 고지, SBOM 라벨, 하네스 회귀 시험 편입 포함)는 유지보수자 결정이다.
+  4. **[해결 2026-10-18] 패치 출하**: 유지보수자가 main 반영과 다음 릴리스 포함을 결정했다(#440). CI의 비분할 M5는 다시 `diverged == 0` 검사가 되었고, 경합 하네스는 수동 실행용 `scripts/test/test-replication-write-race-live.py`로 들어갔다(CI 미편입, 실행 시간).
   3. **[외부 게시 승인] 업스트림 ITS 리포트 등록**: `.omc/logs/agy-432-its-draft.md`의 bugs.openldap.org 등록은 외부 게시이므로 유지보수자의 명시적 승인이 선행되어야 한다 (D434-1).

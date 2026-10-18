@@ -22,7 +22,7 @@ English | **한국어**
 
 | 계층 | 내용 | 라이선스 | 수정 여부 |
 |---|---|---|---|
-| OpenLDAP | 업스트림 소스 릴리스를 `image/Dockerfile`에서 버전과 sha256으로 고정해 컴파일 | OpenLDAP Public License 2.8 | 아니오. 패치를 두지 않습니다. |
+| OpenLDAP | 업스트림 소스 릴리스를 `image/Dockerfile`에서 버전과 sha256으로 고정해 컴파일 | OpenLDAP Public License 2.8 | 예. syncrepl 패치 1건을 적용합니다(`image/patches/`, #432). 이미지의 `/usr/share/doc/openldap/patches/`에도 포함됩니다. |
 | 베이스 OS | `debian:trixie-slim`과 빌드가 설치하는 패키지(OpenSSL, Cyrus SASL, libargon2 등) | 대부분 GPL/LGPL, 일부 BSD/Apache/CC0 | 아니오. 패키지 그대로 재배포합니다. |
 | UI | 이 프로젝트의 Go 바이너리와 빌드된 frontend | Apache-2.0 | 해당 없음 |
 
@@ -45,7 +45,7 @@ OpenLDAP은 OpenLDAP Foundation의 등록 상표입니다. ldapium은 OpenLDAP F
 
 ## 암호화와 수출
 
-이미지에는 Debian의 OpenSSL과 Cyrus SASL, OpenLDAP에 컴파일된 TLS/SASL 지원, Argon2 비밀번호 해시 등 암호화 소프트웨어가 포함됩니다. 소스가 공개되어 있고 수정하지 않았다는 점에서 미국 EAR의 TSU 예외(§740.13(e))가 상정하는 상황이며, 일반적인 Linux 컨테이너 이미지와 같은 입장입니다. 이는 법률 의견이 아니며 각 관할지의 암호화 수입 제한은 직접 확인해야 합니다.
+이미지에는 Debian의 OpenSSL과 Cyrus SASL, OpenLDAP에 컴파일된 TLS/SASL 지원, Argon2 비밀번호 해시 등 암호화 소프트웨어가 포함됩니다. 소스가 공개되어 있고(암호와 무관한 syncrepl 패치 1건 외에는) 수정하지 않았다는 점에서 미국 EAR의 TSU 예외(§740.13(e))가 상정하는 상황이며, 일반적인 Linux 컨테이너 이미지와 같은 입장입니다. 이는 법률 의견이 아니며 각 관할지의 암호화 수입 제한은 직접 확인해야 합니다.
 
 ## 의존성 라이선스
 

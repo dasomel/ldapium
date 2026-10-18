@@ -10,13 +10,14 @@ is meant to be deployable commercially without obligations beyond attribution.
 
 ## Bundled in the server image
 
-The image compiles OpenLDAP from the upstream source release and ships it
-unmodified. See [NOTICE](NOTICE) and
+The image compiles OpenLDAP from the upstream source release plus one carried
+syncrepl patch (image/patches/, also in the image at
+/usr/share/doc/openldap/patches/), so the binaries are modified. See [NOTICE](NOTICE) and
 [docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt](docs/OPENLDAP-PUBLIC-LICENSE-2.8.txt).
 
 | Component | Version | License |
 |---|---|---|
-| OpenLDAP Software | 2.6.15 | OpenLDAP Public License 2.8 |
+| OpenLDAP Software | 2.6.15 + 1 patch | OpenLDAP Public License 2.8; modified (syncrepl fix) |
 | Debian base (`debian:trixie-slim`) | rolling | Various; redistributed unmodified |
 | OpenSSL, Cyrus SASL, libargon2 | as packaged by Debian | Apache-2.0 / BSD-style / CC0-1.0 |
 

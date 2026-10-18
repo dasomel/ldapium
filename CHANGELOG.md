@@ -10,6 +10,14 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Fixed
+
+- Two providers writing the same entry within milliseconds could leave the earlier-CSN
+  node with a deleted attribute or missing `entryCSN`/`modifyTimestamp`, and it did not
+  heal (#432, #434). The image now carries an OpenLDAP 2.6.15 syncrepl `retry_diff` patch
+  (`image/patches/`); the divergence detector stays as a safety net. Measured: Password
+  Modify race 46/3000 diverged unpatched vs 0/3000 patched, plain replace 9/8400 vs 0/12600.
+
 ## [0.2.1] — 2026-10-16
 
 Maintenance release: dependency and base-image refreshes, one documentation
