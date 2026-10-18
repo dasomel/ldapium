@@ -53,6 +53,8 @@ RUN set -eu; \
     rm openldap.tgz
 
 WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
+COPY patches/openldap-2.6.15-its-retry-diff.patch /tmp/its-retry-diff.patch
+RUN patch -p1 --fuzz=0 < /tmp/its-retry-diff.patch
 RUN ./configure \
         --prefix=/usr \
         --sysconfdir=/etc \
