@@ -377,6 +377,19 @@ it lives inside the `slapd.d` volume:
 a short-lived background `slapd` is used only internally to apply seed files
 before the real, PID-1 `slapd` takes over.
 
+## Carried patches
+
+The image compiles upstream OpenLDAP 2.6.15 plus the patches in `image/patches/`
+(applied with `patch -p1 --fuzz=0`, so a version bump fails the build instead of
+patching shifted code). Each is also installed at `/usr/share/doc/openldap/patches/`,
+and the `io.ldapium.openldap.patches` label names them.
+
+- `openldap-2.6.15-its-retry-diff.patch` (#432, #434): syncrepl's `retry_diff`
+  reran the diff on a partial modlist, so two providers writing the same entry
+  within milliseconds could leave the earlier-CSN node with a deleted attribute or
+  a missing `entryCSN`/`modifyTimestamp`. Upstream ITS number pending. Rebase it on
+  the next OpenLDAP bump, or drop it once upstream carries the fix.
+
 ## Replication
 
 Set `LDAP_REPLICATION_ENABLED=true` to turn a set of these containers into an

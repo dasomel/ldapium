@@ -23,7 +23,7 @@ more here than the brevity of MIT.
 
 | Layer | What | Licence | Modified? |
 |---|---|---|---|
-| OpenLDAP | Compiled from the upstream source release, pinned by version and sha256 in `image/Dockerfile` | [OpenLDAP Public License 2.8](OPENLDAP-PUBLIC-LICENSE-2.8.txt) | **No.** No patches are carried. |
+| OpenLDAP | Compiled from the upstream source release, pinned by version and sha256 in `image/Dockerfile` | [OpenLDAP Public License 2.8](OPENLDAP-PUBLIC-LICENSE-2.8.txt) | **Yes.** One syncrepl patch is carried (`image/patches/`, #432), also shipped in the image at `/usr/share/doc/openldap/patches/`. |
 | Base OS | `debian:trixie-slim` and the packages the build installs (OpenSSL, Cyrus SASL, libargon2, runtime libs) | Various — mostly GPL/LGPL, some BSD/Apache/CC0 | No. Redistributed as packaged. |
 | UI | This project's Go binary and built frontend assets | Apache-2.0 | n/a |
 
@@ -93,7 +93,7 @@ releases.
 
 The images contain cryptographic software: OpenSSL and Cyrus SASL from Debian,
 TLS and SASL support compiled into OpenLDAP, and Argon2 password hashing. The
-source is publicly available and unmodified, which is the situation the US
+source is publicly available and, apart from the carried syncrepl patch (not crypto-related), unmodified, which is the situation the US
 EAR's TSU exemption (§740.13(e)) exists for, and the same footing every
 mainstream Linux container image stands on.
 

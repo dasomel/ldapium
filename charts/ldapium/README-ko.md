@@ -1,6 +1,6 @@
 # ldapium Helm chart
 
-`image/`의 OpenLDAP 2.6.15 서버를 StatefulSet으로 배포하고, 선택적으로 관리 UI(`ui/`)를 함께 배포합니다.
+`image/`의 OpenLDAP 2.6.15 서버(syncrepl 패치 1건 포함, #432)를 StatefulSet으로 배포하고, 선택적으로 관리 UI(`ui/`)를 함께 배포합니다.
 
 English | **한국어**
 

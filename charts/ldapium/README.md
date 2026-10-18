@@ -109,7 +109,7 @@ version or the replication configuration changes.
 
 | Layer | Supported / verified combination | Evidence |
 |---|---|---|
-| OpenLDAP | 2.6.15, compiled from the upstream source tarball | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
+| OpenLDAP | 2.6.15, compiled from the upstream source tarball plus one carried syncrepl patch (#432) | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
 | Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
 | Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
 | HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior (D11) | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |

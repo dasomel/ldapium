@@ -19,6 +19,7 @@ RUN apt-get update \
         libltdl-dev \
         libargon2-dev \
         groff-base \
+        patch \
         pkgconf \
         curl \
         ca-certificates \
@@ -53,6 +54,14 @@ RUN set -eu; \
     rm openldap.tgz
 
 WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
+# Carried patch for #432/#434: in 2.6.15 syncrepl's retry_diff reran the diff on
+# a partial modlist, so two providers writing the same entry within milliseconds
+# could leave the earlier-CSN node with a deleted attribute or a missing
+# entryCSN/modifyTimestamp. --fuzz=0 makes a version bump fail the build loudly
+# instead of applying to shifted code: rebase the patch, or drop it once
+# upstream fixes this (OpenLDAP ITS number pending).
+COPY patches/openldap-2.6.15-its-retry-diff.patch /tmp/its-retry-diff.patch
+RUN patch -p1 --fuzz=0 < /tmp/its-retry-diff.patch
 RUN ./configure \
         --prefix=/usr \
         --sysconfdir=/etc \
@@ -146,7 +155,7 @@ ARG OPENLDAP_VERSION
 # version actually compiled in this image, and where its source came from —
 # so `docker inspect` answers "what OpenLDAP is this" without needing this
 # Dockerfile.
-LABEL io.ldapium.openldap.version="${OPENLDAP_VERSION}"       io.ldapium.openldap.source="https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz"       io.ldapium.openldap.license="OLDAP-2.8"
+LABEL io.ldapium.openldap.version="${OPENLDAP_VERSION}"       io.ldapium.openldap.source="https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz"       io.ldapium.openldap.license="OLDAP-2.8"       io.ldapium.openldap.patches="its-retry-diff (#432); ${OPENLDAP_VERSION} + ldapium patches"
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -173,6 +182,10 @@ COPY --from=exporter-builder /out/openldap_exporter /usr/local/bin/openldap_expo
 # The upstream license, verbatim from the source tarball rather than retyped,
 # so a copy travels with every image and not only with this repo's docs/.
 COPY --from=builder /usr/src/openldap-${OPENLDAP_VERSION}/LICENSE /usr/share/doc/openldap/LICENSE
+
+# The server is upstream plus the patch(es) in image/patches/, so the patch text
+# ships beside the license instead of only in this repo.
+COPY patches/ /usr/share/doc/openldap/patches/
 
 RUN ln -s /usr/lib/slapd /usr/local/sbin/slapd \
     && ldconfig

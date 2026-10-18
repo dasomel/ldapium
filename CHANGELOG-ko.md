@@ -6,6 +6,12 @@ English | **한국어**
 
 하나의 Git tag `vX.Y.Z`가 Helm chart와 두 컨테이너 이미지를 같은 버전으로 배포합니다. `appVersion`은 빌드에 포함되는 OpenLDAP 버전을 의미합니다.
 
+## [Unreleased]
+
+### 수정
+
+- 두 provider가 같은 항목을 수 밀리초 안에 쓰면 먼저 쓴 CSN 쪽 노드에서 속성이 지워지거나 `entryCSN`/`modifyTimestamp`가 없는 상태가 남고 스스로 복구되지 않던 문제를 고쳤습니다(#432, #434). 이미지가 OpenLDAP 2.6.15 syncrepl `retry_diff` 패치(`image/patches/`)를 포함합니다. 발산 감지기는 안전망으로 유지됩니다. 측정: Password Modify 경쟁 패치 전 46/3000, 패치 후 0/3000 발산, 일반 replace 패치 전 9/8400, 패치 후 0/12600.
+
 ## [0.2.1] — 2026-10-16
 
 유지보수 릴리스입니다. 의존성/베이스 이미지 갱신, 문서 정정 1건, machine 비밀번호 설정(`setPassword`)에 대한 실환경 검증 보강이 전부입니다. 동작이나 설정은 바뀌지 않으며 0.2.0에서의 업그레이드는 이미지/chart 버전 변경만 필요합니다.

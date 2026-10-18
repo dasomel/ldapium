@@ -1,7 +1,7 @@
 # ldapium
 
 A maintained OpenLDAP stack for Kubernetes: a server image **compiled from upstream
-source**, a management UI, and a Helm chart — built because the existing options stopped
+source** (plus one carried syncrepl fix, [image/patches/](image/patches/)), a management UI, and a Helm chart — built because the existing options stopped
 being viable.
 
 **English | [한국어](README-ko.md)**
@@ -118,7 +118,7 @@ records what was verified and how.
 
 | Path | What |
 |---|---|
-| `image/` | OpenLDAP 2.6.15 server, built from source. Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
+| `image/` | OpenLDAP 2.6.15 server, built from source with one carried syncrepl patch (#432). Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. Opt-in bearer-token access for Keycloak service clients (read-only by default; writes behind a separate switch), see `docs/api.md`. |
 | `charts/ldapium/` | Helm chart deploying the server, with the UI as an optional component. |
 

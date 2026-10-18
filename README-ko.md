@@ -20,7 +20,7 @@ English | **한국어**
 
 ldapium은 이 문제를 다음 구성으로 해결합니다.
 
-- 업스트림 OpenLDAP 소스 직접 빌드(현재 2.6.15 LTS). 베이스 이미지 패키지에 딸려 오는 버전이 아니라 버전을 직접 고정합니다.
+- 업스트림 OpenLDAP 소스 직접 빌드(현재 2.6.15 LTS, syncrepl 수정 패치 1건 포함: [image/patches/](image/patches/)). 베이스 이미지 패키지에 딸려 오는 버전이 아니라 버전을 직접 고정합니다.
 - `linux/amd64` 및 `linux/arm64` 지원(에뮬레이션이 아닌 네이티브 runner로 빌드하고, 베이스 계층의 보안 수정이 릴리스를 기다리지 않도록 주기적으로 재빌드)
 - 기본 샘플 데이터 없음
 - 기본 관리자 비밀번호 없음
@@ -89,7 +89,7 @@ ldapium은 이 문제를 다음 구성으로 해결합니다.
 
 | 경로 | 설명 |
 |---|---|
-| `image/` | 업스트림 소스에서 빌드한 OpenLDAP 2.6.15 서버 이미지. overlay: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. 백엔드 `back-mdb`, OpenSSL TLS, Cyrus SASL |
+| `image/` | 업스트림 소스에 syncrepl 패치 1건(#432)을 적용해 빌드한 OpenLDAP 2.6.15 서버 이미지. overlay: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. 백엔드 `back-mdb`, OpenSSL TLS, Cyrus SASL |
 | `ui/` | DIT 브라우저, 사용자/그룹 관리, 비밀번호 설정 UI. 기본은 LDAP bind 로그인이며, 선택적 Keycloak SSO는 role로 제한된 전용 LDAP 서비스 계정을 사용합니다. Keycloak service client용 bearer 토큰 접근은 opt-in이며 기본은 읽기 전용이고 쓰기는 별도 스위치입니다(`docs/api.md`) |
 | `charts/ldapium/` | 서버를 배포하는 Helm chart. UI는 선택 구성 요소입니다 |
 

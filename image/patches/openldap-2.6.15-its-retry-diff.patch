@@ -1,0 +1,38 @@
+--- a/servers/slapd/syncrepl.c	2026-10-17 12:14:12
++++ b/servers/slapd/syncrepl.c	2026-10-17 12:14:12
+@@ -4138,6 +4138,7 @@
+ 	dninfo dni = {0};
+ 	int	retry = 1;
+ 	int	freecsn = 1, csn_queued = 0;
++	int	diff_done = 0;
+ 
+ 	ber_init2( ber, NULL, LBER_USE_DER );
+ 	ber_set_option( ber, LBER_OPT_BER_MEMCTX, &op->o_tmpmemctx );
+@@ -4209,6 +4210,27 @@
+ 	 * retry once. We still accept this pending CSN, it's a modification that's
+ 	 * been eclipsed, not rejected.
+ 	 */
++	if ( diff_done ) {
++		/*
++		 * The first diff consumed the incoming modlist (attr_cmp moves
++		 * mods into dni.mods, freed after be_modify/be_modrdn, and
++		 * syncrepl_diff_entry truncates what is left) and set
++		 * SLAP_ATTR_IXADD on entry attrs. Rediffing against that state
++		 * pairs mods with the wrong attrs and loses the opattr mods.
++		 * Rebuild both from the received entry, which is a pristine
++		 * copy (slap_mods2entry dup).
++		 */
++		Attribute *ra;
++		const char *rtext;
++		char rtxtbuf[SLAP_TEXT_BUFLEN];
++
++		for ( ra = entry->e_attrs; ra; ra = ra->a_next )
++			ra->a_flags &= ~SLAP_ATTR_IXADD;
++		slap_mods_free( *modlist, 1 );
++		*modlist = NULL;
++		slap_entry2mods( entry, modlist, &rtext, rtxtbuf, sizeof( rtxtbuf ) );
++	}
++	diff_done = 1;
+ 	if ( !freecsn ) {
+ 		BER_BVZERO( &op->o_csn );
+ 		freecsn = 1;
