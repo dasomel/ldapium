@@ -20,7 +20,7 @@ being viable.
 > [CHANGELOG.md](CHANGELOG.md) for the known gaps.
 
 > **Registry note:** GitHub Releases and GHCR packages (both images and the OCI
-> chart) exist for `0.1.0`, `0.1.1`, `0.2.0` and `0.2.1`. Verify the one you
+> chart) exist for `0.1.0`, `0.1.1`, `0.2.0`, `0.2.1` and `0.3.0`. Verify the one you
 > install, for example with the attestation command under "Supply chain".
 
 ## Why this exists
@@ -128,14 +128,14 @@ and differences between Helm and Compose deployments.
 ## Install
 
 Both images and the chart are published to GHCR and cut from the same git tag,
-so `0.2.1` means the same thing everywhere. Confirm the corresponding GitHub Release and GHCR
+so `0.3.0` means the same thing everywhere. Confirm the corresponding GitHub Release and GHCR
 packages exist for the version you pick.
 
 ### Kubernetes (Helm)
 
 ```bash
 helm install directory oci://ghcr.io/dasomel/charts/ldapium \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
   --set ldap.rootDN=dc=example,dc=org
@@ -188,8 +188,8 @@ has the runbook, including the two-step procedure for changing the CA itself.
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/dasomel/ldapium:0.2.1` | OpenLDAP 2.6.15 server |
-| `ghcr.io/dasomel/ldapium-ui:0.2.1` | Management UI |
+| `ghcr.io/dasomel/ldapium:0.3.0` | OpenLDAP 2.6.15 server |
+| `ghcr.io/dasomel/ldapium-ui:0.3.0` | Management UI |
 
 Both are designed for `linux/amd64` + `linux/arm64` and carry build provenance attestations
 when the release workflow completes successfully.
@@ -297,7 +297,7 @@ provenance attestation** and an **SBOM attestation**, signed by GitHub's OIDC id
 when the release workflow completes successfully.
 
 ```bash
-gh attestation verify oci://ghcr.io/dasomel/ldapium:0.2.1 \
+gh attestation verify oci://ghcr.io/dasomel/ldapium:0.3.0 \
   --repo dasomel/ldapium
 ```
 

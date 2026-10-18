@@ -33,8 +33,8 @@ English | **한국어**
 릴리스된 모든 이미지는 SBOM을 두 방식으로 제공합니다. registry에 서명된 attestation으로 이미지와 함께 붙어 있고, GitHub Release에는 SPDX 2.3(`ldapium.spdx.json`)과 CycloneDX(`ldapium.cdx.json`) 및 UI 이미지용 같은 쌍이 첨부됩니다. 직접 생성해 비교할 수 있습니다.
 
 ```sh
-gh attestation verify oci://ghcr.io/dasomel/ldapium:0.2.1 --repo dasomel/ldapium
-syft ghcr.io/dasomel/ldapium:0.2.1 -o spdx-json
+gh attestation verify oci://ghcr.io/dasomel/ldapium:0.3.0 --repo dasomel/ldapium
+syft ghcr.io/dasomel/ldapium:0.3.0 -o spdx-json
 ```
 
 빌드 provenance도 같은 방식으로 attest되므로 이미지를 만든 workflow run과 commit까지 추적할 수 있습니다.

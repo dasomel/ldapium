@@ -66,7 +66,7 @@ Every released image carries an SBOM in two ways:
 - **Attached to the image in the registry** as a signed attestation, so it
   travels with the artifact:
 
-      gh attestation verify oci://ghcr.io/dasomel/ldapium:0.2.1 \
+      gh attestation verify oci://ghcr.io/dasomel/ldapium:0.3.0 \
         --repo dasomel/ldapium
 
 - **Attached to the GitHub Release** as `ldapium.spdx.json`,
@@ -75,7 +75,7 @@ Every released image carries an SBOM in two ways:
 
 Regenerate one yourself and compare; that is the point of publishing it:
 
-    syft ghcr.io/dasomel/ldapium:0.2.1 -o spdx-json
+    syft ghcr.io/dasomel/ldapium:0.3.0 -o spdx-json
 
 Build provenance is attested the same way, so an image can be traced to the
 workflow run and commit that produced it.

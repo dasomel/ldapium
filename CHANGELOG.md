@@ -10,13 +10,46 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-18
+
+Fixes a data-loss race in multi-provider replication and adds an opt-in detector for it.
+No configuration change is required; upgrading from 0.2.1 is an image/chart version bump.
+The server image's OpenLDAP is now upstream 2.6.15 plus one carried patch, so the
+binaries are modified (NOTICE, `docs/legal.md`); `appVersion` stays `2.6.15`.
+
 ### Fixed
 
 - Two providers writing the same entry within milliseconds could leave the earlier-CSN
   node with a deleted attribute or missing `entryCSN`/`modifyTimestamp`, and it did not
   heal (#432, #434). The image now carries an OpenLDAP 2.6.15 syncrepl `retry_diff` patch
-  (`image/patches/`); the divergence detector stays as a safety net. Measured: Password
-  Modify race 46/3000 diverged unpatched vs 0/3000 patched, plain replace 9/8400 vs 0/12600.
+  (`image/patches/`, also in the image at `/usr/share/doc/openldap/patches/`, label
+  `io.ldapium.openldap.patches`; #440). Measured: Password Modify race 46/3000 diverged
+  unpatched vs 0/3000 patched, plain replace 9/8400 vs 0/12600; full CI including
+  `replication-chaos` and the upgrade E2E passed on the patched image.
+
+### Added
+
+- **Cross-provider divergence detector (#437).** `replication.check.divergence.enabled`
+  (default `false`) makes the replication check CronJob compare recently changed entries
+  across providers (window `windowMinutes`, default 45; re-read after `graceSeconds`,
+  default 5; at most `maxCandidates`, default 500, paged). A real divergence fails the job,
+  which fires `LDAPiumReplicationCheckFailed`. It stays useful as a safety net for images
+  built without the patch. Runbook: `docs/ha-profile.md`.
+- `scripts/test/test-replication-write-race-live.py`: an opt-in two-provider race harness
+  (plain replace and Password Modify), not run in CI.
+
+### Tests
+
+- The two-provider unpartitioned M5 race in `machine write measurements` was recorded as
+  a measurement while #432 was open (#435) and is a check again (`diverged == 0`) now that
+  the image carries the fix (#440).
+
+### Documentation
+
+- Markdown docs brought up to date with 0.2.1, README feature and CI sections (#433);
+  the replication write-race change package with the D434 decisions and the patch proof
+  (`docs/changes/replication-write-race/`, #436, #439); AGENTS.md and `docs/ha-profile.md`
+  describe the race and the fix.
 
 ## [0.2.1] — 2026-10-16
 
@@ -844,6 +877,7 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0
 [0.1.1]: https://github.com/dasomel/ldapium/releases/tag/v0.1.1
