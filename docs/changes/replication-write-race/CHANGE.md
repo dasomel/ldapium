@@ -3,7 +3,7 @@
 - Change class: `D` — 복제 시맨틱·데이터 정합성·가용성 토폴로지 (AGENTS.md)
 - Owner: dasomel (유지보수자 결정 대기)
 - Related issue: [#434](https://github.com/dasomel/ldapium/issues/434) (근본 원인 [#432](https://github.com/dasomel/ldapium/issues/432), 실측 기록 [#435](https://github.com/dasomel/ldapium/pull/435))
-- Status: `Accepted (2026-10-17: D434-1, D434-2, D434-3 accepted by the maintainer; D434-4 stands as proposed deferral)`
+- Status: `Accepted (2026-10-17: D434-1, D434-2, D434-3 accepted by the maintainer; D434-4 stands as proposed deferral). 2026-10-18: D434-2 merged (#437); D434-3 patch proven on a branch (see "D434-3 실증 결과"), shipping not yet decided`
 - Accepted by / date: 미정 (유지보수자 결정 대기)
 
 ## Problem
@@ -13,7 +13,7 @@ N-way 다중 프로바이더 Active-Active(`olcMultiProvider: TRUE`) 환경에�
 - **관찰 증상**: 일반 속성 `replace` 경합 시 해당 속성이 완전히 삭제된다. RFC 3062 Password Modify 경합 시에는 자체 `userPassword`는 남으나 `entryCSN`, `modifiersName`, `modifyTimestamp` 등 운영 속성(opattrs)이 엔트리에서 영구 유실된다.
 - **탐지 불가**: 양 노드의 접미사 `contextCSN`은 양쪽 쓰기를 모두 반영하여 동일하므로 `LDAPiumContextCSNDivergence` 경보가 발화하지 않는다. 다음 쓰기가 올 때까지 발산이 유지되며 재기동이나 대기(600초 이상)로도 복구되지 않는다.
 - **실측치**: 로컬 Colima 환경 실측 결과 일반 속성 replace 약 0.9% (10/~1,170), Password Modify 약 0.3-0.4%에서 발산이 재현되었다(출처: docs/changes/machine-write-scope-v2/EVIDENCE.md §2r 및 PR #435).
-- **원인 메커니즘**: `servers/slapd/syncrepl.c:4708`의 ITS#10358 어서션 재시도(`goto retry_diff`) 시 1차 패스에서 수신 `modlist`가 이미 소진(`*ml = NULL`, line 5726)되어 '재 diff가 빈 수정으로 동작'한다는 메커니즘 설명은 **가설/미증명**(코드 리딩에 기반한 추정이며 opattrs 삭제의 정확한 트리거는 미증명 상태이고, 실측 로그에서 관측된 두 번째 `be_modify (0)`과 충돌함)이다. slapd 로그에는 `be_modify <dn> (122)` 직후 `(0)`이 기록된다. master 브랜치도 `retry_diff` 리셋 로직은 동일하다(master는 실측하지 않음).
+- **원인 메커니즘** (2026-10-18 코드 확인 및 D434-3 패치로 실증): `servers/slapd/syncrepl.c:4708`의 ITS#10358 어서션 재시도(`goto retry_diff`)는 수신 `modlist`를 복원하지 않는다. 1차 `syncrepl_diff_entry()`에서 `attr_cmp`는 수신 modlist를 수신 엔트리 속성과 lock-step으로 걷으며 바뀐 속성의 mod만 떼어 `dni.mods`로 옮기고(이후 `be_modify`/`be_modrdn` 뒤 해제), 바뀌지 않은 속성의 mod는 남긴 채 꼬리를 자른다(`*ml = NULL`, line 5726). 수신 엔트리 속성에는 `SLAP_ATTR_IXADD`도 남는다. 2차 diff는 이 일부만 남은 목록으로 돌기 때문에 mod와 속성 짝이 어긋나 DELETE를 만들고 opattr mod를 잃는다. 이것으로 두 관찰 증상이 모두 설명되며, 재시도 전에 modlist를 다시 만드는 패치가 발산을 없앴다. slapd 로그에는 `be_modify <dn> (122)` 직후 `(0)`이 기록된다. master 브랜치도 `retry_diff` 리셋 로직은 동일하다(master는 실측하지 않음).
 - **업스트림 현황**: bugs.openldap.org에서 관련 리포트인 ITS#10358(2.6.11 재시도 도입), ITS#10541(2.6.14)은 확인되었으나, 본 결함과 일치하는 보고는 없었다. 초안(`.omc/logs/agy-432-its-draft.md`)이 작성되어 있으나 외부 게시 승인 전이다.
 - **노출 위험**: 단일 노드에 고정된 `W_cred`는 안전하나, UI(`LDAP_URL`이 로드밸런싱 Service를 향함) 및 머신 `W_data`/`W_lock`, 외부 LDAP 클라이언트는 두 노드에 동시 도달할 수 있어 위험에 노출된다.
 
@@ -65,12 +65,12 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 |---|---|---|---|---|---|---|
 | 1. 단일 쓰기 프로바이더 | 설계상 회피 (두 provider 동시 쓰기 자체를 없앰; 승격·재연결 구간은 별도 검증 필요) | 쓰기 노드 크래시 시 쓰기 가용성 전면 중단(SPOF), 펜싱 없는 승격 시 스플릿 브레인 | D11(N-way Active-Active 유일 지원) 정면 배치, RTO SLA 위반 | 대형 | 높음 | 무중단 장애 조치, 스플릿 브레인 방지 |
 | 2. delta-syncrepl | 일반 쓰기 해결(미검증: delta 수정이 syncrepl_op_modify()를 경유한다는 ITS#10358 메인테이너 발언에 기반한 미검증 가설) | purge 초과·노드 초기화 시 Full-sync 폴백으로 #432 재노출 | 없음 (신규 구성) | 대형 | 높음 | 기존 볼륨 cn=config 마이그레이션, 디스크 I/O |
-| 3. 캐리 패치 (Carry Patch) | 해결 가설(미실증, D434-3에서 증명) | 업스트림 버전 업 시 리베이스 비용, C 코드 잠재적 코너케이스 | 없음 (패치 관리 허용) | 소형 | 중간 | 신규 하네스 구축 후 2,000회 무발산 실증, 카오스 E2E |
+| 3. 캐리 패치 (Carry Patch) | 해결 (2026-10-18 브랜치 실증, "D434-3 실증 결과" 참조) | 업스트림 버전 업 시 리베이스 비용, C 코드 잠재적 코너케이스 | 없음 (패치 관리 허용) | 소형 | 중간 | 신규 하네스 구축 후 2,000회 무발산 실증, 카오스 E2E |
 | 4. 탐지기 + 수용 (Accept+Detector) | 미해결 (사후 감지 및 수동 복구) | 발산 발생 시 복구 전까지 불일치 지속 (~0.9%) | 없음 (현행 정책 유지) | 소형 | 낮음 | 2단계 탐지 신뢰성, 거짓 양성 배제 |
 
 - **대안 1 (단일 쓰기)**: `docs/ha-profile.md` D11과 정면 충돌한다. OpenLDAP 자체에는 분산 펜싱 메커니즘이 없어 펜싱 없는 자동 승격에는 스플릿 브레인으로 인한 데이터 손상 위험이 있다(D11 근거 참조). 또한 UI 백엔드는 인증 직후 비밀번호를 폐기하므로(`session/store.go:14-25`) 요청마다 쓰기 대상을 바꾸는 분기는 어렵다(추론).
 - **대안 2 (delta-syncrepl)**: delta-syncrepl이 일반 쓰기 결함을 해결한다는 것은 delta 수정이 `syncrepl_op_modify()`를 경유한다는 ITS#10358 메인테이너 발언에만 기반한 **미검증** 가정이다. 또한 `cn=accesslog` 기반 델타 복제를 구성하더라도 changelog purge 기간 초과나 신규 노드 추가로 인한 전체 동기화(`refreshAndPersist`) 폴백 시 #432 취약 경로에 다시 노출된다(Full-refresh 폴백 한계). 또한 기존 볼륨(`$MARKER` 존재 시)의 `cn=config` 오프라인 마이그레이션과 디스크 부하가 크다.
-- **대안 3 (캐리 패치)**: `syncrepl.c`의 `retry_diff:` 구간에서 `slap_entry2mods`로 `*modlist`를 재생성하여 결함을 완화하겠다는 것은 **해결 가설(미실증, D434-3에서 증명)**이다. 소진된 modlist 재생성 가설 또한 미실증 상태이며, 아키텍처나 기존 결정을 훼손하지 않는 변경안이나 C 코드 변경의 실증 증명(D434-3)이 필수적이다.
+- **대안 3 (캐리 패치)**: `syncrepl.c`의 `retry_diff:` 구간에서 `slap_entry2mods`로 `*modlist`를 재생성하여 결함을 해결한다. 제안 당시에는 미실증 가설이었으나 2026-10-18 브랜치 실증으로 확인됐다("D434-3 실증 결과" 참조). 아키텍처나 기존 결정을 훼손하지 않으며, 남은 비용은 업스트림 버전 업 때의 리베이스다.
 - **대안 4 (탐지기 + 수용)**: 결함을 직접 막지는 못하나, 발생률(~0.9%)이 낮고 재기록으로 복구 가능한 점을 고려하여 프로덕션 위험을 관측 가능성 테두리 안에서 통제한다.
 
 ### 결정 (Decisions — D434-1~3 수용 2026-10-17)
@@ -114,6 +114,26 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 | `AC-001` | 인위적 충돌 주입 후 2단계 탐지기 실행 및 메트릭/경보 확인 | 로컬 Docker 2노드 클러스터 | 발산 발생 시 메트릭 증가, `(122)` 재시도 후 정상 수렴한 경우 경보 0건 |
 | `AC-002` | 패치 이미지 빌드 후 신규 구축 예정인 2,000회 경합 검증 하네스(저장소 외부에 아카이브된 #432 진단 하네스 'diag432'를 참고하여 인리포 스크립트 `scripts/test/test-machine-write-cred-multiprovider-live.py` 기반으로 구축 예정) 수행 | Colima (`ldapium` 프로파일) | plain replace 및 Password Modify 모두 발산율 0건, 카오스 E2E 통과 |
 
+### D434-3 실증 결과 (2026-10-18)
+
+패치: `syncrepl_entry()`의 `retry_diff:` 맨 앞에서, 2차 이후 패스에만(`diff_done`) 수신 엔트리 속성의 `SLAP_ATTR_IXADD`를 지우고 남은 `*modlist`를 해제한 뒤 `slap_entry2mods(entry, …)`로 다시 만든다. 1차 패스는 바뀌지 않는다. 남은 `*modlist`는 이미 해제된 mod와 연결이 끊겨 있어 double free가 없고, 다시 만든 목록은 호출자 `do_syncrep2`가 기존대로 해제한다(코드 확인).
+
+| 시험 | 이미지 | round | 발산 | `be_modify (122)` |
+|---|---|---|---|---|
+| plain replace 경합 | 순정 2.6.15 | 8,400 | 9 | – |
+| plain replace 경합 | 패치 | 12,600 | **0** | 1,161 |
+| Password Modify 경합 (M5) | 순정 2.6.15 | 3,000 | 46 | 523 |
+| Password Modify 경합 (M5) | 패치 | 3,000 | **0** | 512 |
+| plain replace 경합 | 패치 + `-fsanitize=address` | 500 | 0 | 57 |
+| Password Modify 경합 (M5) | 패치 + `-fsanitize=address` | 300 | 0 | 96 |
+| modrdn 대 modify 경합 | 순정 / 패치 + ASAN | 300 / 300 | 0 / 0 | `be_modrdn (122)` 0 |
+
+- 환경: Colima `ldapium` 프로파일, 두 provider, 공유 게이트에서 동시에 방출. Password Modify 경합은 순정 이미지의 양쪽 성공 round 1,194회 중 46회(약 3.9 %)가 발산했고, 같은 비율이라면 패치 이미지(양쪽 성공 1,132회)에서 약 44건이 나와야 한다.
+- ASAN: 실행 중인 slapd에서 수집한 AddressSanitizer 오류 0건. LeakSanitizer 보고는 부트스트랩의 `slappasswd`·`slapadd` 1회성 할당뿐이다.
+- 확인하지 못한 것: slapd 자체의 누수(하네스가 정상 종료 대신 강제 삭제), modrdn 재시도 경로(300 round에서 한 번도 도달하지 않음). modrdn 경로에는 업스트림 기존 결함(재시도 시 `orr_modlist`·RDN 누수, `dni.renamed` 미초기화)이 있으며 패치가 다루지 않는다.
+- 전체 CI(`replication-chaos-e2e`, `upgrade-e2e` 포함)를 패치 이미지로 돌린 결과: draft PR [#438](https://github.com/dasomel/ldapium/pull/438)에서 40개 check 통과(3개 skip). `replication-chaos`와 `rolling upgrade + rollback`(replicated, standalone)도 통과했다. 첫 실행에서 `machine write measurements`의 E-22 timeout 측정이 한 번 실패했다(409 `idempotency_outcome_unknown`). E-22는 provider 하나로만 돌아 syncrepl 경로를 지나지 않고, 재실행에서 통과했다. 같은 job의 두 provider M5는 5 round 모두 수렴했다.
+- 하네스(`exp434-race.py`, `exp434-modrdn-race.py`, M5 전용 `MP_ONLY_M5` 플래그, `Dockerfile.asan`)는 병합하지 않은 실험 브랜치에 있다. 패치를 출하할 때 회귀 시험으로 들일지 정한다.
+
 ## Rollout, rollback and recovery
 
 - **Rollout sequence**:
@@ -148,5 +168,6 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 - **Material changes after acceptance and re-review**: N/A
 - **Open questions or blockers**:
   1. **[PARTIAL 검증] `W_cred` 라우팅 일치 여부**: `docs/machine-write-account.md:329`에는 `W_cred`가 비밀번호 쓰기를 고정한 1개 노드에만 설치된다고 명시되어 있으나, UI 백엔드 설정상 머신 cred 쓰기를 특정 노드로 고정하는 구성이 발견되지 않았다(UI `LDAP_URL`은 로드밸런싱 Service를 향함). 비고정 노드로 라우팅될 때 fail-closed(50) 거부되는 현상이 의도된 것인지, 아니면 라우팅 고정 로직의 누락인지 검증이 필요하다.
-  2. **[UNVERIFIED 검증] 캐리 패치 디프 스케치 및 `dni.mods==NULL` 주장**: 패치 스케치의 `slap_entry2mods` 재유도 로직과 Password Modify 시 `dni.mods==NULL`이라는 주장은 실측 로그에서 관측된 두 번째 `be_modify (0)`과 충돌한다. D434-3 브랜치 빌드와 신규 구축 예정인 경합 하네스 실측을 통해서만 가설의 정확성이 증명될 수 있다.
+  2. **[해결 2026-10-18] 캐리 패치 디프 스케치 및 `dni.mods==NULL` 주장**: `dni.mods==NULL` 주장은 틀렸다(2차 패스는 일부만 남은 modlist로 DELETE를 만들어 두 번째 `be_modify (0)`이 된다). `slap_entry2mods` 재생성 패치는 "D434-3 실증 결과"에서 실증됐다.
+  4. **[결정 대기] 패치 출하**: `2.6.15-ldapium1`로 출하할지(OpenLDAP PL 2.8 제3조 고지, SBOM 라벨, 하네스 회귀 시험 편입 포함)는 유지보수자 결정이다.
   3. **[외부 게시 승인] 업스트림 ITS 리포트 등록**: `.omc/logs/agy-432-its-draft.md`의 bugs.openldap.org 등록은 외부 게시이므로 유지보수자의 명시적 승인이 선행되어야 한다 (D434-1).
