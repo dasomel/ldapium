@@ -86,6 +86,15 @@ spec:
                 {{- if .Values.replication.check.canary }}
                 - --canary
                 {{- end }}
+                {{- if and .Values.replication.check.divergence .Values.replication.check.divergence.enabled }}
+                - --divergence
+                - --divergence-window-minutes
+                - {{ if hasKey .Values.replication.check.divergence "windowMinutes" }}{{ .Values.replication.check.divergence.windowMinutes | quote }}{{ else }}"45"{{ end }}
+                - --divergence-grace-seconds
+                - {{ if hasKey .Values.replication.check.divergence "graceSeconds" }}{{ .Values.replication.check.divergence.graceSeconds | quote }}{{ else }}"5"{{ end }}
+                - --divergence-max-candidates
+                - {{ if hasKey .Values.replication.check.divergence "maxCandidates" }}{{ .Values.replication.check.divergence.maxCandidates | quote }}{{ else }}"500"{{ end }}
+                {{- end }}
               env:
                 # /opt/ldapium-check is a read-only ConfigMap mount; do not try to write bytecode there.
                 - name: PYTHONDONTWRITEBYTECODE

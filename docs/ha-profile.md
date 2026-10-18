@@ -156,7 +156,7 @@ an operational boundary.
 | Failure Mode | Detection Mechanism | Automated / Operational Recovery | Verification Status |
 |---|---|---|---|
 | **Single provider pod crash / deletion** | Kubernetes pod startup/liveness/readiness exec probe failure (`ldapwhoami` over `ldapi://`); `up{namespace=...,service=...-metrics} == 0` on crashed pod; endpoint removed from Service. | StatefulSet automatically recreates pod; `syncrepl` automatically reconnects to peers and replicates changes missed during downtime. Writes continue without interruption on surviving pods. | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: continuous write probe running for the full pod-delete-to-Ready-again window confirms at least 20 in-window write attempts and a longest consecutive in-window failure streak of <= 15s; writes succeed while degraded; full convergence upon restart). |
-| **Concurrent same-entry writes on two providers (no partition)** | None automatic: both nodes' `contextCSN` cover both writes, so `LDAPiumContextCSNDivergence` does not fire. The earlier-CSN node logs `syncrepl_entry: rid=… be_modify <dn> (122)` followed by `(0)`; comparing the entry across providers (`ldapsearch` per pod) shows it. | Not last-write-wins: an OpenLDAP 2.6.15 syncrepl retry defect (#432) leaves the earlier-CSN node with a wrong entry (the modified attribute deleted, or for Password Modify its own `userPassword` without `entryCSN`/`modifyTimestamp`). It stays diverged until the next write to that entry; a restart does not fix it. Rewrite the entry from the correct provider. The shipped `W_cred` password compartment is pinned to one provider and is not exposed; the UI and other LDAP clients reach any provider through the Service and are. | **Measured** (local, #432): ~0.9 % of simultaneous plain `replace` pairs on two providers, ~0.3–0.4 % of simultaneous Password Modify pairs; mitigation tracked as a design issue. |
+| **Concurrent same-entry writes on two providers (no partition)** | The replication check divergence mode when enabled (`replication.check.divergence.enabled=true`, alerting via `LDAPiumReplicationCheckFailed`). When disabled, none automatic: both nodes' `contextCSN` cover both writes, so `LDAPiumContextCSNDivergence` does not fire. The earlier-CSN node logs `syncrepl_entry: rid=… be_modify <dn> (122)` followed by `(0)`. | Not last-write-wins: an OpenLDAP 2.6.15 syncrepl retry defect (#432) leaves the earlier-CSN node with a wrong entry (the modified attribute deleted, or for Password Modify its own `userPassword` without `entryCSN`/`modifyTimestamp`). It stays diverged until the next write to that entry; a restart does not fix it. **Repair runbook:** query both providers with `ldapsearch -b <dn> -s base '*' '+'` to determine the provider holding the later `entryCSN` and intact operational attributes; rewrite the entry from that intact provider via `ldapmodify` (re-writing grants a newer CSN that syncrepl replicates, converging the diverged provider). The shipped `W_cred` password compartment is pinned to one provider and is not exposed; the UI and other LDAP clients reach any provider through the Service and are. | **Measured** (local, #432): ~0.9 % of simultaneous plain `replace` pairs on two providers, ~0.3–0.4 % of simultaneous Password Modify pairs; detection and repair runbook implemented in D434-2. |
 | **Network partition (split-brain isolation)** | `LDAPiumReplicationLag` / `LDAPiumContextCSNDivergence` alerts; syncrepl connection timeout in slapd logs. | Each partition accepts local writes. Upon network healing, syncrepl exchanges CSNs; conflicting updates to identical entries resolve silently via timestamp last-write-wins without error records. Discarded update CSNs are observable in raw accesslog export (see [docs/audit-event-schema.md](audit-event-schema.md)). | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: iptables DROP on FORWARD chain isolates node; writes accepted on both sides; full convergence and silent same-entry conflict resolution verified after unpartition). |
 | **Single-provider storage corruption** | Pod fails startup with MDB initialization error; `CrashLoopBackOff`; exporter scrape failure. | Delete the corrupted PVC (`data-<fullname>-<ordinal>`); restart the pod. The pod starts with a clean empty PVC and performs an initial syncrepl refresh from peer providers to fully rebuild state. | **Verified** (`.github/workflows/replication-chaos-e2e.yml`: expansion from 1 to 3 pods proves empty PVCs hydrate cleanly via initial syncrepl refresh). |
 | **Data volume lost, config volume kept** | Pod crash-loops with `the database directory ... is missing` in its log (exit 1); nothing is created and the peers are untouched. | Delete BOTH the data and the config PVC of that ordinal (`data-<fullname>-<ordinal>` and its config claim); the pod starts empty and refills from the peers. Deleting only one claim does not recover it. | **Verified** (`test-replication-identity.sh` chaos E9 asserts the message and the recovery; Kubernetes K3). |
@@ -341,7 +341,8 @@ by `scripts/test/test-replication-identity-check-cluster.sh`.
 `replication.check.enabled=true` renders a CronJob (default every 30 minutes, `Forbid`,
 `backoffLimit: 0`) that runs the check against every pod over the headless Service
 with `--dedicated --config-password-file --require-converged` (and `--canary` when
-`replication.check.canary=true`). Requirements and behavior:
+`replication.check.canary=true`, `--divergence` when
+`replication.check.divergence.enabled=true`). Requirements and behavior:
 
 - `replication.identity=dedicated` (the check reads as the identity) and an image that
   has `python3` and `ldapsearch`: set `replication.check.image.repository`/`tag`. The
@@ -355,6 +356,22 @@ with `--dedicated --config-password-file --require-converged` (and `--canary` wh
   replication Secret and the TLS Secret, as 0400 files read with `-y`. That is a second
   holder of the administrator credential (D43 unchanged): restrict RBAC on the namespace.
 - The NetworkPolicy admits the check pod on 636.
+- **Cross-provider state divergence detection (#434 / D434-2):** with
+  `replication.check.divergence.enabled=true` (configurable `windowMinutes`, default 45;
+  `graceSeconds`, default 5; `maxCandidates`, default 500), the check queries candidate entries
+  modified or created within `windowMinutes` (or missing `entryCSN`) across providers under the
+  base DIT. `windowMinutes` must be >= the CronJob schedule interval plus grace (default 45 min
+  for the default 30-minute schedule) so modifications between runs are not missed.
+  Candidate discovery queries evaluate `modifyTimestamp` and `createTimestamp` without directory
+  indexes (unindexed scan cost); queries use simple paged results (`ldapsearch -E pr=500/noprompt`
+  requesting only `dn`) to avoid exceeding server size limits (`LDAP_SIZE_LIMIT` default 10,000).
+  Per-candidate per-node read subprocesses (`O(candidates * nodes)`) are bounded by `maxCandidates`
+  (default 500); if candidates exceed this cap, the first N deterministically sorted entries are
+  evaluated and a WARN line is emitted (exit 0; D434-2 cap). If candidate entries differ in user attributes
+  or `entryCSN`, it pauses for `graceSeconds` to rule out in-flight syncrepl propagation, then re-reads.
+  Confirmed divergence causes the check to fail (exit 1) reporting
+  `FAIL: divergence detected for dn="...": ...` to stderr (never printing attribute values, only
+  DNs, attribute names, and hashes).
 - **Where results show:** the Job's status (`kubectl -n NS get jobs`; exit 0 pass, 1 defect,
   2 evidence could not be established, both non-zero fail the Job) and its pod log
   (`kubectl -n NS logs job/NAME`: counts and fixed messages, never values or hashes).
