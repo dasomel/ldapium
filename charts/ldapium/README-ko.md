@@ -18,7 +18,7 @@ OCI registry에서 릴리스 chart를 설치하는 경우:
 
 ```bash
 helm install directory oci://ghcr.io/dasomel/charts/ldapium \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
   --set ldap.rootDN='dc=example,dc=org'

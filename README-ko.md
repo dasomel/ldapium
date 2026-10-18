@@ -12,7 +12,7 @@ English | **한국어**
 
 > **상태: prototype**. 패키징이 이 프로젝트의 핵심이고 공개된 곳에서 판단받는 편이 낫기 때문에 일부러 일찍 공개했습니다. 이 README의 모든 내용은 실제로 실행 중인 환경에서 확인했지만, 아직 작성자 외의 누구도 실행해 보지 않았습니다. 이 문단을 믿는 대신 아래의 `helm test`로 설치를 직접 확인할 수 있습니다. 알려진 제한 사항은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
 
-> **Registry 안내:** 두 이미지와 OCI chart의 GitHub Release/GHCR package는 `0.1.0`, `0.1.1`, `0.2.0`, `0.2.1`에 대해 존재합니다. 설치할 버전은 "공급망"의 attestation 명령 등으로 직접 확인하십시오.
+> **Registry 안내:** 두 이미지와 OCI chart의 GitHub Release/GHCR package는 `0.1.0`, `0.1.1`, `0.2.0`, `0.2.1`, `0.3.0`에 대해 존재합니다. 설치할 버전은 "공급망"의 attestation 명령 등으로 직접 확인하십시오.
 
 ## 프로젝트 목적
 
@@ -95,13 +95,13 @@ ldapium은 이 문제를 다음 구성으로 해결합니다.
 
 ## 설치
 
-두 이미지와 chart는 GHCR에 게시되며 같은 git tag에서 만들어지므로 `0.2.1`은 어디서나 같은 의미입니다. 선택한 버전의 GitHub Release와 GHCR package가 있는지 확인하십시오.
+두 이미지와 chart는 GHCR에 게시되며 같은 git tag에서 만들어지므로 `0.3.0`은 어디서나 같은 의미입니다. 선택한 버전의 GitHub Release와 GHCR package가 있는지 확인하십시오.
 
 ### Kubernetes
 
 ```bash
 helm install directory oci://ghcr.io/dasomel/charts/ldapium \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --namespace directory --create-namespace \
   --set auth.adminPassword="$(openssl rand -base64 24)" \
   --set ldap.rootDN='dc=example,dc=org'
@@ -139,8 +139,8 @@ LDAPS 리스너가 열리고, 복제도 `ldaps://`로 전환됩니다. 인증서
 
 ### 이미지
 
-- `ghcr.io/dasomel/ldapium:0.2.1` — OpenLDAP 서버
-- `ghcr.io/dasomel/ldapium-ui:0.2.1` — 관리 UI
+- `ghcr.io/dasomel/ldapium:0.3.0` — OpenLDAP 서버
+- `ghcr.io/dasomel/ldapium-ui:0.3.0` — 관리 UI
 
 두 이미지는 `linux/amd64`와 `linux/arm64`를 대상으로 설계되어 있으며, release workflow가 성공적으로 끝나면 build provenance attestation이 함께 붙습니다.
 
@@ -192,7 +192,7 @@ export LDAP_ADMIN_PASSWORD=...   # 또는 --password-file
 - 이미지에는 provenance와 SBOM을 연결할 수 있도록 release workflow가 구성되어 있으며, 확인은 다음 명령으로 합니다.
 
 ```bash
-gh attestation verify oci://ghcr.io/dasomel/ldapium:0.2.1 --repo dasomel/ldapium
+gh attestation verify oci://ghcr.io/dasomel/ldapium:0.3.0 --repo dasomel/ldapium
 ```
 
 - SPDX/CycloneDX SBOM이 각 GitHub Release에 첨부됩니다.

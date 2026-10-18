@@ -8,9 +8,29 @@ English | **한국어**
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-18
+
+다중 provider 복제의 데이터 유실 경쟁을 고치고, 이를 감지하는 opt-in 감지기를 추가합니다.
+설정 변경은 필요 없으며 0.2.1에서는 이미지/chart 버전만 올리면 됩니다. 서버 이미지의
+OpenLDAP는 이제 업스트림 2.6.15에 패치 하나를 더한 것이므로 수정된 바이너리입니다(NOTICE,
+`docs/legal-ko.md`). `appVersion`은 `2.6.15`로 유지됩니다.
+
 ### 수정
 
-- 두 provider가 같은 항목을 수 밀리초 안에 쓰면 먼저 쓴 CSN 쪽 노드에서 속성이 지워지거나 `entryCSN`/`modifyTimestamp`가 없는 상태가 남고 스스로 복구되지 않던 문제를 고쳤습니다(#432, #434). 이미지가 OpenLDAP 2.6.15 syncrepl `retry_diff` 패치(`image/patches/`)를 포함합니다. 발산 감지기는 안전망으로 유지됩니다. 측정: Password Modify 경쟁 패치 전 46/3000, 패치 후 0/3000 발산, 일반 replace 패치 전 9/8400, 패치 후 0/12600.
+- 두 provider가 같은 항목을 수 밀리초 안에 쓰면 먼저 쓴 CSN 쪽 노드에서 속성이 지워지거나 `entryCSN`/`modifyTimestamp`가 없는 상태가 남고 스스로 복구되지 않던 문제를 고쳤습니다(#432, #434). 이미지가 OpenLDAP 2.6.15 syncrepl `retry_diff` 패치를 포함합니다(`image/patches/`, 이미지 안 `/usr/share/doc/openldap/patches/`, label `io.ldapium.openldap.patches`, #440). 측정: Password Modify 경쟁 패치 전 46/3000, 패치 후 0/3000 발산, 일반 replace 패치 전 9/8400, 패치 후 0/12600. `replication-chaos`와 업그레이드 E2E를 포함한 전체 CI가 패치 이미지에서 통과했습니다.
+
+### 추가
+
+- **provider 간 발산 감지기(#437).** `replication.check.divergence.enabled`(기본 `false`)를 켜면 복제 점검 CronJob이 최근 바뀐 항목을 provider끼리 비교합니다(범위 `windowMinutes` 기본 45분, `graceSeconds` 기본 5초 뒤 재조회, 최대 `maxCandidates` 기본 500개, 페이지 조회). 실제 발산이면 job이 실패해 `LDAPiumReplicationCheckFailed`가 울립니다. 패치 없이 빌드한 이미지의 안전망으로도 쓸 수 있습니다. 런북: `docs/ha-profile.md`.
+- `scripts/test/test-replication-write-race-live.py`: 두 provider 경쟁 하네스(일반 replace, Password Modify). 수동 실행용이며 CI에서는 돌지 않습니다.
+
+### 테스트
+
+- `machine write measurements`의 두 provider 비분할 M5 경쟁은 #432가 열려 있는 동안 측정값으로만 기록했고(#435), 이미지에 수정이 들어가면서 다시 검사(`diverged == 0`)가 되었습니다(#440).
+
+### 문서
+
+- Markdown 문서를 0.2.1 기준으로 갱신하고 README에 기능·CI 절을 추가했습니다(#433). 복제 쓰기 경쟁 변경 패키지(D434 결정과 패치 실증, `docs/changes/replication-write-race/`, #436, #439)를 추가했고, AGENTS.md와 `docs/ha-profile.md`가 경쟁과 수정을 설명합니다.
 
 ## [0.2.1] — 2026-10-16
 
@@ -116,6 +136,7 @@ English | **한국어**
 - 0.1.0은 첫 릴리스이므로 기존 버전에서의 upgrade path를 약속하지 않습니다.
 - e2e workflow는 새로 구성되었으므로 독립 환경에서 지속적인 검증이 필요합니다.
 
+[0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0
 [0.1.1]: https://github.com/dasomel/ldapium/releases/tag/v0.1.1
