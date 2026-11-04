@@ -42,7 +42,7 @@ SBOM attached to that release, or:
 | `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.5/json/LICENSE) |
 | `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.15/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
-| `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.16.0/LICENSE) |
+| `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.16.1/LICENSE) |
 | `github.com/labstack/gommon` | MIT | [link](https://github.com/labstack/gommon/blob/v0.5.0/LICENSE) |
 | `github.com/mattn/go-colorable` | MIT | [link](https://github.com/mattn/go-colorable/blob/v0.1.15/LICENSE) |
 | `github.com/mattn/go-isatty` | MIT | [link](https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE) |
