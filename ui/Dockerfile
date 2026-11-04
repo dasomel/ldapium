@@ -58,7 +58,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 ENTRYPOINT ["/server"]
 
 # Opt-in backup-capable runtime. Default final target remains distroless.
-FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS backup-runtime
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS backup-runtime
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ldap-utils rclone ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 65532 ldapium && useradd -u 65532 -g 65532 -M ldapium
