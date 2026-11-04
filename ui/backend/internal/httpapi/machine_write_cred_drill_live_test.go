@@ -117,6 +117,23 @@ func (p *drillProxy) waitHeld(d time.Duration) bool {
 	}
 }
 
+// waitDropped reports whether the proxy dropped the held message (the client
+// closed or sent something while it was held) within d. Call it before
+// release() after a request ended without the write: release() racing the
+// client's close could otherwise forward the aborted write to slapd (#442).
+func (p *drillProxy) waitDropped(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if p.closedAt.Load() != 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (p *drillProxy) serve(client net.Conn) {
 	server, err := net.DialTimeout("tcp", p.target, 10*time.Second)
 	if err != nil {
@@ -176,6 +193,14 @@ func (p *drillProxy) serve(client net.Conn) {
 					}
 					select {
 					case <-rel:
+						select {
+						case c2 := <-chunks:
+							// prefer a pending client close over a simultaneous release
+							_ = c2
+							p.closedAt.Store(time.Now().UnixNano())
+							return
+						default:
+						}
 					case c2 := <-chunks:
 						// the client gave up (closed or unbound) before the release
 						_ = c2
@@ -620,6 +645,7 @@ func TestCredDrillLive(t *testing.T) {
 	held := r.proxy.waitHeld(5 * time.Second)
 	r.check(held, "(c1) the Password Modify reached the W_cred connection and is held by the proxy")
 	got := <-done
+	r.proxy.waitDropped(5 * time.Second)
 	closed := time.Duration(r.proxy.closedAt.Load() - start.UnixNano())
 	r.proxy.release()
 	r.obs("MACHINE_REQUEST_TIMEOUT=10s: a setPassword stalled at the LDAP connection ended after %s (UI closed the connection %s after the request started), status %d %s", sec(got.elapsed), sec(closed), got.status, got.code)
@@ -650,10 +676,13 @@ func TestCredDrillLive(t *testing.T) {
 	rotatedAt := time.Now()
 	r.rotate(next)
 	got = <-done
+	afterRot := time.Since(rotatedAt)
+	dropped := r.proxy.waitDropped(5 * time.Second)
 	r.proxy.release()
-	r.obs("MACHINE_REQUEST_TIMEOUT=4s, W_cred rotated %s into the request: ended after %s, %s after the rotation, status %d %s", sec(rotatedAt.Sub(start)), sec(got.elapsed), sec(time.Since(rotatedAt)), got.status, got.code)
+	r.obs("MACHINE_REQUEST_TIMEOUT=4s, W_cred rotated %s into the request: ended after %s, %s after the rotation, status %d %s", sec(rotatedAt.Sub(start)), sec(got.elapsed), sec(afterRot), got.status, got.code)
 	r.check(got.elapsed <= 2500*time.Millisecond && got.elapsed >= 1500*time.Millisecond,
 		fmt.Sprintf("(c2) the stalled request ended at MACHINE_REQUEST_TIMEOUT (4 s) minus the 2 s cleanup reserve: measured %s", sec(got.elapsed)))
+	r.check(dropped, "(c2) the UI closed the LDAP connection on the timeout; the held write was dropped and never reached slapd")
 	r.check(got.status == 409 && got.code == codeIdempotencyOutcomeUnknown && !r.hasPassword(pb) && !r.pendingGone(pb),
 		fmt.Sprintf("(c2) 409 idempotency_outcome_unknown, the account is unchanged (got %d %s)", got.status, got.code))
 	if r.mutate != "rotate-noop" {

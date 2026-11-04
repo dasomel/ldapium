@@ -243,6 +243,8 @@ func TestCredE22Live(t *testing.T) {
 	insert()
 	got := <-done
 	window := time.Since(checkedAt)
+	dropped := r.proxy.waitDropped(5 * time.Second)
+	say(dropped, "timeout: the UI closed the LDAP connection on the timeout; the held write was dropped and never reached slapd")
 	r.proxy.release()
 	remove()
 	obs("held past MACHINE_REQUEST_TIMEOUT=10s with the looser rule inserted: request ended %s after the check returned, status %d %s", sec(window), got.status, got.code)
