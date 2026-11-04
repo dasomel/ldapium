@@ -8,6 +8,12 @@ English | **한국어**
 
 ## [Unreleased]
 
+### Security
+
+- UI backend와 exporter 이미지 빌더의 Go 툴체인을 `golang:1.27.3`으로, `ui/backend/go.mod`를
+  `go 1.26.10`으로 올렸습니다: GO-2026-6809(`crypto/x509`의 손상된 중간 인증서 불신).
+- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical).
+
 ## [0.3.0] — 2026-10-18
 
 다중 provider 복제의 데이터 유실 경쟁을 고치고, 이를 감지하는 opt-in 감지기를 추가합니다.

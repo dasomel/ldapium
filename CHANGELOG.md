@@ -10,6 +10,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Security
+
+- Go toolchain `golang:1.27.3` (was 1.27.2) for the UI backend and exporter image
+  builders, and `go 1.26.10` in `ui/backend/go.mod`: GO-2026-6809 (`crypto/x509`
+  distrust of compromised intermediate certificates).
+- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical).
+
 ## [0.3.0] — 2026-10-18
 
 Fixes a data-loss race in multi-provider replication and adds an opt-in detector for it.
