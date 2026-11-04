@@ -563,8 +563,13 @@ if want chaos; then
   poll ready "$n3" || bad "[E12] chaos: n3 never ready after the hard kill"
   for u in chaos1 chaos2; do poll has_uid "$n3" "$u" || bad "[E12] chaos: ${u} never reached the killed and restarted consumer"; done
   load_stop
-  check "[E12] chaos: hard-killed consumer converged: same user count on every node" "1" \
-    "$(for n in "$n1" "$n2" "$n3"; do uid_count "$n"; done | sort -u | grep -c .)"
+  # only n3 was polled above: chaos2 (written on n2) can still be on its way to n1, so wait for the
+  # counts to agree instead of comparing one instant
+  node_counts() { for n in "$n1" "$n2" "$n3"; do uid_count "$n"; done | sort -u | grep -c .; }
+  # shellcheck disable=SC2317,SC2329 # invoked through poll
+  counts_agree() { [ "$(node_counts)" = 1 ]; }
+  poll counts_agree || true
+  check "[E12] chaos: hard-killed consumer converged: same user count on every node" "1" "$(node_counts)"
   docker network disconnect "$net" "$n2"
   add_user "$n1" splitA
   add_user "$n2" splitB
