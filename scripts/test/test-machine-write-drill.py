@@ -55,6 +55,13 @@ def obs(text):
   print('OBS ' + text, flush=True)
 
 
+def wait_dropped(proxy, timeout=5.0):
+  """Wait (bounded) until the proxy dropped the held message; the caller's checks decide what a miss means."""
+  deadline = time.monotonic() + timeout
+  while proxy.client_closed_at is None and time.monotonic() < deadline:
+    time.sleep(0.02)
+
+
 class HoldProxy:
   """TCP proxy in front of slapd. In mode `hold`, a connection whose FIRST client message contains `hold_dn` (the
   bind request of the identity under test) is forwarded up to and including that bind; its NEXT client message (the
@@ -510,6 +517,8 @@ def main():
   set_password(WDATA_DN, new_pw)
   rot2 = time.monotonic()
   th.join(60)
+  # wait for the proxy to see the UI's close first: a release() racing it forwards the aborted write (#442)
+  wait_dropped(proxy)
   proxy.release()
   status2, body2, total2 = result['e2']
   closed_after_hold = (proxy.client_closed_at - proxy.held_at) if proxy.client_closed_at else None
@@ -529,6 +538,7 @@ def main():
   th.start()
   live.wait_until(lambda: proxy.held_at is not None, 'the third write held', 15)
   th.join(30)
+  wait_dropped(proxy)
   proxy.release()
   status5, _, total5 = result['e5']
   live.check(status5 in (409, 503) and 3.5 <= total5 <= 5.5, f'[E] with MACHINE_REQUEST_TIMEOUT=4s the stalled write ends after {total5:.1f} s ({status5}): the in-flight bound follows the setting')
