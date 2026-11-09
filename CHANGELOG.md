@@ -10,6 +10,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Security
+
+- UI backend: `github.com/labstack/echo/v4` 4.16.3, which carries the upstream fix for
+  CVE-2026-118651 and CVE-2026-118653 (labstack/echo#3197; neither path was used here, #460),
+  and `github.com/go-jose/go-jose/v4` 4.1.7 (#446). The govulncheck exclusions stay until
+  the Go vulnerability database records the fixed version.
+
 ## [0.3.1] — 2026-11-09
 
 Security and maintenance release: the Go toolchain and Echo fixes below, refreshed

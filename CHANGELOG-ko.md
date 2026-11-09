@@ -8,6 +8,12 @@ English | **한국어**
 
 ## [Unreleased]
 
+### Security
+
+- UI backend: `github.com/labstack/echo/v4` 4.16.3(CVE-2026-118651·CVE-2026-118653 업스트림 수정
+  포함, labstack/echo#3197; 두 경로 모두 여기서는 미사용, #460), `github.com/go-jose/go-jose/v4`
+  4.1.7 (#446). Go 취약점 DB에 수정 버전이 기록될 때까지 govulncheck 제외 항목은 유지합니다.
+
 ## [0.3.1] — 2026-11-09
 
 보안·유지보수 릴리스입니다: 아래 Go 툴체인과 Echo 수정, Debian 베이스 이미지 갱신, 그리고
