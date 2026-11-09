@@ -297,8 +297,9 @@ With `UI_BASE_PATH` set (for example `/ldapium`) the redirect URI must include
 the prefix: register `<production-origin>/ldapium/api/sso/callback` and
 `<origin>/ldapium/login`. `SSO_CALLBACK_ORIGINS` stays origin-only.
 
-For RP-initiated logout, also register `<origin>/login` as a valid
-post-logout redirect URI for each allowed browser origin.
+For RP-initiated logout, also register `<origin>/login` (`<origin><UI_BASE_PATH>/login`
+when a base path is set) as a valid post-logout redirect URI for each allowed
+browser origin.
 
 Create the realm role `ldap-admin` (or override `SSO_ADMIN_ROLE`) and map
 realm roles into the ID token. The UI accepts either an array custom claim
