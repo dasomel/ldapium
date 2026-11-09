@@ -169,9 +169,12 @@ func TestCancellationTerminatesWorkerAndChild(t *testing.T) {
 	deadline := time.Now().Add(workerWait)
 	var child int
 	for time.Now().Before(deadline) {
+		// The worker's open()+write() is not atomic: an empty or partial read
+		// parses as 0 and must not end the wait.
 		if b, err := os.ReadFile(childPID); err == nil {
-			child, _ = strconv.Atoi(string(b))
-			break
+			if child, _ = strconv.Atoi(string(b)); child > 0 {
+				break
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
