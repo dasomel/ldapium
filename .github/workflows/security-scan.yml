@@ -90,13 +90,14 @@ jobs:
       # means a real, reachable vulnerability, and the fix is usually one line
       # — raising the go directive in ui/backend/go.mod to the patch release
       # that fixed it.
+      # D460-1: unfixed advisories in unused paths are listed by GO ID in
+      # ui/backend/govulncheck-exclude.txt; stale exclusions fail the check.
       - name: govulncheck
-        working-directory: ui/backend
-        # Pinned, not @latest. `go run tool@latest` downloads and executes the
-        # newest published version at scan time, which makes the scanner itself
-        # a build-time execution path — the class of attack this scan exists to
-        # find. Bumped by hand, deliberately.
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        # Pinned, not @latest (in scripts/govulncheck.sh). `go run tool@latest`
+        # downloads and executes the newest published version at scan time, which
+        # makes the scanner itself a build-time execution path — the class of
+        # attack this scan exists to find. Bumped by hand, deliberately.
+        run: ./scripts/govulncheck.sh
 
   images:
     name: Published images

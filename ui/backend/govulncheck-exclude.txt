@@ -1,0 +1,6 @@
+# Reachable govulncheck findings with no upstream fix whose vulnerable code
+# path is not used in ui/backend (enforced by scripts/govulncheck.sh).
+# Stale entries fail the check so each exclusion is removed with the fix bump.
+
+GO-2026-6875  # CVE-2026-118651 echo Proxy middleware X-Real-IP; Proxy middleware unused here; no fix yet — #460
+GO-2026-6872  # CVE-2026-118653 echo RateLimiter XFF; RateLimiter unused here; no fix yet — #460

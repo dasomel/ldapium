@@ -30,7 +30,7 @@ make frontend-dev
 
 ## PR 전 검증
 
-`make check`는 CI가 실행하는 검사를 같은 순서로 실행합니다. `scripts/check-make-parity.sh`가 `make check`와 CI 양쪽에서 실행되어 둘이 어긋나면 실패합니다. 의도된 예외는 레지스트리에 접근하는 `scripts/check-base-images.sh`와 kubeconform 바이너리가 필요한 `scripts/verify-chart-schema.sh`입니다. `make check`에는 네트워크가 필요한 `govulncheck`도 포함됩니다.
+`make check`는 CI가 실행하는 검사를 같은 순서로 실행합니다. `scripts/check-make-parity.sh`가 `make check`와 CI 양쪽에서 실행되어 둘이 어긋나면 실패합니다. 의도된 예외는 레지스트리에 접근하는 `scripts/check-base-images.sh`와 kubeconform 바이너리가 필요한 `scripts/verify-chart-schema.sh`입니다. `make check`에는 네트워크가 필요한 `./scripts/govulncheck.sh`도 포함됩니다.
 
 ```sh
 make check
@@ -52,7 +52,7 @@ shellcheck scripts/*.sh scripts/test/*.sh charts/ldapium/files/tests/*.sh
 ./scripts/licenses.sh --check
 ./scripts/check-make-parity.sh
 # 그 외 Makefile의 check 타깃에 나열된 ./scripts/test/test-*.sh 단계
-cd ui/backend && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+./scripts/govulncheck.sh
 ```
 
 `image/`를 변경했다면 단순히 `docker build` 성공만 확인하지 말고 실제 컨테이너 부팅까지 검증하고 PR에 관찰 결과를 남깁니다.
