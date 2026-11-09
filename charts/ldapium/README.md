@@ -1,6 +1,6 @@
 # ldapium Helm chart
 
-Deploys the `image/` OpenLDAP 2.6.15 server as a StatefulSet, with an optional
+Deploys the `image/` OpenLDAP 2.6.16 server as a StatefulSet, with an optional
 management UI (`ui/`). See the repo root [README.md](../../README.md) for why
 this project exists. The replication design this chart implements
 (N-way multi-provider, peer list injected from `replicaCount`, admin-identity
@@ -109,7 +109,7 @@ version or the replication configuration changes.
 
 | Layer | Supported / verified combination | Evidence |
 |---|---|---|
-| OpenLDAP | 2.6.15, compiled from the upstream source tarball plus one carried syncrepl patch (#432) | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
+| OpenLDAP | 2.6.16, compiled from the upstream source tarball plus one carried syncrepl patch (#432) | `image/Dockerfile`; the chart's image E2E workflows build that source before install. |
 | Database backend | `back-mdb` for the directory data and the optional accesslog database; `auditlog` is an overlay that writes a file, not a database | `image/ldifs/01-cn-config.ldif`; backup/restore preserves MDB operational attributes. |
 | Standalone | One StatefulSet provider with replication disabled | `helm test` and the standalone TLS scenario in `.github/workflows/e2e.yml`. |
 | HA topology | Three in-cluster StatefulSet providers, N-way multi-provider `syncrepl` with `refreshAndPersist`; every provider accepts writes and same-entry conflicts use OpenLDAP's CSN last-writer-wins behavior (D11) | `.github/workflows/replication-chaos-e2e.yml` verifies failure, partition healing, same-entry conflict observation, and convergence. |
@@ -867,7 +867,7 @@ regardless of outcome (`olcAccessLogSuccess: FALSE`) — a rejected bind
 attempt against a privileged DN is exactly the evidence this exists to
 capture, and would be invisible if only successes were kept.
 `audit.accessLog.ops` (`LDAP_ACCESSLOG_OPS`) must not contain `extended` or
-`all`: OpenLDAP 2.6.15's accesslog overlay aborts slapd on the first Password
+`all`: OpenLDAP 2.6.15 and 2.6.16's accesslog overlay aborts slapd on the first Password
 Modify, so the image entrypoint refuses to start (#398, F-7, `D398-1`). Use
 `writes reads bind`; there is no override until upstream fixes it.
 `.github/workflows/security-e2e.yml` asserts all of that: a search shows up

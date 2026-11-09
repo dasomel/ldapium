@@ -514,7 +514,7 @@ LDAP_ACCESSLOG_OPS="${LDAP_ACCESSLOG_OPS:-reads bind}"
 ACCESSLOG_DIR="${DATA_DIR}/accesslog"
 # D398-1 (#398, F-7): refuse, never rewrite. With `extended` (or `all`, which
 # includes it) in olcAccessLogOps, the first Password Modify exop aborts slapd
-# (OpenLDAP 2.6.15 accesslog.c:1623 accesslog_response: Assertion '0' failed,
+# (OpenLDAP 2.6.15 and 2.6.16 accesslog.c:1623 accesslog_response: Assertion '0' failed,
 # exit 133), on the human setPassword path as much as the machine one. Cost: an
 # operator who wanted extended-op auditing cannot have it; silently dropping the
 # token would hide that, so start-up fails instead. Escape hatch: none — the
@@ -1975,7 +1975,7 @@ rm -f "$hardening_ldif" "$hd_dump" "$hd_db"
 #   abort     anything else whose first token is `users`, or that the parser is
 #             not certain about: startup aborts in set/off mode before any
 #             change. There is no "another shape, ignore" fall-through.
-# What the parser handles, exactly (probed against the image's slapd 2.6.15):
+# What the parser handles, exactly (probed on slapd 2.6.15; parser unchanged in 2.6.16):
 #   tokens    split on any isspace() character: space, tab, VT, FF, CR, NL;
 #   quotes    a double quote toggles a quoted segment anywhere inside a token
 #             (`"users"`, `size.prtotal="unlimited"`, `us"ers"`); quotes are

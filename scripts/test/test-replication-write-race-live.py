@@ -2,7 +2,7 @@
 """Local opt-in race harness for #432/#434: two providers write the same entries at the same instant.
 
 Not part of CI (it takes minutes). Use it to check an image carries the syncrepl retry_diff fix
-(image/patches/openldap-2.6.15-its-retry-diff.patch), or to measure a stock build: after each batch both
+(image/patches/openldap-2.6.16-its-retry-diff.patch), or to measure a stock build: after each batch both
 providers must hold identical entries (description, entryCSN, modifiersName, modifyTimestamp, userPassword).
 Exit 0 only if no entry diverged; the counts are printed as `MEASURE ...` lines. Passwords never reach the
 output.

@@ -10,7 +10,7 @@ being viable.
 [![CodeQL](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml/badge.svg)](https://github.com/dasomel/ldapium/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dasomel/ldapium/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/ldapium)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.15-informational)](https://www.openldap.org/)
+[![OpenLDAP](https://img.shields.io/badge/OpenLDAP-2.6.16-informational)](https://www.openldap.org/)
 
 > **Status: prototype.** Published early on purpose — the packaging is the
 > point of the project and it is easier to judge in the open. Every claim in
@@ -35,13 +35,13 @@ Every common way to run OpenLDAP in Kubernetes broke at roughly the same time:
 | `symascorp/symas-openldap` | amd64 only — no arm64 manifest. |
 | LLDAP · GLAuth · Kanidm | Read-only over the LDAP wire protocol; cannot back a writable directory. |
 
-Upstream OpenLDAP itself is healthy — 2.6 is the LTS stream and 2.6.15 shipped
-2026-09-08. The gap is packaging, not the software. So this project packages it.
+Upstream OpenLDAP itself is healthy — 2.6 is the LTS stream and 2.6.16 shipped
+2026-10-21. The gap is packaging, not the software. So this project packages it.
 
 ## What is different here
 
 **Compiled from the upstream tarball**, not from a distribution package, so the version
-is ours to pin — currently 2.6.15, the current LTS — rather than whatever a base image's
+is ours to pin — currently 2.6.16, the current LTS — rather than whatever a base image's
 package archive happens to carry.
 
 **No sample data, ever.** Some images seed demo accounts and groups on first launch. In a
@@ -118,7 +118,7 @@ records what was verified and how.
 
 | Path | What |
 |---|---|
-| `image/` | OpenLDAP 2.6.15 server, built from source with one carried syncrepl patch (#432). Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
+| `image/` | OpenLDAP 2.6.16 server, built from source with one carried syncrepl patch (#432). Overlays: `memberof`, `refint`, `ppolicy`, `unique`, `syncprov`. Backend `back-mdb`, TLS via OpenSSL, Cyrus SASL. |
 | `ui/` | Management UI — DIT browser, user and group CRUD, password set. Defaults to LDAP-bind login; optional Keycloak SSO uses a role-gated dedicated LDAP service account. Opt-in bearer-token access for Keycloak service clients (read-only by default; writes behind a separate switch), see `docs/api.md`. |
 | `charts/ldapium/` | Helm chart deploying the server, with the UI as an optional component. |
 
@@ -188,7 +188,7 @@ has the runbook, including the two-step procedure for changing the CA itself.
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/dasomel/ldapium:0.3.1` | OpenLDAP 2.6.15 server |
+| `ghcr.io/dasomel/ldapium:0.3.1` | OpenLDAP 2.6.16 server |
 | `ghcr.io/dasomel/ldapium-ui:0.3.1` | Management UI |
 
 Both are designed for `linux/amd64` + `linux/arm64` and carry build provenance attestations

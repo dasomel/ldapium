@@ -98,7 +98,7 @@ N-way 복제 토폴로지(D11)의 가용성을 유지하면서 동일 엔트리 
 |---|---|
 | Source / API / command | N/A — 외부 API 및 CLI 명령 변경 없음 |
 | Dependencies / lockfiles | N/A — Go/Python 의존성 락파일 변경 없음 |
-| Runtime / toolchain | `image/Dockerfile`이 OpenLDAP 2.6.15 소스에 `image/patches/openldap-2.6.15-its-retry-diff.patch`를 `--fuzz=0`으로 적용해 컴파일한다(#440) |
+| Runtime / toolchain | `image/Dockerfile`이 OpenLDAP 2.6.15 소스에 `image/patches/openldap-2.6.16-its-retry-diff.patch`를 `--fuzz=0`으로 적용해 컴파일한다(#440) |
 | CI / CD | `.github/workflows/machine-write-e2e.yml` 측정 항목 유지, 캐리 패치 검증 워크플로 추가 |
 | Release / packaging | `appVersion`은 `2.6.15` 유지(`check-versions.sh`가 Dockerfile tarball 버전과 일치를 요구하고 UI가 `OPENLDAP_VERSION`으로 표시). 패치 식별은 이미지 label `io.ldapium.openldap.patches`와 이미지 내 패치 사본으로 한다 |
 | Generated output | N/A — 자동 생성 산출물 없음 |

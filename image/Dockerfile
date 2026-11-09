@@ -1,10 +1,10 @@
 #
-# From-source OpenLDAP 2.6.15, built and owned by this project — no osixia,
+# From-source OpenLDAP 2.6.16, built and owned by this project — no osixia,
 # no vegardit. See image/README.md for the full env var contract and
 # image/ldifs/*.ldif for the bootstrap templates.
 
-ARG OPENLDAP_VERSION=2.6.15
-ARG OPENLDAP_SHA256=bc91225dbfc50354033b1303bc91d1a7f6ddd1dc32fac950d79c28fe66d6bca8
+ARG OPENLDAP_VERSION=2.6.16
+ARG OPENLDAP_SHA256=8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18
 
 FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS builder
 ARG OPENLDAP_VERSION
@@ -54,13 +54,13 @@ RUN set -eu; \
     rm openldap.tgz
 
 WORKDIR /usr/src/openldap-${OPENLDAP_VERSION}
-# Carried patch for #432/#434: in 2.6.15 syncrepl's retry_diff reran the diff on
+# Carried patch for #432/#434: in 2.6.15 and 2.6.16 syncrepl's retry_diff reran the diff on
 # a partial modlist, so two providers writing the same entry within milliseconds
 # could leave the earlier-CSN node with a deleted attribute or a missing
 # entryCSN/modifyTimestamp. --fuzz=0 makes a version bump fail the build loudly
 # instead of applying to shifted code: rebase the patch, or drop it once
 # upstream fixes this (OpenLDAP ITS number pending).
-COPY patches/openldap-2.6.15-its-retry-diff.patch /tmp/its-retry-diff.patch
+COPY patches/openldap-2.6.16-its-retry-diff.patch /tmp/its-retry-diff.patch
 RUN patch -p1 --fuzz=0 < /tmp/its-retry-diff.patch
 RUN ./configure \
         --prefix=/usr \

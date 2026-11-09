@@ -10,11 +10,11 @@ This snapshot records features already merged to `main`. Open pull requests and 
 
 ## Product boundary
 
-ldapium packages upstream OpenLDAP 2.6.15 for modern Kubernetes/container operation. It combines a source-built server image, optional management UI, Helm chart, Docker Compose path, backup/restore, air-gap tooling and release/supply-chain evidence.
+ldapium packages upstream OpenLDAP 2.6.16 for modern Kubernetes/container operation. It combines a source-built server image, optional management UI, Helm chart, Docker Compose path, backup/restore, air-gap tooling and release/supply-chain evidence.
 
 ## Directory / replication
 
-- OpenLDAP 2.6.15 built from upstream source
+- OpenLDAP 2.6.16 built from upstream source
 - MDB backend
 - memberOf / refint / ppolicy / unique / syncprov overlays
 - standalone and multi-provider replication paths
