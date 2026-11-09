@@ -10,19 +10,41 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-09
+
+Security and maintenance release: the Go toolchain and Echo fixes below, refreshed
+Debian base images, and one opt-in UI feature (context path). No configuration change
+is required; upgrading from 0.3.0 is an image/chart version bump.
+
 ### Added
 
 - UI: serve under a context path with `UI_BASE_PATH` (chart `ui.basePath`), e.g.
   `https://host/ldapium/`, without an ingress rewrite. Cookies, SSO redirect URIs,
   OpenAPI `servers` and the chart probes follow the prefix; the SSO client's
-  redirect URI must include it. Unset keeps today's root behaviour.
+  redirect URI must include it. Unset keeps today's root behaviour (#462, #463).
 
 ### Security
 
 - Go toolchain `golang:1.27.3` (was 1.27.2) for the UI backend and exporter image
   builders, and `go 1.26.10` in `ui/backend/go.mod`: GO-2026-6809 (`crypto/x509`
-  distrust of compromised intermediate certificates).
-- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical).
+  distrust of compromised intermediate certificates; #457).
+- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical; #457). Not reachable in 0.3.0: ldapium does not use
+  Echo's Proxy middleware.
+
+### Images
+
+- Debian `trixie-slim` base re-pinned to `f6b08b0` in both images (#452, #454).
+
+### Tests and CI
+
+- `govulncheck` gate (`scripts/govulncheck.sh`): excludes by ID only advisories with no
+  upstream fix whose code path is unused, listed in `ui/backend/govulncheck-exclude.txt`
+  (GO-2026-6875 / CVE-2026-118651 and GO-2026-6872 / CVE-2026-118653, Echo Proxy and
+  RateLimiter middleware, neither used; #460, #461). A stale entry fails the gate.
+- Flaky live checks fixed: the machine-write E-22 timeout and T025 drills waited for the
+  held write to be dropped before releasing the proxy (#442, #451); the replication
+  identity E12 chaos check now polls for converged user counts (#458).
+- GitHub Actions updated (#448).
 
 ## [0.3.0] — 2026-10-18
 
@@ -891,6 +913,7 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.3.1]: https://github.com/dasomel/ldapium/releases/tag/v0.3.1
 [0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0

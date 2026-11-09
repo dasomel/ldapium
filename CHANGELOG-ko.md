@@ -8,18 +8,40 @@ English | **한국어**
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-09
+
+보안·유지보수 릴리스입니다: 아래 Go 툴체인과 Echo 수정, Debian 베이스 이미지 갱신, 그리고
+opt-in UI 기능(컨텍스트 경로) 하나가 포함됩니다. 설정 변경은 필요 없으며 0.3.0에서는
+이미지/chart 버전만 올리면 됩니다.
+
 ### Added
 
 - UI: `UI_BASE_PATH`(차트 `ui.basePath`)로 컨텍스트 경로(예: `https://host/ldapium/`)에서 ingress
   rewrite 없이 서비스할 수 있습니다. 쿠키, SSO 리디렉션 URI, OpenAPI `servers`, 차트 probe가 접두
   경로를 따르며, SSO 클라이언트의 redirect URI에도 접두 경로를 포함해야 합니다. 설정하지 않으면
-  기존 루트 동작과 같습니다.
+  기존 루트 동작과 같습니다 (#462, #463).
 
 ### Security
 
 - UI backend와 exporter 이미지 빌더의 Go 툴체인을 `golang:1.27.3`으로, `ui/backend/go.mod`를
-  `go 1.26.10`으로 올렸습니다: GO-2026-6809(`crypto/x509`의 손상된 중간 인증서 불신).
-- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical).
+  `go 1.26.10`으로 올렸습니다: GO-2026-6809(`crypto/x509`의 손상된 중간 인증서 불신; #457).
+- UI backend: `github.com/labstack/echo/v4` 4.16.1 (CVE-2026-118264, critical; #457). ldapium은 Echo Proxy 미들웨어를
+  쓰지 않으므로 0.3.0에서도 도달 불가였습니다.
+
+### Images
+
+- 두 이미지의 Debian `trixie-slim` 베이스를 `f6b08b0`으로 다시 고정했습니다 (#452, #454).
+
+### Tests and CI
+
+- `govulncheck` 게이트(`scripts/govulncheck.sh`): 업스트림 수정이 없고 해당 코드 경로를 쓰지 않는
+  권고만 `ui/backend/govulncheck-exclude.txt`에 ID로 제외합니다(GO-2026-6875 / CVE-2026-118651,
+  GO-2026-6872 / CVE-2026-118653 — Echo Proxy·RateLimiter 미들웨어, 둘 다 미사용; #460, #461).
+  더 이상 보고되지 않는 항목은 게이트를 실패시킵니다.
+- 불안정했던 live 검사 수정: machine-write E-22 timeout과 T025 drill이 proxy를 놓기 전에 붙잡은
+  쓰기가 버려졌는지 기다립니다(#442, #451). 복제 identity E12 chaos 검사는 사용자 수 수렴을
+  polling합니다(#458).
+- GitHub Actions 갱신(#448).
 
 ## [0.3.0] — 2026-10-18
 
@@ -149,6 +171,7 @@ OpenLDAP는 이제 업스트림 2.6.15에 패치 하나를 더한 것이므로 �
 - 0.1.0은 첫 릴리스이므로 기존 버전에서의 upgrade path를 약속하지 않습니다.
 - e2e workflow는 새로 구성되었으므로 독립 환경에서 지속적인 검증이 필요합니다.
 
+[0.3.1]: https://github.com/dasomel/ldapium/releases/tag/v0.3.1
 [0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dasomel/ldapium/releases/tag/v0.2.0

@@ -27,7 +27,7 @@ security report.
 
 ## Supported versions
 
-Only the latest release (currently 0.2.x; see `CHANGELOG.md`). This project is
+Only the latest release (currently 0.3.x; see `CHANGELOG.md`). This project is
 at 0.x: there are no backports, and a fix ships in the next release rather than
 as a patch to an older one.
 
