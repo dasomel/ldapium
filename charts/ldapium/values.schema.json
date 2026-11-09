@@ -29,6 +29,10 @@
     "ui": {
       "type": "object",
       "properties": {
+        "basePath": {
+          "type": "string",
+          "description": "Context path the UI is served under (UI_BASE_PATH); empty = root. Validated at render time."
+        },
         "machineAuth": {
           "type": "object",
           "additionalProperties": false,

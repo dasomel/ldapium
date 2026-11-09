@@ -112,7 +112,7 @@ func (s *Server) handleLogout(c echo.Context) error {
 	if s.sso != nil {
 		postLogoutURI := ""
 		if callbackURI, err := s.sso.callbackURI(c.Request()); err == nil {
-			postLogoutURI = callbackOrigin(callbackURI) + "/login?sso_logged_out=1"
+			postLogoutURI = callbackOrigin(callbackURI) + s.url("/login") + "?sso_logged_out=1" // D6
 		}
 		return c.JSON(http.StatusOK, logoutResponse{
 			RedirectURL: s.sso.logoutURL(oidcLogoutIDToken, postLogoutURI),

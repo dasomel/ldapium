@@ -203,12 +203,12 @@ func (s *Server) handleBackupRun(c echo.Context) error {
 	})
 	var hit *backup.IdempotentJobError
 	if errors.As(err, &hit) {
-		return replayBackupStart(c, hit)
+		return s.replayBackupStart(c, hit)
 	}
 	if err != nil {
 		return s.backupJobError(c, err)
 	}
-	c.Response().Header().Set(echo.HeaderLocation, "/api/v1/backups/jobs/"+job.JobID)
+	c.Response().Header().Set(echo.HeaderLocation, s.url("/api/v1/backups/jobs/"+job.JobID))
 	return c.JSON(202, map[string]string{"job_id": job.JobID, "kind": job.Kind, "status": job.Status})
 }
 
@@ -249,12 +249,12 @@ func (s *Server) backupIdempotency(c echo.Context) (*backup.RequestIdempotency, 
 // same 202 and Location for the same request (the body shows the job's current
 // status; Location is the authority), 422 for another request, and 409
 // outcome_unknown when the fingerprint key that made the record is gone.
-func replayBackupStart(c echo.Context, hit *backup.IdempotentJobError) error {
+func (s *Server) replayBackupStart(c echo.Context, hit *backup.IdempotentJobError) error {
 	switch hit.Verdict {
 	case idempotency.VerdictSame:
 		h := c.Response().Header()
 		h.Set(headerIdempotentReplayed, "true")
-		h.Set(echo.HeaderLocation, "/api/v1/backups/jobs/"+hit.Job.JobID)
+		h.Set(echo.HeaderLocation, s.url("/api/v1/backups/jobs/"+hit.Job.JobID))
 		return c.JSON(202, map[string]string{"job_id": hit.Job.JobID, "kind": hit.Job.Kind, "status": hit.Job.Status})
 	case idempotency.VerdictDifferent:
 		return apiErr(http.StatusUnprocessableEntity, codeIdempotencyKeyReused, "this Idempotency-Key was already used for a different request")

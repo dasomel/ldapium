@@ -21,7 +21,8 @@ const frontendOSSVersions = [
 }))
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? './' : '/',
   define: {
     __FRONTEND_OSS_VERSIONS__: JSON.stringify(frontendOSSVersions),
   },
@@ -45,4 +46,4 @@ export default defineConfig({
     outDir: '../backend/web/dist',
     emptyOutDir: true,
   },
-})
+}))

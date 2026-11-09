@@ -115,6 +115,10 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 	s.echo.IPExtractor = ipExtractorFor(cfg)
 	s.echo.HTTPErrorHandler = apiErrorHandler(s.echo.DefaultHTTPErrorHandler)
 
+	// First, so every later Pre step and the router see the unprefixed path (D2).
+	if cfg.BasePath != "" {
+		s.echo.Pre(s.basePathMiddleware())
+	}
 	s.echo.Pre(s.headPreMiddleware())
 
 	// Outermost, so the request counters also see what Recover turns into a 500.
@@ -184,7 +188,11 @@ func newServer(cfg config.Config, dialer ldapclient.Dialer, sessions *session.St
 		}
 		s.backups.SetJobTimeouts(cfg.BackupJobTimeoutData, cfg.BackupJobTimeoutLogs)
 	}
-	s.routes(spa)
+	index, err := buildIndex(spa, cfg.BasePath)
+	if err != nil {
+		return nil, fmt.Errorf("prepare index.html: %w", err)
+	}
+	s.routes(spa, index)
 	return s, nil
 }
 
@@ -200,7 +208,7 @@ func (s *Server) Close() {
 // controls the listener/shutdown lifecycle rather than this package.
 func (s *Server) Handler() http.Handler { return s.echo }
 
-func (s *Server) routes(spa fs.FS) {
+func (s *Server) routes(spa fs.FS, index []byte) {
 	// The metrics listener is separate (cmd/server, METRICS_ADDR); on this port
 	// /metrics is an explicit 404 rather than the SPA fallback (D218-10).
 	s.echo.GET("/metrics", s.handlePublicMetrics)
@@ -257,7 +265,7 @@ func (s *Server) routes(spa fs.FS) {
 	// callers alike get the same 404 (same method key, last one wins).
 	s.echo.RouteNotFound("/api", s.handleAPINotFound)
 	s.echo.RouteNotFound("/api/*", s.handleAPINotFound)
-	registerSPA(s.echo, spa, s.handleAPINotFound)
+	registerSPA(s.echo, spa, index, s.handleAPINotFound)
 	s.initAPIRoutes()
 }
 
@@ -300,7 +308,9 @@ func (s *Server) restoreMethodMiddleware() echo.MiddlewareFunc {
 // registerSPA serves the built React app and falls back unknown,
 // non-/api, non-file paths to index.html so client-side routing (e.g.
 // /users, /groups) works on a hard browser refresh.
-func registerSPA(e *echo.Echo, spa fs.FS, apiNotFound echo.HandlerFunc) {
+// index is the cached, base-path-injected index.html (D3), served for every
+// fallback and for "/" itself.
+func registerSPA(e *echo.Echo, spa fs.FS, index []byte, apiNotFound echo.HandlerFunc) {
 	fileServer := http.FileServer(http.FS(spa))
 
 	e.GET("/*", func(c echo.Context) error {
@@ -309,15 +319,13 @@ func registerSPA(e *echo.Echo, spa fs.FS, apiNotFound echo.HandlerFunc) {
 		if isAPIPath(req.URL.Path) {
 			return apiNotFound(c)
 		}
-		if _, err := fs.Stat(spa, trimLeadingSlash(req.URL.Path)); err != nil {
+		if _, err := fs.Stat(spa, trimLeadingSlash(req.URL.Path)); err != nil || req.URL.Path == "/" {
 			// Not a real static asset: hand back index.html and let the
 			// SPA's router take over.
-			index, err := spa.Open("index.html")
-			if err != nil {
+			if index == nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "index.html missing from embedded build")
 			}
-			defer index.Close()
-			return c.Stream(http.StatusOK, "text/html; charset=utf-8", index)
+			return c.HTMLBlob(http.StatusOK, index)
 		}
 		fileServer.ServeHTTP(c.Response(), req)
 		return nil

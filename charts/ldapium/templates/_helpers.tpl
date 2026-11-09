@@ -89,6 +89,24 @@ every template that would use it.
 {{- $port -}}
 {{- end -}}
 
+{{/*
+ui.basePath normalized like the backend's UI_BASE_PATH (D1, D8): "" or "/" is
+the root (renders ""), otherwise "/seg[/seg...]" with segments of
+A-Z a-z 0-9 . _ ~ - and no "." or ".." segment. Anything else fails the render
+rather than a CrashLoopBackOff on the backend's own refusal to start.
+*/}}
+{{- define "ldapium.ui.basePath" -}}
+{{- $raw := trim (toString (.Values.ui.basePath | default "")) -}}
+{{- if or (eq $raw "") (eq $raw "/") -}}
+{{- else -}}
+{{- $p := trimSuffix "/" (ternary $raw (printf "/%s" $raw) (hasPrefix "/" $raw)) -}}
+{{- range $seg := splitList "/" (trimPrefix "/" $p) -}}
+{{- if or (not (regexMatch "^[A-Za-z0-9._~-]+$" $seg)) (eq $seg ".") (eq $seg "..") }}{{ fail (printf "ui.basePath must be /segment[/segment] with segments of A-Z a-z 0-9 . _ ~ - (no . or .. segment), got %q" $raw) }}{{ end -}}
+{{- end -}}
+{{- $p -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Labels of the UI metrics Service. A distinct component keeps it out of the selector of every other Service/ServiceMonitor of this chart. */}}
 {{- define "ldapium.ui.metricsLabels" -}}
 helm.sh/chart: {{ include "ldapium.chart" . }}

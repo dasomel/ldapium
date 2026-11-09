@@ -52,10 +52,13 @@ keyed writes are refused with 422 idempotency_unsupported.
 Management UI:
   Service: {{ include "ldapium.ui.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.replication.clusterDomain }}:{{ .Values.ui.service.port }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ldapium.ui.fullname" . }} 8080:{{ .Values.ui.service.port }}
-  then open http://localhost:8080
+  then open http://localhost:8080{{ include "ldapium.ui.basePath" . }}/
+{{- if include "ldapium.ui.basePath" . }}
+  Served under the base path {{ include "ldapium.ui.basePath" . }} only; register the SSO redirect URI with it ({{ include "ldapium.ui.basePath" . }}/api/sso/callback).
+{{- end }}
 {{- if .Values.ui.ingress.enabled }}
 {{- range .Values.ui.ingress.hosts }}
-  http{{ if $.Values.ui.ingress.tls }}s{{ end }}://{{ .host }}
+  http{{ if $.Values.ui.ingress.tls }}s{{ end }}://{{ .host }}{{ include "ldapium.ui.basePath" $ }}/
 {{- end }}
 {{- end }}
 {{- end }}

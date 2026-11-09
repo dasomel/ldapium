@@ -248,6 +248,9 @@ jobs:
       - name: UI CORS chart assertions
         run: ./scripts/test/test-chart-ui-cors.sh
 
+      - name: UI base path chart assertions
+        run: ./scripts/test/test-chart-ui-base-path.sh
+
       - name: Machine auth chart assertions
         run: ./scripts/test/test-chart-machine-auth.sh
 

@@ -1,4 +1,5 @@
 import { ApiError } from './api'
+import { withBase } from './base-path'
 import type { ApiErrorBody } from './types'
 
 export interface ApplicationProfile {
@@ -17,7 +18,7 @@ export interface ApplicationProfile {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/v1/applications${path}`, {
+  const response = await fetch(withBase(`/api/v1/applications${path}`), {
     ...init, credentials: 'same-origin',
   })
   const body: unknown = await response.json()
@@ -65,7 +66,7 @@ export const integration = {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'If-Match': `"${fingerprint}"` }, body: JSON.stringify(change),
   }),
   remove: async (id: string, revision: number) => {
-    const res = await fetch(`/api/v1/applications/${encodeURIComponent(id)}/integration-profile`, {
+    const res = await fetch(withBase(`/api/v1/applications/${encodeURIComponent(id)}/integration-profile`), {
       method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'If-Match': `"${revision}"` },
     })
     if (!res.ok) {

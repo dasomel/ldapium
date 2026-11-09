@@ -624,6 +624,13 @@ ui:
 
   replicaCount: 1
 
+  # -- Context path the UI is served under (→ UI_BASE_PATH), e.g. /ldapium behind
+  #    a shared ingress. Empty = origin root. The backend serves the prefix
+  #    itself (no ingress rewrite) and scopes its cookies to it; every
+  #    ui.ingress path must start with it. Register an SSO redirect URI with
+  #    the prefix (https://host/ldapium/api/sso/callback). Segments: A-Z a-z 0-9 . _ ~ -
+  basePath: ""
+
   # Idempotency-Key for the core user/group writes (#216). Records live in the
   # UI process's memory and a restart forgets them, so this only holds with one
   # replica: enabling it renders strategy Recreate, and UI_IDEMPOTENCY_ENABLED is
@@ -980,7 +987,8 @@ ui:
     # when enabled. Include each externally reachable UI origin, for example:
     #   - http://127.0.0.1:5173
     #   - http://127.0.0.1:8080
-    # Keycloak must register <origin>/api/sso/callback for every entry.
+    # Keycloak must register <origin>/api/sso/callback for every entry
+    # (<origin><ui.basePath>/api/sso/callback when ui.basePath is set).
     callbackOrigins: []
 
   # -- Dedicated LDAP service account used only after a Keycloak user passes

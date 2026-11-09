@@ -93,6 +93,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/test/test-licenses-failure.sh
 	@./scripts/test/test-chart-idempotency-render.sh
 	@./scripts/test/test-chart-ui-cors.sh
+	@./scripts/test/test-chart-ui-base-path.sh
 	@./scripts/test/test-chart-machine-auth.sh
 	@./scripts/test/test-chart-machine-write.sh
 	@./scripts/test/test-chart-replication-check.sh

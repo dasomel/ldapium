@@ -1,3 +1,5 @@
+import { withBase } from './base-path'
+
 export type BackupConnection = { id: string; name: string; type: string; host: string; port: number; user: string; endpoint: string; region: string; bucket: string; prefix: string; known_hosts: string; allow_plaintext: boolean; password?: string; access_key?: string; secret_key?: string; credentials_set?: boolean }
 export type BackupPolicy = { enabled: boolean; interval_minutes: number; keep_days: number; keep_count: number; destinations: string[] }
 export type BackupPolicies = { revision: number; data: BackupPolicy; logs: BackupPolicy }
@@ -10,7 +12,7 @@ export type BackupJob = { job_id: string; kind: 'data' | 'logs'; trigger: string
   destinations?: { id: string; status: 'succeeded' | 'failed' | 'skipped' | 'unknown'; error_code?: string }[]
   artifact?: { run_id: string; files?: { name: string; bytes: number; sha256: string }[] } }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/v1/backups${path}`, { credentials: 'same-origin', ...init })
+  const response = await fetch(withBase(`/api/v1/backups${path}`), { credentials: 'same-origin', ...init })
   const body = await response.json()
   if (!response.ok) throw new Error(body.error ?? body.message ?? 'Backup request failed')
   return body as T
