@@ -70,7 +70,8 @@ Keycloak user is never asked for an LDAP password.
 When Keycloak advertises an `end_session_endpoint`, the UI sends the
 server-side ID-token hint there for RP-initiated logout, then returns to its
 login page without auto-starting a new session. Register
-`<origin>/login` as a valid post-logout redirect URI in Keycloak. If the
+`<origin>/login` as a valid post-logout redirect URI in Keycloak (with
+`UI_BASE_PATH` set, `<origin><base-path>/login`). If the
 provider does not advertise that endpoint, logout is local-only; use
 Keycloak's own session controls when provider-session logout is required.
 
@@ -145,6 +146,7 @@ LDAP connection details and a session secret explicitly.
 | `UI_IDEMPOTENCY_ENABLED` | no | `false` | Honour `Idempotency-Key` on the core user/group writes (#216). Records are in process memory (24h) and a restart forgets them, so enable it only for a single UI process (the chart does: one replica, `Recreate`). Off, a keyed write is refused with `422 idempotency_unsupported` |
 | `UI_IDEMPOTENCY_TTL` | no | `24h` | How long a completed record replays (1m-7d) |
 | `UI_IDEMPOTENCY_KEY_FILE` | no | _(unset)_ | Absolute path of the persisted fingerprint key: created once with mode 0600 in a 0700 directory owned by the UI user, never regenerated; startup is refused if it is unsafe. Two lines (`current`, `previous`) rotate it. Required for `Idempotency-Key` on backup start (the key lives in the durable job record); without it that key is refused. Never logged |
+| `UI_BASE_PATH` | no | _(empty = origin root)_ | Context path the UI and API are served under, e.g. `/ldapium` behind a shared ingress. Normalized to a leading `/` and no trailing `/`; segments are `A-Z a-z 0-9 . _ ~ -` only (no `.`/`..`, no empty segment), anything else refuses to start. The app serves the prefix itself, so the proxy must forward it unchanged (no rewrite): `<prefix>` redirects (308) to `<prefix>/`, paths outside it answer 404. Session and SSO cookies are scoped to it, and SSO/IdP redirect URIs must include it. Never taken from `X-Forwarded-Prefix`. Nested prefixes on one host (`/a` and `/a/b`) are unsupported. |
 | `UI_TRUSTED_PROXIES` | no | `private` | How the login limiter resolves a request's client IP: `private`, a comma-separated CIDR list, or `none` — see "Login throttling and trusted proxies" below |
 | `METRICS_ADDR` | no | _(empty)_ | `host:port` of an optional second listener that serves only `GET /metrics` (Prometheus text, `ldapium_ui_*` process metrics). Empty = no listener and nothing collected. Must differ from `LISTEN_ADDR`; unauthenticated, so bind it to loopback or protect it with a NetworkPolicy. The public port answers `/metrics` with a 404 JSON error body. See `docs/api.md` |
 | `CORS_ALLOWED_ORIGINS` | no | _(empty)_ | Comma-separated exact `scheme://host[:port]` origins that may read `/api` GET/HEAD responses cross-origin with credentials. Read-only: the write Origin gate ignores this list, so a listed origin cannot write either. Empty = no CORS headers at all. `*`, `null`, paths, userinfo and empty or out-of-range ports are refused at startup; the default ports `:80`/`:443` are dropped (browsers omit them). Same-site use only: the session cookie stays `SameSite=Lax`. See `docs/api.md` |
@@ -290,6 +292,10 @@ Also register `<production-origin>/api/sso/callback` for every production
 origin placed in `SSO_CALLBACK_ORIGINS`. The backend derives the callback
 from the request host/scheme (including forwarded host/proto) only after an
 exact allowlist check, so do not use wildcards.
+
+With `UI_BASE_PATH` set (for example `/ldapium`) the redirect URI must include
+the prefix: register `<production-origin>/ldapium/api/sso/callback` and
+`<origin>/ldapium/login`. `SSO_CALLBACK_ORIGINS` stays origin-only.
 
 For RP-initiated logout, also register `<origin>/login` as a valid
 post-logout redirect URI for each allowed browser origin.

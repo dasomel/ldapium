@@ -33,9 +33,11 @@ type oidcAuthenticator struct {
 	verifier        *oidc.IDTokenVerifier
 	oauthConfig     oauth2.Config
 	callbackOrigins map[string]struct{}
-	states          *oidcStateStore
-	adminRole       string
-	endSessionURL   string
+	// basePath is cfg.BasePath: the IdP redirect URI carries it (D6).
+	basePath      string
+	states        *oidcStateStore
+	adminRole     string
+	endSessionURL string
 }
 
 func newOIDCAuthenticator(ctx context.Context, cfg config.SSOConfig) (*oidcAuthenticator, error) {
@@ -169,7 +171,7 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 	}
 	logAuthEvent(authProviderOIDC, authResultSuccess, requestIDOf(c), dn, "", "")
 	s.setSessionCookie(c, session.Sign([]byte(s.cfg.SessionSecret), sess.ID))
-	return c.Redirect(http.StatusSeeOther, callbackOrigin(state.redirectURI)+"/")
+	return c.Redirect(http.StatusSeeOther, callbackOrigin(state.redirectURI)+s.url("/")) // D6
 }
 
 // redirectSSOFailure logs one failed SSO auth-event line and redirects the
@@ -180,7 +182,7 @@ func (s *Server) handleSSOCallback(c echo.Context) error {
 // fingerprint, since it originates from client-influenced input.
 func (s *Server) redirectSSOFailure(c echo.Context, redirectURI, reason, identity string) error {
 	logAuthEvent(authProviderOIDC, authResultFailure, requestIDOf(c), "", reason, fingerprintIdentity(identity))
-	loginURL := callbackOrigin(redirectURI) + "/login?sso_error=" + url.QueryEscape(reason)
+	loginURL := callbackOrigin(redirectURI) + s.url("/login") + "?sso_error=" + url.QueryEscape(reason)
 	return c.Redirect(http.StatusSeeOther, loginURL)
 }
 
@@ -237,7 +239,7 @@ func (a *oidcAuthenticator) callbackURI(req *http.Request) (string, error) {
 	if _, ok := a.callbackOrigins[origin]; !ok {
 		return "", errors.New("origin is not allowlisted")
 	}
-	return origin + "/api/sso/callback", nil
+	return origin + a.basePath + "/api/sso/callback", nil
 }
 
 func requestOrigin(req *http.Request) (string, error) {

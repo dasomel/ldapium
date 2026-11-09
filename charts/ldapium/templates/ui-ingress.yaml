@@ -1,4 +1,5 @@
 {{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+{{- $basePath := include "ldapium.ui.basePath" . }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -24,6 +25,7 @@ spec:
       http:
         paths:
           {{- range .paths }}
+          {{- if and $basePath (not (hasPrefix $basePath .path)) }}{{ fail (printf "ui.ingress path %q must start with ui.basePath %q: the backend serves only under that prefix" .path $basePath) }}{{ end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:

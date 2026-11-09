@@ -2,6 +2,8 @@
 // 3.1 document at /api/v1/openapi.json; nothing here talks to the network
 // except fetchOpenApi, so everything else is unit-testable in isolation.
 
+import { withBase } from './base-path'
+
 export const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
 export type Method = (typeof METHODS)[number]
 export type AuthKind = 'public' | 'session' | 'admin'
@@ -73,7 +75,7 @@ export interface EndpointGroup { tag: string; description?: string; endpoints: E
 export const UNTAGGED = 'other'
 
 export async function fetchOpenApi(signal?: AbortSignal): Promise<OpenApiDoc> {
-  const res = await fetch('/api/v1/openapi.json', { credentials: 'same-origin', signal })
+  const res = await fetch(withBase('/api/v1/openapi.json'), { credentials: 'same-origin', signal })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const doc = (await res.json()) as OpenApiDoc
   if (!doc || typeof doc !== 'object' || !doc.paths) throw new Error('not an OpenAPI document')
@@ -207,7 +209,9 @@ export function jsonBody(doc: OpenApiDoc, op: Operation): { schema: Schema; exam
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 
 export function buildCurl(doc: OpenApiDoc, e: Endpoint, origin: string): string {
-  // servers[0].url may be relative ("/api/v1") — resolve it against the page origin.
+  // servers[0].url may be relative ("/api/v1") — resolve it against the page
+  // origin. Under a context path the backend serves it as "<prefix>" (D7), so
+  // the prefix comes from there; origin stays scheme://host for the Origin header.
   const server = doc.servers?.[0]?.url ?? ''
   const base = (/^https?:\/\//.test(server) ? server : `${origin}${server}`).replace(/\/$/, '')
   const params = endpointParams(doc, e.op, doc.paths?.[e.path])

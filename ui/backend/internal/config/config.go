@@ -193,6 +193,11 @@ type Config struct {
 	// any response. Values are validated and lower-cased at load time.
 	CORSAllowedOrigins []string
 
+	// BasePath (UI_BASE_PATH) is the context path the UI is served under, e.g.
+	// "/ldapium" behind a shared ingress (D1). "" means the origin root. Normalized
+	// to a leading "/" and no trailing "/"; never derived from a request header.
+	BasePath string
+
 	// Machine is the optional bearer authentication for service clients
 	// (MACHINE_AUTH_ENABLED, default false; see machine.go). Zero value when off.
 	Machine MachineConfig
@@ -382,6 +387,11 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.BasePath, err = parseBasePath(getenv("UI_BASE_PATH"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	if err := loadMachine(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
@@ -549,6 +559,29 @@ func validateMetricsAddr(raw, listenAddr string) (string, error) {
 	}
 	return v, nil
 }
+
+// parseBasePath validates UI_BASE_PATH (D1): empty or "/" is the root; anything
+// else is normalized to "/seg[/seg...]" where each segment is a plain
+// unreserved-character name, so the value is safe in a cookie Path, a Location
+// header and an HTML attribute without escaping.
+func parseBasePath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" || p == "/" {
+		return "", nil
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.TrimSuffix(p, "/")
+	for _, seg := range strings.Split(p[1:], "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.Trim(seg, basePathSegmentChars) != "" {
+			return "", fmt.Errorf("invalid UI_BASE_PATH %q: want /segment[/segment] with segments of A-Z a-z 0-9 . _ ~ -", raw)
+		}
+	}
+	return p, nil
+}
+
+const basePathSegmentChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-"
 
 // parseCORSOrigins validates CORS_ALLOWED_ORIGINS: a comma separated list of
 // exact http(s)://host[:port] origins. Wildcards, "null", paths, queries,

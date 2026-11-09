@@ -285,6 +285,40 @@ jobs:
 
           echo "PASS: move entry succeeded, new DN confirmed, and refint rewrote group membership"
 
+      # ui-base-path: the same release re-rolled with ui.basePath=/ldapium. The
+      # rollout itself proves the chart's prefixed probes; the spec proves the
+      # browser path (assets, API, deep-link reload, cookie Path) stays under
+      # /ldapium/, and curl proves the root is no longer served.
+      - name: Re-deploy under ui.basePath=/ldapium
+        run: |
+          set -euo pipefail
+          kill "$(cat /tmp/port-forward.pid)" 2>/dev/null || true
+          helm upgrade directory charts/ldapium --namespace directory --reuse-values \
+            --set ui.basePath=/ldapium --wait --timeout 5m
+          kubectl -n directory port-forward svc/directory-ldapium-ui 8080:8080 > /tmp/port-forward.log 2>&1 &
+          echo $! > /tmp/port-forward.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/ldapium/ >/dev/null 2>&1 && break
+            [ "$i" -lt 30 ] || { echo "::error::UI never became reachable under /ldapium/"; cat /tmp/port-forward.log; exit 1; }
+            sleep 1
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ldapium)
+          [ "$code" = 308 ] || { echo "::error::/ldapium: expected 308, got $code"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/auth/config)
+          [ "$code" = 404 ] || { echo "::error::/api outside the prefix: expected 404, got $code"; exit 1; }
+          curl -sf http://127.0.0.1:8080/ldapium/ | grep -q '<base href="/ldapium/">'
+          echo "PASS: rolled out with prefixed probes; /ldapium -> 308, root /api -> 404, index carries <base>"
+
+      - name: Run browser E2E under /ldapium
+        working-directory: ui/frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:8080/ldapium/
+          E2E_BASE_PATH: /ldapium
+          E2E_ADMIN_DN: cn=admin,dc=example,dc=org
+          E2E_ADMIN_PASSWORD: ${{ github.run_id }}-e2e-not-a-real-secret
+          CI: "true"
+        run: npx playwright test e2e/base-path.spec.ts
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

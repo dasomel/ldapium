@@ -278,13 +278,13 @@ spec:
           # reach the directory should still come up and say so.
           readinessProbe:
             httpGet:
-              path: /api/auth/config
+              path: {{ include "ldapium.ui.basePath" . }}/api/auth/config
               port: http
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /api/auth/config
+              path: {{ include "ldapium.ui.basePath" . }}/api/auth/config
               port: http
             initialDelaySeconds: 10
             periodSeconds: 20
@@ -442,6 +442,10 @@ spec:
               value: {{ .Values.ui.session.passwordChangeFailureWindow | quote }}
             - name: UI_TRUSTED_PROXIES
               value: {{ .Values.ui.trustedProxies | quote }}
+            {{- with include "ldapium.ui.basePath" . }}
+            - name: UI_BASE_PATH
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.ui.cors.allowedOrigins }}
             - name: CORS_ALLOWED_ORIGINS
               value: {{ join "," .Values.ui.cors.allowedOrigins | quote }}

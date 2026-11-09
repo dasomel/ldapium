@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
 	"embed"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -34,7 +36,7 @@ const openAPIPath = "/api/v1/openapi.json"
 // and expose no directory data.
 func (s *Server) registerAPIDocs(api *echo.Group) {
 	api.GET("/v1/meta", s.handleAPIMeta)
-	api.GET("/v1/openapi.json", serveEmbedded("openapi/openapi.json", "application/json"))
+	api.GET("/v1/openapi.json", s.serveOpenAPI())
 	// Outside /api on purpose: llms.txt is a root-level convention.
 	s.echo.GET("/llms.txt", serveEmbedded("openapi/llms.txt", "text/plain; charset=utf-8"))
 }
@@ -49,8 +51,54 @@ func (s *Server) handleAPIMeta(c echo.Context) error {
 		APIVersion: "v1",
 		Version:    s.cfg.AppVersion,
 		AuthMode:   mode,
-		OpenAPI:    openAPIPath,
+		OpenAPI:    s.url(openAPIPath), // D7
 	})
+}
+
+// serveOpenAPI serves the embedded spec. With a base path set, servers[0].url
+// becomes the prefix (no trailing slash: OpenAPI appends each "/api/..." path
+// to it) so "try it" and generated clients hit the right place (D7). The
+// document is rewritten once; the embedded file itself keeps "/".
+func (s *Server) serveOpenAPI() echo.HandlerFunc {
+	if s.cfg.BasePath == "" {
+		return serveEmbedded("openapi/openapi.json", "application/json")
+	}
+	body, err := apiDocsFS.ReadFile("openapi/openapi.json")
+	if err == nil {
+		body, err = withServerURL(body, s.cfg.BasePath)
+	}
+	return func(c echo.Context) error {
+		if err != nil {
+			return respondErr(c, err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "public, max-age=300")
+		return c.Blob(http.StatusOK, "application/json", body)
+	}
+}
+
+func withServerURL(doc []byte, url string) ([]byte, error) {
+	var spec map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &spec); err != nil {
+		return nil, err
+	}
+	var servers []map[string]any
+	if err := json.Unmarshal(spec["servers"], &servers); err != nil || len(servers) == 0 {
+		servers = []map[string]any{{}}
+	}
+	servers[0]["url"] = url
+	raw, err := json.Marshal(servers)
+	if err != nil {
+		return nil, err
+	}
+	spec["servers"] = raw
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(spec); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func serveEmbedded(name, contentType string) echo.HandlerFunc {

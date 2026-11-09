@@ -1,3 +1,4 @@
+import { withBase } from './base-path'
 import type {
   ApiErrorBody,
   AuditActionsResponse,
@@ -48,7 +49,7 @@ function writeHeaders(opts?: WriteOptions): Record<string, string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(withBase(`/api${path}`), {
     ...init,
     credentials: 'same-origin',
     headers: {

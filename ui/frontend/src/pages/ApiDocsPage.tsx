@@ -12,6 +12,7 @@ import {
   buildLoginCurl, collectEndpoints, fetchOpenApi, filterEndpoints, groupByTag, METHODS,
   type Method, type OpenApiDoc,
 } from '@/lib/api-docs'
+import { basePath, withBase } from '@/lib/base-path'
 import { cn } from '@/lib/utils'
 
 export function ApiDocsPage() {
@@ -52,7 +53,7 @@ export function ApiDocsPage() {
 
   const endpoints = useMemo(() => (doc ? collectEndpoints(doc) : []), [doc])
   const groups = useMemo(() => (doc ? groupByTag(doc, filterEndpoints(endpoints, query, methods)) : []), [doc, endpoints, query, methods])
-  const origin = window.location.origin
+  const origin = `${window.location.origin}${basePath()}`
 
   function toggleMethod(m: Method) {
     const next = new Set(methods)
@@ -86,8 +87,8 @@ export function ApiDocsPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <a className={cn('inline-flex h-9 items-center gap-2 rounded-console border border-border-strong px-3.5 text-[13px] font-medium hover:bg-muted')} href="/api/v1/openapi.json" target="_blank" rel="noreferrer"><FileJson aria-hidden="true" className="size-4" />{t('apiDocs.rawSpec')}</a>
-          <a className={cn('inline-flex h-9 items-center gap-2 rounded-console border border-border-strong px-3.5 text-[13px] font-medium hover:bg-muted')} href="/llms.txt" target="_blank" rel="noreferrer"><FileText aria-hidden="true" className="size-4" />{t('apiDocs.llmsTxt')}</a>
+          <a className={cn('inline-flex h-9 items-center gap-2 rounded-console border border-border-strong px-3.5 text-[13px] font-medium hover:bg-muted')} href={withBase('/api/v1/openapi.json')} target="_blank" rel="noreferrer"><FileJson aria-hidden="true" className="size-4" />{t('apiDocs.rawSpec')}</a>
+          <a className={cn('inline-flex h-9 items-center gap-2 rounded-console border border-border-strong px-3.5 text-[13px] font-medium hover:bg-muted')} href={withBase('/llms.txt')} target="_blank" rel="noreferrer"><FileText aria-hidden="true" className="size-4" />{t('apiDocs.llmsTxt')}</a>
         </div>
       </header>
 

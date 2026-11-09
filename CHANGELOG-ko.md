@@ -8,6 +8,13 @@ English | **한국어**
 
 ## [Unreleased]
 
+### Added
+
+- UI: `UI_BASE_PATH`(차트 `ui.basePath`)로 컨텍스트 경로(예: `https://host/ldapium/`)에서 ingress
+  rewrite 없이 서비스할 수 있습니다. 쿠키, SSO 리디렉션 URI, OpenAPI `servers`, 차트 probe가 접두
+  경로를 따르며, SSO 클라이언트의 redirect URI에도 접두 경로를 포함해야 합니다. 설정하지 않으면
+  기존 루트 동작과 같습니다.
+
 ### Security
 
 - UI backend와 exporter 이미지 빌더의 Go 툴체인을 `golang:1.27.3`으로, `ui/backend/go.mod`를

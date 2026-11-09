@@ -8,10 +8,11 @@ import { ThemeProvider } from '@/context/ThemeContext'
 import { ToastProvider } from '@/context/ToastContext'
 import { LanguageProvider } from '@/context/LanguageContext'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { basePath } from '@/lib/base-path'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basePath() || undefined}>
       <ThemeProvider>
         <LanguageProvider>
           <ToastProvider>

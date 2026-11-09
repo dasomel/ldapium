@@ -10,6 +10,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Added
+
+- UI: serve under a context path with `UI_BASE_PATH` (chart `ui.basePath`), e.g.
+  `https://host/ldapium/`, without an ingress rewrite. Cookies, SSO redirect URIs,
+  OpenAPI `servers` and the chart probes follow the prefix; the SSO client's
+  redirect URI must include it. Unset keeps today's root behaviour.
+
 ### Security
 
 - Go toolchain `golang:1.27.3` (was 1.27.2) for the UI backend and exporter image

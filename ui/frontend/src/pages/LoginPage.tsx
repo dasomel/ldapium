@@ -4,6 +4,7 @@ import { KeyRound, LockKeyhole, TerminalSquare } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useT } from '@/context/LanguageContext'
 import { ApiError } from '@/lib/api'
+import { withBase } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,7 +36,7 @@ export function LoginPage() {
   useEffect(() => {
     if (authMode !== 'sso' || ssoError || ssoLoggedOut || redirectStarted.current) return
     redirectStarted.current = true
-    window.location.assign('/api/sso/start')
+    window.location.assign(withBase('/api/sso/start'))
   }, [authMode, ssoError, ssoLoggedOut])
 
   if (dn) return <Navigate to="/tree" replace />
@@ -97,12 +98,12 @@ export function LoginPage() {
                   {t(ssoErrorKey)}
                 </div>
               )}
-              <Button type="button" onClick={() => window.location.assign('/api/sso/start')} className="w-full">
+              <Button type="button" onClick={() => window.location.assign(withBase('/api/sso/start'))} className="w-full">
                 <KeyRound className="size-4" />
                 {t('login.continueWithKeycloak')}
               </Button>
               <a
-                href="/api/sso/start"
+                href={withBase('/api/sso/start')}
                 className="block text-center text-[12px] text-accent underline underline-offset-2 hover:text-accent/80"
               >
                 {t('login.ssoFallbackLink')}

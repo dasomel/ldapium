@@ -64,7 +64,7 @@ func (s *Server) setSessionCookie(c echo.Context, signedValue string) {
 	c.SetCookie(&http.Cookie{
 		Name:     sessionCookieName,
 		Value:    signedValue,
-		Path:     "/",
+		Path:     s.url("/"), // D5
 		HttpOnly: true,
 		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -80,7 +80,7 @@ func (s *Server) setSSOLoginCookie(c echo.Context, binding string) {
 	c.SetCookie(&http.Cookie{
 		Name:     ssoLoginCookieName,
 		Value:    binding,
-		Path:     "/api/sso",
+		Path:     s.url("/api/sso"), // D5
 		HttpOnly: true,
 		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -92,7 +92,7 @@ func (s *Server) clearSSOLoginCookie(c echo.Context) {
 	c.SetCookie(&http.Cookie{
 		Name:     ssoLoginCookieName,
 		Value:    "",
-		Path:     "/api/sso",
+		Path:     s.url("/api/sso"), // D5
 		HttpOnly: true,
 		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -104,7 +104,7 @@ func (s *Server) clearSessionCookie(c echo.Context) {
 	c.SetCookie(&http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     s.url("/"), // D5
 		HttpOnly: true,
 		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
