@@ -30,10 +30,10 @@ English | **한국어**
 
 ## 범위
 
-이 프로젝트의 패키징, Helm chart, 관리 UI, CI/CD 및 공급망 구성에 대한 취약점은 프로젝트 범위에 포함됩니다. OpenLDAP 서버 자체의 구현 취약점은 [OpenLDAP 프로젝트](https://bugs.openldap.org/)에 신고하십시오. 이 저장소는 수정하지 않은 업스트림 소스를 컴파일하며 자체 패치가 없습니다. 업스트림 수정이 릴리스된 뒤 고정 버전을 올리는 일은 보안 신고가 아니라 일반 issue입니다.
+이 프로젝트의 패키징, Helm chart, 관리 UI, CI/CD 및 공급망 구성에 대한 취약점은 프로젝트 범위에 포함됩니다. OpenLDAP 서버 자체의 구현 취약점은 [OpenLDAP 프로젝트](https://bugs.openldap.org/)에 신고하십시오. 이 저장소는 업스트림 소스에 `image/patches/`의 패치(0.3.0부터 syncrepl 수정 1건, `docs/legal-ko.md` 참고)를 적용해 컴파일하며, 그 패치의 결함은 이 프로젝트 범위입니다. 업스트림 수정이 릴리스된 뒤 고정 버전을 올리는 일은 보안 신고가 아니라 일반 issue입니다.
 
 ## 지원 버전
 
-최신 릴리스만 지원합니다(현재 0.2.x, `CHANGELOG.md` 참고). 0.x 단계이므로 백포트는 없고 수정은 이전 버전 패치가 아니라 다음 릴리스로 나갑니다.
+최신 릴리스만 지원합니다(현재 0.3.x, `CHANGELOG.md` 참고). 0.x 단계이므로 백포트는 없고 수정은 이전 버전 패치가 아니라 다음 릴리스로 나갑니다.
 
 두 이미지는 매주(`.github/workflows/weekly-rebuild.yml`) 다시 빌드되어 Debian 패키지 보안 업데이트가 릴리스를 기다리지 않고 `:main` 태그에 반영됩니다. 베이스 이미지는 digest로 고정되어 있어 `debian:trixie-slim` 갱신은 재빌드가 아니라 Dependabot PR로 들어오며(`docs/dependency-policy.md`), 릴리스된 태그는 불변이고 제자리에서 다시 빌드하지 않습니다.

@@ -20,10 +20,11 @@ In scope: this repository — the server image (`image/`), the management UI
 configuration.
 
 Not in scope: vulnerabilities in OpenLDAP itself. Report those to
-[the OpenLDAP project](https://bugs.openldap.org/); this repo compiles
-unmodified upstream source and carries no patches of its own. Once a fix is
-released upstream, bumping the pinned version here is an ordinary issue, not a
-security report.
+[the OpenLDAP project](https://bugs.openldap.org/). This repo compiles upstream
+source plus the patches listed in `image/patches/` (since 0.3.0, one syncrepl
+fix; see `docs/legal.md`); a defect in one of those patches is in scope here.
+Once a fix is released upstream, bumping the pinned version here is an ordinary
+issue, not a security report.
 
 ## Supported versions
 

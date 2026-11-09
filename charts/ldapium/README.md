@@ -568,8 +568,9 @@ ui:
 
 `POST /api/logout` clears the local UI session and, when Keycloak advertises
 an `end_session_endpoint`, uses the server-side ID-token hint for
-RP-initiated logout. Register `<origin>/login` as a valid post-logout
-redirect URI for every `ui.sso.callbackOrigins` entry. If Keycloak does not
+RP-initiated logout. Register `<origin>/login` (`<origin><ui.basePath>/login`
+when `ui.basePath` is set) as a valid post-logout redirect URI for every
+`ui.sso.callbackOrigins` entry. If Keycloak does not
 advertise an end-session endpoint, logout remains local-only.
 
 ### Keycloak LDAP user federation
