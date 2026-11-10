@@ -38,7 +38,7 @@ check 'first run posts one state marker' test "$(grep -c '<!-- upstream-its-watc
 
 export COMMENTS_FILE=$fixtures/comments-previous.json
 out=$(watch)
-check 'same state uses newest marker across pages and posts nothing' test "$out" = 'no change'
+check 'same state: newest valid bot marker across pages, spoofed and malformed markers ignored' test "$out" = 'no change'
 
 sed 's/UNCONFIRMED/RESOLVED/; s|<resolution></resolution>|<resolution>FIXED</resolution>|' \
 	"$fixtures/its.xml" >"$work/changed.xml"

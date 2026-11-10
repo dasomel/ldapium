@@ -69,7 +69,7 @@ PY
 }
 
 previous_state() {
-	python3 - "$1" <<'PY'
+	python3 - "$1" "${MARKER_AUTHOR:-github-actions[bot]}" <<'PY'
 import json
 import re
 import sys
@@ -77,9 +77,15 @@ with open(sys.argv[1]) as source:
     pages = json.load(source)
 # gh --slurp wraps paginated arrays; fixtures may also be a single array.
 comments = [comment for page in pages for comment in (page if isinstance(page, list) else [page])]
+# #471 is a public issue: anyone can post a marker. Trust only the workflow's
+# own comments, and only a marker whose every field has the expected shape.
+field = r"(?:its|master|rel26|latest26)=[A-Za-z0-9%._:/=+-]+"
+shape = re.compile(rf"{field}(?: {field})*")
 for comment in sorted(comments, key=lambda c: c["id"], reverse=True):
+    if (comment.get("user") or {}).get("login") != sys.argv[2]:
+        continue
     match = re.search(r"<!-- upstream-its-watch state: (.*?) -->", comment.get("body") or "")
-    if match:
+    if match and shape.fullmatch(match.group(1)):
         print(match.group(1))
         break
 PY
@@ -87,6 +93,7 @@ PY
 
 main() (
 	local work source value previous state body label old changed=0 reachable=0
+	local -a prev_fields=()
 	work=$(mktemp -d)
 	trap 'rm -rf "$work"' EXIT
 	local -a sources=(its master rel26 latest26) values=() changes=()
@@ -130,7 +137,9 @@ main() (
 	for source in 0 1 2 3; do
 		label=${sources[$source]}
 		old=''
-		for value in $previous; do
+		read -ra prev_fields <<<"$previous"
+		# ${a[@]+...}: an empty array under set -u is "unbound" in bash < 4.4 (macOS).
+		for value in ${prev_fields[@]+"${prev_fields[@]}"}; do
 			if [[ $value == "$label="* ]]; then old=${value#*=}; fi
 		done
 		value=${values[$source]}
