@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<bugzilla><bug>
+<bug_id>10664</bug_id><bug_status>UNCONFIRMED</bug_status><resolution></resolution>
+<target_milestone>---</target_milestone><delta_ts>2026-11-10 03:00:00</delta_ts>
+<long_desc><thetext>retry_diff can lose data.</thetext></long_desc>
+</bug></bugzilla>

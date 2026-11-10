@@ -23,7 +23,7 @@ more here than the brevity of MIT.
 
 | Layer | What | Licence | Modified? |
 |---|---|---|---|
-| OpenLDAP | Compiled from the upstream source release, pinned by version and sha256 in `image/Dockerfile` | [OpenLDAP Public License 2.8](OPENLDAP-PUBLIC-LICENSE-2.8.txt) | **Yes.** One syncrepl patch is carried (`image/patches/`, #432), also shipped in the image at `/usr/share/doc/openldap/patches/`. |
+| OpenLDAP | Compiled from the upstream source release, pinned by version and sha256 in `image/Dockerfile` | [OpenLDAP Public License 2.8](OPENLDAP-PUBLIC-LICENSE-2.8.txt) | **Yes.** One syncrepl patch is carried (`image/patches/`, #432, upstream ITS#10664), also shipped in the image at `/usr/share/doc/openldap/patches/`. |
 | Base OS | `debian:trixie-slim` and the packages the build installs (OpenSSL, Cyrus SASL, libargon2, runtime libs) | Various — mostly GPL/LGPL, some BSD/Apache/CC0 | No. Redistributed as packaged. |
 | UI | This project's Go binary and built frontend assets | Apache-2.0 | n/a |
 

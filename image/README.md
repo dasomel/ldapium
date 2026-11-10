@@ -387,7 +387,8 @@ and the `io.ldapium.openldap.patches` label names them.
 - `openldap-2.6.16-its-retry-diff.patch` (#432, #434): syncrepl's `retry_diff`
   reran the diff on a partial modlist, so two providers writing the same entry
   within milliseconds could leave the earlier-CSN node with a deleted attribute or
-  a missing `entryCSN`/`modifyTimestamp`. Upstream ITS number pending. Rebase it on
+  a missing `entryCSN`/`modifyTimestamp`. Reported upstream as
+  [ITS#10664](https://bugs.openldap.org/show_bug.cgi?id=10664) (tracked in #471). Rebase it on
   the next OpenLDAP bump, or drop it once upstream carries the fix.
 
 ## Replication

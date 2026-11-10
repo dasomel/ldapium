@@ -155,7 +155,7 @@ ARG OPENLDAP_VERSION
 # version actually compiled in this image, and where its source came from —
 # so `docker inspect` answers "what OpenLDAP is this" without needing this
 # Dockerfile.
-LABEL io.ldapium.openldap.version="${OPENLDAP_VERSION}"       io.ldapium.openldap.source="https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz"       io.ldapium.openldap.license="OLDAP-2.8"       io.ldapium.openldap.patches="its-retry-diff (#432); ${OPENLDAP_VERSION} + ldapium patches"
+LABEL io.ldapium.openldap.version="${OPENLDAP_VERSION}"       io.ldapium.openldap.source="https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${OPENLDAP_VERSION}.tgz"       io.ldapium.openldap.license="OLDAP-2.8"       io.ldapium.openldap.patches="its-retry-diff (ITS#10664, #432); ${OPENLDAP_VERSION} + ldapium patches"
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \

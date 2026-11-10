@@ -89,6 +89,7 @@ check: ## Run what CI runs, in the same order (minus the registry checks)
 	@./scripts/test/test-ship-audit-log.sh
 	@./scripts/test/test-migration-dryrun.sh
 	@./scripts/test/test-detect-entry-drift.sh
+	@./scripts/test/test-upstream-its-watch.sh
 	@./scripts/test/test-chart-ui-metrics.sh
 	@./scripts/test/test-licenses-failure.sh
 	@./scripts/test/test-chart-idempotency-render.sh

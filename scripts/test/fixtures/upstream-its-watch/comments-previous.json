@@ -1,0 +1,18 @@
+[
+  [
+    {
+      "id": 2,
+      "body": "<!-- upstream-its-watch state: obsolete -->"
+    }
+  ],
+  [
+    {
+      "id": 3,
+      "body": "<!-- upstream-its-watch state: its=UNCONFIRMED/---/milestone=---/comments=1/delta=2026-11-10%2003:00:00 master=585543752836/fixhint=no rel26=585543752836/fixhint=no latest26=2.6.16 -->"
+    },
+    {
+      "id": 4,
+      "body": "A newer comment without a marker."
+    }
+  ]
+]
