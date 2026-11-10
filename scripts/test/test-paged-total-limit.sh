@@ -392,7 +392,7 @@ expect_eq "base64: off removes only ours" "$(count_all "$c")" "1"
 expect_eq "base64: ... the Korean DN stays capped" "$(paged "$c" "$kr_dn" "$user_pw")" "100 4"
 clear_limits
 
-# --- parser: spellings, case, whitespace (slapd 2.6.15 accepts them all). -----
+# --- parser: spellings, case, whitespace (slapd 2.6.15, unchanged in 2.6.16, accepts them all). -----
 # The reserved rule is recognised SEMANTICALLY (selector `users` with only a
 # size.prtotal limit), whatever the case, the whitespace or the value spelling.
 specs=(

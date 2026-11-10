@@ -8,6 +8,14 @@ English | **한국어**
 
 ## [Unreleased]
 
+### Changed
+
+- 서버 이미지: OpenLDAP 2.6.16 (이전 2.6.15; #469). 업스트림 수정에는 slapo-accesslog 요청별 info
+  상태(ITS#10597), ppolicy·memberof entry 누수 수정, GnuTLS 클라이언트 인증서 검증(ITS#10616),
+  번들 LMDB 0.9.37이 포함됩니다. 2.6.16의 `syncrepl.c`가 바뀌지 않았으므로 syncrepl `retry_diff`
+  패치(#432, #434)는 계속 적용하며 파일명은 `openldap-2.6.16-its-retry-diff.patch`로 바꿨습니다.
+  Password Modify 시 accesslog 중단(#398)도 그대로이므로 `extended`/`all`은 계속 거부합니다.
+
 ### Security
 
 - UI backend: `github.com/labstack/echo/v4` 4.16.3(CVE-2026-118651·CVE-2026-118653 업스트림 수정

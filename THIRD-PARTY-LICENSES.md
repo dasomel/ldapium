@@ -17,7 +17,7 @@ syncrepl patch (image/patches/, also in the image at
 
 | Component | Version | License |
 |---|---|---|
-| OpenLDAP Software | 2.6.15 + 1 patch | OpenLDAP Public License 2.8; modified (syncrepl fix) |
+| OpenLDAP Software | 2.6.16 + 1 patch | OpenLDAP Public License 2.8; modified (syncrepl fix) |
 | Debian base (`debian:trixie-slim`) | rolling | Various; redistributed unmodified |
 | OpenSSL, Cyrus SASL, libargon2 | as packaged by Debian | Apache-2.0 / BSD-style / CC0-1.0 |
 

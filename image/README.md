@@ -1,6 +1,6 @@
 # ldapium image
 
-A from-source OpenLDAP **2.6.15** container image that this project owns outright —
+A from-source OpenLDAP **2.6.16** container image that this project owns outright —
 no dependency on [osixia/docker-openldap](https://github.com/osixia/docker-openldap)
 (abandoned, last stable release 2021) or
 [vegardit/docker-openldap](https://github.com/vegardit/docker-openldap) (built from
@@ -21,7 +21,7 @@ LDIFs in `LDAP_SEED_DIR`.
 docker build --platform linux/arm64 -t ldapium:dev image/
 ```
 
-Multi-stage build: a `debian:trixie-slim` builder stage compiles OpenLDAP 2.6.15
+Multi-stage build: a `debian:trixie-slim` builder stage compiles OpenLDAP 2.6.16
 from the official source tarball (checksum-pinned), then only the built
 binaries/libraries/modules and schema files are copied into a clean
 `debian:trixie-slim` runtime stage. No compiler toolchain ships in the final image.
@@ -240,7 +240,7 @@ classification is **default-deny** and done by one awk program (linear time: an
   set/off mode before any change. There is no "other shape, ignore" fall-through
   (so `off` does not silently skip a rule it cannot place).
 
-Exactly what is parsed (probed on the image's slapd 2.6.15): tokens split on any
+Exactly what is parsed (probed on 2.6.15; parser unchanged in 2.6.16): tokens split on any
 `isspace()` character (space, tab, VT, FF, CR, NL); a double quote toggles a quoted
 segment anywhere in a token (`"users"`, `size.prtotal="unlimited"`, `us"ers"`),
 quotes are removed and white space inside them belongs to the token, so a quoted
@@ -379,12 +379,12 @@ before the real, PID-1 `slapd` takes over.
 
 ## Carried patches
 
-The image compiles upstream OpenLDAP 2.6.15 plus the patches in `image/patches/`
+The image compiles upstream OpenLDAP 2.6.16 plus the patches in `image/patches/`
 (applied with `patch -p1 --fuzz=0`, so a version bump fails the build instead of
 patching shifted code). Each is also installed at `/usr/share/doc/openldap/patches/`,
 and the `io.ldapium.openldap.patches` label names them.
 
-- `openldap-2.6.15-its-retry-diff.patch` (#432, #434): syncrepl's `retry_diff`
+- `openldap-2.6.16-its-retry-diff.patch` (#432, #434): syncrepl's `retry_diff`
   reran the diff on a partial modlist, so two providers writing the same entry
   within milliseconds could leave the earlier-CSN node with a deleted attribute or
   a missing `entryCSN`/`modifyTimestamp`. Upstream ITS number pending. Rebase it on

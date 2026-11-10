@@ -2,7 +2,7 @@
 
 - 실행일: 2026-10-01
 - 이미지: `ldapium:e2e` (`sha256:3e0de23501db29a03e71e2e49b5a53312c4f82d2c99da531b5ddc2f775381027`)
-- OpenLDAP: 2.6.15
+- OpenLDAP: 2.6.15 (measured; image now ships 2.6.16)
 - 호스트: Macmini, Docker Desktop, Apple Silicon
 - 벤치마크 서버 제한: 3 CPU, 메모리 6 GiB
 - 호스트 Docker 한도: 14 CPU, 메모리 64 GiB

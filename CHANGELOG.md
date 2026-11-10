@@ -10,6 +10,15 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Changed
+
+- Server image: OpenLDAP 2.6.16 (was 2.6.15; #469). Upstream fixes include the slapo-accesslog
+  per-operation info state (ITS#10597), ppolicy and memberof entry-leak fixes, GnuTLS client
+  certificate verification (ITS#10616) and bundled LMDB 0.9.37. The syncrepl `retry_diff`
+  patch (#432, #434) is still carried, renamed `openldap-2.6.16-its-retry-diff.patch`, because
+  2.6.16's `syncrepl.c` is unchanged. The accesslog abort on Password Modify (#398) is also
+  still present, so `extended`/`all` stay refused.
+
 ### Security
 
 - UI backend: `github.com/labstack/echo/v4` 4.16.3, which carries the upstream fix for
