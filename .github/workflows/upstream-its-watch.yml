@@ -1,0 +1,42 @@
+# D1: Weekly polling keeps #471 current without a state branch; the newest issue
+#     marker is the baseline. Unreachable sources retain their previous values.
+# D2: Serialize runs to avoid duplicate comments; queued dispatches can retry.
+# D3: Restrict egress and grant issue write only to this job. Fix hints require
+#     human review before removing the local patch; this workflow changes no code.
+name: Upstream ITS watch
+
+on:
+  schedule:
+    - cron: '41 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-its-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            bugs.openldap.org:443
+            git.openldap.org:443
+            api.github.com:443
+            github.com:443
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Watch upstream ITS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/upstream-its-watch.sh

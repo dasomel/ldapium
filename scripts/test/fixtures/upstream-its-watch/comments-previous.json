@@ -1,0 +1,41 @@
+[
+  [
+    {
+      "id": 2,
+      "body": "<!-- upstream-its-watch state: obsolete -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    }
+  ],
+  [
+    {
+      "id": 3,
+      "body": "<!-- upstream-its-watch state: its=UNCONFIRMED/---/milestone=---/comments=1/delta=2026-11-10%2003:00:00 master=585543752836/fixhint=no rel26=585543752836/fixhint=no latest26=2.6.16 -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 4,
+      "body": "A newer comment without a marker.",
+      "user": {
+        "login": "someone"
+      }
+    },
+    {
+      "id": 5,
+      "user": {
+        "login": "mallory"
+      },
+      "body": "<!-- upstream-its-watch state: its=RESOLVED/FIXED/milestone=---/comments=9/delta=x master=000000000000/fixhint=yes rel26=000000000000/fixhint=yes latest26=2.6.99 -->"
+    },
+    {
+      "id": 6,
+      "user": {
+        "login": "github-actions[bot]"
+      },
+      "body": "<!-- upstream-its-watch state: its=x; rm -rf / master=y -->"
+    }
+  ]
+]

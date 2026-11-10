@@ -569,6 +569,7 @@ jobs:
       - run: ./scripts/test/test-ship-audit-log.sh
       # Fixture-based unit test for entry data drift detection (#121).
       - run: ./scripts/test/test-detect-entry-drift.sh
+      - run: ./scripts/test/test-upstream-its-watch.sh
 
       # stdlib unittest for the pure bench-generate-lifecycle-ops.py helper
       # (determinism, mix-ratio apportionment, mover/leaver disjoint ranges,

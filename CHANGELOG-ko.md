@@ -14,6 +14,7 @@ English | **한국어**
   상태(ITS#10597), ppolicy·memberof entry 누수 수정, GnuTLS 클라이언트 인증서 검증(ITS#10616),
   번들 LMDB 0.9.37이 포함됩니다. 2.6.16의 `syncrepl.c`가 바뀌지 않았으므로 syncrepl `retry_diff`
   패치(#432, #434)는 계속 적용하며 파일명은 `openldap-2.6.16-its-retry-diff.patch`로 바꿨습니다.
+  업스트림에는 ITS#10664로 보고했습니다(2026-11-10, 새 주간 `upstream-its-watch` 워크플로가 #471에서 추적).
   Password Modify 시 accesslog 중단(#398)도 그대로이므로 `extended`/`all`은 계속 거부합니다.
 
 ### Security

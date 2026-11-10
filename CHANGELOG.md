@@ -16,7 +16,8 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   per-operation info state (ITS#10597), ppolicy and memberof entry-leak fixes, GnuTLS client
   certificate verification (ITS#10616) and bundled LMDB 0.9.37. The syncrepl `retry_diff`
   patch (#432, #434) is still carried, renamed `openldap-2.6.16-its-retry-diff.patch`, because
-  2.6.16's `syncrepl.c` is unchanged. The accesslog abort on Password Modify (#398) is also
+  2.6.16's `syncrepl.c` is unchanged. Reported upstream as ITS#10664 (2026-11-10, tracked in
+  #471 by the new weekly `upstream-its-watch` workflow). The accesslog abort on Password Modify (#398) is also
   still present, so `extended`/`all` stay refused.
 
 ### Security
