@@ -2,6 +2,8 @@
 # Offline behavior checks; block curl/gh to catch accidental external calls.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# The outputs checked below must not depend on the runner (GITHUB_ACTIONS adds annotations).
+unset GITHUB_ACTIONS
 
 fail=0
 check() {
@@ -52,6 +54,8 @@ check 'fix hint flip would comment' grep -qE 'master code: .*/fixhint=no -> .*/f
 out=$(ITS_FILE=$work/missing watch 2>"$work/warnings")
 check 'one unreachable source causes no false change' test "$out" = 'no change'
 check 'unreachable source warns' grep -qF 'warning: its unreachable' "$work/warnings"
+out=$(GITHUB_ACTIONS=true ITS_FILE=$work/missing watch 2>/dev/null)
+check 'unreachable source is annotated on Actions' grep -qxF '::warning::upstream-its-watch: its unreachable' <<<"$out"
 out=$(ITS_FILE=$work/missing MASTER_FILE=$fixtures/syncrepl-fixed.c watch 2>"$work/warnings")
 check 'other changes retain unreachable source previous value' grep -qF 'its=UNCONFIRMED/---/milestone=---/comments=1/' <<<"$out"
 
