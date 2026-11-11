@@ -19,6 +19,10 @@ English | **한국어**
 
 ### Security
 
+- UI backend와 exporter 이미지 빌더의 Go 툴체인을 `golang:1.27.4`(이전 1.27.3)로, `ui/backend/go.mod`를
+  `go 1.26.11`로 올렸습니다: GO-2026-6859 / CVE-2026-97054(`net/http` MaxBytesReader 헤더 경쟁으로
+  HTTP/1 서버가 죽을 수 있음). govulncheck가 도달 가능으로 보고해 `docs/dependency-policy.md`의
+  예외에 따라 냉각 기간 안에 채택했습니다.
 - UI backend: `github.com/labstack/echo/v4` 4.16.3(CVE-2026-118651·CVE-2026-118653 업스트림 수정
   포함, labstack/echo#3197; 두 경로 모두 여기서는 미사용, #460), `github.com/go-jose/go-jose/v4`
   4.1.7 (#446). Go 취약점 DB에 수정 버전이 기록될 때까지 govulncheck 제외 항목은 유지합니다.

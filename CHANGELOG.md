@@ -22,6 +22,10 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ### Security
 
+- Go toolchain `golang:1.27.4` (was 1.27.3) for the UI backend and exporter image builders,
+  and `go 1.26.11` in `ui/backend/go.mod`: GO-2026-6859 / CVE-2026-97054 (`net/http`
+  MaxBytesReader header race can crash an HTTP/1 server), reported reachable by govulncheck,
+  so adopted inside the cooling window per `docs/dependency-policy.md`.
 - UI backend: `github.com/labstack/echo/v4` 4.16.3, which carries the upstream fix for
   CVE-2026-118651 and CVE-2026-118653 (labstack/echo#3197; neither path was used here, #460),
   and `github.com/go-jose/go-jose/v4` 4.1.7 (#446). The govulncheck exclusions stay until
