@@ -1,12 +1,17 @@
 # Grouped so a normal week produces a few reviewable PRs instead of a dozen
 # one-line ones. Security updates are never grouped away — Dependabot opens
 # those separately regardless of these settings.
+# D1: Enforce docs/dependency-policy.md's seven-day release age, accepting
+# slower routine updates; reviewed manual bumps remain the escape hatch.
+# Cooldown does not affect security updates.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /ui/backend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       go-dependencies:
         patterns: ["*"]
@@ -15,6 +20,8 @@ updates:
     directory: /ui/frontend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       # React, Vite, Tailwind and friends move together; a split PR per
       # package tends not to build on its own.
@@ -25,6 +32,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -38,3 +47,5 @@ updates:
       - /ui
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
