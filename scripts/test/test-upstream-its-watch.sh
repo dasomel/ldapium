@@ -29,6 +29,7 @@ export PATH="$work/bin:$PATH"
 export ITS_FILE=$fixtures/its.xml MASTER_FILE=$fixtures/syncrepl-before.c
 export REL26_FILE=$fixtures/syncrepl-before.c TAGS_FILE=$fixtures/tags.json
 export COMMENTS_FILE=$fixtures/comments-empty.json DRY_RUN=1
+unset SHOW_COMMENTS GITHUB_STEP_SUMMARY
 export ITS_ID=10664 TRACK_ISSUE=471 GH_REPO=dasomel/ldapium
 watch() { ./scripts/upstream-its-watch.sh; }
 
@@ -72,4 +73,84 @@ status=0
 COMMENTS_FILE=$work/missing watch >"$work/history-out" 2>"$work/history-errors" || status=$?
 check 'unreadable history fails closed' test "$status" != 0
 check 'unreadable history never comments' test ! -s "$work/history-out"
+# A real emitted body becomes the next bot marker, exercising marker forgery safety.
+python3 - "$fixtures/comments-previous.json" "$work/two-comments.json" <<'PYTHON'
+import json
+import sys
+from pathlib import Path
+pages = json.loads(Path(sys.argv[1]).read_text())
+for page in pages:
+    for comment in page:
+        comment["body"] = comment.get("body", "").replace("comments=1/", "comments=2/")
+Path(sys.argv[2]).write_text(json.dumps(pages))
+PYTHON
+ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$work/two-comments.json watch >"$work/relay"
+check '2 -> 4 relays exactly the two new comments with safe fences and truncation' \
+	python3 - "$work/relay" "$work/four-comments.json" <<'PYTHON'
+import json
+import re
+import sys
+from pathlib import Path
+out = Path(sys.argv[1]).read_text()
+body = out.split("\n", 1)[1]
+section = body.split("## New ITS comments\n", 1)[1]
+assert section.count("Comment ") == 2
+assert "Comment 2: Author 2 — 2026-11-12 03:00:00" in section
+assert "Comment 3: author3@example.org" in section
+assert "Original report." not in section and "Earlier reply." not in section
+assert "<\\!-- upstream-its-watch state: its=FORGED -->" in section
+assert body.count("<!-- upstream-its-watch state:") == 1
+assert "````\nComment 2:" in section
+assert "```\nNew fenced reply.\n````" in section
+assert "Long reply: " + "가" * (3000 - len("Long reply: ")) + "[truncated]" in section
+assert "가" * 3001 not in section
+assert len(body) < 60000
+assert re.fullmatch(r"<!-- upstream-its-watch state: .*comments=4/.* -->", body.splitlines()[-1])
+Path(sys.argv[2]).write_text(json.dumps([
+    {"id": 10, "body": body, "user": {"login": "github-actions[bot]"}}
+]))
+PYTHON
+out=$(ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$work/four-comments.json watch)
+check 'neutralized forgery leaves the real marker parseable on the next run' test "$out" = 'no change'
+ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$work/four-comments.json \
+	SHOW_COMMENTS=1 GITHUB_STEP_SUMMARY=$work/summary watch >"$work/show-all"
+check 'SHOW_COMMENTS prints all comments, writes matching summary and does not post unchanged state' \
+	python3 - "$work/show-all" "$work/summary" <<'PYTHON'
+import sys
+from pathlib import Path
+out, summary = (Path(path).read_text() for path in sys.argv[1:])
+assert out == summary + "no change\n"
+assert summary.count("Comment ") == 4
+assert "Original report." in summary and "Earlier reply." in summary
+assert "<\\!-- upstream-its-watch state: its=FORGED -->" in summary
+assert "````\nComment 2:" in summary and "[truncated]" in summary
+assert "would comment" not in out
+PYTHON
+out=$(ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$fixtures/comments-empty.json watch)
+check 'no previous marker relays all comments' test "$(grep -c '^Comment [0-9]:' <<<"$out")" = 4
+out=$(ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$work/four-comments.json SHOW_COMMENTS=1 watch)
+check 'SHOW_COMMENTS also works without a summary path' grep -qF 'Original report.' <<<"$out"
+
+# Enough new comments to exceed GitHub's limit still leave a closed fence and final marker.
+python3 - "$fixtures/its-4comments.xml" "$work/many.xml" <<'PYTHON'
+import copy
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1])
+bug = root.find(".//bug")
+for _ in range(30):
+    bug.append(copy.deepcopy(bug.findall("long_desc")[-1]))
+root.write(sys.argv[2], encoding="utf-8")
+PYTHON
+ITS_FILE=$work/many.xml COMMENTS_FILE=$fixtures/comments-empty.json watch >"$work/bounded"
+check 'large relay stays below 60000 characters with final marker and overflow notice' \
+	python3 - "$work/bounded" <<'PYTHON'
+import sys
+from pathlib import Path
+body = Path(sys.argv[1]).read_text().split("\n", 1)[1]
+assert len(body) < 60000
+assert "Remaining comments omitted" in body
+assert body.splitlines()[-1].startswith("<!-- upstream-its-watch state:")
+assert body.split("[Remaining comments omitted", 1)[0].rstrip().endswith("\n```")
+PYTHON
 exit "$fail"

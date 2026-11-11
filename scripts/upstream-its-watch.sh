@@ -35,6 +35,53 @@ print(f'{field("bug_status", True)}/{field("resolution")}'
 PY
 }
 
+# D3: Relay untrusted ITS prose as inert fenced text because the maintainer
+# cannot reach Bugzilla. Bound issue bodies; manual SHOW_COMMENTS recovers overflow.
+render_comments() {
+	python3 - "$@" <<'PYTHON'
+import re
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+xml, previous, mode = sys.argv[1:4]
+comments = ET.parse(xml).findall(".//bug/long_desc")
+match = re.search(r"(?:^| )its=[^ ]*/comments=(\d+)(?:/|$)", previous)
+start = int(match.group(1)) if match else 0
+if mode == "all":
+    start = 0
+blocks = []
+for index, comment in enumerate(comments[start:], start):
+    who = comment.find("who")
+    author = (who.get("name") or who.text or "unknown") if who is not None else "unknown"
+    when = comment.findtext("bug_when") or "unknown"
+    text = comment.findtext("thetext") or ""
+    if len(text) > 3000:
+        text = text[:3000] + "[truncated]"
+    payload = f"Comment {index}: {author} — {when}\n\n{text}"
+    payload = payload.replace("<!--", "<\\!--")
+    fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", payload)), default=0))
+    blocks.append(f"{fence}\n{payload}\n{fence}\n")
+section = "\n## New ITS comments\n\n" if blocks else ""
+if mode == "all":
+    print(section + "\n".join(blocks), end="")
+else:
+    base = Path(sys.argv[4]).read_text()
+    marker = f"<!-- upstream-its-watch state: {sys.argv[5]} -->\n"
+    notice = "\n[Remaining comments omitted to fit; use show_comments to read all.]\n"
+    budget = 59999 - len(base) - len(marker)
+    selected = ""
+    for block in blocks:
+        if len(section + selected + block + notice) > budget:
+            selected += notice
+            break
+        selected += block + "\n"
+    body = base + section + selected + marker
+    if len(body) >= 60000:
+        raise ValueError("watch body exceeds character budget")
+    print(body, end="")
+PYTHON
+}
+
 parse_code() {
 	python3 - "$1" <<'PY'
 import hashlib
@@ -109,6 +156,7 @@ main() (
 		if fetch "${overrides[$source]}" "${urls[$source]}" "$work/source" &&
 			value=$("${parsers[$source]}" "$work/source" 2>"$work/parse-error"); then
 			values[source]=$value
+			if [[ $source == 0 ]]; then cp "$work/source" "$work/its.xml"; fi
 			reachable=$((reachable + 1))
 		else
 			values[source]=unreachable
@@ -159,14 +207,27 @@ main() (
 		fi
 		state+="${state:+ }${sources[$source]}=$value"
 	done
+	if [[ ${SHOW_COMMENTS:-0} == 1 && -f $work/its.xml ]]; then
+		render_comments "$work/its.xml" "" all >"$work/relay"
+		cat "$work/relay"
+		if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+			cat "$work/relay" >>"$GITHUB_STEP_SUMMARY"
+		fi
+	fi
 	if [[ $changed == 0 ]]; then
 		echo 'no change'
 		return 0
 	fi
 	body=$(printf 'OpenLDAP ITS#%s upstream watch: changes detected.\n\n' "$ITS_ID"
-		printf '%s\n' "${changes[@]}"
+		printf '%s\n' ${changes[@]+"${changes[@]}"}
 		printf '\nFix hints are heuristic; review upstream before removing the local retry_diff patch.\n'
-		printf '\n<!-- upstream-its-watch state: %s -->\n' "$state")
+		printf '\n')
+	printf '%s\n' "$body" >"$work/body"
+	if [[ -f $work/its.xml ]]; then
+		body=$(render_comments "$work/its.xml" "$previous" new "$work/body" "$state")
+	else
+		body+=$'\n'"<!-- upstream-its-watch state: $state -->"
+	fi
 	if [[ ${DRY_RUN:-0} == 1 ]]; then
 		printf 'would comment on %s#%s:\n%s\n' "$GH_REPO" "$TRACK_ISSUE" "$body"
 	else
