@@ -96,7 +96,7 @@ body = out.split("\n", 1)[1]
 section = body.split("## New ITS comments\n", 1)[1]
 assert section.count("Comment ") == 2
 assert "Comment 2: Author 2 — 2026-11-12 03:00:00" in section
-assert "Comment 3: author3@example.org" in section
+assert "Comment 3: unknown — 2026-11-12 03:00:00" in section and "@example.org" not in section
 assert "Original report." not in section and "Earlier reply." not in section
 assert "<\\!-- upstream-its-watch state: its=FORGED -->" in section
 assert body.count("<!-- upstream-its-watch state:") == 1
@@ -130,6 +130,25 @@ out=$(ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$fixtures/comments-empt
 check 'no previous marker relays all comments' test "$(grep -c '^Comment [0-9]:' <<<"$out")" = 4
 out=$(ITS_FILE=$fixtures/its-4comments.xml COMMENTS_FILE=$work/four-comments.json SHOW_COMMENTS=1 watch)
 check 'SHOW_COMMENTS also works without a summary path' grep -qF 'Original report.' <<<"$out"
+
+# Security review: no Bugzilla e-mail is republished, and on Actions untrusted
+# text cannot issue workflow commands.
+check 'no commenter e-mail is relayed' test "$(grep -c '@example\.org' <<<"$out" || true)" = 0
+check 'a commenter without a display name is shown as unknown' grep -qE '^Comment 3: unknown ' <<<"$out"
+sed 's|Earlier reply.|::warning::forged command from ITS text|' "$fixtures/its-4comments.xml" >"$work/cmd.xml"
+out=$(GITHUB_ACTIONS=true ITS_FILE=$work/cmd.xml COMMENTS_FILE=$work/four-comments.json SHOW_COMMENTS=1 watch 2>/dev/null)
+token=$(sed -n 's/^::stop-commands::\(.*\)$/\1/p' <<<"$out")
+check 'show_comments output is wrapped in stop-commands on Actions' test -n "$token"
+check 'workflow commands resume with the same token after the relay' grep -qxF "::$token::" <<<"$out"
+check 'the forged command line sits between stop and resume' python3 -c '
+import sys
+lines = sys.stdin.read().splitlines()
+start = next(i for i, l in enumerate(lines) if l.startswith("::stop-commands::"))
+token = lines[start].split("::", 2)[2]
+end = lines.index("::" + token + "::")
+forged = next(i for i, l in enumerate(lines) if "forged command" in l)
+sys.exit(0 if start < forged < end else 1)
+' <<<"$out"
 
 # Enough new comments to exceed GitHub's limit still leave a closed fence and final marker.
 python3 - "$fixtures/its-4comments.xml" "$work/many.xml" <<'PYTHON'

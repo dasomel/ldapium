@@ -45,6 +45,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 xml, previous, mode = sys.argv[1:4]
 comments = ET.parse(xml).findall(".//bug/long_desc")
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 match = re.search(r"(?:^| )its=[^ ]*/comments=(\d+)(?:/|$)", previous)
 start = int(match.group(1)) if match else 0
 if mode == "all":
@@ -52,12 +53,17 @@ if mode == "all":
 blocks = []
 for index, comment in enumerate(comments[start:], start):
     who = comment.find("who")
-    author = (who.get("name") or who.text or "unknown") if who is not None else "unknown"
+    # Only the display name: the element text is the commenter's e-mail address,
+    # and #471 is public. A name that is itself an address counts as missing.
+    author = ((who.get("name") or "").strip() if who is not None else "")[:80]
+    if not author or EMAIL.search(author):
+        author = "unknown"
     when = comment.findtext("bug_when") or "unknown"
     text = comment.findtext("thetext") or ""
     if len(text) > 3000:
         text = text[:3000] + "[truncated]"
     payload = f"Comment {index}: {author} — {when}\n\n{text}"
+    payload = EMAIL.sub("<e-mail redacted>", payload)
     payload = payload.replace("<!--", "<\\!--")
     fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", payload)), default=0))
     blocks.append(f"{fence}\n{payload}\n{fence}\n")
@@ -71,13 +77,14 @@ else:
     budget = 59999 - len(base) - len(marker)
     selected = ""
     for block in blocks:
-        if len(section + selected + block + notice) > budget:
+        if len(section + selected + block + "\n" + notice) > budget:
             selected += notice
             break
         selected += block + "\n"
     body = base + section + selected + marker
     if len(body) >= 60000:
-        raise ValueError("watch body exceeds character budget")
+        # Never fail the watcher over size: keep the status lines and the marker.
+        body = base + "\n## New ITS comments\n" + notice + marker
     print(body, end="")
 PYTHON
 }
@@ -139,7 +146,7 @@ PY
 }
 
 main() (
-	local work source value previous state body label old changed=0 reachable=0
+	local work source value previous state body label old resume="" changed=0 reachable=0
 	local -a prev_fields=()
 	work=$(mktemp -d)
 	trap 'rm -rf "$work"' EXIT
@@ -209,7 +216,15 @@ main() (
 	done
 	if [[ ${SHOW_COMMENTS:-0} == 1 && -f $work/its.xml ]]; then
 		render_comments "$work/its.xml" "" all >"$work/relay"
+		# Untrusted ITS text: a line starting with "::" would be a workflow command.
+		if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+			resume=$(python3 -c 'import uuid; print(uuid.uuid4().hex)')
+			printf '::stop-commands::%s\n' "$resume"
+		fi
 		cat "$work/relay"
+		if [[ -n ${resume:-} ]]; then
+			printf '::%s::\n' "$resume"
+		fi
 		if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
 			cat "$work/relay" >>"$GITHUB_STEP_SUMMARY"
 		fi
