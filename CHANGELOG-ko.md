@@ -10,6 +10,9 @@ English | **한국어**
 
 ### Changed
 
+- Dependabot: Go, npm, GitHub Actions, Docker 일반 버전 갱신에 7일 냉각 기간을 설정했습니다.
+  보안 업데이트는 계속 즉시 생성됩니다. 수동 갱신과 Docker digest 적용 범위의 한계는
+  `docs/dependency-policy.md`에 명시했습니다.
 - 서버 이미지: OpenLDAP 2.6.16 (이전 2.6.15; #469). 업스트림 수정에는 slapo-accesslog 요청별 info
   상태(ITS#10597), ppolicy·memberof entry 누수 수정, GnuTLS 클라이언트 인증서 검증(ITS#10616),
   번들 LMDB 0.9.37이 포함됩니다. 2.6.16의 `syncrepl.c`가 바뀌지 않았으므로 syncrepl `retry_diff`
