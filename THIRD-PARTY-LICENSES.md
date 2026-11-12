@@ -38,8 +38,8 @@ SBOM attached to that release, or:
 | `github.com/cespare/xxhash/v2` | MIT | [link](https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt) |
 | `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | [link](https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE) |
 | `github.com/go-asn1-ber/asn1-ber` | MIT | [link](https://github.com/go-asn1-ber/asn1-ber/blob/v1.5.8/LICENSE) |
-| `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.7/LICENSE) |
-| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.7/json/LICENSE) |
+| `github.com/go-jose/go-jose/v4` | Apache-2.0 | [link](https://github.com/go-jose/go-jose/blob/v4.1.8/LICENSE) |
+| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | [link](https://github.com/go-jose/go-jose/blob/v4.1.8/json/LICENSE) |
 | `github.com/go-ldap/ldap/v3` | MIT | [link](https://github.com/go-ldap/ldap/blob/v3.4.15/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/labstack/echo/v4` | MIT | [link](https://github.com/labstack/echo/blob/v4.16.3/LICENSE) |

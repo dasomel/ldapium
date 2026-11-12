@@ -5,7 +5,7 @@ go 1.26.11
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-asn1-ber/asn1-ber v1.5.8
-	github.com/go-jose/go-jose/v4 v4.1.7
+	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/labstack/echo/v4 v4.16.3
 	github.com/prometheus/client_golang v1.25.0
