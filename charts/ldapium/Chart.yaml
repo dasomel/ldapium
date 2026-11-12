@@ -5,7 +5,7 @@ description: >-
   StatefulSet with an optional management UI. No sample data, no default
   admin password.
 type: application
-version: 0.3.1
+version: 0.3.2
 appVersion: "2.6.16"
 home: https://github.com/dasomel/ldapium
 sources:
