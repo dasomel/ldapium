@@ -8,6 +8,12 @@ English | **한국어**
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-13
+
+보안·유지보수 릴리스입니다: 아래 Go 툴체인 수정, OpenLDAP 2.6.16, 베이스 이미지와 의존성 갱신이
+포함됩니다. 설정 변경은 필요 없으며 0.3.1에서는 이미지/chart 버전만 올리면 됩니다.
+`appVersion`은 `2.6.16`이 됩니다.
+
 ### Changed
 
 - Dependabot: Go, npm, GitHub Actions, Docker 일반 버전 갱신에 7일 냉각 기간을 설정했습니다.
@@ -28,7 +34,20 @@ English | **한국어**
   예외에 따라 냉각 기간 안에 채택했습니다.
 - UI backend: `github.com/labstack/echo/v4` 4.16.3(CVE-2026-118651·CVE-2026-118653 업스트림 수정
   포함, labstack/echo#3197; 두 경로 모두 여기서는 미사용, #460), `github.com/go-jose/go-jose/v4`
-  4.1.7 (#446). Go 취약점 DB에 수정 버전이 기록될 때까지 govulncheck 제외 항목은 유지합니다.
+  4.1.8 (#446, #480). Go 취약점 DB에 수정 버전이 기록될 때까지 govulncheck 제외 항목은 유지합니다.
+
+### Images
+
+- 두 이미지의 Debian `trixie-slim` 베이스를 `a72b443`으로 다시 고정했습니다 (#473, #474).
+- UI frontend 의존성 묶음을 갱신했습니다: React 19.3.1, Vite 8.3.5, Radix UI 패키지,
+  lucide-react 1.68.0 등 (#465).
+
+### Tests and CI
+
+- `upstream-its-watch`: OpenLDAP ITS#10664, 업스트림 `syncrepl.c`, 새 2.6 릴리스를 매주 확인하고
+  바뀐 것이 있으면 #471에 댓글을 남기며 새 ITS 댓글도 옮겨 적습니다 (#472, #477).
+- worker의 pid 파일을 쓰기 전에 읽어 간헐적으로 실패하던 백업 단위 테스트를 고쳤습니다 (#466).
+- GitHub Actions 갱신 (#481).
 
 ## [0.3.1] — 2026-11-09
 
@@ -193,6 +212,7 @@ OpenLDAP는 이제 업스트림 2.6.15에 패치 하나를 더한 것이므로 �
 - 0.1.0은 첫 릴리스이므로 기존 버전에서의 upgrade path를 약속하지 않습니다.
 - e2e workflow는 새로 구성되었으므로 독립 환경에서 지속적인 검증이 필요합니다.
 
+[0.3.2]: https://github.com/dasomel/ldapium/releases/tag/v0.3.2
 [0.3.1]: https://github.com/dasomel/ldapium/releases/tag/v0.3.1
 [0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1

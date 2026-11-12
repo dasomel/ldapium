@@ -10,6 +10,12 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-13
+
+Security and maintenance release: the Go toolchain fix below, OpenLDAP 2.6.16, and refreshed
+base images and dependencies. No configuration change is required; upgrading from 0.3.1 is an
+image/chart version bump. `appVersion` moves to `2.6.16`.
+
 ### Changed
 
 - Dependabot: configure a seven-day cooldown for Go, npm, GitHub Actions and Docker
@@ -31,8 +37,21 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
   so adopted inside the cooling window per `docs/dependency-policy.md`.
 - UI backend: `github.com/labstack/echo/v4` 4.16.3, which carries the upstream fix for
   CVE-2026-118651 and CVE-2026-118653 (labstack/echo#3197; neither path was used here, #460),
-  and `github.com/go-jose/go-jose/v4` 4.1.7 (#446). The govulncheck exclusions stay until
+  and `github.com/go-jose/go-jose/v4` 4.1.8 (#446, #480). The govulncheck exclusions stay until
   the Go vulnerability database records the fixed version.
+
+### Images
+
+- Debian `trixie-slim` base re-pinned to `a72b443` in both images (#473, #474).
+- UI frontend dependency group refreshed: React 19.3.1, Vite 8.3.5, the Radix UI packages,
+  lucide-react 1.68.0 and others (#465).
+
+### Tests and CI
+
+- `upstream-its-watch`: weekly check of OpenLDAP ITS#10664, upstream `syncrepl.c` and new 2.6
+  releases; it comments on #471 when something changes and relays new ITS comments (#472, #477).
+- Fixed a flaky backup unit test that read the worker's pid file before it was written (#466).
+- GitHub Actions updated (#481).
 
 ## [0.3.1] — 2026-11-09
 
@@ -937,6 +956,7 @@ rather than assumed.
   live directory and its failure modes verified, but the CI wiring around it
   is new.
 
+[0.3.2]: https://github.com/dasomel/ldapium/releases/tag/v0.3.2
 [0.3.1]: https://github.com/dasomel/ldapium/releases/tag/v0.3.1
 [0.3.0]: https://github.com/dasomel/ldapium/releases/tag/v0.3.0
 [0.2.1]: https://github.com/dasomel/ldapium/releases/tag/v0.2.1
