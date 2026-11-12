@@ -6,7 +6,7 @@
 ARG OPENLDAP_VERSION=2.6.16
 ARG OPENLDAP_SHA256=8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18
 
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS builder
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS builder
 ARG OPENLDAP_VERSION
 ARG OPENLDAP_SHA256
 ENV DEBIAN_FRONTEND=noninteractive
@@ -122,7 +122,7 @@ RUN make -C contrib/slapd-modules/ppm ppm CRACK=no \
 # refuses outright ("the go.mod file ... contains one or more replace directives").
 # So materialise the module from the checksum-verified module cache and build it
 # as the main module, where replace directives are honoured.
-FROM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS exporter-builder
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS exporter-builder
 ARG OPENLDAP_EXPORTER_VERSION=v2.9.18
 ARG EXPORTER_X_CRYPTO_VERSION=v0.56.0
 ARG TARGETARCH
@@ -146,7 +146,7 @@ RUN set -eux; \
         -o /out/openldap_exporter main.go; \
     test -x /out/openldap_exporter
 
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runtime
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 ARG OPENLDAP_VERSION
 
 # docker/metadata-action's labels (applied at build time in build-multiarch.yml)

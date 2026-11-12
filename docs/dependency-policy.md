@@ -70,6 +70,19 @@ is almost never urgent. The exception is a fix for a vulnerability that this
 project is actually reachable from — `govulncheck` reports reachability, so that
 is a decision with evidence behind it rather than a CVE score.
 
+`.github/dependabot.yml` sets `cooldown.default-days: 7` on each `updates`
+entry: Go modules, npm packages, GitHub Actions and Docker. Dependabot filters
+releases by age before proposing routine version updates on the existing weekly
+schedule; this is seven days from publication, not another seven days after the
+PR opens. Security updates are unaffected by cooldown and remain immediate.
+See GitHub's [cooldown reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown)
+and [feature announcement](https://github.blog/changelog/2025-07-01-dependabot-supports-configuration-of-a-minimum-package-age/).
+GitHub Actions and Docker support `default-days`, but not the `semver-*-days`
+options. Cooldown behavior for Docker images pinned as `name:tag@sha256:...`
+is **not documented**; reviewers still check the age of digest updates.
+Manual module/tool updates and early merges remain the maintainer's
+responsibility; cooldown is not a merge gate.
+
 ## Base images, and what pinning them by digest changed
 
 Base images are pinned as `name:tag@sha256:...`. The tag stays for readability;
@@ -160,13 +173,15 @@ GOPROXY=off GOFLAGS=-mod=readonly GOMODCACHE=/some/cache/dir go build ./...
 
 ## Known gaps
 
-- **The cooling window is process, not tooling.** Nothing checks that a PR
-  actually waited the seven days "Reviewing a dependency change" above
-  describes before merging a new module/tool release — it depends on the
-  reviewer following the doc. It has been skipped in practice: the 0.1.1 and
+- **Cooldown filters Dependabot version updates, not merges.** The seven-day
+  release age is configured for all four ecosystems above, but no merge gate
+  prevents a maintainer from adopting a release early by hand. OpenLDAP source,
+  syft and govulncheck updates remain manual; Docker tag-and-digest cooldown
+  behavior is not documented, so digest age still needs review. Security
+  updates bypass cooldown; the reachable-vulnerability exception above still
+  guides adoption. The window has been skipped in practice: the 0.1.1 and
   0.2.1 dependency updates (the latter #420–#424) were merged before the window
-  had elapsed, as `CHANGELOG.md` records for both releases. `.github/dependabot.yml`
-  has no cooldown setting.
+  had elapsed, as `CHANGELOG.md` records for both releases.
 - **SBOM/provenance covers the shipped artifact's dependency tree, not a
   separate build-toolchain inventory.** `go version`, `govulncheck`'s pinned
   version, and the other build-time tool pins are recorded in the workflow

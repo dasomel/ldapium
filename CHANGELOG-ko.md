@@ -10,6 +10,9 @@ English | **한국어**
 
 ### Changed
 
+- Dependabot: Go, npm, GitHub Actions, Docker 일반 버전 갱신에 7일 냉각 기간을 설정했습니다.
+  보안 업데이트는 계속 즉시 생성됩니다. 수동 갱신과 Docker digest 적용 범위의 한계는
+  `docs/dependency-policy.md`에 명시했습니다.
 - 서버 이미지: OpenLDAP 2.6.16 (이전 2.6.15; #469). 업스트림 수정에는 slapo-accesslog 요청별 info
   상태(ITS#10597), ppolicy·memberof entry 누수 수정, GnuTLS 클라이언트 인증서 검증(ITS#10616),
   번들 LMDB 0.9.37이 포함됩니다. 2.6.16의 `syncrepl.c`가 바뀌지 않았으므로 syncrepl `retry_diff`
@@ -19,6 +22,10 @@ English | **한국어**
 
 ### Security
 
+- UI backend와 exporter 이미지 빌더의 Go 툴체인을 `golang:1.27.4`(이전 1.27.3)로, `ui/backend/go.mod`를
+  `go 1.26.11`로 올렸습니다: GO-2026-6859 / CVE-2026-97054(`net/http` MaxBytesReader 헤더 경쟁으로
+  HTTP/1 서버가 죽을 수 있음). govulncheck가 도달 가능으로 보고해 `docs/dependency-policy.md`의
+  예외에 따라 냉각 기간 안에 채택했습니다.
 - UI backend: `github.com/labstack/echo/v4` 4.16.3(CVE-2026-118651·CVE-2026-118653 업스트림 수정
   포함, labstack/echo#3197; 두 경로 모두 여기서는 미사용, #460), `github.com/go-jose/go-jose/v4`
   4.1.7 (#446). Go 취약점 DB에 수정 버전이 기록될 때까지 govulncheck 제외 항목은 유지합니다.

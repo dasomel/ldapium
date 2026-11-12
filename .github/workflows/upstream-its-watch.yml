@@ -3,12 +3,19 @@
 # D2: Serialize runs to avoid duplicate comments; queued dispatches can retry.
 # D3: Restrict egress and grant issue write only to this job. Fix hints require
 #     human review before removing the local patch; this workflow changes no code.
+# D4: Relay fenced ITS comments because the maintainer cannot reach Bugzilla;
+#     manual show_comments also exposes history without forcing an issue post.
 name: Upstream ITS watch
 
 on:
   schedule:
     - cron: '41 3 * * 2'
   workflow_dispatch:
+    inputs:
+      show_comments:
+        description: Print all ITS comments to the log and step summary
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,5 +45,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Watch upstream ITS
         env:
+          SHOW_COMMENTS: ${{ inputs.show_comments && '1' || '0' }}
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/upstream-its-watch.sh
