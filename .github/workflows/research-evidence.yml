@@ -2,8 +2,13 @@ name: Research evidence
 
 # D4: Path filtering avoids slowing unrelated PRs. Other changes do not run
 # this gate automatically; run make research-check manually when needed.
+# D5: Branch pushes only. Without `branches`, a tag push also matched (a new ref has no
+#     diff to path-filter), so every release tag started this job and Release's preflight
+#     failed on "pending research-check" until rerun (v0.2.0 through v0.3.2). The tagged
+#     commit was already checked on its branch. Cost: nothing runs on tags.
 on:
   push:
+    branches: ['**']
     paths:
       - 'research/**'
       - 'scripts/research/**'
