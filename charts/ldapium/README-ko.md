@@ -70,6 +70,7 @@ replication을 강제로 켜거나 끄려면 `replication.enabled`를 명시할 
 | `tls.existingSecret` | `""` | `tls.crt`/`tls.key`(선택 `ca.crt`)가 든 Secret, `/etc/openldap/tls`에 마운트 |
 | `backup.enabled` | `false` | backup CronJob 활성화 |
 | `ui.enabled` | `false` | 관리 UI 활성화 |
+| `ui.basePath` | `""` | → `UI_BASE_PATH`. 공유 ingress에서 UI/API를 제공할 경로(예: `/ldapium`). 빈 값은 origin 루트. 프록시는 접두사를 제거하지 않고 전달해야 하며, 쿠키와 probe 경로도 접두사를 따릅니다. 모든 `ui.ingress` 경로와 SSO redirect URI에 접두사를 포함하십시오. 형식과 검증 규칙은 [영문 설정 표](README.md#values) 참고 |
 | `ui.ldap.userSearchFilter` | `(uid=%s)` | → `LDAP_USER_SEARCH_FILTER`. 비우면 전체 DN 로그인만 가능 |
 | `ui.machineAuth.enabled` | `false` | machine bearer 인증(Keycloak 서비스 클라이언트용, 읽기 전용 HTTP API) opt-in. 끄면 아무것도 렌더링하지 않음. 켜면 `ui.trustedProxies=private`(기본값)은 거부됩니다 |
 | `ui.sso.enabled` | `false` | Keycloak OIDC SSO 활성화 |

@@ -1,9 +1,10 @@
 # Contributing
 
-Thanks for looking. This project packages OpenLDAP; it does not fork or patch
-it. Changes to LDAP behaviour itself belong upstream at
-[openldap.org](https://www.openldap.org/), and this repo tracks upstream
-releases rather than carrying local patches.
+Thanks for looking. This project packages upstream OpenLDAP releases. The image
+currently carries one syncrepl correctness patch for ITS#10664; see
+[Carried patches](image/README.md#carried-patches) for its scope and removal
+condition. Changes to LDAP behaviour itself belong upstream at
+[openldap.org](https://www.openldap.org/).
 
 ## What the project is opinionated about
 

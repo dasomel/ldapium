@@ -17,7 +17,7 @@ build-time tooling is the execution path.
 | Base images | tag **and digest** in each Dockerfile | Dependabot, weekly |
 | OpenLDAP source | version **and** sha256 in `image/Dockerfile` | by hand — Dependabot cannot see a tarball URL |
 | `syft`, used to build air-gap SBOMs | **image digest** in `scripts/offline-bundle.sh` | by hand |
-| `govulncheck` | version in `.github/workflows/security-scan.yml` and the `Makefile` `check` target | by hand |
+| `govulncheck` | version in `scripts/govulncheck.sh`; reachable-finding exclusions in `ui/backend/govulncheck-exclude.txt` | by hand |
 
 The last two were `:latest` and `@latest`. Both are build-time execution paths —
 the syft container is handed the docker socket while a release is being
@@ -36,6 +36,9 @@ most recently at the moment the scan runs. Neither is allowed to float.
 - `scripts/licenses.sh --check` fails on a licence outside the allow-list or a
   stale `THIRD-PARTY-LICENSES.md`, which also catches a dependency that changed
   identity underneath its version.
+- `scripts/govulncheck.sh` runs the pinned scanner and fails on any reachable
+  finding not listed in `ui/backend/govulncheck-exclude.txt`; it also fails when
+  an exclusion is no longer reported, so resolved advisories must be removed.
 - `scripts/check-base-images.sh` requires every `FROM` to carry a digest, and
   every digest to resolve to a manifest list covering the architectures the
   release publishes. See below for why the second half is not redundant.

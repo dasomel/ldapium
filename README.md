@@ -42,7 +42,8 @@ Upstream OpenLDAP itself is healthy — 2.6 is the LTS stream and 2.6.16 shipped
 
 **Compiled from the upstream tarball**, not from a distribution package, so the version
 is ours to pin — currently 2.6.16, the current LTS — rather than whatever a base image's
-package archive happens to carry.
+package archive happens to carry. The image includes one syncrepl correctness patch;
+see [Carried patches](image/README.md#carried-patches) for its scope and removal condition.
 
 **No sample data, ever.** Some images seed demo accounts and groups on first launch. In a
 directory that a real identity provider federates, those become real users. This image

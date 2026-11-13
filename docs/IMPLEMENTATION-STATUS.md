@@ -6,6 +6,11 @@ The dedicated replication detail below was added 2026-10-09 against main `3e1f34
 
 Refreshed 2026-10-16 against `main` at `7342f96` (v0.2.1) from the code, workflows and CHANGELOG: OpenLDAP version, dedicated replication identity, machine bearer authentication (including revocation and write scopes), generated credentials and the web UI notes. Sections not named here keep their earlier date; the live scripts were not re-run.
 
+Documentation refreshed 2026-11-14 against `2e48806` (post-v0.3.2) from code and
+workflows: the carried syncrepl patch, UI context path, vulnerability exclusion
+gate and upstream watcher. This is a source review; live scripts were not re-run.
+Earlier runtime evidence retains its original dates.
+
 This snapshot records features already merged to `main`. Open pull requests and issue-only roadmap items are intentionally excluded.
 
 ## Product boundary
@@ -14,7 +19,7 @@ ldapium packages upstream OpenLDAP 2.6.16 for modern Kubernetes/container operat
 
 ## Directory / replication
 
-- OpenLDAP 2.6.16 built from upstream source
+- OpenLDAP 2.6.16 built from upstream source with the carried syncrepl `retry_diff` patch; [patch scope and upstream watcher](../image/README.md#carried-patches), removal tracked in #471
 - MDB backend
 - memberOf / refint / ppolicy / unique / syncprov overlays
 - standalone and multi-provider replication paths
@@ -74,6 +79,7 @@ credential restriction D43 is retained.
 
 ## UI / client integration
 
+- opt-in UI/API context path (`UI_BASE_PATH`, chart `ui.basePath`), with proxy, cookie and SSO requirements in [ui/README.md](../ui/README.md)
 - DIT browser
 - user/group create, edit and delete
 - entry move via LDAP ModifyDN (`/api/entry/move`) with idempotency error mapping
@@ -185,6 +191,11 @@ Known limitations and follow-ups: see "Known limitations and follow-ups" in `doc
 - SBOM / provenance / GitHub artifact attestations
 - release preflight gates and digest recording
 - OpenLDAP version/source/license metadata embedded in the image
+
+The pinned `scripts/govulncheck.sh` gate rejects unexcluded reachable findings and
+stale exclusions; the exception register is `ui/backend/govulncheck-exclude.txt`.
+See [dependency-policy.md](dependency-policy.md) for the review policy and
+Dependabot's seven-day cooldown for routine version updates.
 
 ## Important current boundaries
 
