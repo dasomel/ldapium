@@ -108,9 +108,10 @@ Dependabot digest bump has to pass.
 
 Two consequences worth knowing:
 
-- **Base patch latency is now Dependabot's cadence**, up to a week for routine
-  updates. Dependabot opens security updates separately and immediately, and
-  those are the ones worth merging on sight.
+- **Base updates now depend on Dependabot's weekly cadence and review**, with
+  the cooling window above applying to routine updates; a week is not a maximum
+  patch delay. Reviewers still check digest age. Security updates bypass cooldown;
+  early adoption follows the reachable-vulnerability exception above.
 - **The weekly rebuild still earns its place**, for a narrower reason than
   before. Pinning froze the base *layer*, not what is installed on top of it:
   `apt-get install` resolves against Debian's current archive on every build, so
