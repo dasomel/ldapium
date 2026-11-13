@@ -4,6 +4,12 @@
 
 > 검증 범위: 아래 YAML은 필수 시크릿(`ui.session.secret`, `auth.adminPassword`)을 더해 `helm template`으로 렌더해 확인했다(이 YAML만으로는 오프라인 렌더가 되지 않는다). 클러스터에서 실제 스크랩·NetworkPolicy 집행·프록시 동작은 이 문서를 쓰는 동안 실행하지 않았다.
 
+## 공유 ingress의 하위 경로
+
+`UI_BASE_PATH`(차트 `ui.basePath`, 기본값 빈 문자열)를 `/ldapium`으로 설정하면 UI와 API가 그 접두사 아래에서 제공된다. 프록시는 접두사를 제거하지 않고 전달해야 한다. 이 문서의 공개 UI/API 경로에도 같은 접두사를 붙인다(예: `/ldapium/api/server-settings`). 별도 `METRICS_ADDR` 리스너의 `/metrics`는 그대로다.
+
+세션·SSO 쿠키 경로와 probe도 접두사를 따르며, IdP에 등록한 callback과 로그아웃 후 redirect URI에도 접두사를 넣어야 한다. 허용 경로 형식과 제한은 [UI 환경 변수 표](../ui/README.md#configuration-environment-variables)를 참고한다.
+
 ## `/metrics` 켜기와 스크랩
 
 기본은 꺼짐이다. 켜지 않으면 리스너도 수집도 없다. 켜면 UI 프로세스 지표(`ldapium_ui_*`)만 나온다. slapd 지표는 기존 `metrics.*`의 exporter 사이드카(9330)가 맡는다.

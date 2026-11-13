@@ -389,7 +389,10 @@ and the `io.ldapium.openldap.patches` label names them.
   within milliseconds could leave the earlier-CSN node with a deleted attribute or
   a missing `entryCSN`/`modifyTimestamp`. Reported upstream as
   [ITS#10664](https://bugs.openldap.org/show_bug.cgi?id=10664) (tracked in #471). Rebase it on
-  the next OpenLDAP bump, or drop it once upstream carries the fix.
+  the next OpenLDAP bump, or drop it once upstream carries the fix. The weekly
+  `upstream-its-watch.yml` workflow checks ITS status, the `retry_diff` code on
+  the upstream master and 2.6 branches, and the latest 2.6 release; changes are
+  reported on #471 for maintainer review. The watcher does not change the patch.
 
 ## Replication
 

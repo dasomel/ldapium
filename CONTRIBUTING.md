@@ -1,18 +1,23 @@
 # Contributing
 
-Thanks for looking. This project packages OpenLDAP; it does not fork or patch
-it. Changes to LDAP behaviour itself belong upstream at
-[openldap.org](https://www.openldap.org/), and this repo tracks upstream
-releases rather than carrying local patches.
+Thanks for looking. This project packages upstream OpenLDAP releases. The image
+currently carries one syncrepl correctness patch for ITS#10664; see
+[Carried patches](image/README.md#carried-patches) for its scope and removal
+condition. Changes to LDAP behaviour itself belong upstream at
+[openldap.org](https://www.openldap.org/).
 
 ## What the project is opinionated about
 
 These are not style preferences — a change that breaks one of them will be
 asked to change, so it is cheaper to know up front:
 
-- **No default credentials, anywhere.** The image, the chart and the compose
-  file each refuse to start without an admin password rather than falling back
-  to a guessable one. New configuration follows the same rule.
+- **No default credentials, anywhere.** A fresh standalone image (including
+  Compose) can generate and persist a random admin password; replication requires
+  an explicit shared password. The chart generates and retains a Secret on a live
+  install, or uses operator-supplied credentials; offline rendering requires
+  explicit credentials. New configuration must never fall back to a guessable
+  password. See [credential generation](image/README.md) and the
+  [chart guide](charts/ldapium/README.md).
 - **No sample data.** A fresh directory contains the base DN and the admin
   entry, nothing else.
 - **The UI binds as the logged-in user.** It has no service account of its own

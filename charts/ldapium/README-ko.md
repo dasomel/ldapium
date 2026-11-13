@@ -24,7 +24,7 @@ helm install directory oci://ghcr.io/dasomel/charts/ldapium \
   --set ldap.rootDN='dc=example,dc=org'
 ```
 
-기본 관리자 비밀번호는 없습니다(`image/entrypoint.sh`는 비밀번호 없이 시작하지 않음). `auth.adminPassword`와 `auth.existingSecret`이 모두 없으면 실제 `helm install`은 64자 비밀번호를 한 번 생성해 `<release>-ldapium-admin` Secret(`helm.sh/resource-policy: keep`)에 저장하고 업그레이드 때 `lookup`으로 재사용합니다. `lookup`이 비는 오프라인 렌더(`helm template`, ArgoCD, `--dry-run=client`)와 새 namespace(`--create-namespace`)에서는 매 렌더마다 다른 비밀번호가 만들어져 데이터 볼륨이 잠기므로 chart가 렌더링을 중단합니다. 이때는 `auth.existingSecret`(권장) 또는 `auth.adminPassword`를 지정하십시오. 업그레이드 시 관리자 Secret이 없어도 생성하지 않고 중단합니다(원래 비밀번호를 지정).
+기본 관리자 비밀번호는 없습니다(새 단독 이미지는 비밀번호를 생성·보존할 수 있지만, 복제는 명시적인 공유 비밀번호가 필요함). `auth.adminPassword`와 `auth.existingSecret`이 모두 없으면 실제 `helm install`은 64자 비밀번호를 한 번 생성해 `<release>-ldapium-admin` Secret(`helm.sh/resource-policy: keep`)에 저장하고 업그레이드 때 `lookup`으로 재사용합니다. `lookup`이 비는 오프라인 렌더(`helm template`, ArgoCD, `--dry-run=client`)와 새 namespace(`--create-namespace`)에서는 매 렌더마다 다른 비밀번호가 만들어져 데이터 볼륨이 잠기므로 chart가 렌더링을 중단합니다. 이때는 `auth.existingSecret`(권장) 또는 `auth.adminPassword`를 지정하십시오. 업그레이드 시 관리자 Secret이 없어도 생성하지 않고 중단합니다(원래 비밀번호를 지정).
 
 ## HA / Replication
 
@@ -70,6 +70,7 @@ replication을 강제로 켜거나 끄려면 `replication.enabled`를 명시할 
 | `tls.existingSecret` | `""` | `tls.crt`/`tls.key`(선택 `ca.crt`)가 든 Secret, `/etc/openldap/tls`에 마운트 |
 | `backup.enabled` | `false` | backup CronJob 활성화 |
 | `ui.enabled` | `false` | 관리 UI 활성화 |
+| `ui.basePath` | `""` | → `UI_BASE_PATH`. 공유 ingress에서 UI/API를 제공할 경로(예: `/ldapium`). 빈 값은 origin 루트. 프록시는 접두사를 제거하지 않고 전달해야 하며, 쿠키와 probe 경로도 접두사를 따릅니다. 모든 `ui.ingress` 경로와 SSO redirect URI에 접두사를 포함하십시오. 형식과 검증 규칙은 [영문 설정 표](README.md#values) 참고 |
 | `ui.ldap.userSearchFilter` | `(uid=%s)` | → `LDAP_USER_SEARCH_FILTER`. 비우면 전체 DN 로그인만 가능 |
 | `ui.machineAuth.enabled` | `false` | machine bearer 인증(Keycloak 서비스 클라이언트용, 읽기 전용 HTTP API) opt-in. 끄면 아무것도 렌더링하지 않음. 켜면 `ui.trustedProxies=private`(기본값)은 거부됩니다 |
 | `ui.sso.enabled` | `false` | Keycloak OIDC SSO 활성화 |
