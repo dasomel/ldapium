@@ -86,11 +86,11 @@ One git tag publishes everything. `v0.1.0` produces:
    Never put `[skip ci]` in a tag annotation — the tag push is what triggers
    the release.
 
-   The tag push also starts the `Research evidence` workflow (`research-check`),
-   which has to finish before Release's preflight reads the check runs. If
-   preflight runs while it is still pending, it fails with `pending research-check`
-   (this happened on v0.2.0 and v0.2.1). Wait for `research-check` to complete,
-   then `gh run rerun <release-run-id>` — do not re-tag.
+   The tag push starts only the `Release` workflow. Up to v0.3.2 it also started
+   `Research evidence` (`research-check`), and preflight failed on
+   `pending research-check` until the run was rerun; that workflow now runs on
+   branch pushes only. If preflight ever fails on a check that was merely still
+   running, wait for it and `gh run rerun <release-run-id>` — do not re-tag.
 
 7. **Verify what was published**, rather than assuming the green check means
    it worked:
