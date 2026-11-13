@@ -24,7 +24,7 @@ helm install directory oci://ghcr.io/dasomel/charts/ldapium \
   --set ldap.rootDN='dc=example,dc=org'
 ```
 
-기본 관리자 비밀번호는 없습니다(`image/entrypoint.sh`는 비밀번호 없이 시작하지 않음). `auth.adminPassword`와 `auth.existingSecret`이 모두 없으면 실제 `helm install`은 64자 비밀번호를 한 번 생성해 `<release>-ldapium-admin` Secret(`helm.sh/resource-policy: keep`)에 저장하고 업그레이드 때 `lookup`으로 재사용합니다. `lookup`이 비는 오프라인 렌더(`helm template`, ArgoCD, `--dry-run=client`)와 새 namespace(`--create-namespace`)에서는 매 렌더마다 다른 비밀번호가 만들어져 데이터 볼륨이 잠기므로 chart가 렌더링을 중단합니다. 이때는 `auth.existingSecret`(권장) 또는 `auth.adminPassword`를 지정하십시오. 업그레이드 시 관리자 Secret이 없어도 생성하지 않고 중단합니다(원래 비밀번호를 지정).
+기본 관리자 비밀번호는 없습니다(새 단독 이미지는 비밀번호를 생성·보존할 수 있지만, 복제는 명시적인 공유 비밀번호가 필요함). `auth.adminPassword`와 `auth.existingSecret`이 모두 없으면 실제 `helm install`은 64자 비밀번호를 한 번 생성해 `<release>-ldapium-admin` Secret(`helm.sh/resource-policy: keep`)에 저장하고 업그레이드 때 `lookup`으로 재사용합니다. `lookup`이 비는 오프라인 렌더(`helm template`, ArgoCD, `--dry-run=client`)와 새 namespace(`--create-namespace`)에서는 매 렌더마다 다른 비밀번호가 만들어져 데이터 볼륨이 잠기므로 chart가 렌더링을 중단합니다. 이때는 `auth.existingSecret`(권장) 또는 `auth.adminPassword`를 지정하십시오. 업그레이드 시 관리자 Secret이 없어도 생성하지 않고 중단합니다(원래 비밀번호를 지정).
 
 ## HA / Replication
 
