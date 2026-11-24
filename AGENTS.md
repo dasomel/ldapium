@@ -1,6 +1,6 @@
 # ldapium
 
-Canonical agent contract. Read `README.md`, `ui/README.md`, `image/README.md`, `charts/ldapium/README.md`, `CONTRIBUTING.md`, `RELEASING.md` and the relevant issue only when they apply; this file carries only what those do not make safe to derive.
+Canonical agent contract; carries only what the READMEs, `CONTRIBUTING.md` and `RELEASING.md` do not make safe to derive.
 
 Change workflow, risk classes and evidence follow the OpenForge docs: https://github.com/dasomel/openforge/blob/main/docs/change-management.md and https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md. For research-evidence capture see `research/README.md` (opportunistic, never a blocking gate).
 
@@ -11,7 +11,6 @@ For OpenLDAP configuration, directory operations, replication, LDAP auth, backup
 - Exported API changes, LDAP schema/operation semantics, privilege/credential handling, destructive directory actions and bulk operations are design changes, not routine edits.
 - Keep DNs and low-level LDAP details behind the domain/service abstraction.
 - Use integration/E2E evidence for LDAP, auth, backup/restore, upgrade and browser behavior when unit tests cannot prove the real path; unrelated trivial changes don't need it.
-- `make check` runs what CI runs, in CI order.
 - Shared/production/destructive/release/credential/external mutations need explicit authorization.
 
 ## Local Docker/LDAP verification
