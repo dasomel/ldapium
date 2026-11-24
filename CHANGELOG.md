@@ -10,6 +10,12 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Tests and CI
+
+- `govulncheck` gate: removed the GO-2026-6875 and GO-2026-6872 exclusions now that the Go
+  vulnerability database records Echo 4.16.3 as the fix (already in use); the gate failed on them
+  as stale entries.
+
 ## [0.3.2] — 2026-11-13
 
 Security and maintenance release: the Go toolchain fix below, OpenLDAP 2.6.16, and refreshed
