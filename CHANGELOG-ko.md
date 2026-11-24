@@ -8,6 +8,13 @@ English | **한국어**
 
 ## [Unreleased]
 
+### Security
+
+- `govulncheck` 게이트: `ui/backend/govulncheck-exclude.txt`에서 GO-2026-6875 / CVE-2026-118651와
+  GO-2026-6872 / CVE-2026-118653 제외 항목을 제거했습니다. Go 취약점 데이터베이스가 사용 중인
+  `github.com/labstack/echo/v4` 4.16.3의 수정을 기록해 스캐너가 더 이상 보고하지 않으며,
+  stale 제외 검사가 제거를 요구했습니다(#460).
+
 ## [0.3.2] — 2026-11-13
 
 보안·유지보수 릴리스입니다: 아래 Go 툴체인 수정, OpenLDAP 2.6.16, 베이스 이미지와 의존성 갱신이

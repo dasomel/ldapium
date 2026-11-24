@@ -10,6 +10,13 @@ version. `appVersion` is separate: it is the OpenLDAP release being compiled.
 
 ## [Unreleased]
 
+### Security
+
+- `govulncheck` gate: removed the GO-2026-6875 / CVE-2026-118651 and GO-2026-6872 /
+  CVE-2026-118653 exclusions from `ui/backend/govulncheck-exclude.txt`; the Go vulnerability
+  database now records the fix in `github.com/labstack/echo/v4` 4.16.3 (in use), so the
+  scanner no longer reports them and the stale-exclusion check required removal (#460).
+
 ## [0.3.2] — 2026-11-13
 
 Security and maintenance release: the Go toolchain fix below, OpenLDAP 2.6.16, and refreshed
